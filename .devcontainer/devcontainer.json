@@ -1,0 +1,44 @@
+{
+  "name": "ALLM Dev",
+  "image": "mcr.microsoft.com/playwright:v1.58.2-noble",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22",
+      "installYarnUsingApt": false,
+    },
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "1.24",
+    },
+    "ghcr.io/devcontainers-extra/features/elixir-asdf:2": {
+      "elixirVersion": "1.17.3",
+      "erlangVersion": "27.1.2",
+    },
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
+  },
+  "mounts": [
+    "source=${localEnv:HOME}/.claude/skills,target=/root/.claude/skills,type=bind,readonly",
+  ],
+  "postCreateCommand": "corepack enable && corepack prepare pnpm@10.28.1 --activate && npm install -g @playwright/cli@latest && playwright-cli install && mix local.hex --force && mix local.rebar --force",
+  "remoteUser": "root",
+  "containerEnv": {
+    "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
+    "IS_SANDBOX": "1",
+    "DEVCONTAINER": "1",
+    "npm_config_yes": "true",
+    "PNPM_YES": "true",
+    "FORCE_COLOR": "1",
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "astro-build.astro-vscode",
+        "bradlc.vscode-tailwindcss",
+        "dbaeumer.vscode-eslint",
+        "ms-playwright.playwright",
+        "unifiedjs.vscode-mdx",
+        "jakebecker.elixir-ls",
+        "phoenixframework.phoenix",
+      ],
+    },
+  },
+}
