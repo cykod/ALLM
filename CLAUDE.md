@@ -39,22 +39,27 @@ Build order recommended by the spec (§28): data structs → `Engine` → behavi
 
 ## Common commands
 
+Toolchain floor: Elixir `~> 1.17`, Erlang/OTP 27+ (see `mix.exs`).
+
 ```bash
 mix deps.get              # install deps
 mix compile               # compile
 mix format                # format
-mix test                  # full suite
+mix test                  # full suite (80% coverage threshold configured in mix.exs)
 mix test test/path/to/file_test.exs:42   # single test by line number
 mix test --only focus     # run tests tagged @tag :focus
-mix credo --strict        # linter (once credo is added)
-mix dialyzer              # type check (once dialyxir is added)
+mix credo --strict        # linter
+mix dialyzer              # type check
 iex -S mix                # REPL with project loaded
 ```
 
-The dev container (`.devcontainer/devcontainer.json`) ships with Node and Go but **not Elixir** — Elixir/OTP need to be installed separately (e.g., via `asdf` or the Erlang Solutions repo) before `mix` commands work.
+Test-only helpers live under `test/support/` (added to `elixirc_paths` in the `:test` env only) — this is the right home for `ALLM.Providers.Fake` fixtures and other test-only modules.
+
+The dev container (`.devcontainer/devcontainer.json`) ships with Node, Go, and Elixir/OTP (installed via the `rabdulwahhab/devcontainer-features` asdf-based features — `erlang-asdf` must stay in the features list because `elixir-asdf` depends on it).
 
 ## Working on this codebase
 
 - When a change touches behaviour or spec-defined shapes, cite the section (`§6.3`, `§12.3`, etc.) in the commit message so reviewers can diff intent against the spec.
 - `ALLM.Providers.Fake` is the canonical way to test orchestration. Do not reach for network mocks unless you're testing a real provider adapter's wire shape.
 - Property-style scenarios listed in §31 are the minimum bar — every implementation must pass them.
+- `optional: true` in `mix.exs` does NOT skip Hex version resolution — it only governs whether *downstream applications* need the dep. For *this* project, Hex still has to resolve the version constraint, so a placeholder like `{:llm_db, "~> 0.1", optional: true}` against a dep whose published versions are `2026.x` will break `mix deps.get`. Defer future deps as a code comment (`# :llm_db re-added in Phase 9 …`), not as a live constraint with an invented version.

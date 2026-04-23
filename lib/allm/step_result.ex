@@ -1,5 +1,16 @@
 defmodule ALLM.StepResult do
-  @moduledoc "See spec §5.8."
+  @moduledoc """
+  The result of a single chat step. See spec §5.8.
+
+  Layer A — pure serializable data. Carries the updated `:thread`, the
+  `:response` from the adapter, any `:tool_results` appended during this
+  step, and a `:done?` flag indicating whether the chat loop should halt
+  after this step.
+
+  The `:done?` field uses a `?`-suffixed atom key per spec §5.8; this is
+  legal Elixir and round-trips through both `:erlang.term_to_binary/1` and
+  (in sub-phase 1.5) tagged JSON encoding.
+  """
 
   alias ALLM.{Message, Response, Thread}
 
@@ -18,4 +29,40 @@ defmodule ALLM.StepResult do
     done?: false,
     metadata: %{}
   ]
+
+  @doc """
+  Build a `%StepResult{}` from keyword opts.
+
+  Every field is optional but `:thread` and `:response` are usually set in
+  real output. Unknown keys raise `ArgumentError` via `struct!/2`.
+
+  ## Examples
+
+      iex> sr = ALLM.StepResult.new(done?: true)
+      iex> sr.done?
+      true
+      iex> sr.tool_results
+      []
+  """
+  @spec new(keyword()) :: t()
+  def new(opts) when is_list(opts), do: struct!(__MODULE__, opts)
+
+  @doc false
+  @spec __from_tagged__(map()) :: t()
+  def __from_tagged__(data) when is_map(data) do
+    %__MODULE__{
+      thread: hydrate_optional(data["thread"]),
+      response: hydrate_optional(data["response"]),
+      tool_results: ALLM.Serializer.hydrate(data["tool_results"] || []),
+      done?: data["done?"] || false,
+      metadata: data["metadata"] || %{}
+    }
+  end
+
+  defp hydrate_optional(nil), do: nil
+  defp hydrate_optional(value), do: ALLM.Serializer.hydrate(value)
+end
+
+defimpl Jason.Encoder, for: ALLM.StepResult do
+  def encode(value, opts), do: ALLM.Serializer.encode_tagged(value, opts)
 end

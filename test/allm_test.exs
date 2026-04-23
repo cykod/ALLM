@@ -1,11 +1,17 @@
 defmodule ALLMTest do
   use ExUnit.Case, async: true
 
+  doctest ALLM
+
   alias ALLM.{Message, Request, Tool}
 
   describe "message builders" do
     test "system/1 builds a system message" do
       assert %Message{role: :system, content: "be nice"} = ALLM.system("be nice")
+    end
+
+    test "system/1 returns an ALLM.Message struct" do
+      assert is_struct(ALLM.system("hi"), Message)
     end
 
     test "user/1 builds a user message" do
@@ -60,6 +66,16 @@ defmodule ALLMTest do
       req = ALLM.request([ALLM.user("hi")], model: "gpt-4.1-mini", temperature: 0.2)
       assert req.model == "gpt-4.1-mini"
       assert req.temperature == 0.2
+    end
+
+    test "returns an ALLM.Request struct" do
+      assert is_struct(ALLM.request([ALLM.user("hi")]), Request)
+    end
+
+    test "delegates to ALLM.Request.new/2 (same struct as calling new/2 directly)" do
+      messages = [ALLM.user("hi")]
+      opts = [model: "gpt-4.1-mini", temperature: 0.2]
+      assert ALLM.request(messages, opts) == ALLM.Request.new(messages, opts)
     end
   end
 end

@@ -22,7 +22,8 @@ defmodule ALLM.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger],
+      mod: {ALLM.Application, []}
     ]
   end
 
@@ -35,10 +36,11 @@ defmodule ALLM.MixProject do
       {:finch, "~> 0.19"},
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.2"},
-      {:llm_db, "~> 0.1", optional: true},
+      # :llm_db re-added in Phase 9 (capability pre-flight / cost population, spec §6.3)
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:stream_data, "~> 1.1", only: [:test]}
     ]
   end
 

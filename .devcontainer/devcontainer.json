@@ -1,6 +1,8 @@
 {
   "name": "ALLM Dev",
-  "image": "mcr.microsoft.com/playwright:v1.58.2-noble",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
   "features": {
     "ghcr.io/devcontainers/features/node:1": {
       "version": "22",
@@ -9,9 +11,11 @@
     "ghcr.io/devcontainers/features/go:1": {
       "version": "1.24",
     },
-    "ghcr.io/devcontainers-extra/features/elixir-asdf:2": {
-      "elixirVersion": "1.17.3",
-      "erlangVersion": "27.1.2",
+    "ghcr.io/rabdulwahhab/devcontainer-features/erlang-asdf:1": {
+      "version": "27.1.2",
+    },
+    "ghcr.io/rabdulwahhab/devcontainer-features/elixir-asdf:1": {
+      "version": "1.17.3-otp-27",
     },
     "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
   },
