@@ -40,7 +40,12 @@ defmodule ALLM.MixProject do
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:stream_data, "~> 1.1", only: [:test]}
+      {:stream_data, "~> 1.1", only: [:test]},
+      # Test-only path dep: certifies the two defaults
+      # (ALLM.ToolExecutor.Default, ALLM.ToolResultEncoder.JSON) against
+      # the shipped conformance harness. See conformance/README.md for
+      # the release checklist (path → "~> 0.2" rewrite at publish time).
+      {:allm_conformance, path: "conformance", only: :test}
     ]
   end
 

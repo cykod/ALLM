@@ -11,3 +11,7 @@
 [BUILD] tue 4/21 1pm - Build Phase 2 (Engine + Keys) sub-phases 2.1-2.4 from PHASE_2_DESIGN.md
 
 [DSGN] tue 4/21 8pm - Design Phase 3 — Behaviours, default implementations, and conformance harness
+
+[MILE] thu 4/23 12pm - Committed Phase 1 + Phase 2 milestone: Layer A data structs, validator, serializer, Engine resolver API, Keys five-level chain, and retro-driven process artifacts
+
+[BUILD] thu 4/23 12pm - Build all phases from PHASE_3_DESIGN.md

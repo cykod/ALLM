@@ -1,3 +1,26 @@
+## [FEAT] Phase 3: Behaviour contracts, defaults, conformance harness
+*Friday, April 24th at 1pm*
+Hardens the four Layer B behaviours (ALLM.Adapter, StreamAdapter, ToolExecutor, 
+ToolResultEncoder) with rich moduledocs, per-callback docs, and 
+error-struct-tightened return types. Ships two default implementations — 
+ALLM.ToolExecutor.Default with arity-1/2 dispatch and raise/exit/throw 
+conversion to %ToolError{}, and ALLM.ToolResultEncoder.JSON with binary 
+passthrough plus Jason-backed encoding — both at 100% coverage. Publishes the 
+allm_conformance sibling Hex package under conformance/ with four 
+ExUnit.CaseTemplate harnesses (47 injected cases across 
+Adapter/StreamAdapter/ToolExecutor/ToolResultEncoder), a permanent StubAdapter 
+fixture implementing both adapter behaviours, and harness self-tests; main 
+project certifies its defaults via a path-dep on the sibling. Three accumulated 
+retros drove AGENT_DESIGN_SPEC and AGENT_IMPLEMENTATION_SPEC refinements: §3 
+consolidated into a five-class empirical-verification rule (stdlib exceptions, 
+project closed-atom enums, stdlib function failure modes on OTP floor, 
+macro-expansion-wrapped raises, opaque-term returns) plus hedge-word guidance, 
+and §16 now names both conformance shipping shapes with the Shape-B PLT gotcha 
+(plt_add_apps: [:ex_unit]) documented. Main suite: 323 → 393 tests, 0 
+failures, 0 credo issues, 0 dialyzer errors; conformance sub-project: 55 tests.
+
+---
+
 ## [FEAT] Phase 1 + 2: Layer A data, Engine resolver, Keys chain
 *Thursday, April 23rd at 12pm*
 Ship Phase 1 and Phase 2 of the ALLM library end-to-end: Layer A data structs 
@@ -24,6 +47,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+
+### Phase 3.5 — `allm_conformance` Sibling Package + Harness Wiring
+
+#### Added
+- `allm_conformance` — new sibling Hex package (in-repo sub-project at `conformance/`, app `:allm_conformance`, version `0.2.0`). Ships four `ExUnit.CaseTemplate`-based harnesses under the `ALLM.Test.*` namespace (`ALLM.Test.AdapterConformance`, `ALLM.Test.StreamAdapterConformance`, `ALLM.Test.ToolExecutorConformance`, `ALLM.Test.ToolResultEncoderConformance`). Consumer install is one line (`{:allm_conformance, "~> 0.2", only: :test}`); no `elixirc_paths` surgery. See `conformance/README.md` for usage and release checklist. Per PHASE_3_DESIGN.md §Non-obvious Decision #1.
+- `ALLM.Test.Fixtures.StubAdapter` — permanent scripted test fixture (in `conformance/test/support/`, not exported) implementing both `ALLM.Adapter` and `ALLM.StreamAdapter`. Drives the harness's own self-tests; script shape documented in its `@moduledoc`.
+- 43 conformance self-tests across the sub-project (12 + 6 + 10 + 7 injected cases plus 8 meta-tests covering case-count stability and missing-opt `KeyError`).
+- Main project `mix.exs` now declares `{:allm_conformance, path: "conformance", only: :test}` so the two default implementations (`ALLM.ToolExecutor.Default`, `ALLM.ToolResultEncoder.JSON`) certify against the harness: `test/allm/tool_executor/default_test.exs` and `test/allm/tool_result_encoder/json_test.exs` each plug in via `use ALLM.Test.<...>Conformance, ...`.
+- `LICENSE` files at the repo root and in `conformance/` (MIT, Pascal Rettig) — prerequisite for `mix hex.build`.
+
+#### Notes
+- The design doc's `StreamError` mid-stream reason table named `:truncated | :malformed_chunk | :connection_dropped`, but the Phase 1 committed `ALLM.Error.StreamError` enum is `:adapter_error | :cancelled | :timeout | :malformed_event | :unknown`. The conformance suite uses the committed atoms (`:cancelled` in the self-test case) per `AGENT_DESIGN_SPEC.md §3`'s empirical-verification rule.
 
 ### Phase 2.4 — Engine Integration Test
 

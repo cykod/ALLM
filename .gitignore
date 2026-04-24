@@ -6,9 +6,20 @@
 erl_crash.dump
 *.ez
 *.beam
+*.tar
 /config/*.secret.exs
 .elixir_ls/
 /tmp/
 .DS_Store
 /.env
 /.env.local
+
+# Conformance sub-project build artifacts
+/conformance/_build/
+/conformance/deps/
+/conformance/cover/
+/conformance/doc/
+/conformance/.elixir_ls/
+
+# Playwright local artifacts
+/.playwright/

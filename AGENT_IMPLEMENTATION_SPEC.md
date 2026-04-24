@@ -204,9 +204,18 @@ Every Layer A struct gets:
 
 ### Layer B — Runtime
 
-Every behaviour gets a **conformance suite** under `test/support/<behaviour>_conformance.ex`. The suite is parameterized by the implementation module:
+Every behaviour gets a **conformance suite**. The design doc chooses one of two shipping shapes per behaviour; an implementer must read the design's Non-obvious Decisions section to know which one is in use before placing the files.
+
+**Shape A — main-project-internal (`test/support/`).** The suite lives in the main `allm` package at `test/support/<behaviour>_conformance.ex`, uses `ExUnit.CaseTemplate` or `defmacro __using__/1`, and is available only inside the main project's test tree. Use this when the suite has no external consumers and doesn't need to be published. Lower coordination cost, no second `mix.exs`.
+
+**Shape B — sibling Hex package (`conformance/`).** The suite lives in a sibling sub-project at `conformance/lib/allm/test/<behaviour>_conformance.ex` and is published as a separate Hex package (e.g., `allm_conformance`) that external adapter authors depend on with a one-line `{:allm_conformance, "~> 0.2", only: :test}` entry in their `deps/0`. Use this when (a) external users are expected to write their own implementations of the behaviour and need the harness, (b) the harness pulls in test-framework deps (`ExUnit.CaseTemplate`, future `StreamData` generators) that would leak into the main runtime package, or (c) consumers would otherwise need to add `"deps/allm/test/support"` to their `elixirc_paths`. The main `allm` package depends on the sibling via a `path:` dev-time dep so its own defaults can certify against the harness.
+
+**Shape B PLT gotcha.** A sibling-package harness built on `ExUnit.CaseTemplate` expands to a call to `ExUnit.CaseTemplate.__proxy__/2`, which Dialyzer can only resolve if `:ex_unit` is in the sub-project's PLT. Add `dialyzer: [plt_add_apps: [:ex_unit]]` to the sibling's `mix.exs` `project/0` block — otherwise `mix dialyzer` fails with an unresolved-call warning against `__proxy__/2`. This is an undocumented cost of Shape B; the design's cost-tradeoff analysis for Shape B should include it.
+
+Regardless of shape, the suite is parameterized by the implementation module:
 
 ```elixir
+# Shape A (test/support/):
 defmodule ALLM.AdapterConformance do
   defmacro __using__(opts) do
     impl = Keyword.fetch!(opts, :impl)
@@ -216,7 +225,24 @@ defmodule ALLM.AdapterConformance do
 
       describe "Adapter conformance" do
         test "generate/3 with a minimal request returns {:ok, %ALLM.Response{}}", do: ...
-        test "generate/3 surfaces authentication errors as %ALLM.Error.AdapterError{reason: :authentication_failed}", do: ...
+        # ... one test per spec'd behaviour
+      end
+    end
+  end
+end
+
+# Shape B (conformance/lib/allm/test/):
+defmodule ALLM.Test.AdapterConformance do
+  use ExUnit.CaseTemplate
+
+  using opts do
+    quote do
+      @__allm_conformance_adapter__ Keyword.fetch!(unquote(opts), :adapter)
+
+      describe "ALLM.Adapter conformance" do
+        test "generate/2 with a minimal request returns {:ok, %ALLM.Response{}}", _context do
+          # reads @__allm_conformance_adapter__
+        end
         # ... one test per spec'd behaviour
       end
     end
@@ -224,7 +250,7 @@ defmodule ALLM.AdapterConformance do
 end
 ```
 
-`ALLM.Providers.Fake` is the reference implementation; every real provider adapter (OpenAI, Anthropic) reuses the same suite via `use ALLM.AdapterConformance, impl: ALLM.Providers.OpenAI`.
+`ALLM.Providers.Fake` is the reference implementation; every real provider adapter (OpenAI, Anthropic) reuses the same suite via `use ALLM.AdapterConformance, impl: ALLM.Providers.OpenAI` (Shape A) or `use ALLM.Test.AdapterConformance, adapter: ALLM.Providers.OpenAI` (Shape B).
 
 The engine itself gets a **serializability test**: `:erlang.term_to_binary/1` on a constructed engine succeeds, and the round-tripped engine produces equivalent results. This catches accidentally storing a fun or a Finch ref on the struct.
 
