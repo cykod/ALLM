@@ -5,27 +5,30 @@ defmodule ALLM.Providers.FakeScenariosTest do
   coverage. `mix test --only spec_31` scopes Phase 12's regression audit
   to one file.
 
-  Active coverage after Phase 5: 6 scenarios (3 Phase 4 + 3 Phase 5).
-  Remaining: 4 scenarios tagged `@tag :pending`, deferred to Phases 7/8.
+  Active coverage after Phase 6: 9 scenarios (3 Phase 4 + 3 Phase 5 + 3
+  Phase 6). Remaining: 3 scenarios tagged `@tag :pending`, deferred to
+  Phases 7/8.
 
   | # | Scenario | Phase |
   |---|---|---|
   | 1 | pure text streaming with `emit_text_deltas: true` (default) | 4 (active) |
   | 2 | pure text streaming with `emit_text_deltas: false` | 5 (active) |
-  | 3 | parallel tool calls in one assistant turn | 4 (active) |
+  | 3 | parallel tool calls at adapter level | 4 (active) |
   | 4 | mid-stream adapter error — stream terminates with `{:error, reason}` | 4/5 (active) |
   | 5 | consumer cancellation releases the adapter's HTTP request | 5 (active — `:counters` observer) |
-  | 6 | `max_turns` cap | 7 (deferred) |
-  | 7 | `halt_when` fires | 7 (deferred) |
-  | 8 | tool handler raises — `on_tool_error` policy | 7 (deferred) |
-  | 9 | session round-trip | 8 (deferred) |
+  | 6 | single tool call with `mode: :auto` through `ALLM.step/3` | 6 (active) |
+  | 7 | parallel tool calls through `ALLM.step/3` | 6 (active) |
+  | 8 | tool handler raises — `on_tool_error` policy (atom forms) | 6 (active — function form Phase 7) |
+  | 9 | `max_turns` cap | 7 (deferred) |
+  | 10 | `halt_when` fires | 7 (deferred) |
+  | 11 | session round-trip | 8 (deferred) |
   """
 
   use ExUnit.Case, async: true
 
   @moduletag :spec_31
 
-  alias ALLM.{Engine, Message, Request, Response}
+  alias ALLM.{Engine, Message, Request, Response, StepResult, Tool}
   alias ALLM.Error.AdapterError
   alias ALLM.Providers.Fake
 
@@ -277,6 +280,147 @@ defmodule ALLM.Providers.FakeScenariosTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Phase 6 — newly active scenarios covering tool orchestration end-to-end
+  # through `ALLM.step/3`. Exercises the full adapter → ToolRunner → Chat
+  # pipeline that Phase 4/5 scenarios tested only at the adapter layer.
+  # ---------------------------------------------------------------------------
+
+  describe "§31 scenario: single tool call with mode: :auto" do
+    test "ALLM.step/3 executes the tool and appends a :tool-role message" do
+      tool =
+        Tool.new(
+          name: "echo",
+          description: "",
+          schema: %{},
+          handler: fn args -> {:ok, args} end
+        )
+
+      engine =
+        Engine.new(
+          adapter: Fake,
+          adapter_opts: [
+            script: [
+              {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+              {:finish, :tool_calls}
+            ]
+          ],
+          tools: [tool]
+        )
+
+      assert {:ok, %StepResult{} = sr} =
+               ALLM.step(engine, [ALLM.user("call echo")], mode: :auto)
+
+      assert sr.done? == false
+      assert [%Message{role: :tool, tool_call_id: "c0"}] = sr.tool_results
+    end
+  end
+
+  describe "§31 scenario: parallel tool calls through ALLM.step/3" do
+    test "both handlers run and tool_results list has 2 messages (order-independent)" do
+      tool_a =
+        Tool.new(
+          name: "a",
+          description: "",
+          schema: %{},
+          handler: fn _ -> {:ok, %{from: "a"}} end
+        )
+
+      tool_b =
+        Tool.new(
+          name: "b",
+          description: "",
+          schema: %{},
+          handler: fn _ -> {:ok, %{from: "b"}} end
+        )
+
+      engine =
+        Engine.new(
+          adapter: Fake,
+          adapter_opts: [
+            script: [
+              {:tool_call, id: "c0", name: "a", arguments: %{}},
+              {:tool_call, id: "c1", name: "b", arguments: %{}},
+              {:finish, :tool_calls}
+            ]
+          ],
+          tools: [tool_a, tool_b]
+        )
+
+      assert {:ok, %StepResult{} = sr} =
+               ALLM.step(engine, [ALLM.user("call both")], mode: :auto)
+
+      assert sr.done? == false
+      assert length(sr.tool_results) == 2
+
+      ids = sr.tool_results |> Enum.map(& &1.tool_call_id) |> Enum.sort()
+      assert ids == ["c0", "c1"]
+    end
+  end
+
+  describe "§31 scenario: tool handler raises, on_tool_error policy fires" do
+    # Function form of on_tool_error (e.g. `fn exn, ctx -> ... end`) is
+    # deferred to Phase 7. This scenario covers the two atom-form policies
+    # (`:continue` and `:halt`) which land with Phase 6.
+    test ":continue produces done?: false with the error encoded into tool_results" do
+      tool =
+        Tool.new(
+          name: "raiser",
+          description: "",
+          schema: %{},
+          handler: fn _ -> raise "boom" end
+        )
+
+      engine =
+        Engine.new(
+          adapter: Fake,
+          adapter_opts: [
+            script: [
+              {:tool_call, id: "c0", name: "raiser", arguments: %{}},
+              {:finish, :tool_calls}
+            ]
+          ],
+          tools: [tool]
+        )
+
+      assert {:ok, %StepResult{} = sr} =
+               ALLM.step(engine, [ALLM.user("raise")], on_tool_error: :continue)
+
+      assert sr.done? == false
+      assert [%Message{role: :tool, tool_call_id: "c0"}] = sr.tool_results
+      refute Map.has_key?(sr.metadata, :halted_reason)
+    end
+
+    test ":halt sets done?: true with metadata.halted_reason: :tool_error" do
+      tool =
+        Tool.new(
+          name: "raiser",
+          description: "",
+          schema: %{},
+          handler: fn _ -> raise "boom" end
+        )
+
+      engine =
+        Engine.new(
+          adapter: Fake,
+          adapter_opts: [
+            script: [
+              {:tool_call, id: "c0", name: "raiser", arguments: %{}},
+              {:finish, :tool_calls}
+            ]
+          ],
+          tools: [tool]
+        )
+
+      assert {:ok, %StepResult{} = sr} =
+               ALLM.step(engine, [ALLM.user("raise")], on_tool_error: :halt)
+
+      assert sr.done? == true
+      assert sr.metadata[:halted_reason] == :tool_error
+      assert sr.metadata[:halt_tool_call_id] == "c0"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Deferred scenarios — one @tag :pending placeholder per remaining §31
   # bullet. Each test body is `:ok` so the placeholder runs without failure
   # and the test listing shows the deferred work. Phase 12's audit can count
@@ -294,13 +438,6 @@ defmodule ALLM.Providers.FakeScenariosTest do
   test "§31 scenario: halt_when fires (Phase 7)" do
     # `halt_when:` predicate is a chat-loop option; Phase 7 wires it through
     # the orchestrator's per-step evaluation.
-    :ok
-  end
-
-  @tag :pending
-  test "§31 scenario: tool handler raises, on_tool_error policy fires (Phase 7)" do
-    # `on_tool_error` policy (`:halt` | `:append_error`) is applied by the
-    # chat loop; Phase 7 introduces the policy and its tests.
     :ok
   end
 

@@ -29,3 +29,9 @@
 [BUILD] fri 4/24 4pm - Build all phases from PHASE_5_DESIGN.md
 
 [DSGN] fri 4/24 6pm - Design Phase 6 single-turn tool loop (stream_step/step)
+
+[MILE] fri 4/24 6pm - Shipped Phase 4 Fake adapter and Phase 5 generate/stream_generate facade with stream-equivalence property
+
+[BUILD] fri 4/24 6pm - Build all phases from steering/PHASE_6_DESIGN.md
+
+[BUILD] fri 4/24 6pm - Build all phases from PHASE_6_DESIGN.md

@@ -268,6 +268,101 @@ defmodule ALLM.StreamCollectorTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Phase 6: new fold clauses
+  # ---------------------------------------------------------------------------
+
+  describe "apply_event/2 — :tool_result_encoded (Phase 6)" do
+    test "appends %Message{role: :tool, tool_call_id: id, content: content} to tool_results" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event({:tool_result_encoded, %{id: "c0", content: "hi"}})
+
+      assert [%Message{role: :tool, tool_call_id: "c0", content: "hi", metadata: %{}}] =
+               s.tool_results
+    end
+
+    test "two :tool_result_encoded events preserve insertion order" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event({:tool_result_encoded, %{id: "a", content: "1"}})
+        |> StreamCollector.apply_event({:tool_result_encoded, %{id: "b", content: "2"}})
+
+      assert [%Message{tool_call_id: "a"}, %Message{tool_call_id: "b"}] = s.tool_results
+    end
+
+    test "does not affect halt state" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event({:tool_result_encoded, %{id: "a", content: "1"}})
+
+      assert s.halt == nil
+    end
+  end
+
+  describe "apply_event/2 — :tool_halt (Phase 6)" do
+    test "sets state.halt to {:halt, reason, tool_call_id}" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event(
+          {:tool_halt, %{tool_call_id: "c0", reason: :budget_exceeded, result: %{}}}
+        )
+
+      assert s.halt == {:halt, :budget_exceeded, "c0"}
+    end
+
+    test "first-halt-wins — subsequent :tool_halt events are ignored" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event(
+          {:tool_halt, %{tool_call_id: "c0", reason: :first, result: %{}}}
+        )
+        |> StreamCollector.apply_event(
+          {:tool_halt, %{tool_call_id: "c1", reason: :second, result: %{}}}
+        )
+
+      assert s.halt == {:halt, :first, "c0"}
+    end
+  end
+
+  describe "apply_event/2 — :ask_user_requested (Phase 6)" do
+    test "sets state.halt to {:ask_user, :ask_user, id, question, opts}" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event(
+          {:ask_user_requested,
+           %{tool_call_id: "c0", tool_name: "echo", question: "which?", opts: [choices: [1, 2]]}}
+        )
+
+      assert s.halt == {:ask_user, :ask_user, "c0", "which?", [choices: [1, 2]]}
+    end
+
+    test "first-halt-wins — subsequent :ask_user_requested events are ignored" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event(
+          {:ask_user_requested, %{tool_call_id: "c0", tool_name: "e", question: "first?", opts: []}}
+        )
+        |> StreamCollector.apply_event(
+          {:ask_user_requested,
+           %{tool_call_id: "c1", tool_name: "e", question: "second?", opts: []}}
+        )
+
+      assert s.halt == {:ask_user, :ask_user, "c0", "first?", []}
+    end
+
+    test "a :tool_halt followed by :ask_user_requested preserves :tool_halt (first-halt-wins across shapes)" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event({:tool_halt, %{tool_call_id: "c0", reason: :x, result: :r}})
+        |> StreamCollector.apply_event(
+          {:ask_user_requested, %{tool_call_id: "c1", tool_name: "e", question: "q?", opts: []}}
+        )
+
+      assert s.halt == {:halt, :x, "c0"}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # to_response/1
   # ---------------------------------------------------------------------------
 
@@ -359,6 +454,93 @@ defmodule ALLM.StreamCollectorTest do
       assert_raise ArgumentError, ~r/to_response\/1 for thread-less collection/, fn ->
         StreamCollector.to_step_result(StreamCollector.new(nil))
       end
+    end
+
+    # -------------------------------------------------------------------------
+    # Phase 6 extensions
+    # -------------------------------------------------------------------------
+
+    test "populates tool_results from :tool_result_encoded folds" do
+      thread = Thread.new()
+
+      s =
+        StreamCollector.new(thread)
+        |> StreamCollector.apply_event({:tool_result_encoded, %{id: "a", content: "1"}})
+        |> StreamCollector.apply_event({:tool_result_encoded, %{id: "b", content: "2"}})
+
+      sr = StreamCollector.to_step_result(s)
+      assert [%Message{tool_call_id: "a"}, %Message{tool_call_id: "b"}] = sr.tool_results
+    end
+
+    test "done?: true when a :tool_halt fired even if finish_reason == :tool_calls" do
+      msg = %Message{role: :assistant, content: ""}
+      thread = Thread.new()
+
+      s =
+        StreamCollector.new(thread)
+        |> StreamCollector.apply_event(
+          {:message_completed, %{message: msg, finish_reason: :tool_calls}}
+        )
+        |> StreamCollector.apply_event({:tool_halt, %{tool_call_id: "c0", reason: :x, result: :r}})
+
+      sr = StreamCollector.to_step_result(s)
+      assert sr.done? == true
+    end
+
+    test "done?: true when :ask_user_requested fired even if finish_reason == :tool_calls" do
+      msg = %Message{role: :assistant, content: ""}
+      thread = Thread.new()
+
+      s =
+        StreamCollector.new(thread)
+        |> StreamCollector.apply_event(
+          {:message_completed, %{message: msg, finish_reason: :tool_calls}}
+        )
+        |> StreamCollector.apply_event(
+          {:ask_user_requested, %{tool_call_id: "c0", tool_name: "e", question: "q?", opts: []}}
+        )
+
+      sr = StreamCollector.to_step_result(s)
+      assert sr.done? == true
+    end
+
+    test "merges halt metadata (tool_halt shape) into StepResult.metadata" do
+      thread = Thread.new()
+
+      s =
+        StreamCollector.new(thread)
+        |> StreamCollector.apply_event(
+          {:tool_halt, %{tool_call_id: "c0", reason: :budget, result: :r}}
+        )
+
+      sr = StreamCollector.to_step_result(s)
+      assert sr.metadata[:halted_reason] == :budget
+      assert sr.metadata[:halt_tool_call_id] == "c0"
+    end
+
+    test "merges halt metadata (ask_user shape) into StepResult.metadata" do
+      thread = Thread.new()
+
+      s =
+        StreamCollector.new(thread)
+        |> StreamCollector.apply_event(
+          {:ask_user_requested,
+           %{tool_call_id: "c0", tool_name: "e", question: "which?", opts: [choices: [1, 2]]}}
+        )
+
+      sr = StreamCollector.to_step_result(s)
+      assert sr.metadata[:halted_reason] == :ask_user
+      assert sr.metadata[:pending_tool_call_id] == "c0"
+      assert sr.metadata[:pending_question] == "which?"
+      assert sr.metadata[:ask_user_opts] == [choices: [1, 2]]
+    end
+
+    test "no halt — metadata unchanged" do
+      thread = Thread.new()
+      s = StreamCollector.new(thread)
+      sr = StreamCollector.to_step_result(s)
+      assert sr.metadata == %{}
+      refute Map.has_key?(sr.metadata, :halted_reason)
     end
   end
 
@@ -459,6 +641,18 @@ defmodule ALLM.StreamCollectorTest do
         {:raw_chunk, "anything"},
         {:raw_chunk, {:usage, %{input_tokens: 1}}},
         {:error, %AdapterError{reason: :rate_limited, message: "x"}}
+      ]
+
+      for event <- events do
+        assert %StreamCollector{} = StreamCollector.apply_event(StreamCollector.new(), event)
+      end
+    end
+
+    test "apply_event/2 accepts every Phase-6 orchestration tag without raising on well-formed payload" do
+      events = [
+        {:tool_result_encoded, %{id: "c0", content: "1"}},
+        {:tool_halt, %{tool_call_id: "c0", reason: :x, result: :r}},
+        {:ask_user_requested, %{tool_call_id: "c0", tool_name: "t", question: "q?", opts: []}}
       ]
 
       for event <- events do

@@ -26,6 +26,7 @@ Key invariants:
 - **Two orchestration modes.** `:auto` (loop executes tools automatically) and `:manual` (caller submits tool results). Ask-user suspension via `{:ask_user, ...}` handler return works in both modes (§12.3).
 - **HTTP transport split.** Non-streaming: `Req`. Streaming: `Finch` directly (HTTP/1, not HTTP/2 — documented in spec §7.2 due to a flow-control bug affecting large request bodies).
 - **Telemetry is the extension point.** `middleware:` is reserved for a later version and must stay `[]` in v0.2 (§29). Cross-cutting concerns go through telemetry handlers or adapter wrappers.
+- **Mid-stream adapter errors fold into the response, not the call-site tuple.** A mid-stream `{:error, struct}` event from the adapter surfaces as `{:ok, %Response{finish_reason: :error, metadata: %{error: struct}}}` from `ALLM.generate/3` / `ALLM.step/3` — the call-site tuple stays `{:ok, _}`. Only synchronous pre-flight errors (missing adapter, invalid request, adapter-reported pre-flight failure) surface as `{:error, struct}` at the call site. Callers pattern-matching on `{:error, _}` and falling through on any other shape will silently swallow mid-stream errors like rate limits, content-filter blocks, and stream cancellations. Spec §10.1, PHASE_5 Non-obvious Decision #4.
 
 Build order recommended by the spec (§28): data structs → `Engine` → behaviours → `Event` → stream runner + `ALLM.Providers.Fake` → collectors/reducers → streaming APIs → non-streaming wrappers → session helpers → real provider adapters (OpenAI, Anthropic).
 

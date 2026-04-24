@@ -1,3 +1,20 @@
+## [FEAT] Phase 6: step/3 + stream_step/3 with parallel tool execution
+*Friday, April 24th at 10pm*
+Implements Phase 6 sub-phases 6.1-6.4 across three batches: ALLM.ToolRunner 
+(parallel Task.async_stream dispatch + on_tool_error policy), ALLM.Chat.step/3 
++ stream_step/3 (three-phase Stream.resource state machine), the ALLM.step/3 + 
+stream_step/3 facade, and a 100-iteration step-equivalence property proving 
+step ≡ stream_step |> collect. Extends StreamCollector with :tool_results and 
+:halt fields plus three fold clauses, activates three §31 scenarios (single 
+tool call auto, parallel tool calls, handler raises), and renames @phase_7_opts 
+to @orchestration_opts. Folds nine retro findings into AGENT_DESIGN_SPEC, 
+AGENT_IMPLEMENTATION_SPEC, and CLAUDE.md (sub-phase retro cadence, shared test 
+helpers threshold, primitive-vs-composition verification, struct-field 
+structural rule, mid-stream error contract, and others). Test suite: 140 
+doctests, 17 properties, 726 tests, 0 failures.
+
+---
+
 ## [FEAT] Phase 4+5: Fake adapter + generate/stream_generate facade
 *Friday, April 24th at 6pm*
 Ships Phase 4 (ALLM.Providers.Fake scripted adapter implementing both
@@ -64,6 +81,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+
+### Phase 6.3 + 6.4 — `ALLM.step/3` + `ALLM.stream_step/3` facade + step-equivalence property + §31 activation
+
+#### Added
+- `ALLM.step/3` — new public facade function (spec §4, §10.3). Pure one-line delegation to `ALLM.Chat.step/3`; accepts either an `%ALLM.Thread{}` or a list of `%ALLM.Message{}` as the second arg. `@doc` carries a runnable Fake + inline tool doctest.
+- `ALLM.stream_step/3` — new public facade function (spec §4, §10.4). Pure one-line delegation to `ALLM.Chat.stream_step/3`; returns `{:ok, stream}` where the stream emits adapter events → tool-execution event groups → exactly one terminal `:step_completed`. `@doc` carries a runnable Fake + inline tool doctest.
+- `ALLM.Test.Assertions` — new test-support module (`test/support/assertions.ex`, not shipped in the Hex package). Exports `assert_equivalent_step_result/2` which compares two `%StepResult{}` values modulo a `tool_call_id` sort on `:tool_results` and on `:tool`-role thread messages (per PHASE_6_DESIGN.md Non-obvious Decision #9). Every other field (`:response`, `:done?`, non-tool-role thread messages, `:metadata`) is compared by exact `==`.
+- `test/allm/step_equivalence_test.exs` — `StreamData` property test (`@moduletag :property`) asserting `ALLM.step(engine, thread, mode: :auto) ≡ ALLM.stream_step(engine, thread, mode: :auto) |> reduce(collector) |> to_step_result/1` across 100 randomly generated tool-call-bearing Fake scripts. A second property at 25 iterations covers mid-execution handler failures (`on_tool_error: :continue`). Each iteration isolates Fake's per-process cursor via `Task.async/1` so the two paths see fresh process-dict cursors. Thread extraction from the `:step_completed` event payload compensates for the `StreamCollector` catch-all no-op on that tag (Phase 7 may add explicit handling).
+- `test/allm/providers/fake_scenarios_test.exs` — three Phase 6 §31 scenarios activated as new describe blocks: "single tool call with `mode: :auto`" (through `ALLM.step/3` with an echo tool), "parallel tool calls through `ALLM.step/3`" (two tools, order-independent tool_results assertion), "tool handler raises, `on_tool_error` policy fires" (covers atom forms `:continue` and `:halt`; function form deferred to Phase 7 with an inline comment). The existing `@tag :pending` placeholder for the handler-raises scenario was removed; three `@tag :pending` placeholders remain for Phase 7/8 (max_turns, halt_when, session round-trip). Moduledoc scenario table updated to reflect the 9-active / 3-pending split.
+- `test/allm/allm_step_test.exs`, `test/allm/allm_stream_step_test.exs` — facade-level tests covering happy paths, pre-flight `%EngineError{reason: :missing_adapter}`, list-of-messages normalisation, and delegation-invariant equality (both facades under `Task.async/1` to isolate cursor state).
+
+### Phase 6.2 — `ALLM.Chat.step/3` + `ALLM.Chat.stream_step/3` + `StreamCollector` extension
+
+#### Added
+- `ALLM.Chat` — new internal Layer C module (spec §17). Ships `step/3` (non-streaming single-turn orchestrator) and `stream_step/3` (streaming variant). Normalises `thread_or_messages` (list of `%Message{}` → `ALLM.Thread.from_messages/1`), validates the thread via `ALLM.Validate.thread/1`, dispatches the adapter call via `ALLM.Runner.run/3` / `ALLM.StreamRunner.run/3`, then branches on `:mode` and `response.finish_reason`. `mode: :manual` + `:tool_calls` surfaces tool calls without executing handlers and sets `StepResult.metadata.mode: :manual` (NOT a halt — Finding F2). `mode: :auto` + `:tool_calls` dispatches to `ALLM.ToolRunner.run_tool_calls/3` / `ALLM.ToolRunner.stream_tool_calls/3`, appends tool-role messages to the thread, and surfaces halt metadata (`:tool_error`, `{:halt, reason, result}`, `{:ask_user, ...}`) via `StepResult.metadata`. Assistant-message construction uses `response.output_text` (collector-authoritative) per PHASE_6_DESIGN.md Non-obvious Decision #10. Ask-user handler returns do NOT append an `:assistant` message with `metadata.ask_user: true` in Phase 6 (Non-obvious Decision #6); that thread mutation is Phase 7's concern. `stream_step/3` composes via a single three-phase `Stream.resource/3` state machine (Phase A drives the adapter stream, Phase B drives `ToolRunner.stream_tool_calls/3`, Phase C emits exactly one `:step_completed` event) — one outer resource, no wrapping (Non-obvious Decision #1). Event sequence invariant: all adapter events → zero-to-N tool-execution event groups → exactly one terminal `:step_completed`. No new `ALLM.Event` variants added. No new error-reason atoms added. Error table inherited from Phase 5 plus `%EngineError{reason: :unknown_tool}` from Phase 6.1.
+
+#### Changed
+- `ALLM.StreamCollector` — struct gains two fields (`:tool_results: []`, `:halt: nil`) and three new fold clauses (`:tool_result_encoded`, `:tool_halt`, `:ask_user_requested`) inserted immediately before the catch-all per Phase 5 Non-obvious Decision #5. `:tool_result_encoded` appends a `%Message{role: :tool, tool_call_id: id, content: content, metadata: %{}}` to `:tool_results`; `:tool_halt` and `:ask_user_requested` set `:halt` on first observation (first-halt-wins via `halt: nil` guard on the clause head — subsequent halts fall to the catch-all no-op). `to_step_result/1` now reads `:tool_results` from the struct (was hardcoded `[]`), computes `done?` via `step_done?/1` (`halt != nil or finish_reason in [:stop, :length, :content_filter, :error]` — was derived from `:finish_reason` alone), and merges halt metadata into `StepResult.metadata` via `merge_halt_metadata/2` (`{:halt, reason, id}` → `%{halted_reason: reason, halt_tool_call_id: id}`; `{:ask_user, :ask_user, id, q, o}` → `%{halted_reason: :ask_user, pending_tool_call_id: id, pending_question: q, ask_user_opts: o}`). Per PHASE_6_DESIGN.md §StreamCollector extension, Non-obvious Decision #11, and Invariants 1–7. `:tool_execution_started`, `:tool_execution_completed`, and `:step_completed` stay in the catch-all; Phase 7 may add explicit clauses for `:step_completed`. Totality property still holds across the 16-tag closed union.
+
+### Phase 6.1 — `ALLM.ToolRunner` + `StreamRunner` attribute rename
+
+#### Added
+- `ALLM.ToolRunner` — new internal Layer C module (spec §17). Ships `run_tool_calls/3` (non-streaming, returns `{:ok, [Message.t()]} | {:ok, [Message.t()], halt_metadata} | {:error, %EngineError{}}`) and `stream_tool_calls/3` (streaming, returns an enumerable of `ALLM.Event` values — Phase 6 extension to spec §17 per PHASE_6_DESIGN.md Non-obvious Decision #2). Both variants share `execute_one_tool/3` for dispatch + encoding + `on_tool_error` policy. Parallel execution via `Task.async_stream/5` with `ordered: false`, `max_concurrency: max(1, min(length(tool_calls), System.schedulers_online() * 2))` default, `on_timeout: :kill_task`, `zip_input_on_exit: true`; per-tool `tool_timeout` (default 30_000 ms). Unknown-tool pre-flight returns `{:error, %EngineError{reason: :unknown_tool, metadata: %{tool_name: name}}}` synchronously (non-streaming) or a single-element error stream (streaming); no tools execute. Empty `tool_calls` short-circuits to `{:ok, []}` / `Stream.concat([])` to guard against `Task.async_stream/5`'s `ArgumentError` on `max_concurrency: 0`. Handler-return dispatch covers all five spec §5.2 shapes: `{:ok, _}`, `{:error, _}` (policy-routed), `{:ask_user, _}` / `{:ask_user, _, _}` (content `"<awaiting user response>"` per spec §12.3; halt with ask-user metadata), `{:halt, reason, result}` (halt with tool_halt metadata). Encoder failures (`Protocol.UndefinedError`, `Jason.EncodeError`) caught and wrapped as `%ToolError{reason: :encoding_failed}`, then routed through `on_tool_error` (Non-obvious Decision #3). Function form of `on_tool_error` raises `ArgumentError` mentioning Phase 7. Sibling-drain on halt (Invariant 3): `Task.async_stream/5` runs to natural exhaustion on handler halt; first-halt-wins (earliest input-index) for `halt_metadata`. No new `ALLM.Event` variants added. No new error-reason atoms added.
+
+#### Changed
+- `ALLM.StreamRunner` — internal module-attribute rename (no behavioural change): `@phase_7_opts` → `@orchestration_opts`, `strip_phase_7_opts/1` → `strip_orchestration_opts/1`, `Logger.debug/1` message "Phase 7 opt" → "orchestration opt", `@moduledoc` section heading "Phase 7 opts are stripped" → "Orchestration opts are stripped". Contents unchanged (`[:mode, :max_turns, :halt_when]`). Phase 6 consumes `:mode` at the `ALLM.Chat` layer (Phase 6.2); StreamRunner's deny-list remains as the safety-net before adapter dispatch. Per PHASE_6_DESIGN.md Non-obvious Decision #5.
 
 ### Phase 5.4 — Stream-equivalence property + §31 scenario wiring
 

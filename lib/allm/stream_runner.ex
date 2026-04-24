@@ -6,14 +6,15 @@ defmodule ALLM.StreamRunner do
   dispatches to the engine adapter's `stream/2`, and applies per-§19
   post-filters and the `:on_event` observer.
 
-  ## Phase 7 opts are stripped
+  ## Orchestration opts are stripped
 
-  Phase 7 orchestration opts (`:mode`, `:max_turns`, `:halt_when`) are
-  deny-listed here and NOT forwarded to the adapter — `stream_generate/3`
-  is single-request, so they would be no-ops or (in the case of
-  `:halt_when`) a `Protocol.UndefinedError` trap at the Jason-encode
-  boundary of real providers. `Logger.debug/1` fires for each stripped
-  key so power users can see the drop during development.
+  Orchestration opts (Phase 6 and Phase 7 consumers) — `:mode`,
+  `:max_turns`, `:halt_when` — are deny-listed here and NOT forwarded to
+  the adapter. `stream_generate/3` is single-request, so they would be
+  no-ops or (in the case of `:halt_when`) a `Protocol.UndefinedError`
+  trap at the Jason-encode boundary of real providers. `Logger.debug/1`
+  fires for each stripped key so power users can see the drop during
+  development.
 
   ## No double-wrapped `Stream.resource/3`
 
@@ -37,8 +38,12 @@ defmodule ALLM.StreamRunner do
   alias ALLM.{Engine, Request, Validate}
   alias ALLM.Error.{AdapterError, EngineError, ValidationError}
 
-  # Phase 7 orchestration opts — stripped before reaching the adapter.
-  @phase_7_opts [:mode, :max_turns, :halt_when]
+  # Orchestration opts (Phase 6 and Phase 7 consumers) — stripped before
+  # reaching the adapter. Phase 6 consumes `:mode` at the `ALLM.Chat` layer;
+  # StreamRunner's deny-list is the safety-net that catches any unstripped
+  # orchestration key before adapter dispatch (see Phase 6 design Non-obvious
+  # Decision #5).
+  @orchestration_opts [:mode, :max_turns, :halt_when]
 
   # Phase 5 streaming-layer opts — read directly from opts by this module,
   # not forwarded to the adapter as params.
@@ -107,7 +112,7 @@ defmodule ALLM.StreamRunner do
   # ---------------------------------------------------------------------------
 
   defp dispatch(%Engine{} = engine, %Request{} = request, opts) do
-    opts = strip_phase_7_opts(opts)
+    opts = strip_orchestration_opts(opts)
     final_request = resolve_request_model(engine, request, opts)
     dispatch_opts = build_dispatch_opts(engine, opts)
 
@@ -115,9 +120,9 @@ defmodule ALLM.StreamRunner do
     |> post_process(opts)
   end
 
-  # Strip the Phase 7 opts from the keyword list, logging each dropped key.
-  defp strip_phase_7_opts(opts) do
-    Enum.reduce(@phase_7_opts, opts, &maybe_strip_key/2)
+  # Strip the orchestration opts from the keyword list, logging each dropped key.
+  defp strip_orchestration_opts(opts) do
+    Enum.reduce(@orchestration_opts, opts, &maybe_strip_key/2)
   end
 
   defp maybe_strip_key(key, acc) do
@@ -130,7 +135,7 @@ defmodule ALLM.StreamRunner do
   end
 
   defp log_stripped(key) do
-    Logger.debug(fn -> "[ALLM.StreamRunner] stripped Phase 7 opt: #{inspect(key)}" end)
+    Logger.debug(fn -> "[ALLM.StreamRunner] stripped orchestration opt: #{inspect(key)}" end)
   end
 
   # Resolve the request's model via `Engine.resolve_model/2` and attach it

@@ -36,7 +36,7 @@ defmodule ALLM do
   public API surface.
   """
 
-  alias ALLM.{Engine, Message, Request, Tool}
+  alias ALLM.{Engine, Message, Request, StepResult, Thread, Tool}
   alias ALLM.Error.{AdapterError, EngineError, ValidationError}
 
   @doc """
@@ -233,4 +233,105 @@ defmodule ALLM do
           | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
   def generate(engine, request, opts \\ []),
     do: ALLM.Runner.run(engine, request, opts)
+
+  @doc """
+  Execute a single chat step (one adapter round-trip plus any auto-executed
+  tool calls) and return a `%ALLM.StepResult{}`. See spec §4 and §10.3.
+
+  `thread_or_messages` is either an `%ALLM.Thread{}` or a list of
+  `%ALLM.Message{}` (normalised via `ALLM.Thread.from_messages/1`). The
+  thread is validated via `ALLM.Validate.thread/1` at entry. Pure
+  one-line delegation to `ALLM.Chat.step/3`; see that module for the
+  full behaviour contract (mode dispatch, on_tool_error policy, halt
+  metadata).
+
+  ## Options
+
+  In addition to any provider-specific opts the adapter honours:
+
+    * `:mode` — `:auto` (default) executes tool calls; `:manual` returns
+      them for the caller to submit results.
+    * `:tool_timeout` — milliseconds per tool (default 30_000).
+    * `:on_tool_error` — `:continue` (default) or `:halt`.
+    * `:tool_executor`, `:tool_result_encoder` — module overrides.
+    * Phase 5 stream filter opts are accepted but have no effect on this
+      non-streaming path.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...>   adapter: ALLM.Providers.Fake,
+      ...>   adapter_opts: [
+      ...>     script: [
+      ...>       {:tool_call, id: "call_0", name: "weather", arguments: %{"city" => "NYC"}},
+      ...>       {:finish, :tool_calls}
+      ...>     ]
+      ...>   ],
+      ...>   tools: [ALLM.tool(
+      ...>     name: "weather",
+      ...>     description: "forecast by city",
+      ...>     schema: %{"type" => "object"},
+      ...>     handler: fn %{"city" => c} -> {:ok, %{forecast: "sunny", city: c}} end
+      ...>   )]
+      ...> )
+      iex> {:ok, sr} = ALLM.step(engine, [ALLM.user("weather in NYC?")])
+      iex> {sr.done?, length(sr.tool_results)}
+      {false, 1}
+  """
+  @spec step(Engine.t(), Thread.t() | [Message.t()], keyword()) ::
+          {:ok, StepResult.t()}
+          | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
+  def step(engine, thread_or_messages, opts \\ []),
+    do: ALLM.Chat.step(engine, thread_or_messages, opts)
+
+  @doc """
+  Execute a single chat step as a lazy stream of `ALLM.Event` values. See
+  spec §4 and §10.4.
+
+  `thread_or_messages` is either an `%ALLM.Thread{}` or a list of
+  `%ALLM.Message{}`. The returned stream is open — no events fire until
+  the caller reduces. Events are emitted in this order: all adapter
+  events (pass-through from `stream_generate/3`), then zero-to-N
+  tool-execution event groups (per tool: `:tool_execution_started` →
+  `:tool_execution_completed` → `:tool_result_encoded` /
+  `:ask_user_requested` / `:tool_halt`), then exactly one terminal
+  `:step_completed` event.
+
+  Pure one-line delegation to `ALLM.Chat.stream_step/3`; see that
+  module for the three-phase `Stream.resource/3` state machine and the
+  unknown-tool error-in-stream contract.
+
+  ## Options
+
+  Same as `step/3`. Additionally accepts the Phase 5 streaming filter
+  opts (`:emit_text_deltas`, `:emit_tool_deltas`, `:include_raw_chunks`,
+  `:on_event`) — they apply to the adapter-stream pass-through phase.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...>   adapter: ALLM.Providers.Fake,
+      ...>   adapter_opts: [
+      ...>     script: [
+      ...>       {:tool_call, id: "call_0", name: "weather", arguments: %{"city" => "NYC"}},
+      ...>       {:finish, :tool_calls}
+      ...>     ]
+      ...>   ],
+      ...>   tools: [ALLM.tool(
+      ...>     name: "weather",
+      ...>     description: "forecast by city",
+      ...>     schema: %{"type" => "object"},
+      ...>     handler: fn %{"city" => c} -> {:ok, %{forecast: "sunny", city: c}} end
+      ...>   )]
+      ...> )
+      iex> {:ok, stream} = ALLM.stream_step(engine, [ALLM.user("weather in NYC?")])
+      iex> events = Enum.to_list(stream)
+      iex> Enum.any?(events, &match?({:step_completed, _}, &1))
+      true
+  """
+  @spec stream_step(Engine.t(), Thread.t() | [Message.t()], keyword()) ::
+          {:ok, Enumerable.t()}
+          | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
+  def stream_step(engine, thread_or_messages, opts \\ []),
+    do: ALLM.Chat.stream_step(engine, thread_or_messages, opts)
 end
