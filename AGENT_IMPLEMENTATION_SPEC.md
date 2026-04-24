@@ -98,15 +98,41 @@ When two adjacent sub-phases target the same layer and share no behavioural depe
 
 Keep sub-phases split when they target different layers or when one's public API is a dependency of the other (e.g., `ALLM.Validate` returns `%ValidationError{}` from `ALLM.Error` — those sub-phases are ordered, not combinable). If in doubt, split; combining a dependency-crossing batch is strictly worse than running two batches in sequence.
 
+**Private-helper-contract coupling.** Before combining N sub-phases, enumerate the private helpers each sub-phase calls into. If the same helper appears in ≥2 sub-phases' call graphs, the helper's contract must be named in the design's Behaviour & Type Contracts section with both sub-phases' accept sets listed — otherwise one sub-phase's needs can pull the helper in a direction that breaks the other. A widen-on-demand (e.g., relaxing a validator mid-batch because one caller needs a wider accept set) is symptomatic: the shared helper's contract was authored against only one sub-phase's needs. The public-API dependency test isn't enough; shared private helpers also need agreement.
+
 ### Constructor test pattern
 
 To assert "required positional args raise `ArgumentError`", use `Mod.new(nil)` — not `apply(Mod, :new, [])`. Credo's `Refactor.Apply` rule flags the `apply/3` form; `nil` falls into the function's own reason-validation path and produces the same `ArgumentError` without Credo friction. The function's `@spec` guarantees the arity; no need to use `apply/3` to bypass it.
+
+### Credo gates likely to bite
+
+The project runs `mix credo --strict` as a release gate. The following rules have shaped Elixir-idiom choice across phases; write the satisfying shape first rather than discovering it on the lint run.
+
+- **`Refactor.Apply`** — `apply/3` is disallowed. Constructor-arity assertions use `Mod.new(nil)` (see above). Optional-dep dispatch uses `Module.concat(["OptionalMod"]).fun(arg)` (see §Common Pitfalls → Optional-dep detection).
+- **`Refactor.CyclomaticComplexity`** (threshold 9) — a function with ≥ 9 independent decision points (if/case/guard/`and`/`or` chains, multi-branch `cond`) trips the rule. For flat sequences of guards or `if-raise` clauses, extract one guard per private helper. Worked example: `ALLM.Providers.Fake.Script.validate!/1` at `lib/allm/providers/fake/script.ex` (five guards factored through `validate_list_opt!/4`).
+- **`Refactor.ABCSize`** (threshold 30) — function body's A/B/C score. Closely related to cyclomatic complexity; the same extract-helpers fix applies.
+- **`Refactor.LongQuoteBlocks`** (threshold 150 lines) — `quote do ... end` inside macros. For conformance harnesses, push helpers out of the `quote` block and expose them as `@doc false def`s on the harness module itself; the caller's quoted code invokes them via `unquote(__MODULE__)` binding.
+- **`Readability.StringSigils`** — double-quoted strings with multiple escapes trigger a suggestion to use `~s()`. Apply in test names that embed JSON.
+
+### Pending tests for deferred phases
+
+When a test file holds scenarios not yet implementable in the current phase (e.g., Phase 4's `fake_scenarios_test.exs` holds placeholders for Phase 5/7/8), use `@tag :pending` + `:ok` body + one-line deferred-phase comment:
+
+    @tag :pending
+    test "§31 scenario: max_turns cap (Phase 7)" do
+      # Phase 7 introduces the orchestrator loop bound.
+      :ok
+    end
+
+The project's `test/test_helper.exs` configures `ExUnit.start(exclude: [:pending])` so tagged tests are excluded from `mix test`. Run them explicitly with `mix test --only pending`. `mix test --only <tag>` overrides exclude, so `mix test --only spec_31` on a file with mixed tags still surfaces the pending ones. When implementing a deferred scenario, delete the `@tag :pending` **and** the `:ok` body together — never leave the tag above new assertions, because the excluded test won't run and the assertions are dead.
 
 ### 4a. Tactical vs. structural inference
 
 When the design names a rule and its trigger but leaves the specific Elixir-idiom choice to the implementer — atom naming for a `{field, reason}` tuple, defensive clauses for string-keyed vs. atom-keyed maps, which error atom to pick when the design says "out of range" without specifying — pick the idiomatic choice and move on. Log it in your Implementation Notes as `[tactical] <one-line summary>` so the review step can audit. Do not halt the build loop for a design round-trip on tactical naming.
 
 **Structural inferences** — `@enforce_keys`, `defexception` fallback clauses, `@derive` vs. `defimpl`, `String.to_existing_atom/1` vs. `String.to_atom/1`, `Stream.resource/3` vs. `Stream.unfold/2`, or a change to a documented deny-list / allow-list (e.g., adding a key to `@engine_field_keys`, removing a reason from a closed-reason-atom enum) — are NOT tactical. They're test-observable invariants that belong in the design's Behaviour & Type Contracts section (per `AGENT_DESIGN_SPEC.md §3`). If you find yourself inferring one, stop and request a design amendment — the contract section is incomplete.
+
+**Structural safeguard-addition exception.** When the design omits a structural invariant whose absence creates a silent-drift risk (a conformance-suite case-count without introspection, a mirror module without a file:line cite, a validator whose accept set is tighter than what the conformance harness actually passes), the implementer MAY ship the safeguard as a structural deviation with `[structural, documented]` annotation and an explicit rationale linking to the drift risk. The retro then evaluates whether to promote the pattern into the design spec. Halting for a design round-trip on missing-invariant structural gaps is optional; halting on wrong-call structural deviations (the design says X, the implementer wants Y) is still required. Worked examples: Phase 3 Batch 3's `@case_count` + meta-test addition; Phase 4.1's `deltas:` MapSet for tool-call re-parse scoping.
 
 ### 5. Quality Gates After Every Phase
 
@@ -252,6 +278,10 @@ end
 
 `ALLM.Providers.Fake` is the reference implementation; every real provider adapter (OpenAI, Anthropic) reuses the same suite via `use ALLM.AdapterConformance, impl: ALLM.Providers.OpenAI` (Shape A) or `use ALLM.Test.AdapterConformance, adapter: ALLM.Providers.OpenAI` (Shape B).
 
+**Shape B harness helpers must be namespaced.** A `defp some_helper/n` inside the harness's `using/1` `quote do ... end` block expands into every consuming test module and shares the caller's namespace — collides with any main-module helper of the same name. Main-module test authors would then either have to pick a different name or be blocked. For the same reason, a main-module that needs a helper sharing the same name (e.g., `eventually/2`) should pick a non-colliding alternative (`wait_for/2`, etc.). If the harness needs a helper callable from the `using/1`-expanded code, define it as a `@doc false def` on the harness module itself and invoke it from the quote via `harness = unquote(__MODULE__); harness.fun(...)` — pushes the definition out of the quote block (reduces `Refactor.LongQuoteBlocks` pressure) and keeps the harness's internal helpers out of the caller's namespace.
+
+**Shape B harnesses must not reference optional fixtures by direct module atom.** A fixture that lives under `conformance/test/support/` (`ALLM.Test.Fixtures.StubAdapter`, etc.) is not on the main package's `elixirc_paths`. Any direct reference to it inside the `using/1` expansion — including via `alias` — produces an `undefined (module is not available)` compile warning in every main-package consumer. Resolve the fixture at runtime: `stub = Module.concat(["ALLM", "Test", "Fixtures", "StubAdapter"])` + `Code.ensure_loaded?(stub)` gates — `Module.concat/1` with source-literal strings produces the atom at runtime, hiding the reference from compile-time resolution (same pattern as §Common Pitfalls → Optional-dep detection).
+
 The engine itself gets a **serializability test**: `:erlang.term_to_binary/1` on a constructed engine succeeds, and the round-tripped engine produces equivalent results. This catches accidentally storing a fun or a Finch ref on the struct.
 
 ### Layer C — Stateless execution
@@ -321,6 +351,22 @@ Each error struct has at minimum `:reason` (atom from a closed set), `:message` 
 - **Backpressure is the consumer's responsibility.** Producer streams emit as fast as the network delivers; consumers using `Stream.take/2`, `Enum.into/3`, etc., control the rate. Document this in `@doc` for every public stream-returning function.
 - **HTTP/1, not HTTP/2** for streaming (spec §7.2). Don't change this without a spec amendment.
 - **SSE parsing is line-buffered.** Events can span chunks; the parser must buffer until it sees `\n\n`. Test with chunks split mid-event.
+
+### `Stream.resource/3` three-arity cheatsheet
+
+The three fun arguments have **different return shapes**; mixing them up produces a cryptic pattern-match failure deep in `Stream.Reducers`, not a clear type error.
+
+| Fun | Arity | Return shape | Purpose |
+|-----|-------|--------------|---------|
+| `start_fun` | `(() -> acc)` | Initial acc **only** — never events | Open resources (files, sockets, counters refs). Stash any pre-emit events in the acc for the first `next_fun` to drain. |
+| `next_fun` | `(acc -> {[events], new_acc} \| {:halt, acc})` | `{events, acc}` during iteration; `{:halt, acc}` on completion | Pop a unit of work; emit events; advance state. Must be idempotent-on-halt. |
+| `after_fun` | `(acc -> term)` | Return value discarded | Cleanup. Runs synchronously on normal halts (`Enum.take/2`, reducer throws, consumer process exit with a trappable reason). Does NOT run on `Process.exit(pid, :kill)`. |
+
+The asymmetry that bites first: **`start_fun` returns acc, not `{events, acc}`**. To emit a bookend event (like `:message_started`) before consuming any entry, stash it in the acc's `:pending` field at `start_fun`, and have `next_fun`'s first clause drain it:
+
+    defp next_fun(%{pending: [_ | _] = pending} = acc), do: {pending, %{acc | pending: []}}
+
+Worked example: `ALLM.Providers.Fake.stream/2` at `lib/allm/providers/fake.ex`.
 
 ## Common Commands
 

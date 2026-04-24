@@ -35,6 +35,9 @@ defmodule ALLM.StreamAdapter do
     4. `opts[:stream_timeout]` (time between consecutive events) is
        honored by the adapter; exceeding it emits a terminating
        `{:error, %AdapterError{reason: :timeout}}` event.
+    5. Adapters emitting `{:raw_chunk, {:usage, _}}` events must pre-map
+       provider-wire usage keys to `%ALLM.Usage{}` field names before
+       emitting; see `ALLM.StreamCollector`'s usage-fold contract.
   """
 
   @doc """

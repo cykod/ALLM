@@ -36,7 +36,8 @@ defmodule ALLM do
   public API surface.
   """
 
-  alias ALLM.{Message, Request, Tool}
+  alias ALLM.{Engine, Message, Request, Tool}
+  alias ALLM.Error.{AdapterError, EngineError, ValidationError}
 
   @doc """
   Build a system-role `%ALLM.Message{}` from a text string.
@@ -150,4 +151,86 @@ defmodule ALLM do
   """
   @spec request([Message.t()], keyword()) :: Request.t()
   def request(messages, opts \\ []), do: Request.new(messages, opts)
+
+  @doc """
+  Open a streaming generation against the engine's adapter. See spec §4 and
+  §10.2.
+
+  Returns `{:ok, enumerable}` where the enumerable is a lazy stream of
+  `ALLM.Event` values (no event fires until the caller reduces), or
+  `{:error, struct}` on a synchronous pre-flight failure (missing adapter,
+  invalid request, adapter-reported pre-flight error).
+
+  ## Options
+
+  In addition to any provider-specific opts the adapter honours, the
+  following Phase 5 streaming-layer keys are consumed by this function:
+
+    * `:emit_text_deltas` — `true` (default) keeps `:text_delta` events in
+      the stream; `false` drops them. `:text_completed` and
+      `:message_completed` are unaffected.
+    * `:emit_tool_deltas` — `true` (default) keeps `:tool_call_delta`
+      events; `false` drops them.
+    * `:include_raw_chunks` — `false` (default) drops `:raw_chunk` events
+      EXCEPT those with payload `{:usage, _}`, which always pass so
+      `%Response.usage` can be populated downstream.
+    * `:on_event` — a 1-arity function invoked for every event BEFORE the
+      filters apply. Exceptions raised inside the callback surface in the
+      consumer's reducing process, not at this call site.
+
+  Phase 7 orchestration opts (`:mode`, `:max_turns`, `:halt_when`) are
+  silently stripped here; `stream_generate/3` is single-request.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...>   adapter: ALLM.Providers.Fake,
+      ...>   adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
+      ...> )
+      iex> req = ALLM.request([ALLM.user("say hi")])
+      iex> {:ok, stream} = ALLM.stream_generate(engine, req)
+      iex> Enum.any?(Enum.to_list(stream), &match?({:message_completed, _}, &1))
+      true
+  """
+  @spec stream_generate(Engine.t(), Request.t(), keyword()) ::
+          {:ok, Enumerable.t()}
+          | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
+  def stream_generate(engine, request, opts \\ []),
+    do: ALLM.StreamRunner.run(engine, request, opts)
+
+  @doc """
+  Execute a non-streaming generation against the engine's adapter. See
+  spec §4 and §10.1.
+
+  Implemented as a reducer over `stream_generate/3` (spec §3) — the
+  streaming path is the primitive. A mid-stream adapter error folds into
+  `response.finish_reason == :error` with the error struct under
+  `response.metadata.error`; pre-flight errors surface directly as
+  `{:error, struct}`.
+
+  ## Options
+
+  Accepts the same options as `stream_generate/3`. `:include_raw_chunks`
+  defaults to `false` but `{:usage, _}` raw chunks always survive the
+  filter so `response.usage` is populated regardless.
+
+  See `ALLM.Runner` for the full mid-stream error contract and the
+  stream-first reducer rationale.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...>   adapter: ALLM.Providers.Fake,
+      ...>   adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
+      ...> )
+      iex> req = ALLM.request([ALLM.user("say hi")])
+      iex> {:ok, response} = ALLM.generate(engine, req)
+      iex> {response.output_text, response.finish_reason}
+      {"hi", :stop}
+  """
+  @spec generate(Engine.t(), Request.t(), keyword()) ::
+          {:ok, ALLM.Response.t()}
+          | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
+  def generate(engine, request, opts \\ []),
+    do: ALLM.Runner.run(engine, request, opts)
 end

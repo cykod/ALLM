@@ -16,10 +16,32 @@ defmodule ALLM.Error.AdapterErrorTest do
     :network_error,
     :malformed_response,
     :unsupported_feature,
+    :no_scripted_response,
     :unknown
   ]
 
+  describe "legal_reasons/0" do
+    test "returns the 12-atom closed set including :no_scripted_response" do
+      reasons = AdapterError.legal_reasons()
+      assert length(reasons) == 12
+      assert :no_scripted_response in reasons
+
+      # Every reason in the file-local fixture must be reflected, and vice
+      # versa — the two sets should be identical.
+      assert MapSet.new(reasons) == MapSet.new(@legal_reasons)
+    end
+  end
+
   describe "new/2" do
+    test ":no_scripted_response succeeds with default message" do
+      err = AdapterError.new(:no_scripted_response)
+
+      assert %AdapterError{
+               reason: :no_scripted_response,
+               message: "adapter error: no_scripted_response"
+             } = err
+    end
+
     test "sets every documented field from opts" do
       err =
         AdapterError.new(:rate_limited,

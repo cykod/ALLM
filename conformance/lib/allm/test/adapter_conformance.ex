@@ -59,7 +59,6 @@ defmodule ALLM.Test.AdapterConformance do
       describe "ALLM.Adapter conformance (#{inspect(@__allm_conformance_adapter__)})" do
         alias ALLM.Error.AdapterError
         alias ALLM.{Message, Request, Response}
-        alias ALLM.Test.Fixtures.StubAdapter
 
         test "generate/2 with a minimal text request returns {:ok, %Response{}}" do
           req = Request.new([%Message{role: :user, content: "hi"}])
@@ -172,31 +171,25 @@ defmodule ALLM.Test.AdapterConformance do
         end
 
         test "accepts opts[:request_timeout] and (when StubAdapter) records it verbatim" do
-          # Design case 11: adapter must honor opts[:request_timeout] per
-          # ALLM.Adapter invariant #3. Universal assertion: the call
-          # succeeds when :request_timeout is present. Additional
-          # assertion when the adapter is ALLM.Test.Fixtures.StubAdapter:
-          # its opts_recorder mechanism captures the full opts keyword,
-          # so we verify the key survived into the adapter's call site.
-          # Third-party adapters ignore :opts_recorder harmlessly — it
-          # lives under the opaque :adapter_opts blob.
+          # Design case 11: adapter honors opts[:request_timeout]. Universal
+          # assertion: the call succeeds when :request_timeout is present.
+          # StubAdapter-only: opts_recorder captures opts verbatim.
           req = Request.new([%Message{role: :user, content: "x"}])
           script = [{:ok, %{output_text: "hi"}}]
+          stub = Module.concat(["ALLM", "Test", "Fixtures", "StubAdapter"])
+          is_stub? = Code.ensure_loaded?(stub) and @__allm_conformance_adapter__ == stub
 
           adapter_opts =
-            if @__allm_conformance_adapter__ == StubAdapter do
-              [script: script, opts_recorder: StubAdapter.start_opts_recorder()]
-            else
-              [script: script]
-            end
+            if is_stub?,
+              do: [script: script, opts_recorder: stub.start_opts_recorder()],
+              else: [script: script]
 
           opts = [adapter_opts: adapter_opts, request_timeout: 1234]
-
           assert {:ok, _} = @__allm_conformance_adapter__.generate(req, opts)
 
-          if @__allm_conformance_adapter__ == StubAdapter do
+          if is_stub? do
             recorder = Keyword.fetch!(adapter_opts, :opts_recorder)
-            [recorded | _] = StubAdapter.recorded_opts(recorder)
+            [recorded | _] = stub.recorded_opts(recorder)
             assert Keyword.get(recorded, :request_timeout) == 1234
           end
         end

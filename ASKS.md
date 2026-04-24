@@ -15,3 +15,17 @@
 [MILE] thu 4/23 12pm - Committed Phase 1 + Phase 2 milestone: Layer A data structs, validator, serializer, Engine resolver API, Keys five-level chain, and retro-driven process artifacts
 
 [BUILD] thu 4/23 12pm - Build all phases from PHASE_3_DESIGN.md
+
+[DSGN] fri 4/24 1pm - Design Phase 4 — ALLM.Providers.Fake scripted adapter
+
+[MILE] fri 4/24 1pm - Shipped Phase 3: hardened four Layer B behaviour contracts, shipped ToolExecutor.Default + ToolResultEncoder.JSON at 100% coverage, and published allm_conformance sibling Hex package with 47 injected cases
+
+[BUILD] fri 4/24 3pm - Build phases from PHASE_4_DESIGN.md steering doc
+
+[RETR] fri 4/24 3pm - Retro on current session
+
+[DSGN] fri 4/24 4pm - Design Phase 5: stream_generate, generate, StreamCollector
+
+[BUILD] fri 4/24 4pm - Build all phases from PHASE_5_DESIGN.md
+
+[DSGN] fri 4/24 6pm - Design Phase 6 single-turn tool loop (stream_step/step)

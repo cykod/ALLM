@@ -7,6 +7,23 @@ defmodule ALLM.Error.AdapterError do
   uniform shape.
 
   See Phase 1 design §Sub-phase 1.1 for the closed reason enum.
+
+  ## Error reasons
+
+  | Reason | Fires when |
+  |--------|------------|
+  | `:rate_limited` | Provider returned a rate-limit signal (HTTP 429, provider-specific header). |
+  | `:authentication_failed` | Credentials rejected (HTTP 401/403). |
+  | `:invalid_request` | Provider rejected the request shape (HTTP 400). |
+  | `:provider_unavailable` | Provider-side outage (HTTP 5xx, connection refused). |
+  | `:context_length_exceeded` | Prompt + expected output exceeds model context window. |
+  | `:content_filter` | Provider refused content on policy grounds. |
+  | `:timeout` | Request-level timeout (`opts[:request_timeout]` exceeded). |
+  | `:network_error` | Transport-level failure (DNS, TCP, TLS). |
+  | `:malformed_response` | Provider returned unparseable body. |
+  | `:unsupported_feature` | Model or provider does not support a requested capability. |
+  | `:no_scripted_response` | Testing adapters (e.g., `ALLM.Providers.Fake`) exhausted their script. Never produced by production providers (spec §31, Phase 4 amendment). |
+  | `:unknown` | Catch-all when no other reason fits; original term preserved in `:cause`. |
   """
 
   @typedoc "Closed set of adapter-level error reasons (spec §20)."
@@ -21,6 +38,7 @@ defmodule ALLM.Error.AdapterError do
           | :network_error
           | :malformed_response
           | :unsupported_feature
+          | :no_scripted_response
           | :unknown
 
   @type t :: %__MODULE__{
@@ -45,8 +63,23 @@ defmodule ALLM.Error.AdapterError do
     network_error
     malformed_response
     unsupported_feature
+    no_scripted_response
     unknown
   )a
+
+  @doc """
+  Return the closed list of legal `:reason` atoms.
+
+  ## Examples
+
+      iex> :no_scripted_response in ALLM.Error.AdapterError.legal_reasons()
+      true
+
+      iex> length(ALLM.Error.AdapterError.legal_reasons())
+      12
+  """
+  @spec legal_reasons() :: [reason()]
+  def legal_reasons, do: @legal_reasons
 
   defexception [
     :reason,

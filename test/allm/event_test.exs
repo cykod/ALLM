@@ -162,9 +162,57 @@ defmodule ALLM.EventTest do
       assert {:message_started, %{message: ^msg}} = Event.message_started(msg)
     end
 
-    test "message_completed/1" do
+    test "message_completed/1 sets finish_reason: nil in the payload" do
       msg = %Message{role: :assistant, content: "ok"}
-      assert {:message_completed, %{message: ^msg}} = Event.message_completed(msg)
+
+      assert {:message_completed, %{message: ^msg, finish_reason: nil}} =
+               Event.message_completed(msg)
+    end
+
+    test "message_completed/2 with :stop returns finish_reason: :stop" do
+      msg = %Message{role: :assistant, content: "ok"}
+
+      assert {:message_completed, %{message: ^msg, finish_reason: :stop}} =
+               Event.message_completed(msg, :stop)
+    end
+
+    test "message_completed/2 with nil is identical to message_completed/1" do
+      msg = %Message{role: :assistant, content: "ok"}
+      assert Event.message_completed(msg, nil) == Event.message_completed(msg)
+    end
+
+    test "message_completed/2 with a binary raises FunctionClauseError" do
+      msg = %Message{role: :assistant, content: "ok"}
+
+      assert_raise FunctionClauseError, fn ->
+        Event.message_completed(msg, "stop")
+      end
+    end
+
+    test "event?/1 accepts :message_completed without :finish_reason (back-compat)" do
+      msg = %Message{role: :assistant, content: "ok"}
+      assert Event.event?({:message_completed, %{message: msg}})
+    end
+
+    test "event?/1 accepts :message_completed with :finish_reason" do
+      msg = %Message{role: :assistant, content: "ok"}
+      assert Event.event?({:message_completed, %{message: msg, finish_reason: :stop}})
+    end
+
+    test ":message_completed with :finish_reason round-trips through :erlang.term_to_binary/1 and Jason" do
+      msg = %Message{role: :assistant, content: "ok"}
+      event = Event.message_completed(msg, :stop)
+
+      assert event == event |> :erlang.term_to_binary() |> :erlang.binary_to_term()
+
+      # Paranoia: convert payload map to a plain map so Jason can encode it,
+      # then assert the decoded shape preserves the finish_reason (as a
+      # string key after JSON round-trip — atom-key preservation isn't
+      # required at the event level, only the value).
+      {:message_completed, payload} = event
+      json = Jason.encode!(payload)
+      decoded = Jason.decode!(json)
+      assert decoded["finish_reason"] == "stop"
     end
 
     test "step_completed/2" do

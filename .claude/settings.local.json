@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:hexdocs.pm)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:containers.dev)",
+      "Bash(gh api *)",
+      "Bash(curl -s https://api.github.com/repos/devcontainers-extra/features/contents/src)",
+      "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); print\\('\\\\n'.join\\(x['name'] for x in data if 'elixir' in x['name'].lower\\(\\) or 'asdf' in x['name'].lower\\(\\) or 'erlang' in x['name'].lower\\(\\)\\)\\)\")"
     ]
   }
 }

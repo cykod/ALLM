@@ -12,6 +12,18 @@ defmodule ALLM.Event do
   canonical way to build events from the stream runner; the spec leaves
   `:raw_chunk` and `:error` un-constructed because their payloads are
   opaque.
+
+  ## Payload extensions
+
+  Phase 5 additively extends the `:message_completed` payload with an
+  optional `:finish_reason` key of type `t:ALLM.Response.finish_reason/0` or
+  `nil`. The tag set is unchanged — the union still has 16 tags. Existing
+  consumers that bind `{:message_completed, %{message: msg}}` continue to
+  match because Elixir map patterns are non-exhaustive; only consumers that
+  want to read `:finish_reason` opt in. The `message_completed/1`
+  constructor is preserved and now produces a payload with
+  `:finish_reason => nil`; `message_completed/2` threads the caller-supplied
+  reason into the payload.
   """
 
   alias ALLM.{ChatResult, Message, Response, Thread}
@@ -35,7 +47,8 @@ defmodule ALLM.Event do
                opts: keyword()
              }}
           | {:tool_halt, %{tool_call_id: String.t(), reason: atom(), result: term()}}
-          | {:message_completed, %{message: Message.t()}}
+          | {:message_completed,
+             %{message: Message.t(), finish_reason: Response.finish_reason() | nil}}
           | {:step_completed, %{response: Response.t(), thread: Thread.t()}}
           | {:chat_completed, %{result: ChatResult.t()}}
           | {:raw_chunk, term()}
@@ -254,17 +267,42 @@ defmodule ALLM.Event do
     do: {:message_started, %{message: message}}
 
   @doc """
-  Build a `:message_completed` event with the finalized message.
+  Build a `:message_completed` event with the finalized message. The payload
+  carries `:finish_reason => nil`; use `message_completed/2` to populate a
+  specific finish reason. See "Payload extensions" in the module doc.
 
   ## Examples
 
       iex> msg = %ALLM.Message{role: :assistant, content: "ok"}
       iex> ALLM.Event.message_completed(msg)
-      {:message_completed, %{message: msg}}
+      {:message_completed, %{message: msg, finish_reason: nil}}
   """
   @spec message_completed(Message.t()) :: t()
   def message_completed(%Message{} = message),
-    do: {:message_completed, %{message: message}}
+    do: {:message_completed, %{message: message, finish_reason: nil}}
+
+  @doc """
+  Build a `:message_completed` event with the finalized message and a
+  finish-reason atom (or `nil`). The guard accepts any atom — the closed
+  `t:ALLM.Response.finish_reason/0` enum is enforced by `@type t` and by
+  `Response.finish_reason/0`, not at the event-construction boundary. This
+  lets adapters preserve provider-specific reasons downstream as
+  `Response.raw_finish_reason`.
+
+  ## Examples
+
+      iex> msg = %ALLM.Message{role: :assistant, content: "ok"}
+      iex> ALLM.Event.message_completed(msg, :stop)
+      {:message_completed, %{message: msg, finish_reason: :stop}}
+
+      iex> msg = %ALLM.Message{role: :assistant, content: "ok"}
+      iex> ALLM.Event.message_completed(msg, nil) == ALLM.Event.message_completed(msg)
+      true
+  """
+  @spec message_completed(Message.t(), Response.finish_reason() | nil) :: t()
+  def message_completed(%Message{} = message, finish_reason)
+      when is_atom(finish_reason) or is_nil(finish_reason),
+      do: {:message_completed, %{message: message, finish_reason: finish_reason}}
 
   @doc """
   Build a `:step_completed` event with the response and the updated thread.

@@ -52,6 +52,26 @@ defmodule ALLM.Test.StreamAdapterConformance do
   @spec case_count() :: pos_integer()
   def case_count, do: @case_count
 
+  @doc false
+  @spec __allm_conformance_eventually__((-> boolean()), pos_integer()) :: boolean()
+  def __allm_conformance_eventually__(fun, timeout_ms) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    eventually_loop(fun, deadline)
+  end
+
+  defp eventually_loop(fun, deadline) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        false
+      else
+        Process.sleep(10)
+        eventually_loop(fun, deadline)
+      end
+    end
+  end
+
   using opts do
     quote location: :keep do
       @__allm_conformance_stream_adapter__ Keyword.fetch!(
@@ -168,7 +188,8 @@ defmodule ALLM.Test.StreamAdapterConformance do
 
           # Stream.resource/3's after_fun runs synchronously at halt.
           # :counters is shared memory, visible across async boundaries.
-          assert eventually(fn -> :counters.get(ref, 1) == 1 end, 500)
+          harness = unquote(__MODULE__)
+          assert harness.__allm_conformance_eventually__(fn -> :counters.get(ref, 1) == 1 end, 500)
         end
 
         test "stream_timeout: mid-stream %AdapterError{reason: :timeout} event is accepted" do
@@ -183,28 +204,6 @@ defmodule ALLM.Test.StreamAdapterConformance do
                    {:error, %AdapterError{reason: :timeout}} -> true
                    _ -> false
                  end)
-        end
-
-        # Poll a 0-arity fun until it returns truthy or the timeout
-        # elapses. 10 ms step; used only by the halt-safety case.
-        defp eventually(fun, timeout_ms) when is_function(fun, 0) do
-          deadline = System.monotonic_time(:millisecond) + timeout_ms
-          eventually_loop(fun, deadline)
-        end
-
-        defp eventually_loop(fun, deadline) do
-          if fun.() do
-            true
-          else
-            now = System.monotonic_time(:millisecond)
-
-            if now >= deadline do
-              false
-            else
-              Process.sleep(10)
-              eventually_loop(fun, deadline)
-            end
-          end
         end
       end
     end
