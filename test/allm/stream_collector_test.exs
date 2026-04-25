@@ -235,27 +235,6 @@ defmodule ALLM.StreamCollectorTest do
       assert s0 == s1
     end
 
-    test ":step_completed is absorbed (state unchanged)" do
-      s0 = StreamCollector.new()
-
-      s1 =
-        StreamCollector.apply_event(
-          s0,
-          {:step_completed, %{response: %Response{}, thread: %Thread{}}}
-        )
-
-      assert s0 == s1
-    end
-
-    test ":chat_completed is absorbed (state unchanged)" do
-      s0 = StreamCollector.new()
-
-      cr = %ChatResult{thread: %Thread{}, final_response: %Response{}, halted_reason: :completed}
-      s1 = StreamCollector.apply_event(s0, {:chat_completed, %{result: cr}})
-
-      assert s0 == s1
-    end
-
     test ":not_even_a_tuple is absorbed" do
       s0 = StreamCollector.new()
       assert s0 == StreamCollector.apply_event(s0, :not_even_a_tuple)
@@ -300,27 +279,50 @@ defmodule ALLM.StreamCollectorTest do
   end
 
   describe "apply_event/2 — :tool_halt (Phase 6)" do
-    test "sets state.halt to {:halt, reason, tool_call_id}" do
+    test "sets state.halt to {:halt, reason, tool_call_id, result}" do
       s =
         StreamCollector.new()
         |> StreamCollector.apply_event(
           {:tool_halt, %{tool_call_id: "c0", reason: :budget_exceeded, result: %{}}}
         )
 
-      assert s.halt == {:halt, :budget_exceeded, "c0"}
+      assert s.halt == {:halt, :budget_exceeded, "c0", %{}}
     end
 
     test "first-halt-wins — subsequent :tool_halt events are ignored" do
       s =
         StreamCollector.new()
         |> StreamCollector.apply_event(
-          {:tool_halt, %{tool_call_id: "c0", reason: :first, result: %{}}}
+          {:tool_halt, %{tool_call_id: "c0", reason: :first, result: :first_r}}
         )
         |> StreamCollector.apply_event(
-          {:tool_halt, %{tool_call_id: "c1", reason: :second, result: %{}}}
+          {:tool_halt, %{tool_call_id: "c1", reason: :second, result: :second_r}}
         )
 
-      assert s.halt == {:halt, :first, "c0"}
+      assert s.halt == {:halt, :first, "c0", :first_r}
+    end
+
+    test "appends a sentinel %Message{role: :tool} carrying payload :content to tool_results" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event(
+          {:tool_halt,
+           %{tool_call_id: "c0", reason: :budget, result: %{r: 1}, content: "encoded-body"}}
+        )
+
+      assert [%Message{role: :tool, tool_call_id: "c0", content: "encoded-body"}] =
+               s.tool_results
+    end
+
+    test "fallback content uses inspect/1 when payload :content is absent" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event(
+          {:tool_halt, %{tool_call_id: "c0", reason: :x, result: %{a: 1}}}
+        )
+
+      assert [%Message{tool_call_id: "c0", content: content}] = s.tool_results
+      assert content == inspect(%{a: 1})
     end
   end
 
@@ -358,7 +360,24 @@ defmodule ALLM.StreamCollectorTest do
           {:ask_user_requested, %{tool_call_id: "c1", tool_name: "e", question: "q?", opts: []}}
         )
 
-      assert s.halt == {:halt, :x, "c0"}
+      assert s.halt == {:halt, :x, "c0", :r}
+    end
+
+    test "appends `<awaiting user response>` sentinel to tool_results" do
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event(
+          {:ask_user_requested,
+           %{tool_call_id: "c0", tool_name: "e", question: "q?", opts: [choices: [1, 2]]}}
+        )
+
+      assert [
+               %Message{
+                 role: :tool,
+                 tool_call_id: "c0",
+                 content: "<awaiting user response>"
+               }
+             ] = s.tool_results
     end
   end
 
@@ -516,6 +535,7 @@ defmodule ALLM.StreamCollectorTest do
       sr = StreamCollector.to_step_result(s)
       assert sr.metadata[:halted_reason] == :budget
       assert sr.metadata[:halt_tool_call_id] == "c0"
+      assert sr.metadata[:halt_result] == :r
     end
 
     test "merges halt metadata (ask_user shape) into StepResult.metadata" do
@@ -549,26 +569,64 @@ defmodule ALLM.StreamCollectorTest do
   # ---------------------------------------------------------------------------
 
   describe "to_chat_result/1" do
-    test "with finish_reason in [:stop, :length, :tool_calls, :content_filter] → :completed" do
-      msg = %Message{role: :assistant, content: ""}
+    test "stored chat_result short-circuits (returned verbatim)" do
+      cr = %ChatResult{
+        thread: Thread.new(),
+        final_response: %Response{output_text: "stored"},
+        halted_reason: :completed
+      }
+
+      s =
+        StreamCollector.new(Thread.new())
+        |> StreamCollector.apply_event({:chat_completed, %{result: cr}})
+
+      assert StreamCollector.to_chat_result(s) == cr
+    end
+
+    test "stored chat_result short-circuits even when state.thread is nil" do
+      cr = %ChatResult{
+        thread: Thread.new(),
+        final_response: %Response{output_text: "stored"},
+        halted_reason: :completed
+      }
+
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event({:chat_completed, %{result: cr}})
+
+      assert StreamCollector.to_chat_result(s) == cr
+    end
+
+    test "fallback: zero-step cancellation → :cancelled" do
       thread = Thread.new()
-
-      for fr <- [:stop, :length, :tool_calls, :content_filter] do
-        s =
-          StreamCollector.new(thread)
-          |> StreamCollector.apply_event({:message_completed, %{message: msg, finish_reason: fr}})
-
-        cr = StreamCollector.to_chat_result(s)
-        assert %ChatResult{thread: ^thread, halted_reason: :completed} = cr
-      end
+      cr = StreamCollector.to_chat_result(StreamCollector.new(thread))
+      assert cr.halted_reason == :cancelled
+      assert cr.thread == thread
+      assert cr.steps == []
     end
 
-    test "with finish_reason: nil → :completed (conservative default)" do
-      cr = StreamCollector.to_chat_result(StreamCollector.new(Thread.new()))
-      assert cr.halted_reason == :completed
+    test "fallback: partial-step cancellation does NOT promote to :completed" do
+      # Two clean :step_completed events but no :chat_completed → still :cancelled.
+      thread = Thread.new()
+      msg = %Message{role: :assistant, content: "step"}
+
+      response = %Response{
+        message: msg,
+        output_text: "step",
+        finish_reason: :stop
+      }
+
+      s =
+        StreamCollector.new(thread)
+        |> StreamCollector.apply_event({:step_completed, %{response: response, thread: thread}})
+        |> StreamCollector.apply_event({:step_completed, %{response: response, thread: thread}})
+
+      cr = StreamCollector.to_chat_result(s)
+      assert cr.halted_reason == :cancelled
+      assert length(cr.steps) == 2
     end
 
-    test "with finish_reason: :error → :error" do
+    test "fallback: state.error != nil → :error (takes precedence over :cancelled)" do
       err = %AdapterError{reason: :rate_limited, message: "x"}
 
       s =
@@ -579,7 +637,35 @@ defmodule ALLM.StreamCollectorTest do
       assert cr.halted_reason == :error
     end
 
-    test "with nil thread raises ArgumentError with helpful message" do
+    test "fallback final_response: last step's response when steps != []" do
+      thread = Thread.new()
+      msg = %Message{role: :assistant, content: "first"}
+      r1 = %Response{message: msg, output_text: "first", finish_reason: :stop}
+
+      msg2 = %Message{role: :assistant, content: "last"}
+      r2 = %Response{message: msg2, output_text: "last", finish_reason: :stop}
+
+      s =
+        StreamCollector.new(thread)
+        |> StreamCollector.apply_event({:step_completed, %{response: r1, thread: thread}})
+        |> StreamCollector.apply_event({:step_completed, %{response: r2, thread: thread}})
+
+      cr = StreamCollector.to_chat_result(s)
+      assert cr.final_response == r2
+    end
+
+    test "fallback final_response: to_response(state) when steps == []" do
+      thread = Thread.new()
+
+      s =
+        StreamCollector.new(thread)
+        |> StreamCollector.apply_event({:text_delta, %{id: nil, delta: "partial"}})
+
+      cr = StreamCollector.to_chat_result(s)
+      assert cr.final_response.output_text == "partial"
+    end
+
+    test "with nil chat_result and nil thread raises ArgumentError with helpful message" do
       assert_raise ArgumentError, ~r/requires a thread/, fn ->
         StreamCollector.to_chat_result(StreamCollector.new())
       end
@@ -587,6 +673,178 @@ defmodule ALLM.StreamCollectorTest do
       assert_raise ArgumentError, ~r/to_response\/1 for thread-less collection/, fn ->
         StreamCollector.to_chat_result(StreamCollector.new(nil))
       end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Phase 7: :step_completed and :chat_completed fold clauses
+  # ---------------------------------------------------------------------------
+
+  describe "apply_event/2 — :step_completed (Phase 7)" do
+    test "appends a %StepResult{} to state.steps with response/thread/tool_results" do
+      thread = Thread.new() |> Thread.add_message(%Message{role: :user, content: "hi"})
+      msg = %Message{role: :assistant, content: "hello"}
+      response = %Response{message: msg, output_text: "hello", finish_reason: :stop}
+      tool_msg = %Message{role: :tool, tool_call_id: "c0", content: "ok", metadata: %{}}
+
+      s =
+        %{StreamCollector.new() | tool_results: [tool_msg]}
+        |> StreamCollector.apply_event({:step_completed, %{response: response, thread: thread}})
+
+      assert [step_result] = s.steps
+      assert %StepResult{} = step_result
+      assert step_result.response == response
+      assert step_result.thread == thread
+      assert step_result.tool_results == [tool_msg]
+    end
+
+    test "resets per-step sub-state after the fold" do
+      thread = Thread.new()
+      msg = %Message{role: :assistant, content: "x"}
+      response = %Response{message: msg, output_text: "x", finish_reason: :stop}
+
+      s0 = StreamCollector.new()
+
+      s1 = %{
+        s0
+        | current_text: "x",
+          current_tool_calls: %{"c0" => %ToolCall{id: "c0", name: "t", arguments: %{}}},
+          tool_call_order: ["c0"],
+          tool_results: [%Message{role: :tool, tool_call_id: "c0", content: "ok"}],
+          halt: {:halt, :foo, "c0", :r},
+          finish_reason: :stop,
+          raw_finish_reason: "stop",
+          last_message: msg
+      }
+
+      s2 =
+        StreamCollector.apply_event(
+          s1,
+          {:step_completed, %{response: response, thread: thread}}
+        )
+
+      assert s2.current_text == ""
+      assert s2.current_tool_calls == %{}
+      assert s2.tool_call_order == []
+      assert s2.tool_results == []
+      assert s2.halt == nil
+      assert s2.finish_reason == nil
+      assert s2.raw_finish_reason == nil
+      assert s2.last_message == nil
+    end
+
+    test "appended StepResult carries PRE-RESET tool_results, halt-derived metadata, and done?" do
+      thread = Thread.new()
+      msg = %Message{role: :assistant, content: "x"}
+      response = %Response{message: msg, output_text: "x", finish_reason: :tool_calls}
+      tool_msg = %Message{role: :tool, tool_call_id: "id1", content: "x"}
+
+      s =
+        %{
+          StreamCollector.new()
+          | tool_results: [tool_msg],
+            halt: {:halt, :foo, "id1", :result_term}
+        }
+        |> StreamCollector.apply_event({:step_completed, %{response: response, thread: thread}})
+
+      [step_result] = s.steps
+      assert step_result.tool_results == [tool_msg]
+      assert step_result.metadata.halted_reason == :foo
+      assert step_result.metadata.halt_tool_call_id == "id1"
+      assert step_result.metadata.halt_result == :result_term
+      assert step_result.done? == true
+    end
+
+    test "state.metadata is NOT reset by the fold" do
+      thread = Thread.new()
+      msg = %Message{role: :assistant, content: "x"}
+      response = %Response{message: msg, output_text: "x", finish_reason: :stop}
+
+      s =
+        %{StreamCollector.new() | metadata: %{adapter_meta: 1}}
+        |> StreamCollector.apply_event({:step_completed, %{response: response, thread: thread}})
+
+      assert s.metadata == %{adapter_meta: 1}
+    end
+
+    test "state.thread is updated to the event's thread" do
+      old_thread = Thread.new()
+      new_thread = Thread.new() |> Thread.add_message(%Message{role: :user, content: "next"})
+      msg = %Message{role: :assistant, content: "x"}
+      response = %Response{message: msg, output_text: "x", finish_reason: :stop}
+
+      s =
+        StreamCollector.new(old_thread)
+        |> StreamCollector.apply_event({:step_completed, %{response: response, thread: new_thread}})
+
+      assert s.thread == new_thread
+    end
+
+    test "state.error is NOT reset" do
+      thread = Thread.new()
+      msg = %Message{role: :assistant, content: "x"}
+      response = %Response{message: msg, output_text: "x", finish_reason: :stop}
+      err = %AdapterError{reason: :rate_limited, message: "x"}
+
+      s =
+        %{StreamCollector.new() | error: err}
+        |> StreamCollector.apply_event({:step_completed, %{response: response, thread: thread}})
+
+      assert s.error == err
+    end
+
+    test "two :step_completed folds produce state.steps with length 2 and post-reset cleanliness" do
+      thread = Thread.new()
+      msg = %Message{role: :assistant, content: "x"}
+      response = %Response{message: msg, output_text: "x", finish_reason: :stop}
+
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event({:step_completed, %{response: response, thread: thread}})
+        |> StreamCollector.apply_event({:text_delta, %{id: nil, delta: "step2"}})
+        |> StreamCollector.apply_event({:step_completed, %{response: response, thread: thread}})
+
+      assert length(s.steps) == 2
+      # Sub-state reset cleanly between folds.
+      assert s.current_text == ""
+    end
+  end
+
+  describe "apply_event/2 — :chat_completed (Phase 7)" do
+    test "stores the event's :result verbatim and sets done?: true" do
+      cr = %ChatResult{
+        thread: Thread.new(),
+        final_response: %Response{output_text: "x"},
+        halted_reason: :completed
+      }
+
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event({:chat_completed, %{result: cr}})
+
+      assert s.chat_result == cr
+      assert s.done? == true
+    end
+
+    test "second :chat_completed overwrites the first (last-wins)" do
+      cr1 = %ChatResult{
+        thread: Thread.new(),
+        final_response: %Response{output_text: "first"},
+        halted_reason: :completed
+      }
+
+      cr2 = %ChatResult{
+        thread: Thread.new(),
+        final_response: %Response{output_text: "second"},
+        halted_reason: :max_turns
+      }
+
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event({:chat_completed, %{result: cr1}})
+        |> StreamCollector.apply_event({:chat_completed, %{result: cr2}})
+
+      assert s.chat_result == cr2
     end
   end
 
@@ -653,6 +911,21 @@ defmodule ALLM.StreamCollectorTest do
         {:tool_result_encoded, %{id: "c0", content: "1"}},
         {:tool_halt, %{tool_call_id: "c0", reason: :x, result: :r}},
         {:ask_user_requested, %{tool_call_id: "c0", tool_name: "t", question: "q?", opts: []}}
+      ]
+
+      for event <- events do
+        assert %StreamCollector{} = StreamCollector.apply_event(StreamCollector.new(), event)
+      end
+    end
+
+    test "apply_event/2 accepts every Phase-7 orchestration tag without raising on well-formed payload" do
+      thread = Thread.new()
+      response = %Response{output_text: "x"}
+      cr = %ChatResult{thread: thread, final_response: response, halted_reason: :completed}
+
+      events = [
+        {:step_completed, %{response: response, thread: thread}},
+        {:chat_completed, %{result: cr}}
       ]
 
       for event <- events do

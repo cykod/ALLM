@@ -84,6 +84,7 @@ defmodule ALLM.Chat do
   """
 
   alias ALLM.{
+    ChatResult,
     Engine,
     Event,
     Message,
@@ -99,6 +100,7 @@ defmodule ALLM.Chat do
     Validate
   }
 
+  alias ALLM.Chat.LoopState
   alias ALLM.Error.{AdapterError, EngineError, ValidationError}
 
   @typedoc """
@@ -255,6 +257,391 @@ defmodule ALLM.Chat do
          {:ok, adapter_stream} <- StreamRunner.run(engine, request, opts) do
       {:ok, build_step_stream(engine, thread, adapter_stream, opts)}
     end
+  end
+
+  @typedoc """
+  Options accepted by `run/3` (and `stream/3` in Phase 7.4).
+
+    * `:max_turns` — `pos_integer()`. Precedence: call opts > `engine.params`
+      > `Application.get_env(:allm, :max_turns)` > library default `8`.
+      Validated at entry; raises `ArgumentError` for non-`pos_integer`.
+    * `:halt_when` — `(StepResult.t() -> boolean())`. Called AFTER thread
+      mutation per turn; exceptions propagate to the caller.
+    * Plus every `step_opts/0` key (`:mode`, `:tool_timeout`,
+      `:on_tool_error`, etc.).
+  """
+  @type chat_opts :: keyword()
+
+  @doc """
+  Run a multi-turn chat loop and return a `%ALLM.ChatResult{}`.
+
+  Composes `step/3` calls: each step's `thread` becomes the next step's
+  input thread. Halts on the first matching terminal condition (see
+  `terminal_condition/4` source for the seven-entry total order).
+
+  ## Halt reasons
+
+  | Reason | Fires when |
+  |--------|------------|
+  | `:completed` | Adapter `finish_reason ∈ {:stop, :length, :content_filter}` |
+  | `:error` | Adapter `finish_reason: :error` (mid-stream error folds into the response) |
+  | `:max_turns` | `step_index + 1 >= max_turns` after a step that didn't otherwise halt |
+  | `:halt_when` | `halt_when.(step_result)` returns `true` |
+  | `:ask_user` | Handler returned `{:ask_user, _}` or `{:ask_user, _, _}` |
+  | `:tool_error` | `on_tool_error: :halt` fired, or fun form returned `:halt` / raised |
+  | `:manual_tool_calls` | `mode: :manual` and step surfaces tool calls |
+  | atom() (user) | Handler returned `{:halt, reason, result}` |
+
+  Adapter pre-flight errors surface as `{:error, struct}` from the FIRST
+  step's `step/3` call. Mid-loop adapter errors fold into the step's
+  response and surface as `halted_reason: :error` on the `ChatResult`.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...>   adapter: ALLM.Providers.Fake,
+      ...>   adapter_opts: [
+      ...>     scripts: [
+      ...>       [{:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+      ...>        {:finish, :tool_calls}],
+      ...>       [{:text, "done"}, {:finish, :stop}]
+      ...>     ]
+      ...>   ],
+      ...>   tools: [ALLM.tool(
+      ...>     name: "echo",
+      ...>     description: "",
+      ...>     schema: %{},
+      ...>     handler: fn args -> {:ok, args} end
+      ...>   )]
+      ...> )
+      iex> thread = ALLM.Thread.from_messages([ALLM.user("echo please")])
+      iex> {:ok, %ALLM.ChatResult{} = r} = ALLM.Chat.run(engine, thread)
+      iex> r.halted_reason
+      :completed
+      iex> length(r.steps)
+      2
+  """
+  @spec run(Engine.t(), Thread.t() | [Message.t()], chat_opts()) ::
+          {:ok, ChatResult.t()}
+          | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
+  def run(%Engine{} = engine, thread_or_messages, opts \\ []) when is_list(opts) do
+    max_turns = resolve_max_turns(engine, opts)
+    validate_max_turns!(max_turns)
+
+    with {:ok, thread} <- normalise_thread(thread_or_messages) do
+      # `max_turns` is resolved once at entry and threaded through `LoopState`.
+      # `opts` flows verbatim to `step/3` and the adapter — no sentinels, no
+      # private keys. `terminal_condition/5` reads `max_turns` from its
+      # explicit 5th argument; both `run/3` and (future) `stream/3` resolve
+      # the same way at entry.
+      state = %LoopState{
+        engine: engine,
+        opts: opts,
+        initial_thread: thread,
+        thread: thread,
+        max_turns: max_turns
+      }
+
+      run_loop(state)
+    end
+  end
+
+  @doc """
+  Stream a multi-turn chat loop and return a lazy stream of `ALLM.Event`
+  values terminating in exactly one `:chat_completed` event.
+
+  Composes `stream_step/3` sub-streams sequentially: the outer
+  `Stream.resource/3` drives the current step's reducer one event at a
+  time (mirroring Phase 6's `stream_step/3` continuation idiom one layer
+  up). When a step completes, `terminal_condition/5` decides whether to
+  start a new step (with the augmented thread) or transition to the
+  terminal `:chat_completed` emission.
+
+  ## Multi-turn stream composition
+
+  Two-phase state machine (see Phase 7 design Non-obvious Decision #1):
+
+    * **Phase S (`:step`)** — drives the current `stream_step/3`
+      enumerable via its reducer continuation. Each `next_fun` pulls one
+      event, folds it into the outer `StreamCollector`, and emits it. On
+      `:step_completed`, computes a `%StepResult{}` from the PRE-fold
+      collector state, folds the event, then invokes
+      `terminal_condition/5`. On `:continue`, starts the next step. On
+      `{:halt, reason, _}`, builds the final `%ChatResult{}` and
+      transitions to Phase F.
+    * **Phase F (`:final`)** — emits exactly one
+      `{:chat_completed, %{result: chat_result}}` event and halts.
+
+  ## Cleanup chain
+
+  ```
+  Chat.stream/3 after_fun
+    → halt step_cont
+      → Chat.stream_step/3 after_fun
+        → halt adapter_cont OR tool_cont (whichever is active)
+  ```
+
+  Consumer halt produces NO `:chat_completed` event (per spec §30
+  cancellation contract). Callers needing a final `%ChatResult{}` for a
+  cancelled stream collect events and call
+  `ALLM.StreamCollector.to_chat_result/1` on the partial state.
+
+  ## Ask-user thread asymmetry
+
+  When a step's handler returns `{:ask_user, _}`, the streamed
+  `:step_completed.thread` does NOT include the assistant question
+  message — only the `:chat_completed.result.thread` does (Phase 7
+  Invariant 8). Consumers persisting thread state across turns should
+  read `ChatResult.thread`, not `:step_completed.thread`.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...>   adapter: ALLM.Providers.Fake,
+      ...>   adapter_opts: [
+      ...>     scripts: [
+      ...>       [{:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+      ...>        {:finish, :tool_calls}],
+      ...>       [{:text, "done"}, {:finish, :stop}]
+      ...>     ]
+      ...>   ],
+      ...>   tools: [ALLM.tool(
+      ...>     name: "echo",
+      ...>     description: "",
+      ...>     schema: %{},
+      ...>     handler: fn args -> {:ok, args} end
+      ...>   )]
+      ...> )
+      iex> thread = ALLM.Thread.from_messages([ALLM.user("echo please")])
+      iex> {:ok, stream} = ALLM.Chat.stream(engine, thread)
+      iex> events = Enum.to_list(stream)
+      iex> Enum.count(events, &match?({:chat_completed, _}, &1))
+      1
+  """
+  @spec stream(Engine.t(), Thread.t() | [Message.t()], chat_opts()) ::
+          {:ok, Enumerable.t()}
+          | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
+  def stream(%Engine{} = engine, thread_or_messages, opts \\ []) when is_list(opts) do
+    max_turns = resolve_max_turns(engine, opts)
+    validate_max_turns!(max_turns)
+
+    with {:ok, thread} <- normalise_thread(thread_or_messages),
+         :ok <- Validate.thread(thread),
+         {:ok, first_step_stream} <- stream_step(engine, thread, opts) do
+      {:ok, build_chat_stream(engine, thread, first_step_stream, opts, max_turns)}
+    end
+  end
+
+  defp run_loop(%LoopState{max_turns: max_turns} = init_state) do
+    result =
+      Enum.reduce_while(0..(max_turns - 1), {:ok, init_state}, fn idx, {:ok, state} ->
+        run_step(state, idx)
+      end)
+
+    # The `:continue` branch's `check_max_turns/3` guarantees the LAST iteration
+    # always halts (`step_index + 1 >= max_turns`). The `Enum.reduce_while/3`
+    # natural-exhaustion arm is therefore unreachable and intentionally absent.
+    case result do
+      {:halt, %LoopState{} = halted_state} ->
+        {:ok, build_chat_result(halted_state)}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp run_step(
+         %LoopState{engine: engine, opts: opts, thread: thread, max_turns: max_turns} = state,
+         idx
+       ) do
+    case step(engine, thread, opts) do
+      {:ok, %StepResult{} = sr} ->
+        new_steps = state.steps ++ [sr]
+
+        case terminal_condition(sr, opts, idx, sr.thread, max_turns) do
+          {:halt, :ask_user, halt_meta} ->
+            question_msg = %Message{
+              role: :assistant,
+              content: halt_meta.pending_question,
+              metadata: %{ask_user: true, tool_call_id: halt_meta.pending_tool_call_id}
+            }
+
+            new_thread = Thread.add_message(sr.thread, question_msg)
+
+            halted = %LoopState{
+              state
+              | thread: new_thread,
+                steps: new_steps,
+                step_index: idx + 1,
+                halted_reason: :ask_user,
+                halt_metadata: halt_meta,
+                pending_question: halt_meta.pending_question,
+                pending_tool_call_id: halt_meta.pending_tool_call_id
+            }
+
+            {:halt, {:halt, halted}}
+
+          {:halt, reason, halt_meta} ->
+            halted = %LoopState{
+              state
+              | thread: sr.thread,
+                steps: new_steps,
+                step_index: idx + 1,
+                halted_reason: reason,
+                halt_metadata: halt_meta
+            }
+
+            {:halt, {:halt, halted}}
+
+          :continue ->
+            advanced = %LoopState{
+              state
+              | thread: sr.thread,
+                steps: new_steps,
+                step_index: idx + 1
+            }
+
+            {:cont, {:ok, advanced}}
+        end
+
+      {:error, _struct} = err ->
+        # First-step pre-flight error surfaces verbatim; subsequent-step
+        # errors should not normally reach this branch because mid-stream
+        # adapter errors fold into the response (CLAUDE.md mid-stream-error
+        # invariant). For totality, if a non-first step returns {:error, _},
+        # surface it as halted_reason: :error.
+        if idx == 0 do
+          {:halt, err}
+        else
+          halted = %LoopState{
+            state
+            | step_index: idx,
+              halted_reason: :error,
+              halt_metadata: %{error: elem(err, 1)}
+          }
+
+          {:halt, {:halt, halted}}
+        end
+    end
+  end
+
+  # Single construction point for ChatResult — both run/3 and the future
+  # stream/3 Phase F call this. See Phase 7 design Non-obvious Decision #4.
+  #
+  # Reached only by the run-loop halt arm in batch 2; batch 3's Chat.stream/3
+  # Phase F can reach the empty-steps fallback when the consumer halts the
+  # stream before any step completes — tested in test/allm/chat_stream_test.exs
+  # (Phase 7.4).
+  @spec build_chat_result(LoopState.t()) :: ChatResult.t()
+  defp build_chat_result(%LoopState{} = state) do
+    final_response =
+      case state.steps do
+        [] -> nil
+        steps -> List.last(steps).response
+      end
+
+    %ChatResult{
+      thread: state.thread,
+      final_response: final_response,
+      steps: state.steps,
+      halted_reason: state.halted_reason || :completed,
+      pending_question: state.pending_question,
+      pending_tool_call_id: state.pending_tool_call_id,
+      metadata: state.halt_metadata
+    }
+  end
+
+  # Seven-entry total order over a step result. See Phase 7 design
+  # Non-obvious Decision #5. Ordering is load-bearing; do not reorder.
+  #
+  # `max_turns` is passed explicitly (not via `opts`) so the helper has no
+  # implicit dependency on a sentinel key; both `run/3` and (future)
+  # `stream/3` resolve `max_turns` at entry per Decision #9 and pass the
+  # resolved value here.
+  @spec terminal_condition(StepResult.t(), keyword(), non_neg_integer(), Thread.t(), pos_integer()) ::
+          :continue | {:halt, atom(), map()}
+  defp terminal_condition(%StepResult{} = sr, opts, step_index, _thread, max_turns) do
+    cond do
+      sr.metadata[:halted_reason] == :ask_user -> ask_user_halt(sr)
+      sr.metadata[:halted_reason] == :tool_error -> tool_error_halt(sr)
+      custom_halt_atom?(sr) -> custom_halt(sr)
+      sr.metadata[:mode] == :manual -> {:halt, :manual_tool_calls, %{manual_turn_index: step_index}}
+      sr.response.finish_reason in [:stop, :length, :content_filter] -> {:halt, :completed, %{}}
+      sr.response.finish_reason == :error -> error_halt(sr)
+      true -> halt_when_or_max_turns(sr, opts, step_index, max_turns)
+    end
+  end
+
+  defp ask_user_halt(%StepResult{metadata: meta}) do
+    {:halt, :ask_user,
+     %{
+       pending_question: meta[:pending_question],
+       pending_tool_call_id: meta[:pending_tool_call_id],
+       ask_user_opts: meta[:ask_user_opts]
+     }}
+  end
+
+  defp tool_error_halt(%StepResult{metadata: meta}) do
+    base = %{halt_tool_call_id: meta[:halt_tool_call_id]}
+
+    final =
+      case Map.fetch(meta, :on_tool_error_exception) do
+        {:ok, exc} -> Map.put(base, :on_tool_error_exception, exc)
+        :error -> base
+      end
+
+    {:halt, :tool_error, final}
+  end
+
+  defp custom_halt_atom?(%StepResult{metadata: meta}) do
+    reason = meta[:halted_reason]
+    is_atom(reason) and reason not in [nil, :ask_user, :tool_error]
+  end
+
+  defp custom_halt(%StepResult{metadata: meta}) do
+    {:halt, meta[:halted_reason],
+     %{halt_tool_call_id: meta[:halt_tool_call_id], halt_result: meta[:halt_result]}}
+  end
+
+  defp error_halt(%StepResult{response: response}) do
+    {:halt, :error, %{error: Map.get(response.metadata, :error)}}
+  end
+
+  defp halt_when_or_max_turns(%StepResult{} = sr, opts, step_index, max_turns) do
+    case Keyword.get(opts, :halt_when) do
+      nil -> check_max_turns(step_index, max_turns)
+      fun when is_function(fun, 1) -> apply_halt_when(fun, sr, step_index, max_turns)
+    end
+  end
+
+  defp apply_halt_when(fun, %StepResult{} = sr, step_index, max_turns) do
+    if fun.(sr) do
+      {:halt, :halt_when, %{halt_when_step_index: step_index}}
+    else
+      check_max_turns(step_index, max_turns)
+    end
+  end
+
+  defp check_max_turns(step_index, max_turns) do
+    if step_index + 1 >= max_turns do
+      {:halt, :max_turns, %{max_turns: max_turns}}
+    else
+      :continue
+    end
+  end
+
+  defp resolve_max_turns(%Engine{params: params}, opts) do
+    Keyword.get(opts, :max_turns) ||
+      Map.get(params || %{}, :max_turns) ||
+      Application.get_env(:allm, :max_turns) ||
+      8
+  end
+
+  defp validate_max_turns!(n) when is_integer(n) and n > 0, do: :ok
+
+  defp validate_max_turns!(other) do
+    raise ArgumentError,
+          "max_turns must be a positive integer; got: #{inspect(other)}"
   end
 
   # ---------------------------------------------------------------------------
@@ -550,11 +937,22 @@ defmodule ALLM.Chat do
     %{data | tool_msgs: data.tool_msgs ++ [tool_msg]}
   end
 
-  defp update_phase_b_from_event(data, {:tool_halt, %{tool_call_id: id, reason: reason, result: r}}) do
+  defp update_phase_b_from_event(
+         data,
+         {:tool_halt, %{tool_call_id: id, reason: reason, result: r} = p}
+       ) do
     # First-halt-wins — only set halt_metadata if not already set.
     case data.halt_metadata do
       nil ->
-        tool_msg = encoded_halt_message(id, r, data.engine, data.opts)
+        # Phase 7.6 cleanup B1: prefer the payload's pre-encoded `:content`
+        # (set by `ToolRunner` via `Event.tool_halt/4`); fall back to the
+        # encoder for callers that emit `Event.tool_halt/3` events.
+        content =
+          Map.get_lazy(p, :content, fn ->
+            encode_for_phase_b(r, data.engine, data.opts)
+          end)
+
+        tool_msg = %Message{role: :tool, tool_call_id: id, content: content, metadata: %{}}
         meta = %{halted_reason: reason, halt_tool_call_id: id, halt_result: r}
         %{data | tool_msgs: data.tool_msgs ++ [tool_msg], halt_metadata: meta}
 
@@ -592,22 +990,19 @@ defmodule ALLM.Chat do
 
   defp update_phase_b_from_event(data, _event), do: data
 
-  # Best-effort encoding of the halt result for a tool-role message. We use
-  # the engine's tool_result_encoder to keep the behaviour consistent with
-  # the non-streaming path's ToolRunner; on encoder failure, fall back to
-  # `inspect/1` (this halt path is rare enough that propagating an encoder
-  # exception would surprise callers).
-  defp encoded_halt_message(id, result, engine, opts) do
+  # Best-effort encoding of the halt result for a tool-role message —
+  # used only as a fallback when a `:tool_halt` event arrives without a
+  # pre-encoded `:content` payload key (e.g. an external producer using
+  # `Event.tool_halt/3`). The internal Phase 6/7 path uses
+  # `Event.tool_halt/4` so the encoder runs once in `ToolRunner`.
+  defp encode_for_phase_b(result, engine, opts) do
     encoder = resolve_encoder(engine, opts)
 
-    content =
-      try do
-        encoder.encode(result)
-      rescue
-        _ -> inspect(result)
-      end
-
-    %Message{role: :tool, tool_call_id: id, content: content, metadata: %{}}
+    try do
+      encoder.encode(result)
+    rescue
+      _ -> inspect(result)
+    end
   end
 
   defp resolve_encoder(%Engine{tool_result_encoder: mod}, opts) do
@@ -648,8 +1043,13 @@ defmodule ALLM.Chat do
 
   # --- Phase C: emit :step_completed and halt ---
 
-  defp emit_step_completed(%{thread: thread, response: response} = data) do
-    event = Event.step_completed(response, thread)
+  defp emit_step_completed(%{thread: thread, response: response, mode: mode} = data) do
+    # Phase 7 retro F1+F3: thread the orchestration mode through the
+    # `:step_completed` event payload so that downstream reducers
+    # (StreamCollector's `:step_completed` fold + multi-turn chat
+    # orchestrators) can produce StepResult metadata identical to the
+    # non-streaming `Chat.do_step/4` path.
+    event = Event.step_completed(response, thread, mode)
     {[event], {:done, data}}
   end
 
@@ -680,6 +1080,219 @@ defmodule ALLM.Chat do
   defp stream_after({:phase_c, _data}), do: :ok
 
   defp stream_after({:done, _data}), do: :ok
+
+  # ---------------------------------------------------------------------------
+  # Multi-turn streaming: two-phase Stream.resource/3 (Phase 7 Decision #1)
+  # ---------------------------------------------------------------------------
+
+  defp build_chat_stream(%Engine{} = engine, %Thread{} = thread, first_step_stream, opts, max_turns) do
+    Stream.resource(
+      fn -> init_chat_state(engine, thread, first_step_stream, opts, max_turns) end,
+      &chat_stream_next/1,
+      &outer_after_fun/1
+    )
+  end
+
+  defp init_chat_state(engine, thread, first_step_stream, opts, max_turns) do
+    {:step,
+     %{
+       engine: engine,
+       opts: opts,
+       max_turns: max_turns,
+       thread: thread,
+       collector: StreamCollector.new(thread),
+       loop_state: %LoopState{
+         engine: engine,
+         opts: opts,
+         initial_thread: thread,
+         thread: thread,
+         max_turns: max_turns
+       },
+       step_cont: seed_step_cont(first_step_stream),
+       step_index: 0
+     }}
+  end
+
+  defp seed_step_cont(stream_step_enum) do
+    cont = &Enumerable.reduce(stream_step_enum, &1, fn event, _ -> {:suspend, event} end)
+    {:suspended, nil, cont}
+  end
+
+  defp chat_stream_next({:step, data}), do: pull_next_phase_s(data)
+
+  defp chat_stream_next({:final, %{chat_result: chat_result}}) do
+    {[Event.chat_completed(chat_result)], {:done, nil}}
+  end
+
+  defp chat_stream_next({:done, _} = state), do: {:halt, state}
+
+  defp pull_next_phase_s(%{step_cont: {:suspended, _last, cont}} = data) do
+    # The inner stream_step/3 ALWAYS terminates with a :step_completed
+    # event followed by `:done` on the next pull. We pull events until we
+    # see :step_completed (the transition trigger); :done / :halted
+    # branches are unreachable through normal flow but we route them to
+    # finalise_unexpected/3 for totality.
+    case cont.({:cont, nil}) do
+      {:suspended, {:step_completed, _payload} = event, _next_cont} ->
+        handle_step_completed(data, event)
+
+      {:suspended, event, next_cont} ->
+        new_collector = StreamCollector.apply_event(data.collector, event)
+        new_data = %{data | collector: new_collector, step_cont: {:suspended, event, next_cont}}
+        {[event], {:step, new_data}}
+
+      {_done_or_halted, _acc} ->
+        finalise_unexpected(data)
+    end
+  end
+
+  defp handle_step_completed(
+         data,
+         {:step_completed, %{response: r, thread: t} = payload} = event
+       ) do
+    # State-boundary ownership (Phase 7 design 7.4.2 — load-bearing):
+    # 1. Read pre-fold outer-collector state to compute StepResult. Mode
+    #    flows through the event payload itself (Phase 7 retro F1+F3).
+    mode = Map.get(payload, :mode, :auto)
+    step_result = step_result_from_outer_collector(data.collector, r, t, mode)
+
+    # 2. NOW fold the :step_completed event into the outer collector
+    #    (which resets per-step sub-state per Phase 7 Decision #6).
+    folded_collector = StreamCollector.apply_event(data.collector, event)
+
+    new_steps = data.loop_state.steps ++ [step_result]
+
+    case terminal_condition(step_result, data.opts, data.step_index, t, data.max_turns) do
+      :continue ->
+        # Start the next step; seed its continuation. The current outer
+        # step_cont is already exhausted (we just pulled :step_completed,
+        # the stream_step/3 stream's terminal event); no need to halt it.
+        # stream_step/3 cannot error here — engine.adapter was pre-flight-
+        # validated at stream/3 entry, the augmented thread is always
+        # well-formed (Phase 6 builds tool messages with valid shape),
+        # and StreamRunner.run pre-flight checks have already passed for
+        # this engine. Mid-stream adapter errors fold into the response,
+        # not the {:ok|:error} return.
+        {:ok, next_step_stream} = stream_step(data.engine, t, data.opts)
+
+        new_loop_state = %LoopState{
+          data.loop_state
+          | thread: t,
+            steps: new_steps,
+            step_index: data.step_index + 1
+        }
+
+        new_data =
+          data
+          |> Map.put(:thread, t)
+          |> Map.put(:collector, folded_collector)
+          |> Map.put(:loop_state, new_loop_state)
+          |> Map.put(:step_cont, seed_step_cont(next_step_stream))
+          |> Map.put(:step_index, data.step_index + 1)
+
+        {[event], {:step, new_data}}
+
+      {:halt, :ask_user, halt_meta} ->
+        # Append assistant question message to the chat-result thread BEFORE
+        # building chat_result (Phase 7 Invariant 7 + 8). The :step_completed
+        # event already streamed with thread t (without the question); the
+        # question lives ONLY on chat_result.thread.
+        question_msg = %Message{
+          role: :assistant,
+          content: halt_meta.pending_question,
+          metadata: %{ask_user: true, tool_call_id: halt_meta.pending_tool_call_id}
+        }
+
+        new_thread = Thread.add_message(t, question_msg)
+
+        halted_loop_state = %LoopState{
+          data.loop_state
+          | thread: new_thread,
+            steps: new_steps,
+            step_index: data.step_index + 1,
+            halted_reason: :ask_user,
+            halt_metadata: halt_meta,
+            pending_question: halt_meta.pending_question,
+            pending_tool_call_id: halt_meta.pending_tool_call_id
+        }
+
+        chat_result = build_chat_result(halted_loop_state)
+        {[event], {:final, %{chat_result: chat_result}}}
+
+      {:halt, reason, halt_meta} ->
+        halted_loop_state = %LoopState{
+          data.loop_state
+          | thread: t,
+            steps: new_steps,
+            step_index: data.step_index + 1,
+            halted_reason: reason,
+            halt_metadata: halt_meta
+        }
+
+        chat_result = build_chat_result(halted_loop_state)
+        {[event], {:final, %{chat_result: chat_result}}}
+    end
+  end
+
+  # Defensive — unreachable through normal flow because stream_step/3
+  # ALWAYS terminates with :step_completed before its enumerable exhausts.
+  defp finalise_unexpected(data) do
+    halted_loop_state = %LoopState{
+      data.loop_state
+      | thread: data.thread,
+        halted_reason: :cancelled,
+        halt_metadata: %{}
+    }
+
+    chat_result = build_chat_result(halted_loop_state)
+    {[], {:final, %{chat_result: chat_result}}}
+  end
+
+  # see PHASE_7_DESIGN.md §7.4.2 — read pre-fold collector state to mirror
+  # the StreamCollector :step_completed fold's StepResult shape.
+  #
+  # Phase 7 retro F1+F2+F3: `mode` arrives via the `:step_completed` event
+  # payload (added by `Chat.emit_step_completed/1`); both StepResult
+  # constructions (this helper and the StreamCollector fold) read it from
+  # the same source. Reuses the promoted `StreamCollector.step_done?/1` /
+  # `merge_halt_metadata/2` helpers — no clones (retro F2).
+  defp step_result_from_outer_collector(
+         %StreamCollector{} = c,
+         %Response{} = response,
+         %Thread{} = thread,
+         mode
+       )
+       when mode in [:auto, :manual] do
+    base_metadata = StreamCollector.merge_halt_metadata(%{}, c.halt)
+
+    metadata =
+      if mode == :manual and response.finish_reason == :tool_calls do
+        Map.put(base_metadata, :mode, :manual)
+      else
+        base_metadata
+      end
+
+    %StepResult{
+      thread: thread,
+      response: response,
+      tool_results: c.tool_results,
+      done?: StreamCollector.step_done?(c),
+      metadata: metadata
+    }
+  end
+
+  # Phase 7 Decision #1 cleanup chain: Chat.stream/3 after_fun → halt
+  # step_cont (which triggers stream_step/3's after_fun, which halts
+  # adapter_cont or tool_cont). Phase F has no sub-stream to halt.
+  defp outer_after_fun({:step, %{step_cont: {:suspended, _last, cont}}}) do
+    _ = cont.({:halt, :consumer_halt})
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp outer_after_fun({:final, _}), do: :ok
+  defp outer_after_fun({:done, _}), do: :ok
 
   # ---------------------------------------------------------------------------
   # Shared helpers

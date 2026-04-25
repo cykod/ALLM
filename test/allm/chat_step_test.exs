@@ -3,6 +3,7 @@ defmodule ALLM.ChatStepTest do
 
   alias ALLM.{Chat, Engine, Message, StepResult, Thread, Tool, ToolCall}
   alias ALLM.Error.{EngineError, ValidationError}
+  alias ALLM.Test.FakeFixtures
 
   doctest Chat
 
@@ -19,15 +20,6 @@ defmodule ALLM.ChatStepTest do
     )
   end
 
-  defp engine_with_script(script, tools \\ [], ctx \\ %{}) do
-    Engine.new(
-      adapter: ALLM.Providers.Fake,
-      adapter_opts: [script: script],
-      tools: tools,
-      context: ctx
-    )
-  end
-
   defp user_thread, do: Thread.from_messages([ALLM.user("hi")])
 
   # ---------------------------------------------------------------------------
@@ -36,7 +28,7 @@ defmodule ALLM.ChatStepTest do
 
   describe "step/3 — no tool call" do
     test "plain text response produces done?: true, empty tool_results" do
-      engine = engine_with_script([{:text, "Hello"}, {:finish, :stop}])
+      engine = FakeFixtures.engine([{:text, "Hello"}, {:finish, :stop}])
 
       assert {:ok, %StepResult{} = sr} = Chat.step(engine, user_thread())
       assert sr.done? == true
@@ -46,7 +38,7 @@ defmodule ALLM.ChatStepTest do
     end
 
     test "assistant message has finish_reason metadata, no tool_calls metadata" do
-      engine = engine_with_script([{:text, "Hi"}, {:finish, :stop}])
+      engine = FakeFixtures.engine([{:text, "Hi"}, {:finish, :stop}])
 
       {:ok, sr} = Chat.step(engine, user_thread())
       assistant = List.last(sr.thread.messages)
@@ -65,12 +57,12 @@ defmodule ALLM.ChatStepTest do
   describe "step/3 — single tool call, mode: :auto (default)" do
     test "appends assistant message with tool_calls metadata + tool-role message" do
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
             {:finish, :tool_calls}
           ],
-          [echo_tool()]
+          tools: [echo_tool()]
         )
 
       {:ok, sr} = Chat.step(engine, user_thread())
@@ -94,12 +86,12 @@ defmodule ALLM.ChatStepTest do
 
     test "assistant message content uses response.output_text (empty here because no :text script)" do
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [echo_tool()]
+          tools: [echo_tool()]
         )
 
       {:ok, sr} = Chat.step(engine, user_thread())
@@ -129,13 +121,13 @@ defmodule ALLM.ChatStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{"n" => 0}},
             {:tool_call, id: "c1", name: "echo", arguments: %{"n" => 1}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, sr} = Chat.step(engine, user_thread())
@@ -166,12 +158,12 @@ defmodule ALLM.ChatStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, sr} = Chat.step(engine, user_thread(), mode: :manual)
@@ -203,12 +195,12 @@ defmodule ALLM.ChatStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, sr} = Chat.step(engine, user_thread(), on_tool_error: :halt)
@@ -229,12 +221,12 @@ defmodule ALLM.ChatStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, sr} = Chat.step(engine, user_thread())
@@ -243,6 +235,42 @@ defmodule ALLM.ChatStepTest do
       refute Map.has_key?(sr.metadata, :halted_reason)
       assert [%Message{role: :tool, content: content}] = sr.tool_results
       assert content =~ "error"
+    end
+
+    test "function form that raises surfaces exception under step.metadata.on_tool_error_exception" do
+      # Phase 7 design Non-obvious Decision #8: when an `on_tool_error`
+      # function raises, the captured exception is lifted into the
+      # ToolRunner halt_metadata and propagates to `step.metadata` so
+      # the chat layer can read it directly without fishing through
+      # `tool_results`.
+      tool =
+        Tool.new(
+          name: "echo",
+          description: "",
+          schema: %{},
+          handler: fn _ -> {:error, :bad} end
+        )
+
+      engine =
+        FakeFixtures.engine(
+          [
+            {:tool_call, id: "c-raise", name: "echo", arguments: %{}},
+            {:finish, :tool_calls}
+          ],
+          tools: [tool]
+        )
+
+      {:ok, sr} =
+        ALLM.step(engine, user_thread(),
+          on_tool_error: fn _tc, _err -> raise "boom from on_tool_error" end
+        )
+
+      assert sr.done? == true
+      assert sr.metadata[:halted_reason] == :tool_error
+      assert sr.metadata[:halt_tool_call_id] == "c-raise"
+
+      assert %RuntimeError{message: "boom from on_tool_error"} =
+               sr.metadata[:on_tool_error_exception]
     end
   end
 
@@ -261,12 +289,12 @@ defmodule ALLM.ChatStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, sr} = Chat.step(engine, user_thread())
@@ -293,12 +321,12 @@ defmodule ALLM.ChatStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, sr} = Chat.step(engine, user_thread())
@@ -329,15 +357,12 @@ defmodule ALLM.ChatStepTest do
 
   describe "step/3 — unknown tool" do
     test "returns {:error, %EngineError{reason: :unknown_tool}}" do
+      # No `missing` tool registered.
       engine =
-        engine_with_script(
-          [
-            {:tool_call, id: "c0", name: "missing", arguments: %{}},
-            {:finish, :tool_calls}
-          ],
-          # No `missing` tool registered.
-          []
-        )
+        FakeFixtures.engine([
+          {:tool_call, id: "c0", name: "missing", arguments: %{}},
+          {:finish, :tool_calls}
+        ])
 
       assert {:error, %EngineError{reason: :unknown_tool, metadata: %{tool_name: "missing"}}} =
                Chat.step(engine, user_thread())
@@ -358,7 +383,7 @@ defmodule ALLM.ChatStepTest do
     test "invalid thread (tool message missing tool_call_id) returns %ValidationError{}" do
       bad_msg = %Message{role: :tool, content: "x", tool_call_id: nil}
       thread = Thread.from_messages([bad_msg])
-      engine = engine_with_script([{:text, "ok"}, {:finish, :stop}])
+      engine = FakeFixtures.engine([{:text, "ok"}, {:finish, :stop}])
 
       assert {:error, %ValidationError{reason: :invalid_thread}} = Chat.step(engine, thread)
     end
@@ -370,7 +395,7 @@ defmodule ALLM.ChatStepTest do
 
   describe "step/3 — list-of-messages input normalisation" do
     test "list of %Message{} is wrapped via Thread.from_messages/1" do
-      engine = engine_with_script([{:text, "ok"}, {:finish, :stop}])
+      engine = FakeFixtures.engine([{:text, "ok"}, {:finish, :stop}])
       msgs = [ALLM.user("hi")]
 
       {:ok, sr} = Chat.step(engine, msgs)
@@ -379,7 +404,7 @@ defmodule ALLM.ChatStepTest do
     end
 
     test "invalid input (neither Thread nor list) returns %ValidationError{}" do
-      engine = engine_with_script([{:text, "ok"}, {:finish, :stop}])
+      engine = FakeFixtures.engine([{:text, "ok"}, {:finish, :stop}])
       assert {:error, %ValidationError{reason: :invalid_thread}} = Chat.step(engine, :bogus)
     end
   end
@@ -414,12 +439,12 @@ defmodule ALLM.ChatStepTest do
   describe "step/3 — serializability of StepResult.thread" do
     test "assistant message metadata.tool_calls round-trips through term_to_binary" do
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
             {:finish, :tool_calls}
           ],
-          [echo_tool()]
+          tools: [echo_tool()]
         )
 
       {:ok, sr} = Chat.step(engine, user_thread())

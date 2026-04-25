@@ -36,7 +36,7 @@ defmodule ALLM do
   public API surface.
   """
 
-  alias ALLM.{Engine, Message, Request, StepResult, Thread, Tool}
+  alias ALLM.{ChatResult, Engine, Message, Request, StepResult, Thread, Tool}
   alias ALLM.Error.{AdapterError, EngineError, ValidationError}
 
   @doc """
@@ -334,4 +334,197 @@ defmodule ALLM do
           | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
   def stream_step(engine, thread_or_messages, opts \\ []),
     do: ALLM.Chat.stream_step(engine, thread_or_messages, opts)
+
+  @doc """
+  Run a multi-turn chat loop against the engine and return a
+  `%ALLM.ChatResult{}`. See spec §4 and §10.5.
+
+  `thread_or_messages` is either an `%ALLM.Thread{}` or a list of
+  `%ALLM.Message{}` (normalised via `ALLM.Thread.from_messages/1`). The
+  thread is validated via `ALLM.Validate.thread/1` at entry. Pure
+  one-line delegation to `ALLM.Chat.run/3`; see that module for the
+  full multi-turn loop semantics, the seven-entry terminal-condition
+  ordering, and the `%ChatResult{}` shape.
+
+  ## Mode
+
+    * `:auto` (default) — the loop executes tool calls automatically.
+      Each step appends tool-result messages to the thread before the
+      next adapter call. Halt reasons follow the table below.
+    * `:manual` — the FIRST step whose response carries
+      `finish_reason: :tool_calls` halts with `halted_reason:
+      :manual_tool_calls`. The caller submits tool results via a fresh
+      `chat/3` call with the augmented thread (no executor runs).
+      Pure-text steps under `:manual` continue normally.
+
+  ## `:max_turns` precedence
+
+  The loop bound resolves at entry through this chain (call opts wins
+  on the left):
+
+      call opts > engine.params[:max_turns] > Application.get_env(:allm, :max_turns) > library default 8
+
+  Per Phase 7 design Non-obvious Decision #9. `max_turns` must be a
+  `pos_integer()`; non-positive integers raise `ArgumentError`.
+
+  ## `:halt_when` semantics
+
+  `:halt_when` is a `(StepResult.t() -> boolean())` callback invoked
+  AFTER the step's thread mutation has been applied (Phase 7 design
+  Non-obvious Decision #11). It is the LAST per-step gate consulted —
+  ask-user, handler `{:halt, _, _}`, `on_tool_error: :halt`,
+  `:manual_tool_calls`, and adapter `finish_reason ∈ {:stop, :error,
+  :length, :content_filter}` all preempt it. Exceptions raised inside
+  `halt_when` propagate to the caller of `chat/3`; they are NOT
+  caught.
+
+  ## `:on_tool_error`
+
+  Atom forms `:continue` (default) and `:halt` behave as in Phase 6.
+  The function form `(ToolCall.t(), term() -> {:continue, term()} |
+  :halt)` was deferred from Phase 6 and lands in Phase 7. The
+  function is invoked synchronously inside the per-tool task after
+  the handler's return / encoder failure resolves to an error term
+  (Phase 7 Non-obvious Decision #8): `{:continue, replacement}`
+  encodes `replacement` as the tool-result content; `:halt` halts the
+  batch with `halted_reason: :tool_error`. An invalid return shape or
+  a raise from inside the function is wrapped as `%ALLM.Error.ToolError{reason:
+  :invalid_return}` and treated as `:halt`.
+
+  ## `:on_event` scope
+
+  Inherits the Phase 5 contract: `:on_event` observes only
+  adapter-emitted events (text deltas, tool-call deltas, message
+  bookends, `:raw_chunk`, adapter-emitted `:error`). Phase 6 / Phase
+  7 chat-layer events (`:tool_execution_*`, `:tool_result_encoded`,
+  `:ask_user_requested`, `:tool_halt`, `:step_completed`,
+  `:chat_completed`) are NOT delivered to `:on_event` — they fire
+  outside `ALLM.StreamRunner`. Per Phase 7 Non-obvious Decision #13.
+
+  ## Halt-reason table
+
+  | Reason | Fires when | `metadata` keys populated |
+  |--------|------------|---------------------------|
+  | `:completed` | Adapter `finish_reason ∈ {:stop, :length, :content_filter}` | `%{}` |
+  | `:error` | Adapter `finish_reason: :error` (mid-stream error folds in) | `%{error: error_struct}` (when present) |
+  | `:max_turns` | `step_index + 1 >= max_turns` after a non-halting step | `%{max_turns: N}` |
+  | `:halt_when` | `halt_when.(step_result)` returned `true` | `%{halt_when_step_index: idx}` |
+  | `:ask_user` | Handler returned `{:ask_user, _}` / `{:ask_user, _, _}` | `%{pending_question: q, pending_tool_call_id: id, ask_user_opts: opts}` (also on top-level `%ChatResult{}`) |
+  | `:tool_error` | `on_tool_error: :halt`, fun returned `:halt`, or fun raised | `%{halt_tool_call_id: id}` (plus `:on_tool_error_exception` if fun raised) |
+  | `:manual_tool_calls` | `mode: :manual` and step's `response.finish_reason == :tool_calls` | `%{manual_turn_index: idx}` |
+  | atom() (user) | Handler returned `{:halt, reason, result}` not in the above set | `%{halt_tool_call_id: id, halt_result: result}` |
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...>   adapter: ALLM.Providers.Fake,
+      ...>   adapter_opts: [
+      ...>     scripts: [
+      ...>       [{:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+      ...>        {:finish, :tool_calls}],
+      ...>       [{:text, "done"}, {:finish, :stop}]
+      ...>     ]
+      ...>   ],
+      ...>   tools: [ALLM.tool(
+      ...>     name: "echo",
+      ...>     description: "",
+      ...>     schema: %{},
+      ...>     handler: fn args -> {:ok, args} end
+      ...>   )]
+      ...> )
+      iex> {:ok, %ALLM.ChatResult{} = result} = ALLM.chat(engine, [ALLM.user("echo please")])
+      iex> {result.halted_reason, length(result.steps)}
+      {:completed, 2}
+  """
+  @spec chat(Engine.t(), Thread.t() | [Message.t()], keyword()) ::
+          {:ok, ChatResult.t()}
+          | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
+  def chat(engine, thread_or_messages, opts \\ []),
+    do: ALLM.Chat.run(engine, thread_or_messages, opts)
+
+  @doc """
+  Stream a multi-turn chat loop as a lazy enumerable of `ALLM.Event`
+  values terminating in exactly one `:chat_completed` event. See spec
+  §4 and §10.6.
+
+  `thread_or_messages` is either an `%ALLM.Thread{}` or a list of
+  `%ALLM.Message{}`. The returned stream is open — no events fire
+  until the caller reduces. Pure one-line delegation to
+  `ALLM.Chat.stream/3`; see that module for the two-phase
+  `Stream.resource/3` state machine and the cleanup chain.
+
+  ## Single terminal `:chat_completed`
+
+  A naturally-terminating stream emits adapter events plus tool
+  events for each turn, one `:step_completed` per turn, and exactly
+  one trailing `{:chat_completed, %{result: %ChatResult{}}}` event
+  (Phase 7 Non-obvious Decision #3). Both `chat/3` and
+  `stream/3 |> ALLM.StreamCollector.to_chat_result/1` produce the
+  SAME `%ChatResult{}` for identical inputs because both paths
+  construct it via the same `ALLM.Chat.build_chat_result/1` helper
+  (Phase 7 Non-obvious Decision #4).
+
+  Consumer halts (`Enum.take/2`, `Stream.take_while/2`) produce NO
+  `:chat_completed` event; callers needing a final `%ChatResult{}`
+  for a cancelled stream collect events and call
+  `ALLM.StreamCollector.to_chat_result/1` on the partial state — the
+  fallback path returns `halted_reason: :cancelled`.
+
+  ## Stream-first
+
+  `chat/3` is a reducer over this stream (per spec §3). The streaming
+  path is the primitive; the non-streaming variant exists so callers
+  who don't need event-level visibility get a synchronous result.
+
+  ## Ask-user thread asymmetry
+
+  When a step's handler returns `{:ask_user, _}`, the streamed
+  `:step_completed.thread` does NOT include the assistant question
+  message — only the terminal `:chat_completed.result.thread` does
+  (Phase 7 Invariant 8). Consumers persisting thread state across
+  turns must read `ChatResult.thread`, never `:step_completed.thread`.
+
+  ## `:on_event` scope
+
+  Same as `chat/3` and `stream_generate/3`: `:on_event` observes only
+  adapter-emitted events. Chat-layer events
+  (`:tool_execution_*`, `:tool_result_encoded`, `:ask_user_requested`,
+  `:tool_halt`, `:step_completed`, `:chat_completed`) are NOT
+  delivered to `:on_event` — they fire outside `ALLM.StreamRunner`.
+  Per Phase 7 Non-obvious Decision #13.
+
+  ## Options
+
+  Same options as `chat/3`. The Phase 5 streaming filter opts
+  (`:emit_text_deltas`, `:emit_tool_deltas`, `:include_raw_chunks`,
+  `:on_event`) apply to each turn's adapter pass-through.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...>   adapter: ALLM.Providers.Fake,
+      ...>   adapter_opts: [
+      ...>     scripts: [
+      ...>       [{:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+      ...>        {:finish, :tool_calls}],
+      ...>       [{:text, "done"}, {:finish, :stop}]
+      ...>     ]
+      ...>   ],
+      ...>   tools: [ALLM.tool(
+      ...>     name: "echo",
+      ...>     description: "",
+      ...>     schema: %{},
+      ...>     handler: fn args -> {:ok, args} end
+      ...>   )]
+      ...> )
+      iex> {:ok, stream} = ALLM.stream(engine, [ALLM.user("echo please")])
+      iex> events = Enum.to_list(stream)
+      iex> Enum.count(events, &match?({:chat_completed, _}, &1))
+      1
+  """
+  @spec stream(Engine.t(), Thread.t() | [Message.t()], keyword()) ::
+          {:ok, Enumerable.t()}
+          | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
+  def stream(engine, thread_or_messages, opts \\ []),
+    do: ALLM.Chat.stream(engine, thread_or_messages, opts)
 end

@@ -304,14 +304,12 @@ defmodule ALLM.ToolRunnerTest do
       assert msg.tool_call_id == "c0"
     end
 
-    test "streaming emits the encoded-error trio with :tool_execution_completed carrying {:error, _}" do
-      # The stream variant surfaces halt_metadata via the non-streaming 3-tuple
-      # return; in the stream path, on_tool_error: :halt on a {:error, _} still
-      # produces the standard {:tool_execution_started, :tool_execution_completed,
-      # :tool_result_encoded} trio (halt metadata is not a stream event in
-      # Phase 6 — see route_error/3 producing `terminal: {:encoded, content}`).
-      # This test closes the streaming matrix for the :halt policy on a plain
-      # handler `{:error, _}` return.
+    test "streaming emits :tool_halt with payload :content when on_tool_error: :halt fires (Phase 7.6 B3)" do
+      # Phase 7.6 cleanup B3: on_tool_error: :halt on a `{:error, _}` return
+      # MUST surface as a `:tool_halt` event (was `:tool_result_encoded`).
+      # The payload carries the encoded error content via the optional
+      # `:content` key so `StreamCollector`'s `:tool_halt` fold populates
+      # `state.tool_results` without re-running the encoder.
       tool =
         Tool.new(
           name: "boom",
@@ -328,7 +326,7 @@ defmodule ALLM.ToolRunnerTest do
         |> Enum.to_list()
 
       tags = Enum.map(events, &elem(&1, 0))
-      assert tags == [:tool_execution_started, :tool_execution_completed, :tool_result_encoded]
+      assert tags == [:tool_execution_started, :tool_execution_completed, :tool_halt]
 
       assert Enum.all?(events, &Event.event?/1)
 
@@ -338,7 +336,7 @@ defmodule ALLM.ToolRunnerTest do
              end)
 
       assert Enum.any?(events, fn
-               {:tool_result_encoded, %{id: "c0", content: content}}
+               {:tool_halt, %{tool_call_id: "c0", reason: :tool_error, content: content}}
                when is_binary(content) ->
                  Map.has_key?(Jason.decode!(content), "error")
 
@@ -429,7 +427,12 @@ defmodule ALLM.ToolRunnerTest do
       assert Jason.decode!(msg.content) == %{"status" => "ok"}
     end
 
-    test "reserved reason like :tool_error is accepted (not validated at boundary)" do
+    test "reserved reason like :tool_error is rejected (Phase 7 — spec §5.2)" do
+      # Phase 7: reserved halt atoms are wrapped as %ToolError{:invalid_return}
+      # and routed via on_tool_error. With default :continue, the error is
+      # encoded as the tool message content; the batch does NOT halt with
+      # :tool_error because the reserved-atom rejection is treated as a
+      # tool error, not as the handler's halt request.
       tool =
         Tool.new(
           name: "finalize",
@@ -440,10 +443,12 @@ defmodule ALLM.ToolRunnerTest do
 
       tc = ToolCall.new(id: "c0", name: "finalize", arguments: %{})
 
-      assert {:ok, _msgs, meta} =
+      assert {:ok, [msg]} =
                ToolRunner.run_tool_calls([tc], [tool], engine: engine())
 
-      assert meta.halted_reason == :tool_error
+      decoded = Jason.decode!(msg.content)
+      assert Map.has_key?(decoded, "error")
+      assert decoded["error"] =~ "reserved"
     end
 
     test "streaming emits :tool_halt tail event" do
@@ -712,25 +717,7 @@ defmodule ALLM.ToolRunnerTest do
   # on_tool_error function-form rejection
   # ---------------------------------------------------------------------------
 
-  describe "on_tool_error function-form rejection" do
-    test "passing a function raises ArgumentError mentioning Phase 7" do
-      tc = echo_call("c0")
-
-      assert_raise ArgumentError, ~r/Phase 7/, fn ->
-        ToolRunner.run_tool_calls([tc], [echo_tool()],
-          engine: engine(),
-          on_tool_error: fn _tc, _err -> :halt end
-        )
-      end
-
-      assert_raise ArgumentError, ~r/Phase 7/, fn ->
-        ToolRunner.stream_tool_calls([tc], [echo_tool()],
-          engine: engine(),
-          on_tool_error: fn _tc, _err -> :halt end
-        )
-      end
-    end
-
+  describe "on_tool_error validation" do
     test "passing a non-atom, non-function raises ArgumentError" do
       tc = echo_call("c0")
 
@@ -738,6 +725,35 @@ defmodule ALLM.ToolRunnerTest do
         ToolRunner.run_tool_calls([tc], [echo_tool()],
           engine: engine(),
           on_tool_error: :not_an_atom_policy
+        )
+      end
+    end
+
+    test "passing a function of arity 1 raises ArgumentError mentioning the (tool_call, error) signature" do
+      tc = echo_call("c0")
+
+      assert_raise ArgumentError, ~r/tool_call, error/, fn ->
+        ToolRunner.run_tool_calls([tc], [echo_tool()],
+          engine: engine(),
+          on_tool_error: fn _err -> :halt end
+        )
+      end
+
+      assert_raise ArgumentError, ~r/tool_call, error/, fn ->
+        ToolRunner.stream_tool_calls([tc], [echo_tool()],
+          engine: engine(),
+          on_tool_error: fn _err -> :halt end
+        )
+      end
+    end
+
+    test "passing a function of arity 3 raises ArgumentError" do
+      tc = echo_call("c0")
+
+      assert_raise ArgumentError, ~r/arity 2/, fn ->
+        ToolRunner.run_tool_calls([tc], [echo_tool()],
+          engine: engine(),
+          on_tool_error: fn _tc, _err, _extra -> :halt end
         )
       end
     end
@@ -1204,6 +1220,289 @@ defmodule ALLM.ToolRunnerTest do
       assert %Message{role: :tool, tool_call_id: "c0", metadata: %{}} = msg
       # Round-trip via ETF to confirm no non-serializable terms.
       assert msg == msg |> :erlang.term_to_binary() |> :erlang.binary_to_term()
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Phase 7: on_tool_error function form
+  # ---------------------------------------------------------------------------
+
+  defp boom_tool do
+    Tool.new(
+      name: "boom",
+      description: "",
+      schema: %{},
+      handler: fn _ -> {:error, :bad_arg} end
+    )
+  end
+
+  defp boom_call(id), do: ToolCall.new(id: id, name: "boom", arguments: %{})
+
+  describe "on_tool_error function form — {:continue, replacement}" do
+    test "encoded replacement is the tool message content; batch continues" do
+      tc = boom_call("c0")
+
+      assert {:ok, [msg]} =
+               ToolRunner.run_tool_calls([tc], [boom_tool()],
+                 engine: engine(),
+                 on_tool_error: fn _tc, _err -> {:continue, %{fallback: "ok"}} end
+               )
+
+      assert msg.tool_call_id == "c0"
+      assert Jason.decode!(msg.content) == %{"fallback" => "ok"}
+    end
+
+    test "function receives (tool_call, error_term)" do
+      {:ok, agent} = Agent.start_link(fn -> [] end)
+      tc = boom_call("c0")
+
+      record = fn t, err ->
+        Agent.update(agent, fn calls -> calls ++ [{t, err}] end)
+        {:continue, %{}}
+      end
+
+      assert {:ok, [_msg]} =
+               ToolRunner.run_tool_calls([tc], [boom_tool()],
+                 engine: engine(),
+                 on_tool_error: record
+               )
+
+      [{recv_tc, recv_err}] = Agent.get(agent, & &1)
+      assert recv_tc.id == "c0"
+      assert recv_tc.name == "boom"
+      # error_term is the raw error (atom from `{:error, :bad_arg}`) or a %ToolError{}.
+      assert recv_err == :bad_arg or match?(%ToolError{}, recv_err)
+    end
+  end
+
+  describe "on_tool_error function form — :halt" do
+    test "batch drains; halt metadata returned with :tool_error" do
+      tc = boom_call("c0")
+
+      assert {:ok, [msg], meta} =
+               ToolRunner.run_tool_calls([tc], [boom_tool()],
+                 engine: engine(),
+                 on_tool_error: fn _tc, _err -> :halt end
+               )
+
+      assert meta.halted_reason == :tool_error
+      assert meta.halt_tool_call_id == "c0"
+      assert msg.tool_call_id == "c0"
+    end
+  end
+
+  describe "on_tool_error function form — encoder failure on replacement" do
+    test "non-encodable replacement → %ToolError{:encoding_failed} routed as :halt (no recursion)" do
+      tc = boom_call("c0")
+
+      assert {:ok, [msg], meta} =
+               ToolRunner.run_tool_calls([tc], [boom_tool()],
+                 engine: engine(),
+                 on_tool_error: fn _tc, _err -> {:continue, make_ref()} end
+               )
+
+      assert meta.halted_reason == :tool_error
+      assert meta.halt_tool_call_id == "c0"
+      decoded = Jason.decode!(msg.content)
+      assert Map.has_key?(decoded, "error")
+    end
+  end
+
+  describe "on_tool_error function form — invalid return" do
+    test "non-{:continue, _}, non-:halt return wrapped as %ToolError{:invalid_return} routed :halt" do
+      tc = boom_call("c0")
+
+      assert {:ok, [msg], meta} =
+               ToolRunner.run_tool_calls([tc], [boom_tool()],
+                 engine: engine(),
+                 on_tool_error: fn _tc, _err -> :something_else end
+               )
+
+      assert meta.halted_reason == :tool_error
+      assert meta.halt_tool_call_id == "c0"
+      decoded = Jason.decode!(msg.content)
+      assert Map.has_key?(decoded, "error")
+    end
+  end
+
+  describe "on_tool_error function form — function raises" do
+    test "raise caught; routed :halt with metadata.on_tool_error_exception" do
+      tc = boom_call("c0")
+
+      assert {:ok, [msg], meta} =
+               ToolRunner.run_tool_calls([tc], [boom_tool()],
+                 engine: engine(),
+                 on_tool_error: fn _tc, _err -> raise "oops" end
+               )
+
+      assert meta.halted_reason == :tool_error
+      assert msg.tool_call_id == "c0"
+
+      # Phase 7 design Non-obvious Decision #8: the captured exception is
+      # lifted into the top-level halt_metadata so the chat layer can read
+      # it directly from `step.metadata` without fishing through tool_results.
+      assert %RuntimeError{message: "oops"} = meta.on_tool_error_exception
+    end
+
+    test "single-invocation invariant (Agent counter)" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      tc = boom_call("c0")
+
+      counting_fn = fn _tc, _err ->
+        Agent.update(counter, &(&1 + 1))
+        raise "oops"
+      end
+
+      assert {:ok, [_msg], _meta} =
+               ToolRunner.run_tool_calls([tc], [boom_tool()],
+                 engine: engine(),
+                 on_tool_error: counting_fn
+               )
+
+      # MUST be exactly 1 — proves recursion-avoidance call path is correct.
+      assert Agent.get(counter, & &1) == 1
+    end
+
+    test "single-invocation invariant for invalid-return path" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      tc = boom_call("c0")
+
+      counting_fn = fn _tc, _err ->
+        Agent.update(counter, &(&1 + 1))
+        :something_invalid
+      end
+
+      assert {:ok, [_msg], _meta} =
+               ToolRunner.run_tool_calls([tc], [boom_tool()],
+                 engine: engine(),
+                 on_tool_error: counting_fn
+               )
+
+      assert Agent.get(counter, & &1) == 1
+    end
+
+    test "single-invocation invariant for encoder-failure-on-replacement path" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      tc = boom_call("c0")
+
+      counting_fn = fn _tc, _err ->
+        Agent.update(counter, &(&1 + 1))
+        {:continue, make_ref()}
+      end
+
+      assert {:ok, [_msg], _meta} =
+               ToolRunner.run_tool_calls([tc], [boom_tool()],
+                 engine: engine(),
+                 on_tool_error: counting_fn
+               )
+
+      assert Agent.get(counter, & &1) == 1
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Phase 7: reserved-halt-atom rejection (spec §5.2)
+  # ---------------------------------------------------------------------------
+
+  describe "reserved-halt-atom rejection" do
+    test "@reserved_halt_atoms equals exactly the spec §5.2 set" do
+      assert ToolRunner.__reserved_halt_atoms__() ==
+               [:ask_user, :max_turns, :halt_when, :tool_error, :cancelled, :completed]
+    end
+
+    for reserved <- [:ask_user, :max_turns, :halt_when, :tool_error, :cancelled, :completed] do
+      @reserved reserved
+
+      test "handler {:halt, #{inspect(reserved)}, _} → on_tool_error :continue encodes error with metadata.reserved_halt_atom" do
+        tool =
+          Tool.new(
+            name: "x",
+            description: "",
+            schema: %{},
+            handler: fn _ -> {:halt, @reserved, %{r: 1}} end
+          )
+
+        tc = ToolCall.new(id: "c0", name: "x", arguments: %{})
+
+        assert {:ok, [msg]} =
+                 ToolRunner.run_tool_calls([tc], [tool],
+                   engine: engine(),
+                   on_tool_error: :continue
+                 )
+
+        decoded = Jason.decode!(msg.content)
+        assert Map.has_key?(decoded, "error")
+      end
+
+      test "handler {:halt, #{inspect(reserved)}, _} → on_tool_error :halt halts batch with :tool_error" do
+        tool =
+          Tool.new(
+            name: "x",
+            description: "",
+            schema: %{},
+            handler: fn _ -> {:halt, @reserved, %{r: 1}} end
+          )
+
+        tc = ToolCall.new(id: "c0", name: "x", arguments: %{})
+
+        assert {:ok, [_msg], meta} =
+                 ToolRunner.run_tool_calls([tc], [tool],
+                   engine: engine(),
+                   on_tool_error: :halt
+                 )
+
+        assert meta.halted_reason == :tool_error
+      end
+
+      test "handler {:halt, #{inspect(reserved)}, _} → on_tool_error fun receives ToolError with metadata.reserved_halt_atom" do
+        tool =
+          Tool.new(
+            name: "x",
+            description: "",
+            schema: %{},
+            handler: fn _ -> {:halt, @reserved, %{r: 1}} end
+          )
+
+        tc = ToolCall.new(id: "c0", name: "x", arguments: %{})
+        {:ok, agent} = Agent.start_link(fn -> nil end)
+        reserved = @reserved
+
+        record = fn _tc, err ->
+          Agent.update(agent, fn _ -> err end)
+          {:continue, %{}}
+        end
+
+        assert {:ok, [_msg]} =
+                 ToolRunner.run_tool_calls([tc], [tool],
+                   engine: engine(),
+                   on_tool_error: record
+                 )
+
+        captured = Agent.get(agent, & &1)
+        assert %ToolError{reason: :invalid_return, metadata: meta} = captured
+        assert meta.reserved_halt_atom == reserved
+      end
+    end
+
+    test "non-reserved atom continues to produce halt with the user-supplied atom" do
+      tool =
+        Tool.new(
+          name: "x",
+          description: "",
+          schema: %{},
+          handler: fn _ -> {:halt, :plan_submitted, %{r: 1}} end
+        )
+
+      tc = ToolCall.new(id: "c0", name: "x", arguments: %{})
+
+      assert {:ok, [_msg], meta} =
+               ToolRunner.run_tool_calls([tc], [tool], engine: engine())
+
+      assert meta.halted_reason == :plan_submitted
+      assert meta.halt_result == %{r: 1}
     end
   end
 end

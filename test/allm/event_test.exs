@@ -215,12 +215,32 @@ defmodule ALLM.EventTest do
       assert decoded["finish_reason"] == "stop"
     end
 
-    test "step_completed/2" do
+    test "step_completed/2 defaults mode: :auto" do
       resp = %Response{output_text: "ok"}
       thread = %Thread{messages: []}
 
-      assert {:step_completed, %{response: ^resp, thread: ^thread}} =
+      assert {:step_completed, %{response: ^resp, thread: ^thread, mode: :auto}} =
                Event.step_completed(resp, thread)
+    end
+
+    test "step_completed/3 carries the orchestration mode" do
+      resp = %Response{output_text: "ok"}
+      thread = %Thread{messages: []}
+
+      assert {:step_completed, %{response: ^resp, thread: ^thread, mode: :manual}} =
+               Event.step_completed(resp, thread, :manual)
+
+      assert {:step_completed, %{response: ^resp, thread: ^thread, mode: :auto}} =
+               Event.step_completed(resp, thread, :auto)
+    end
+
+    test "step_completed/3 raises on invalid mode" do
+      resp = %Response{output_text: "ok"}
+      thread = %Thread{messages: []}
+
+      assert_raise FunctionClauseError, fn ->
+        Event.step_completed(resp, thread, :bogus)
+      end
     end
 
     test "chat_completed/1" do

@@ -5,6 +5,8 @@ defmodule ALLM.StreamRunnerTest do
   alias ALLM.Error.{AdapterError, EngineError, ValidationError}
   alias ALLM.Providers.Fake
 
+  import ALLM.Test.AsyncHelpers, only: [wait_for: 2]
+
   doctest StreamRunner
 
   # ---------------------------------------------------------------------------
@@ -48,26 +50,6 @@ defmodule ALLM.StreamRunnerTest do
 
   defp fake_engine(script) do
     Engine.new(adapter: Fake, adapter_opts: [script: script])
-  end
-
-  # Poll a predicate until true or deadline expires. Same shape as Phase 4
-  # `StreamAdapterConformance`'s eventually helper.
-  defp wait_for(fun, timeout_ms) when is_function(fun, 0) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait(fun, deadline)
-  end
-
-  defp do_wait(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        false
-      else
-        Process.sleep(10)
-        do_wait(fun, deadline)
-      end
-    end
   end
 
   # ---------------------------------------------------------------------------

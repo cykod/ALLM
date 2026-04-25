@@ -13,8 +13,81 @@ defmodule ALLM.Test.FakeFixtures do
   published Hex package (per Phase 4 design Non-obvious Decision #10).
   """
 
+  alias ALLM.Engine
   alias ALLM.Error.AdapterError
+  alias ALLM.Providers.Fake
   alias ALLM.Providers.Fake.Script
+
+  @doc """
+  Build a single-script Fake-adapter engine for one-turn tests.
+
+  `script` is a Phase 4 §31 entry list (the same shape consumed by
+  `ALLM.Providers.Fake` under the `script:` adapter opt).
+
+  ## Options
+
+    * `:tools` — list of `ALLM.Tool` structs (default `[]`).
+    * `:adapter_opts` — extra adapter opts to merge into `[script: script]`
+      (e.g., `[emit_text_deltas: false]`). Caller-supplied keys win on
+      collision.
+    * `:engine_opts` — extra keyword opts to merge into the engine
+      construction (e.g., `[context: %{user_id: 1}]`). Caller-supplied keys
+      win on collision with the defaults built here.
+
+  Extracted from the `engine_with_script/2` helpers previously cloned across
+  `chat_step_test.exs`, `chat_stream_step_test.exs`, and `chat_run_test.exs`.
+  """
+  @spec engine([Script.spec31_entry()], keyword()) :: Engine.t()
+  def engine(script, opts \\ []) when is_list(script) and is_list(opts) do
+    tools = Keyword.get(opts, :tools, [])
+    extra_adapter_opts = Keyword.get(opts, :adapter_opts, [])
+    extra_engine_opts = Keyword.get(opts, :engine_opts, [])
+
+    adapter_opts = Keyword.merge([script: script], extra_adapter_opts)
+
+    engine_opts =
+      [adapter: Fake, adapter_opts: adapter_opts, tools: tools]
+      |> Keyword.merge(extra_engine_opts)
+
+    Engine.new(engine_opts)
+  end
+
+  @doc """
+  Build a multi-script Fake-adapter engine for multi-turn tests.
+
+  Allocates a fresh `Fake.start_script_cursor/0` cursor and threads it
+  through `adapter_opts` so each call to the adapter advances the cursor
+  through the script list.
+
+  `scripts` is a list of §31 entry lists, one per expected adapter call.
+
+  ## Options
+
+  Same as `engine/2`. `:adapter_opts` is merged on top of
+  `[scripts: scripts, script_cursor: cursor]`.
+
+  Extracted from `chat_run_test.exs:engine_with_scripts/2`.
+  """
+  @spec engine_with_scripts([[Script.spec31_entry()]], keyword()) :: Engine.t()
+  def engine_with_scripts(scripts, opts \\ []) when is_list(scripts) and is_list(opts) do
+    tools = Keyword.get(opts, :tools, [])
+    extra_adapter_opts = Keyword.get(opts, :adapter_opts, [])
+    extra_engine_opts = Keyword.get(opts, :engine_opts, [])
+
+    cursor = Fake.start_script_cursor()
+
+    adapter_opts =
+      Keyword.merge(
+        [scripts: scripts, script_cursor: cursor],
+        extra_adapter_opts
+      )
+
+    engine_opts =
+      [adapter: Fake, adapter_opts: adapter_opts, tools: tools]
+      |> Keyword.merge(extra_engine_opts)
+
+    Engine.new(engine_opts)
+  end
 
   @doc """
   Plain text response. Returns `adapter_opts` that, fed to

@@ -20,7 +20,7 @@ Four conceptual layers — changes that cross a layer boundary usually signal a 
 Key invariants:
 
 - **Stream-first.** `stream_*` functions are the primitives. Non-streaming variants are reducers over the event stream via `ALLM.StreamCollector`. Implement streaming paths first (§3, §28).
-- **Event protocol is the wire format between the stream runner and consumers.** `ALLM.Event` is a closed tagged-tuple union (§8). Adding a new event type is a breaking change for reducers.
+- **Event protocol is the wire format between the stream runner and consumers.** `ALLM.Event` is a closed tagged-tuple union (§8). Adding a new event type is a breaking change for reducers. Adding a key to an *existing* event's payload map is NOT breaking — pattern-matching on payload keys is non-exhaustive, so existing reducers ignore the new key. When extending payload, document the new key in spec §8 and the event constructor's `@doc`. Worked example: `:step_completed` payload grew a `:mode` key in batch 7.3 to carry `:auto | :manual` from `Chat.stream_step/3` to `StreamCollector`'s fold.
 - **Engines don't carry API keys.** Keys resolve through `ALLM.Keys` at adapter-call time (§6.4). A serialized engine/session is safe to persist; verify with tests.
 - **Model strings are late-resolved.** Optional `llm_db` dependency provides capability pre-flight and cost population; core must function without it (§6.3).
 - **Two orchestration modes.** `:auto` (loop executes tools automatically) and `:manual` (caller submits tool results). Ask-user suspension via `{:ask_user, ...}` handler return works in both modes (§12.3).

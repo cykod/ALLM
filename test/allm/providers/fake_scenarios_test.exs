@@ -5,9 +5,9 @@ defmodule ALLM.Providers.FakeScenariosTest do
   coverage. `mix test --only spec_31` scopes Phase 12's regression audit
   to one file.
 
-  Active coverage after Phase 6: 9 scenarios (3 Phase 4 + 3 Phase 5 + 3
-  Phase 6). Remaining: 3 scenarios tagged `@tag :pending`, deferred to
-  Phases 7/8.
+  Active coverage after Phase 7: 12 scenarios (3 Phase 4 + 3 Phase 5 +
+  3 Phase 6 + 3 Phase 7). Remaining: 1 scenario tagged `@tag :pending`,
+  deferred to Phase 8.
 
   | # | Scenario | Phase |
   |---|---|---|
@@ -18,40 +18,43 @@ defmodule ALLM.Providers.FakeScenariosTest do
   | 5 | consumer cancellation releases the adapter's HTTP request | 5 (active — `:counters` observer) |
   | 6 | single tool call with `mode: :auto` through `ALLM.step/3` | 6 (active) |
   | 7 | parallel tool calls through `ALLM.step/3` | 6 (active) |
-  | 8 | tool handler raises — `on_tool_error` policy (atom forms) | 6 (active — function form Phase 7) |
-  | 9 | `max_turns` cap | 7 (deferred) |
-  | 10 | `halt_when` fires | 7 (deferred) |
-  | 11 | session round-trip | 8 (deferred) |
+  | 8 | tool handler raises — `on_tool_error` policy (atom forms) | 6 (active) |
+  | 9 | `max_turns` cap through `ALLM.chat/3` | 7 (active) |
+  | 10 | `halt_when` fires through `ALLM.chat/3` | 7 (active) |
+  | 11 | single tool call with `mode: :manual` — partial flow via `ALLM.chat/3` | 7 (active) |
+  | 12 | session round-trip | 8 (deferred) |
   """
 
   use ExUnit.Case, async: true
 
   @moduletag :spec_31
 
-  alias ALLM.{Engine, Message, Request, Response, StepResult, Tool}
+  alias ALLM.{ChatResult, Engine, Message, Request, Response, StepResult, Thread, Tool}
   alias ALLM.Error.AdapterError
   alias ALLM.Providers.Fake
+  alias ALLM.Test.FakeFixtures
 
-  # Poll a predicate until true or deadline expires. Same shape as
-  # `StreamRunner`'s test helper and `StreamAdapterConformance`'s
-  # `eventually` helper.
-  defp wait_for(fun, timeout_ms) when is_function(fun, 0) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait(fun, deadline)
+  import ALLM.Test.AsyncHelpers, only: [wait_for: 2]
+
+  defp echo_tool do
+    Tool.new(
+      name: "echo",
+      description: "",
+      schema: %{},
+      handler: fn args -> {:ok, args} end
+    )
   end
 
-  defp do_wait(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        false
-      else
-        Process.sleep(10)
-        do_wait(fun, deadline)
-      end
-    end
+  defp weather_tool do
+    Tool.new(
+      name: "weather",
+      description: "",
+      schema: %{},
+      handler: fn args -> {:ok, args} end
+    )
   end
+
+  defp user_thread, do: Thread.from_messages([ALLM.user("hi")])
 
   defp fake_request(content \\ "x") do
     Request.new([%Message{role: :user, content: content}])
@@ -427,18 +430,76 @@ defmodule ALLM.Providers.FakeScenariosTest do
   # these by tag.
   # ---------------------------------------------------------------------------
 
-  @tag :pending
-  test "§31 scenario: max_turns cap (Phase 7)" do
-    # `max_turns` is a chat-loop bound surfaced through
-    # `ALLM.chat/3`; Phase 7 introduces the orchestrator.
-    :ok
+  describe "§31 scenario: max_turns cap (Phase 7)" do
+    test "max_turns: 2 caps the loop after 2 steps; halted_reason :max_turns" do
+      # Three turns of tool_calls on the wire — chat/3 with max_turns: 2
+      # halts after the second step's tool execution without issuing the
+      # third adapter call.
+      scripts = [
+        [{:tool_call, id: "c0", name: "echo", arguments: %{}}, {:finish, :tool_calls}],
+        [{:tool_call, id: "c1", name: "echo", arguments: %{}}, {:finish, :tool_calls}],
+        [{:tool_call, id: "c2", name: "echo", arguments: %{}}, {:finish, :tool_calls}]
+      ]
+
+      engine = FakeFixtures.engine_with_scripts(scripts, tools: [echo_tool()])
+
+      assert {:ok, %ChatResult{} = result} =
+               ALLM.chat(engine, user_thread(), max_turns: 2)
+
+      assert result.halted_reason == :max_turns
+      assert result.metadata.max_turns == 2
+      assert length(result.steps) == 2
+    end
   end
 
-  @tag :pending
-  test "§31 scenario: halt_when fires (Phase 7)" do
-    # `halt_when:` predicate is a chat-loop option; Phase 7 wires it through
-    # the orchestrator's per-step evaluation.
-    :ok
+  describe "§31 scenario: halt_when fires (Phase 7)" do
+    test "halt_when fires at step 1; halted_reason :halt_when" do
+      # Two-turn fixture: tool_calls then plain text. halt_when looks at
+      # the step's tool_results — which is non-empty after the first turn
+      # — and halts before issuing the second adapter call.
+      scripts = [
+        [{:tool_call, id: "c0", name: "echo", arguments: %{}}, {:finish, :tool_calls}],
+        [{:text, "done"}, {:finish, :stop}]
+      ]
+
+      engine = FakeFixtures.engine_with_scripts(scripts, tools: [echo_tool()])
+
+      halt_when = fn sr -> sr.tool_results != [] end
+
+      assert {:ok, %ChatResult{} = result} =
+               ALLM.chat(engine, user_thread(), halt_when: halt_when)
+
+      assert result.halted_reason == :halt_when
+      assert result.metadata.halt_when_step_index == 0
+      assert length(result.steps) == 1
+    end
+  end
+
+  describe "§31 scenario: single tool call with mode: :manual — partial flow via chat/3 (Phase 7)" do
+    test "mode: :manual surfaces tool calls without executing; halted_reason :manual_tool_calls" do
+      # Single-turn tool-call script. mode: :manual halts on the FIRST
+      # response that carries finish_reason: :tool_calls, returning the
+      # tool calls on final_response for the caller to submit results
+      # (the full session round-trip is Phase 8).
+      script = [
+        {:tool_call, id: "c0", name: "weather", arguments: %{city: "Boston"}},
+        {:finish, :tool_calls}
+      ]
+
+      engine = FakeFixtures.engine(script, tools: [weather_tool()])
+
+      assert {:ok, %ChatResult{} = result} =
+               ALLM.chat(engine, user_thread(), mode: :manual)
+
+      assert result.halted_reason == :manual_tool_calls
+      assert result.metadata.manual_turn_index == 0
+      assert length(result.steps) == 1
+      assert hd(result.steps).tool_results == []
+
+      # final_response carries the surfaced tool call.
+      assert [tool_call] = result.final_response.tool_calls
+      assert tool_call.name == "weather"
+    end
   end
 
   @tag :pending

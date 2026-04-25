@@ -46,10 +46,21 @@ defmodule ALLM.Event do
                question: String.t(),
                opts: keyword()
              }}
-          | {:tool_halt, %{tool_call_id: String.t(), reason: atom(), result: term()}}
+          | {:tool_halt,
+             %{
+               required(:tool_call_id) => String.t(),
+               required(:reason) => atom(),
+               required(:result) => term(),
+               optional(:content) => String.t()
+             }}
           | {:message_completed,
              %{message: Message.t(), finish_reason: Response.finish_reason() | nil}}
-          | {:step_completed, %{response: Response.t(), thread: Thread.t()}}
+          | {:step_completed,
+             %{
+               response: Response.t(),
+               thread: Thread.t(),
+               mode: :auto | :manual
+             }}
           | {:chat_completed, %{result: ChatResult.t()}}
           | {:raw_chunk, term()}
           | {:error, term()}
@@ -254,6 +265,24 @@ defmodule ALLM.Event do
     do: {:tool_halt, %{tool_call_id: tool_call_id, reason: reason, result: result}}
 
   @doc """
+  Build a `:tool_halt` event with the pre-encoded tool-result `content`. The
+  payload's `:content` key lets `ALLM.StreamCollector`'s `:tool_halt` fold
+  populate `state.tool_results` with the sentinel `:tool`-role message
+  without re-running the encoder. See PHASE_7_DESIGN.md Non-obvious
+  Decision #6 + Phase 7.6 cleanup.
+
+  ## Examples
+
+      iex> ALLM.Event.tool_halt("call_1", :rate_limited, %{retry_after: 30}, "encoded-body")
+      {:tool_halt, %{tool_call_id: "call_1", reason: :rate_limited, result: %{retry_after: 30}, content: "encoded-body"}}
+  """
+  @spec tool_halt(String.t(), atom(), term(), String.t()) :: t()
+  def tool_halt(tool_call_id, reason, result, content)
+      when is_binary(tool_call_id) and is_atom(reason) and is_binary(content) do
+    {:tool_halt, %{tool_call_id: tool_call_id, reason: reason, result: result, content: content}}
+  end
+
+  @doc """
   Build a `:message_started` event with the in-progress assistant message.
 
   ## Examples
@@ -307,14 +336,34 @@ defmodule ALLM.Event do
   @doc """
   Build a `:step_completed` event with the response and the updated thread.
 
+  Equivalent to `step_completed(response, thread, :auto)`. The payload's
+  `:mode` key carries the orchestration mode the step ran under so that
+  reducers (`StreamCollector`'s `:step_completed` fold, multi-turn chat
+  orchestrators) can produce StepResult metadata identical to the
+  non-streaming `Chat.step/3` path. See Phase 7 retro F1+F3.
+
   ## Examples
 
       iex> ALLM.Event.step_completed(%ALLM.Response{output_text: "ok"}, %ALLM.Thread{messages: []})
-      {:step_completed, %{response: %ALLM.Response{output_text: "ok"}, thread: %ALLM.Thread{messages: []}}}
+      {:step_completed, %{response: %ALLM.Response{output_text: "ok"}, thread: %ALLM.Thread{messages: []}, mode: :auto}}
   """
   @spec step_completed(Response.t(), Thread.t()) :: t()
   def step_completed(%Response{} = response, %Thread{} = thread),
-    do: {:step_completed, %{response: response, thread: thread}}
+    do: step_completed(response, thread, :auto)
+
+  @doc """
+  Build a `:step_completed` event with the response, the updated thread,
+  and the orchestration mode (`:auto` or `:manual`) the step ran under.
+
+  ## Examples
+
+      iex> ALLM.Event.step_completed(%ALLM.Response{output_text: "ok"}, %ALLM.Thread{messages: []}, :manual)
+      {:step_completed, %{response: %ALLM.Response{output_text: "ok"}, thread: %ALLM.Thread{messages: []}, mode: :manual}}
+  """
+  @spec step_completed(Response.t(), Thread.t(), :auto | :manual) :: t()
+  def step_completed(%Response{} = response, %Thread{} = thread, mode)
+      when mode in [:auto, :manual],
+      do: {:step_completed, %{response: response, thread: thread, mode: mode}}
 
   @doc """
   Build a `:chat_completed` event wrapping the final `ChatResult`.

@@ -72,30 +72,24 @@ defmodule ALLM.StepEquivalenceTest do
     Engine.new(adapter: Fake, adapter_opts: [script: script], tools: tools)
   end
 
-  # Fold the stream through the collector, extracting the augmented thread
-  # from the `:step_completed` event. The StreamCollector's catch-all
-  # currently no-ops on `:step_completed`; we snapshot the thread from its
-  # payload and thread it into the collector before the final call to
-  # `to_step_result/1` so the equivalence compares the post-execution
-  # thread on both sides.
+  # Fold the stream through the collector. With Phase 7, the
+  # `:step_completed` fold appends a `%StepResult{}` to `state.steps`;
+  # use that as the canonical step result for the equivalence test. When
+  # the stream did not emit `:step_completed` (e.g., adapter pre-flight
+  # error / cancellation), fall back to building a step result from the
+  # pre-reset collector state — preserving the pre-Phase-7 helper shape.
   defp collect_step_result(stream, initial_thread) do
     initial = StreamCollector.new(initial_thread)
 
-    {collector, final_thread} =
-      Enum.reduce(stream, {initial, initial_thread}, fn event, {coll, thread} ->
-        new_coll = StreamCollector.apply_event(coll, event)
-
-        new_thread =
-          case event do
-            {:step_completed, %{thread: %Thread{} = t}} -> t
-            _ -> thread
-          end
-
-        {new_coll, new_thread}
+    collector =
+      Enum.reduce(stream, initial, fn event, coll ->
+        StreamCollector.apply_event(coll, event)
       end)
 
-    %{collector | thread: final_thread}
-    |> StreamCollector.to_step_result()
+    case collector.steps do
+      [_ | _] -> List.last(collector.steps)
+      [] -> StreamCollector.to_step_result(collector)
+    end
   end
 
   # ---------------------------------------------------------------------------

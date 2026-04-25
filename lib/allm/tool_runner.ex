@@ -48,9 +48,32 @@ defmodule ALLM.ToolRunner do
       content and the batch proceeds normally.
     * `:halt` — the batch drains to completion and the final return is
       `{:ok, msgs, halt_metadata}` with `halted_reason: :tool_error`.
+    * `(ToolCall.t(), term() -> {:continue, term()} | :halt)` (Phase 7) —
+      called synchronously inside the per-tool task with the failing
+      tool call and the error term. `{:continue, replacement}` encodes
+      `replacement` via the encoder as the tool-result content;
+      `:halt` halts the batch as if the atom form had been supplied.
+      A function that raises or returns an invalid shape is wrapped
+      as `%ToolError{reason: :invalid_return}` and routed as `:halt`
+      WITHOUT re-invoking the function (recursion-avoidance).
 
-  The function form of `on_tool_error` is deferred to Phase 7; passing
-  a function here raises `ArgumentError`.
+  ## Function-form semantics
+
+  See Phase 7 design Non-obvious Decision #8. Inside the per-tool
+  `Task.async_stream/5` task, the runner resolves the function's return
+  to a concrete `:continue` / `:halt` decision FIRST, then delegates to
+  the same `route_error/3` path used for atom-form `on_tool_error`. The
+  function reference is dropped from the dispatch context before the
+  delegated call, so a re-entry with the same function is impossible.
+
+  ## Reserved halt atoms
+
+  Per spec §5.2, the following atoms are reserved as orchestrator-owned
+  halt reasons and MUST NOT be used by handlers in `{:halt, reason, _}`
+  returns: `:ask_user`, `:max_turns`, `:halt_when`, `:tool_error`,
+  `:cancelled`, `:completed`. A handler that returns one is wrapped as
+  `%ToolError{reason: :invalid_return, metadata: %{reserved_halt_atom: r}}`
+  and routed via `on_tool_error`.
   """
 
   alias ALLM.{Engine, Event, Message, Tool, ToolCall}
@@ -59,6 +82,16 @@ defmodule ALLM.ToolRunner do
   @default_tool_timeout 30_000
   @awaiting_user_response "<awaiting user response>"
 
+  # Spec §5.2 — reserved halt reasons that handlers MUST NOT reuse. A
+  # meta-test asserts this attribute equals exactly the spec's stated
+  # set so future spec changes trigger a test failure on import.
+  @reserved_halt_atoms [:ask_user, :max_turns, :halt_when, :tool_error, :cancelled, :completed]
+
+  @type on_tool_error ::
+          :continue
+          | :halt
+          | (ToolCall.t(), error_term :: term() -> {:continue, term()} | :halt)
+
   @type run_opts :: [
           engine: Engine.t() | nil,
           context: map(),
@@ -66,7 +99,7 @@ defmodule ALLM.ToolRunner do
           session_id: String.t() | nil,
           tool_executor: module() | nil,
           tool_result_encoder: module() | nil,
-          on_tool_error: :continue | :halt,
+          on_tool_error: on_tool_error(),
           tool_timeout: timeout(),
           max_concurrency: pos_integer()
         ]
@@ -85,8 +118,9 @@ defmodule ALLM.ToolRunner do
         }
 
   @type tool_error_halt_metadata :: %{
-          halted_reason: :tool_error,
-          halt_tool_call_id: String.t()
+          required(:halted_reason) => :tool_error,
+          required(:halt_tool_call_id) => String.t(),
+          optional(:on_tool_error_exception) => Exception.t()
         }
 
   @type halt_metadata :: ask_user_metadata() | tool_halt_metadata() | tool_error_halt_metadata()
@@ -113,7 +147,7 @@ defmodule ALLM.ToolRunner do
   | `:engine` | `nil` | Engine for context / executor / encoder fallback. |
   | `:tool_executor` | `engine.tool_executor \\|\\| ALLM.ToolExecutor.Default` | Override the executor module. |
   | `:tool_result_encoder` | `engine.tool_result_encoder \\|\\| ALLM.ToolResultEncoder.JSON` | Override the encoder module. |
-  | `:on_tool_error` | `:continue` | `:continue` or `:halt`; function form raises `ArgumentError`. |
+  | `:on_tool_error` | `:continue` | `:continue`, `:halt`, or `(tool_call, error -> {:continue, term} \| :halt)` (Phase 7). |
   | `:tool_timeout` | `30_000` | Milliseconds before `Task.async_stream/5` kills a task. Timed-out tasks surface as `%ToolError{reason: :timeout}`. |
   | `:max_concurrency` | `max(1, min(length(tool_calls), System.schedulers_online() * 2))` | Upper bound on concurrent handler invocations. |
   | `:context` | `engine.context` | Passed to arity-2 handlers. |
@@ -128,7 +162,10 @@ defmodule ALLM.ToolRunner do
   | Encoder raises `Protocol.UndefinedError` / `Jason.EncodeError` | Wrapped as `%ToolError{reason: :encoding_failed}` and routed via `on_tool_error` |
   | Handler raises / exits / returns an invalid shape | `%ToolError{reason: :handler_raised \\| :handler_exit \\| :invalid_return}` (from the executor) routed via `on_tool_error` |
   | Handler exceeds `tool_timeout` | `%ToolError{reason: :timeout}` routed via `on_tool_error` |
-  | `on_tool_error` is a function | Raises `ArgumentError` (Phase 7 extension) |
+  | `on_tool_error` is a function returning `{:continue, replacement}` | `replacement` encoded as tool-result content; batch continues. |
+  | `on_tool_error` is a function returning `:halt` | Batch drains; final return `{:ok, msgs, %{halted_reason: :tool_error, halt_tool_call_id: id}}`. When the function form raises, the captured exception is also lifted into halt_metadata as `:on_tool_error_exception`. |
+  | `on_tool_error` function returns invalid shape / raises | Wrapped as `%ToolError{reason: :invalid_return}`; routed as `:halt`. Function NOT re-invoked. |
+  | `on_tool_error` is a function of arity ≠ 2 | Raises `ArgumentError` at `run_tool_calls/3` entry. |
 
   ## Examples
 
@@ -248,21 +285,30 @@ defmodule ALLM.ToolRunner do
   # Pre-flight / validation
   # ---------------------------------------------------------------------------
 
-  # Raise on the function form of `on_tool_error` — Phase 7 extension
-  # (see PHASE_6_DESIGN.md Non-obvious Decision #3, Error Contract table).
+  @doc false
+  # Test-only accessor for the reserved-atom attribute (see spec §5.2).
+  # Surfaced via @doc false so a meta-test can assert the attribute equals
+  # exactly the spec-defined set.
+  @spec __reserved_halt_atoms__() :: [atom()]
+  def __reserved_halt_atoms__, do: @reserved_halt_atoms
+
+  # Validate `on_tool_error`. Phase 7: function form must be arity 2.
   defp validate_on_tool_error!(policy)
        when policy in [:continue, :halt] or is_nil(policy),
        do: :ok
 
+  defp validate_on_tool_error!(fun) when is_function(fun, 2), do: :ok
+
   defp validate_on_tool_error!(fun) when is_function(fun) do
     raise ArgumentError,
-          "on_tool_error function form is not implemented in Phase 6; " <>
-            "use :continue or :halt, or wait for Phase 7"
+          "on_tool_error function form must accept (tool_call, error) — arity 2; " <>
+            "got function of arity #{:erlang.fun_info(fun)[:arity]}"
   end
 
   defp validate_on_tool_error!(other) do
     raise ArgumentError,
-          "on_tool_error must be :continue or :halt, got: #{inspect(other)}"
+          "on_tool_error must be :continue, :halt, or a function of arity 2 " <>
+            "with signature (tool_call, error), got: #{inspect(other)}"
   end
 
   # Walk the tool calls once; return `:ok` when every name resolves, or
@@ -413,8 +459,11 @@ defmodule ALLM.ToolRunner do
         {:ask_user, question, user_opts} ->
           Event.ask_user_requested(tc.id, tc.name, question, user_opts)
 
-        {:halt, reason, result} ->
-          Event.tool_halt(tc.id, reason, result)
+        {:halt, reason, result, content} ->
+          # Phase 7.6 cleanup B1: 4-tuple variant carries the encoded
+          # `content` so the `StreamCollector` :tool_halt fold can populate
+          # `state.tool_results` without an encoder.
+          Event.tool_halt(tc.id, reason, result, content)
       end
 
     [started, completed, tail]
@@ -476,15 +525,38 @@ defmodule ALLM.ToolRunner do
     handle_ask_user(tc, question, user_opts)
   end
 
+  # Reserved halt atoms (spec §5.2) — must not be reused by handlers. Wrap
+  # as %ToolError{reason: :invalid_return} so on_tool_error decides whether
+  # to encode-and-continue or halt. Ordered BEFORE the general clause.
+  defp dispatch_handler_return({:halt, reason, _result}, %ToolCall{} = tc, ctx)
+       when reason in @reserved_halt_atoms do
+    err =
+      ToolError.new(:invalid_return,
+        tool_name: tc.name,
+        tool_call_id: tc.id,
+        message:
+          "handler returned {:halt, #{inspect(reason)}, _}; #{inspect(reason)} is reserved " <>
+            "(spec §5.2) — pick a non-reserved atom",
+        metadata: %{reserved_halt_atom: reason}
+      )
+
+    route_error(err, tc, ctx)
+  end
+
   defp dispatch_handler_return({:halt, reason, result}, %ToolCall{} = tc, ctx)
        when is_atom(reason) do
     # Spec §5.2: encode `result` as the tool-result content (see spec §30).
     case encode_value(ctx.encoder, result, tc) do
       {:ok, content} ->
+        # Phase 7.6 cleanup B1: pass the encoded `content` through the
+        # terminal tuple so `events_for_dispatch/2` builds a `:tool_halt`
+        # event whose payload carries `:content`. The `StreamCollector`
+        # `:tool_halt` fold then appends the sentinel tool message to
+        # `state.tool_results` without re-running the encoder.
         {:halt, tool_msg(tc.id, content),
          %{
            raw_result: {:halt, reason, result},
-           terminal: {:halt, reason, result},
+           terminal: {:halt, reason, result, content},
            halt_metadata: %{
              halted_reason: reason,
              halt_tool_call_id: tc.id,
@@ -523,8 +595,21 @@ defmodule ALLM.ToolRunner do
   end
 
   # Route an error term through the `on_tool_error` policy.
-  # `:continue` → encode as tool content, mark continue.
-  # `:halt` → encode as tool content, mark halt with :tool_error metadata.
+  # Function form: invoke synchronously inside the task, resolve the
+  # return value to a concrete `:continue` / `:halt` decision FIRST,
+  # then construct a ctx_for_halt with the function reference DROPPED
+  # and delegate to the atom-form branch — single-invocation guarantee
+  # (Phase 7 design Non-obvious Decision #8).
+  defp route_error(err, %ToolCall{} = tc, %{on_tool_error: fun} = ctx) when is_function(fun, 2) do
+    raw_err =
+      case err do
+        %ToolError{} = struct -> {:error, struct}
+        other -> {:error, other}
+      end
+
+    invoke_on_tool_error(fun, tc, err, raw_err, ctx)
+  end
+
   defp route_error(err, %ToolCall{} = tc, ctx) do
     content = encode_error(ctx.encoder, err)
 
@@ -536,19 +621,110 @@ defmodule ALLM.ToolRunner do
 
     case ctx.on_tool_error do
       :halt ->
+        # Phase 7.6 cleanup B3: emit `terminal: {:halt, :tool_error, err,
+        # content}` so `events_for_dispatch/2` produces a `:tool_halt`
+        # event (was `:tool_result_encoded`). Without this, the streaming
+        # `StreamCollector` / `Chat.stream/3` Phase B never observe a halt
+        # and the chat loop runs to `max_turns`.
         {:halt, tool_msg(tc.id, content),
          %{
            raw_result: raw_result,
-           terminal: {:encoded, content},
-           halt_metadata: %{
-             halted_reason: :tool_error,
-             halt_tool_call_id: tc.id
-           }
+           terminal: {:halt, :tool_error, err, content},
+           halt_metadata: build_tool_error_halt_metadata(tc, err)
          }}
 
       _continue ->
         {:continue, tool_msg(tc.id, content),
          %{raw_result: raw_result, terminal: {:encoded, content}}}
+    end
+  end
+
+  # Build the `tool_error_halt_metadata` for a `:tool_error` halt.
+  #
+  # Lifts `:on_tool_error_exception` from the wrapped `%ToolError{}.metadata`
+  # to the top-level halt metadata when present (spec §13 / Phase 7 design
+  # Non-obvious Decision #8 — chat layer surfaces it via
+  # `ChatResult.metadata.on_tool_error_exception` and reads it directly from
+  # `step.metadata` rather than fishing it out of `tool_results`).
+  defp build_tool_error_halt_metadata(%ToolCall{} = tc, %ToolError{metadata: %{} = m}) do
+    base = %{halted_reason: :tool_error, halt_tool_call_id: tc.id}
+
+    case Map.fetch(m, :on_tool_error_exception) do
+      {:ok, exception} -> Map.put(base, :on_tool_error_exception, exception)
+      :error -> base
+    end
+  end
+
+  defp build_tool_error_halt_metadata(%ToolCall{} = tc, _err) do
+    %{halted_reason: :tool_error, halt_tool_call_id: tc.id}
+  end
+
+  # Invoke the function-form on_tool_error inside the task. Catches raises;
+  # dispatches on the return shape; routes via the atom-form path with the
+  # function reference DROPPED to avoid re-entry.
+  defp invoke_on_tool_error(fun, %ToolCall{} = tc, err, raw_err, ctx) do
+    error_term =
+      case raw_err do
+        {:error, %ToolError{} = e} -> e
+        {:error, other} -> other
+      end
+
+    decision =
+      try do
+        fun.(tc, error_term)
+      rescue
+        e ->
+          {:invalid_return,
+           ToolError.new(:invalid_return,
+             tool_name: tc.name,
+             tool_call_id: tc.id,
+             cause: e,
+             metadata: %{on_tool_error_raised: true, on_tool_error_exception: e}
+           )}
+      end
+
+    case decision do
+      {:continue, replacement} ->
+        continue_with_replacement(replacement, tc, ctx)
+
+      :halt ->
+        ctx_for_halt = %{ctx | on_tool_error: :halt}
+        route_error(err, tc, ctx_for_halt)
+
+      {:invalid_return, %ToolError{} = wrapped} ->
+        ctx_for_halt = %{ctx | on_tool_error: :halt}
+        route_error(wrapped, tc, ctx_for_halt)
+
+      _other ->
+        wrapped =
+          ToolError.new(:invalid_return,
+            tool_name: tc.name,
+            tool_call_id: tc.id,
+            metadata: %{on_tool_error_invalid: true}
+          )
+
+        ctx_for_halt = %{ctx | on_tool_error: :halt}
+        route_error(wrapped, tc, ctx_for_halt)
+    end
+  end
+
+  # `{:continue, replacement}` path — encode the replacement as the
+  # tool-result content. Encoder failure on the replacement is wrapped
+  # as `%ToolError{reason: :encoding_failed}` and routed as `:halt`
+  # WITHOUT re-invoking on_tool_error (recursion-avoidance — Phase 7
+  # design Non-obvious Decision #8).
+  defp continue_with_replacement(replacement, %ToolCall{} = tc, ctx) do
+    case encode_value(ctx.encoder, replacement, tc) do
+      {:ok, content} ->
+        {:continue, tool_msg(tc.id, content),
+         %{
+           raw_result: {:ok, replacement},
+           terminal: {:encoded, content}
+         }}
+
+      {:error, %ToolError{} = encoding_err} ->
+        ctx_for_halt = %{ctx | on_tool_error: :halt}
+        route_error(encoding_err, tc, ctx_for_halt)
     end
   end
 

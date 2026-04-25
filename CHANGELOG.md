@@ -1,3 +1,21 @@
+## [FEAT] Phase 7: chat/3 + stream/3 multi-turn orchestration loop
+*Saturday, April 25th at 5pm*
+Ships the first Layer C surface that orchestrates the full multi-turn loop. 
+ALLM.chat/3 repeatedly runs step/3, appending results to the thread until a 
+terminal condition fires (adapter finish_reason, :max_turns exhausted, 
+:halt_when callback, handler-requested {:halt, _, _} or {:ask_user, _}, 
+on_tool_error: :halt, or :manual mode surfacing tool calls). ALLM.stream/3 
+emits every Phase-5/6 event across every turn plus exactly one terminal 
+:chat_completed event carrying the final %ChatResult{}. Adds StreamCollector 
+:step_completed/:chat_completed fold clauses, the ToolRunner on_tool_error 
+function form, ask-user thread mutation at the turn boundary (spec §12.3), and 
+a chat-equivalence property asserting chat/3 ≡ stream/3 |> 
+StreamCollector.to_chat_result/1 across every multi-turn Fake fixture. 
+Activates §31 max_turns/halt_when/manual scenarios; all 857 tests + 18 
+properties green.
+
+---
+
 ## [FEAT] Phase 6: step/3 + stream_step/3 with parallel tool execution
 *Friday, April 24th at 10pm*
 Implements Phase 6 sub-phases 6.1-6.4 across three batches: ALLM.ToolRunner 
@@ -81,6 +99,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+
+### Phase 7.5 — `ALLM.chat/3` + `ALLM.stream/3` facade + chat-equivalence property + §31 activations
+
+#### Added
+- `ALLM.chat/3` — new public facade function (spec §4, §10.5). Pure one-line delegation to `ALLM.Chat.run/3`; multi-turn non-streaming orchestration. `@doc` covers `:mode`, `:max_turns` precedence chain (Phase 7 Non-obvious Decision #9), `:halt_when` semantics (Decision #11), `:on_tool_error` including the function form (Decision #8), the halt-reason table, and the `:on_event` adapter-only scope (Decision #13). One runnable Fake two-turn doctest.
+- `ALLM.stream/3` — new public facade function (spec §4, §10.6). Pure one-line delegation to `ALLM.Chat.stream/3`; multi-turn streaming orchestration emitting exactly one terminal `:chat_completed` event (Decision #3) carrying a `%ChatResult{}` constructed via the same `ALLM.Chat.build_chat_result/1` helper as `ALLM.chat/3` (Decision #4 — chat-equivalence by construction). `@doc` covers single-terminal-event invariant, ask-user thread asymmetry (Invariant 8), and `:on_event` scope. One runnable Fake two-turn doctest asserting exactly one `:chat_completed`.
+- `ALLM.Test.Assertions.assert_equivalent_chat_result/2` — new test-support helper. Compares two `%ChatResult{}` values: `:halted_reason`, `:pending_question`, `:pending_tool_call_id`, and `:final_response` exact; `:metadata` modulo `:halt_result` (documented Phase 6/7 streaming-vs-non-streaming gap — see test moduledoc); thread split into non-`:tool` (positional) and `:tool`-role (sorted by `:tool_call_id`); `:steps` element-wise via a private `assert_equivalent_chat_step/2` that strips halt-induced sentinel tool messages from `:tool_results` before comparison.
+- `test/allm/chat_equivalence_test.exs` — `StreamData` property test (`@moduletag :property`) asserting `ALLM.Chat.run(engine, thread, opts) ≡ ALLM.Chat.stream(engine, thread, opts) |> Enum.reduce(StreamCollector.new(thread), &apply_event/2) |> StreamCollector.to_chat_result/1` across 100 iterations over eight named fixtures (happy multi-turn, `max_turns: 1`, single-turn text, `halt_when` at step 1, manual mode, ask-user mid-loop, custom halt atom, `on_tool_error: fn _, _ -> {:continue, %{ok: 1}} end`). Each iteration isolates Fake's per-process cursor via `Task.async/1`. The `:on_tool_error_halt` fixture from Phase 7 design 7.5.1 is excluded — see BLOCKER notes in test moduledoc and Batch 4 report.
+- `test/allm/allm_chat_test.exs`, `test/allm/allm_stream_test.exs` — facade-level tests covering happy paths, `%EngineError{reason: :missing_adapter}` pre-flight, list-of-messages normalisation, and delegation-invariant equality (both facades under `Task.async/1` to isolate cursor state). Each module registers its own `doctest ALLM` so the `@doc` example runs as part of the test suite.
+- `test/allm/providers/fake_scenarios_test.exs` — three §31 scenarios activated: "max_turns cap" (three-turn tool-call script + `chat/3` with `max_turns: 2` → `halted_reason: :max_turns`, `metadata.max_turns == 2`, `length(steps) == 2`), "halt_when fires" (two-turn fixture + `halt_when: fn sr -> sr.tool_results != [] end` → `halted_reason: :halt_when`, `metadata.halt_when_step_index == 0`, `length(steps) == 1`), and "single tool call with `mode: :manual` — partial flow via `chat/3`" (newly added; single-turn tool-call script + `mode: :manual` → `halted_reason: :manual_tool_calls`, `metadata.manual_turn_index == 0`, empty `tool_results`). The two `@tag :pending` placeholders for `max_turns` and `halt_when` were flipped to active. The "session round-trip (Phase 8)" placeholder remains pending. Scenario table in the moduledoc updated to 12 active / 1 pending.
+
+### Phase 7.4 — `ALLM.Chat.stream/3` (multi-turn streaming, internal)
+
+#### Added
+- `ALLM.Chat.stream/3` — new internal Layer C entry point (spec §17). Composes `Chat.stream_step/3` enumerables sequentially via a two-phase `Stream.resource/3` state machine (Phase 7 Non-obvious Decision #1) driven by the same `Enumerable.reduce/3` continuation idiom as Phase 6's `stream_step/3`. Emits adapter events + tool events for each turn, one `:step_completed` per turn, then exactly one terminal `:chat_completed` event (Decision #3) carrying a `%ChatResult{}` constructed via `build_chat_result/1` (Decision #4). Ask-user thread asymmetry per Invariant 8: `:step_completed.thread` lacks the question; only `:chat_completed.result.thread` includes it. Cleanup chain: outer `after_fun` halts the active step's continuation, which triggers `stream_step/3`'s own cleanup chain.
+
+### Phase 7.3 — `ALLM.Chat.run/3` (multi-turn non-streaming, internal)
+
+#### Added
+- `ALLM.Chat.run/3` — new internal Layer C entry point (spec §17). Multi-turn non-streaming orchestrator composing `Chat.step/3` calls via `Enum.reduce_while/3` over a `%Chat.LoopState{}`. Honours `:max_turns` (call-opts > `engine.params` > `Application.get_env(:allm, :max_turns)` > library default 8 — Phase 7 Non-obvious Decision #9), `:halt_when` (Decision #11), `:on_tool_error` (atom + function forms — Decision #8), and the seven-entry `terminal_condition/5` total order (Decision #5). Halt-reason vocabulary: `:completed`, `:max_turns`, `:halt_when`, `:ask_user`, `:tool_error`, `:manual_tool_calls`, `:error`, plus user custom atoms.
+- `ALLM.Chat.LoopState` — new internal Layer C struct (Phase 7 Non-obvious Decision #4). Carries the loop's accumulator (`engine`, `opts`, `initial_thread`, `thread`, `max_turns`, `steps`, `step_index`, `halted_reason`, `halt_metadata`, `pending_question`, `pending_tool_call_id`, `last_response`). Both `Chat.run/3` and `Chat.stream/3` build their `%ChatResult{}` via the single `build_chat_result/1` helper, which takes a `%LoopState{}` — chat-equivalence is established by construction.
+
+### Phase 7.2 — `ALLM.ToolRunner` `on_tool_error` function form
+
+#### Changed
+- `ALLM.ToolRunner.run_tool_calls/3` / `stream_tool_calls/3` — `:on_tool_error` `(ToolCall.t(), term() -> {:continue, term()} | :halt)` function form is now active (Phase 6's `ArgumentError` guard relaxed). Function is invoked synchronously inside the per-tool `Task.async_stream/5` task after the handler's return / encoder failure resolves to an error term (Phase 7 Non-obvious Decision #8); `{:continue, replacement}` encodes `replacement` as the tool-result content, `:halt` halts the batch with `halted_reason: :tool_error`. Invalid return shapes and function raises are wrapped as `%ToolError{reason: :invalid_return}` and treated as `:halt` (recursion-avoidance — function not re-invoked on its own failure). Function-arity validation (`is_function(fun, 2)`) raises `ArgumentError` at validation time on wrong arity.
+
+### Phase 7.1 — `ALLM.StreamCollector` extension
+
+#### Changed
+- `ALLM.StreamCollector` — struct gains a `:chat_result` field (`ChatResult.t() | nil`). Two new fold clauses (`:step_completed`, `:chat_completed`) inserted immediately before the catch-all per Phase 5 Non-obvious Decision #5: `:step_completed` appends a computed `%StepResult{}` to `state.steps` and resets per-step sub-state (`:current_text`, `:current_tool_calls`, `:tool_call_order`, `:tool_results`, `:halt`, `:finish_reason`, `:raw_finish_reason`, `:error`) so the next step folds cleanly (Phase 7 Non-obvious Decision #6). `:chat_completed` stores the payload's `:result` on `state.chat_result` and sets `state.done? = true`. `to_chat_result/1` extended to prefer the stored `:chat_result` when present and to compute a Phase-7-aware fallback (`:cancelled` for consumer-halted streams, `:error` for mid-stream adapter errors) when absent. `step_done?/1` and `merge_halt_metadata/2` promoted from `defp` to `def` (`@doc false`) for cross-module reuse from `Chat.step_result_from_outer_collector/4` (Phase 7 retro F2).
 
 ### Phase 6.3 + 6.4 — `ALLM.step/3` + `ALLM.stream_step/3` facade + step-equivalence property + §31 activation
 

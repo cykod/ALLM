@@ -7,31 +7,12 @@ defmodule ALLM.Providers.FakeStreamTest do
   alias ALLM.{Message, Request}
   alias ALLM.Providers.Fake
 
+  import ALLM.Test.AsyncHelpers, only: [wait_for: 2]
+
   doctest ALLM.Providers.Fake, only: [stream: 2]
 
   defp fake_request(content \\ "hi") do
     Request.new([%Message{role: :user, content: content}])
-  end
-
-  # Poll a 0-arity fun until it returns truthy or `timeout_ms` elapses.
-  # Used for halt-safety assertions where the :counters increment is
-  # expected to land shortly after the consumer halts.
-  defp wait_for(fun, timeout_ms) when is_function(fun, 0) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_for(fun, deadline)
-  end
-
-  defp do_wait_for(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        false
-      else
-        Process.sleep(10)
-        do_wait_for(fun, deadline)
-      end
-    end
   end
 
   # ---------------------------------------------------------------------------

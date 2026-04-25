@@ -26,32 +26,47 @@ defmodule ALLM.StreamCollector do
   Both fit alongside the spec §13.1 signatures (`new/1`, `apply_event/2`,
   `to_step_result/1`, `to_chat_result/1`) without replacing them.
 
-  The `:last_response` and `:steps` fields are reserved for Phase 7
-  orchestration fold clauses (e.g. `:chat_completed`, `:step_completed`)
-  and are unused in Phase 5/6. Phase 6 adds two new fields, `:tool_results`
-  and `:halt`, populated by the new fold clauses below.
+  Phase 6 adds two new fields, `:tool_results` and `:halt`, populated by
+  fold clauses for orchestration tags. Phase 7 adds `:chat_result` and
+  populates `:steps` via the `:step_completed` fold clause.
 
-  ## Fold semantics — Phase 5 subset plus Phase 6 extension
+  ## Phase 7 extension
+
+  The `:step_completed` fold appends a `%StepResult{}` (built from the
+  PRE-RESET collector state — see Phase 7 Non-obvious Decision #6) to
+  `:steps` and resets the per-step sub-state (`:current_text`,
+  `:current_tool_calls`, `:tool_call_order`, `:tool_results`, `:halt`,
+  `:finish_reason`, `:raw_finish_reason`, `:last_message`). `:error`
+  and `:metadata` are NOT reset — adapter mid-stream errors and
+  accumulated metadata persist across step boundaries so that
+  `to_chat_result/1`'s fallback path can preserve them.
+
+  The `:chat_completed` fold stores the event's `:result` verbatim in
+  `:chat_result` and sets `:done? = true`. `to_chat_result/1` short-
+  circuits to the stored result when present; otherwise it falls back
+  to a computed `%ChatResult{}` whose `halted_reason` is `:cancelled`
+  (consumer halted early) or `:error` (mid-stream adapter error).
+
+  ## Fold semantics — Phase 5 subset plus Phase 6 + Phase 7 extensions
 
   `apply_event/2` ships explicit clauses for the nine Phase-5 adapter-emitted
   tags (`:message_started`, `:text_delta`, `:text_completed`,
   `:tool_call_started`, `:tool_call_delta`, `:tool_call_completed`,
-  `:message_completed`, `:raw_chunk`, `:error`) and three Phase-6
+  `:message_completed`, `:raw_chunk`, `:error`), three Phase-6
   orchestration tags (`:tool_result_encoded`, `:tool_halt`,
-  `:ask_user_requested`). Every other tag —
-  `:tool_execution_started`, `:tool_execution_completed`,
-  `:step_completed`, `:chat_completed`, plus any malformed event — falls
-  through a single catch-all `apply_event(state, _), do: state`.
+  `:ask_user_requested`), and two Phase-7 orchestration tags
+  (`:step_completed`, `:chat_completed`). Every other tag —
+  `:tool_execution_started`, `:tool_execution_completed`, plus any
+  malformed event — falls through a single catch-all
+  `apply_event(state, _), do: state`.
 
   | Tag | Fold | Rationale |
   |-----|------|-----------|
   | `:tool_result_encoded` | append `%Message{role: :tool, tool_call_id: id, content: content}` to `state.tool_results`. | `to_step_result/1` reads `:tool_results` from the struct, enabling `step ≡ stream_step \\|> collect_step`. |
-  | `:tool_halt` | when `state.halt == nil`, set `state.halt = {:halt, reason, id}`. Subsequent halts are no-ops (first-halt-wins). | Halt metadata lives separately from `:finish_reason` so `done?/1` can combine both signals. |
-  | `:ask_user_requested` | when `state.halt == nil`, set `state.halt = {:ask_user, :ask_user, id, q, o}`. First-halt-wins. | Same channel as `:tool_halt`; the distinct shape lets `to_step_result/1` build the Phase 6-owned ask-user metadata. |
-
-  Phase 7 may insert additional clauses for `:step_completed` (appending
-  `%StepResult{}` to `:steps`) and `:chat_completed` (populating
-  `:last_response`) ahead of the catch-all.
+  | `:tool_halt` | when `state.halt == nil`, set `state.halt = {:halt, reason, id, result}` AND append the encoded sentinel `%Message{role: :tool, ...}` (from payload `:content`) to `state.tool_results`. Subsequent halts are no-ops (first-halt-wins). | Halt metadata lives separately from `:finish_reason` so `done?/1` can combine both signals. The sentinel append (Phase 7.6 cleanup B1) keeps `tool_results` aligned with the non-streaming `Chat.do_step/4` path. |
+  | `:ask_user_requested` | when `state.halt == nil`, set `state.halt = {:ask_user, :ask_user, id, q, o}` AND append a `<awaiting user response>` sentinel message to `state.tool_results`. First-halt-wins. | Same channel as `:tool_halt`; the sentinel append (Phase 7.6 cleanup B1) mirrors spec §12.3 step 1. |
+  | `:step_completed` | append `%StepResult{}` (PRE-RESET state) to `state.steps`; set `state.thread = thread`; reset per-step sub-state. | Multi-step `Chat.stream/3` reductions need a clean per-step boundary. `:error` / `:metadata` deliberately persist. |
+  | `:chat_completed` | set `state.chat_result = result`; set `state.done? = true`. | The chat-layer terminal event; `to_chat_result/1` short-circuits to the stored value when present. |
 
   ## Totality guarantee
 
@@ -91,10 +106,15 @@ defmodule ALLM.StreamCollector do
   Terminal halt signal derived from `:tool_halt` / `:ask_user_requested`
   events. `nil` until the first halt event is observed; set once and never
   updated (first-halt-wins — see Phase 6 design Invariant 7).
+
+  The `:halt` shape carries the handler's raw `result` term as the fourth
+  element so `merge_halt_metadata/2` can project it onto `:halt_result`,
+  matching the non-streaming `ToolRunner.run_tool_calls/3` halt_metadata
+  shape (Phase 7.6 cleanup — chat-equivalence blocker B2).
   """
   @type halt_state ::
           nil
-          | {:halt, reason :: atom(), tool_call_id :: String.t()}
+          | {:halt, reason :: atom(), tool_call_id :: String.t(), result :: term()}
           | {:ask_user, :ask_user, tool_call_id :: String.t(), question :: String.t(),
              opts :: keyword()}
 
@@ -108,6 +128,7 @@ defmodule ALLM.StreamCollector do
           steps: [StepResult.t()],
           tool_results: [Message.t()],
           halt: halt_state(),
+          chat_result: ChatResult.t() | nil,
           usage: Usage.t(),
           finish_reason: Response.finish_reason() | nil,
           raw_finish_reason: String.t() | nil,
@@ -125,6 +146,7 @@ defmodule ALLM.StreamCollector do
             steps: [],
             tool_results: [],
             halt: nil,
+            chat_result: nil,
             usage: %Usage{},
             finish_reason: nil,
             raw_finish_reason: nil,
@@ -290,10 +312,24 @@ defmodule ALLM.StreamCollector do
 
   def apply_event(
         %__MODULE__{halt: nil} = state,
-        {:tool_halt, %{tool_call_id: id, reason: reason}}
+        {:tool_halt, %{tool_call_id: id, reason: reason, result: result} = p}
       )
       when is_binary(id) and is_atom(reason) do
-    %{state | halt: {:halt, reason, id}}
+    # Phase 7.6 cleanup — chat-equivalence blocker B1: append the encoded
+    # sentinel tool message to state.tool_results so `:tool_halt` events
+    # contribute to the same `tool_results` shape that the non-streaming
+    # `Chat.do_step/4` produces. Payload's optional `:content` key carries
+    # the pre-encoded sentinel content (added by ToolRunner; see
+    # `Event.tool_halt/4`). Falls back to `inspect/1` for callers that
+    # build the event via `tool_halt/3`.
+    content = Map.get_lazy(p, :content, fn -> inspect(result) end)
+    tool_msg = %Message{role: :tool, tool_call_id: id, content: content, metadata: %{}}
+
+    %{
+      state
+      | halt: {:halt, reason, id, result},
+        tool_results: state.tool_results ++ [tool_msg]
+    }
   end
 
   def apply_event(
@@ -301,7 +337,81 @@ defmodule ALLM.StreamCollector do
         {:ask_user_requested, %{tool_call_id: id, question: q, opts: o}}
       )
       when is_binary(id) and is_binary(q) and is_list(o) do
-    %{state | halt: {:ask_user, :ask_user, id, q, o}}
+    # Phase 7.6 cleanup — chat-equivalence blocker B1: append the
+    # `<awaiting user response>` sentinel tool message to state.tool_results
+    # to mirror spec §12.3 step 1 / non-streaming `Chat.do_step/4`.
+    tool_msg = %Message{
+      role: :tool,
+      tool_call_id: id,
+      content: "<awaiting user response>",
+      metadata: %{}
+    }
+
+    %{
+      state
+      | halt: {:ask_user, :ask_user, id, q, o},
+        tool_results: state.tool_results ++ [tool_msg]
+    }
+  end
+
+  # ---------------------------------------------------------------------------
+  # Phase 7 orchestration folds (inserted before the catch-all per Phase 5
+  # Non-obvious Decision #5). See Phase 7 design Non-obvious Decisions #6 / #7.
+  # ---------------------------------------------------------------------------
+
+  def apply_event(
+        %__MODULE__{} = state,
+        {:step_completed, %{response: %Response{} = response, thread: %Thread{} = thread} = p}
+      ) do
+    # Build StepResult from the PRE-RESET collector state — see Phase 7
+    # Non-obvious Decision #6. The map-update below replaces per-step
+    # fields with reset defaults, but the right-hand-side reads of
+    # `state.tool_results`, `state.halt`, etc. see the original values.
+    #
+    # Phase 7 retro F1: the payload's optional `:mode` key (added by
+    # `Event.step_completed/3`) lets the fold mirror the non-streaming
+    # `Chat.do_step/4` shape — `mode: :manual` with `finish_reason:
+    # :tool_calls` injects `metadata.mode = :manual` so chat-layer
+    # `terminal_condition/5` halts with `:manual_tool_calls`.
+    mode = Map.get(p, :mode, :auto)
+
+    base_metadata = merge_halt_metadata(%{}, state.halt)
+
+    metadata =
+      if mode == :manual and response.finish_reason == :tool_calls do
+        Map.put(base_metadata, :mode, :manual)
+      else
+        base_metadata
+      end
+
+    step_result = %StepResult{
+      thread: thread,
+      response: response,
+      tool_results: state.tool_results,
+      done?: step_done?(state),
+      metadata: metadata
+    }
+
+    %{
+      state
+      | steps: state.steps ++ [step_result],
+        thread: thread,
+        current_text: "",
+        current_tool_calls: %{},
+        tool_call_order: [],
+        tool_results: [],
+        halt: nil,
+        finish_reason: nil,
+        raw_finish_reason: nil,
+        last_message: nil
+    }
+  end
+
+  def apply_event(
+        %__MODULE__{} = state,
+        {:chat_completed, %{result: %ChatResult{} = chat_result}}
+      ) do
+    %{state | chat_result: chat_result, done?: true}
   end
 
   def apply_event(%__MODULE__{} = state, _), do: state
@@ -346,10 +456,14 @@ defmodule ALLM.StreamCollector do
   or when `finish_reason in [:stop, :length, :content_filter, :error]`;
   `false` otherwise (for `:tool_calls` or `nil` with no halt).
 
-  `:tool_results` is populated from the `:tool_result_encoded` fold clause.
+  `:tool_results` is populated from the `:tool_result_encoded` fold clause
+  AND from the `:tool_halt` / `:ask_user_requested` sentinel appends
+  (Phase 7.6 cleanup B1).
+
   `:metadata` merges halt metadata when `state.halt != nil` (see Phase 6
   design §StreamCollector extension):
-    * `{:halt, reason, id}` → `%{halted_reason: reason, halt_tool_call_id: id}`.
+    * `{:halt, reason, id, result}` → `%{halted_reason: reason,
+      halt_tool_call_id: id, halt_result: result}`.
     * `{:ask_user, :ask_user, id, q, o}` → `%{halted_reason: :ask_user,
       pending_tool_call_id: id, pending_question: q, ask_user_opts: o}`.
   """
@@ -372,27 +486,51 @@ defmodule ALLM.StreamCollector do
   end
 
   @doc """
-  Build a `%ALLM.ChatResult{}` from the collector state. Requires a non-nil
-  thread; raises `ArgumentError` otherwise.
+  Build a `%ALLM.ChatResult{}` from the collector state.
 
-  `:halted_reason` is `:error` when `finish_reason == :error`, else
-  `:completed`. Phase 7 will introduce `:max_turns`, `:halt_when`, and
-  `:ask_user` as additional halt reasons.
+  Two branches (Phase 7 Non-obvious Decision #7):
+
+    * **Stored.** When `state.chat_result` is set (from a `:chat_completed`
+      fold), return it verbatim — even when `state.thread` is `nil`. The
+      stored result is authoritative; the orchestrator already constructed
+      the canonical ChatResult.
+    * **Fallback (computed).** When `state.chat_result` is `nil` and
+      `state.thread` is set, build a `%ChatResult{}` from collector state.
+      `:halted_reason` is `:error` when `state.error != nil` (mid-stream
+      adapter error); otherwise ALWAYS `:cancelled` (the consumer halted
+      the stream early; non-empty `state.steps` does NOT promote to
+      `:completed`). `:final_response` is the last step's response when
+      `state.steps != []`, or `to_response(state)` when no steps were
+      observed.
+
+  Raises `ArgumentError` when both `state.chat_result` and `state.thread`
+  are `nil`.
   """
   @spec to_chat_result(state()) :: ChatResult.t()
-  def to_chat_result(%__MODULE__{thread: nil}),
+  def to_chat_result(%__MODULE__{chat_result: %ChatResult{} = stored}), do: stored
+
+  def to_chat_result(%__MODULE__{chat_result: nil, thread: nil}),
     do:
       raise(ArgumentError, """
       StreamCollector.to_chat_result/1 requires a thread; use new/1 with a thread, \
       or call to_response/1 for thread-less collection\
       """)
 
-  def to_chat_result(%__MODULE__{thread: %Thread{} = thread} = state) do
+  def to_chat_result(%__MODULE__{chat_result: nil, thread: %Thread{} = thread} = state) do
+    halted_reason = if state.error, do: :error, else: :cancelled
+
+    final_response =
+      case state.steps do
+        [] -> to_response(state)
+        steps -> List.last(steps).response
+      end
+
     %ChatResult{
       thread: thread,
-      final_response: to_response(state),
-      steps: [],
-      halted_reason: halted_reason_for_finish_reason(state.finish_reason)
+      final_response: final_response,
+      steps: state.steps,
+      halted_reason: halted_reason,
+      metadata: state.metadata
     }
   end
 
@@ -408,23 +546,43 @@ defmodule ALLM.StreamCollector do
     Enum.map(order, &Map.fetch!(tcs, &1))
   end
 
+  @doc false
   # Phase 6: step is done when a halt event fired OR the adapter finish_reason
   # is terminal (anything outside :tool_calls / nil). See Phase 6 design
   # §StreamCollector extension Invariant 4.
-  defp step_done?(%__MODULE__{halt: halt, finish_reason: fr}) do
+  #
+  # Phase 7 retro F2: promoted from `defp` to `def` because `ALLM.Chat`'s
+  # multi-turn streaming path (`step_result_from_outer_collector/3`) is the
+  # second caller of this exact data-shaping rule. Marked `@doc false` —
+  # public for cross-module reuse, not part of the documented surface.
+  @spec step_done?(state()) :: boolean()
+  def step_done?(%__MODULE__{halt: halt, finish_reason: fr}) do
     halt != nil or fr in [:stop, :length, :content_filter, :error]
   end
 
+  @doc false
   # Phase 6: fold the halt tuple into the step result's metadata map. Merging
   # into the existing metadata preserves adapter-contributed keys (e.g.
   # `:error`) when a halt also fired.
-  defp merge_halt_metadata(base, nil), do: base
+  #
+  # Phase 7 retro F2: promoted from `defp` to `def` for the same reason as
+  # `step_done?/1` above. `@doc false` — internal cross-module reuse.
+  @spec merge_halt_metadata(map(), halt_state()) :: map()
+  def merge_halt_metadata(base, nil), do: base
 
-  defp merge_halt_metadata(base, {:halt, reason, id}) do
-    Map.merge(base, %{halted_reason: reason, halt_tool_call_id: id})
+  def merge_halt_metadata(base, {:halt, :tool_error, id, _result}) do
+    # Phase 7.6 cleanup B2: `:tool_error` halt metadata mirrors
+    # `ToolRunner.build_tool_error_halt_metadata/2` — `:halt_result` is
+    # NOT projected (the encoded error already lives on the sentinel
+    # tool message; halt_result is reserved for handler-declared halts).
+    Map.merge(base, %{halted_reason: :tool_error, halt_tool_call_id: id})
   end
 
-  defp merge_halt_metadata(base, {:ask_user, :ask_user, id, question, opts}) do
+  def merge_halt_metadata(base, {:halt, reason, id, result}) do
+    Map.merge(base, %{halted_reason: reason, halt_tool_call_id: id, halt_result: result})
+  end
+
+  def merge_halt_metadata(base, {:ask_user, :ask_user, id, question, opts}) do
     Map.merge(base, %{
       halted_reason: :ask_user,
       pending_tool_call_id: id,
@@ -432,7 +590,4 @@ defmodule ALLM.StreamCollector do
       ask_user_opts: opts
     })
   end
-
-  defp halted_reason_for_finish_reason(:error), do: :error
-  defp halted_reason_for_finish_reason(_), do: :completed
 end

@@ -2,6 +2,7 @@ defmodule ALLM.ChatStreamStepTest do
   use ExUnit.Case, async: true
 
   alias ALLM.{Chat, Engine, Response, Thread, Tool, ToolCall}
+  alias ALLM.Test.FakeFixtures
 
   # ---------------------------------------------------------------------------
   # Helpers
@@ -16,14 +17,6 @@ defmodule ALLM.ChatStreamStepTest do
     )
   end
 
-  defp engine_with_script(script, tools) do
-    Engine.new(
-      adapter: ALLM.Providers.Fake,
-      adapter_opts: [script: script],
-      tools: tools
-    )
-  end
-
   defp user_thread, do: Thread.from_messages([ALLM.user("hi")])
 
   defp tags(events), do: Enum.map(events, &elem(&1, 0))
@@ -35,12 +28,12 @@ defmodule ALLM.ChatStreamStepTest do
   describe "stream_step/3 — event ordering" do
     test "adapter events precede all tool-execution events, then one :step_completed" do
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
             {:finish, :tool_calls}
           ],
-          [echo_tool()]
+          tools: [echo_tool()]
         )
 
       {:ok, stream} = Chat.stream_step(engine, user_thread())
@@ -95,13 +88,13 @@ defmodule ALLM.ChatStreamStepTest do
   describe "stream_step/3 — parallel tool execution" do
     test "two tool calls produce 2× each event type, per-id ordering preserved" do
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{"n" => 0}},
             {:tool_call, id: "c1", name: "echo", arguments: %{"n" => 1}},
             {:finish, :tool_calls}
           ],
-          [echo_tool()]
+          tools: [echo_tool()]
         )
 
       {:ok, stream} = Chat.stream_step(engine, user_thread())
@@ -138,12 +131,12 @@ defmodule ALLM.ChatStreamStepTest do
   describe "stream_step/3 — :step_completed payload" do
     test "carries final %Response{} and final %Thread{} (input + assistant + tool messages)" do
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
             {:finish, :tool_calls}
           ],
-          [echo_tool()]
+          tools: [echo_tool()]
         )
 
       {:ok, stream} = Chat.stream_step(engine, user_thread())
@@ -177,12 +170,12 @@ defmodule ALLM.ChatStreamStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, stream} = Chat.stream_step(engine, user_thread())
@@ -213,12 +206,12 @@ defmodule ALLM.ChatStreamStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, stream} = Chat.stream_step(engine, user_thread())
@@ -252,12 +245,12 @@ defmodule ALLM.ChatStreamStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, stream} = Chat.stream_step(engine, user_thread(), mode: :manual)
@@ -290,12 +283,12 @@ defmodule ALLM.ChatStreamStepTest do
       me = self()
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [echo_tool()]
+          tools: [echo_tool()]
         )
 
       {:ok, stream} = Chat.stream_step(engine, user_thread(), on_event: fn e -> send(me, e) end)
@@ -317,7 +310,7 @@ defmodule ALLM.ChatStreamStepTest do
 
   describe "stream_step/3 — terminal finish_reason (no tool calls)" do
     test "finish_reason :stop skips Phase B and emits :step_completed" do
-      engine = engine_with_script([{:text, "Hello"}, {:finish, :stop}], [])
+      engine = FakeFixtures.engine([{:text, "Hello"}, {:finish, :stop}])
 
       {:ok, stream} = Chat.stream_step(engine, user_thread())
       events = Enum.to_list(stream)
@@ -339,15 +332,12 @@ defmodule ALLM.ChatStreamStepTest do
 
   describe "stream_step/3 — unknown tool" do
     test "emits {:error, %EngineError{}} then :step_completed" do
+      # No `missing` tool registered.
       engine =
-        engine_with_script(
-          [
-            {:tool_call, id: "c0", name: "missing", arguments: %{}},
-            {:finish, :tool_calls}
-          ],
-          # No `missing` tool registered.
-          []
-        )
+        FakeFixtures.engine([
+          {:tool_call, id: "c0", name: "missing", arguments: %{}},
+          {:finish, :tool_calls}
+        ])
 
       {:ok, stream} = Chat.stream_step(engine, user_thread())
       events = Enum.to_list(stream)
@@ -380,13 +370,13 @@ defmodule ALLM.ChatStreamStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:tool_call, id: "c1", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [halting]
+          tools: [halting]
         )
 
       {:ok, stream} = Chat.stream_step(engine, user_thread())
@@ -415,12 +405,12 @@ defmodule ALLM.ChatStreamStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, stream} = Chat.stream_step(engine, user_thread())
@@ -504,12 +494,12 @@ defmodule ALLM.ChatStreamStepTest do
         )
 
       engine =
-        engine_with_script(
+        FakeFixtures.engine(
           [
             {:tool_call, id: "c0", name: "echo", arguments: %{}},
             {:finish, :tool_calls}
           ],
-          [tool]
+          tools: [tool]
         )
 
       {:ok, stream} = Chat.stream_step(engine, user_thread())
