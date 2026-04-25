@@ -74,13 +74,17 @@ defmodule ALLM.StepTest do
     # process-dict cursors stay isolated.
     test "ALLM.step/3 and ALLM.Chat.step/3 return equal results for identical inputs" do
       thread = user_thread()
+      # Phase 9.1: pin request_id so the two delegation arms produce
+      # bytewise-equal StepResults (Response.request_id is otherwise
+      # generated per-call).
+      opts = [request_id: "fixed-step-rid-aaaaaaaaaaa"]
 
       sr_facade =
-        Task.async(fn -> ALLM.step(plain_text_engine(), thread) end)
+        Task.async(fn -> ALLM.step(plain_text_engine(), thread, opts) end)
         |> Task.await()
 
       sr_internal =
-        Task.async(fn -> Chat.step(plain_text_engine(), thread) end)
+        Task.async(fn -> Chat.step(plain_text_engine(), thread, opts) end)
         |> Task.await()
 
       assert {:ok, _} = sr_facade
@@ -89,13 +93,14 @@ defmodule ALLM.StepTest do
 
     test "delegation preserves opts (mode: :manual surfaces tool calls without executing)" do
       thread = user_thread()
+      opts = [mode: :manual, request_id: "fixed-step-rid-bbbbbbbbbbb"]
 
       sr_facade =
-        Task.async(fn -> ALLM.step(single_tool_call_engine(), thread, mode: :manual) end)
+        Task.async(fn -> ALLM.step(single_tool_call_engine(), thread, opts) end)
         |> Task.await()
 
       sr_internal =
-        Task.async(fn -> Chat.step(single_tool_call_engine(), thread, mode: :manual) end)
+        Task.async(fn -> Chat.step(single_tool_call_engine(), thread, opts) end)
         |> Task.await()
 
       assert {:ok, %StepResult{metadata: %{mode: :manual}, tool_results: []}} = sr_facade

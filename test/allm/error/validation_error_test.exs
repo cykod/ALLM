@@ -12,6 +12,7 @@ defmodule ALLM.Error.ValidationErrorTest do
     :invalid_thread,
     :invalid_session,
     :invalid_session_input,
+    :unsupported_capability,
     :vision_not_in_v0_2
   ]
 
@@ -67,6 +68,19 @@ defmodule ALLM.Error.ValidationErrorTest do
     test "default message reflects an empty errors list" do
       err = ValidationError.new(:invalid_tool, [])
       assert err.message == "validation failed: invalid_tool (0 error(s))"
+    end
+
+    test "accepts the :unsupported_capability reason (Phase 9.4 enum extension)" do
+      err =
+        ValidationError.new(
+          :unsupported_capability,
+          [{[:tools], :tools_disabled}]
+        )
+
+      assert %ValidationError{
+               reason: :unsupported_capability,
+               errors: [{[:tools], :tools_disabled}]
+             } = err
     end
 
     test "accepts the :invalid_session_input reason (Phase 8 enum extension)" do

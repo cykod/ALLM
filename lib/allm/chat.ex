@@ -84,6 +84,7 @@ defmodule ALLM.Chat do
   """
 
   alias ALLM.{
+    Capability,
     ChatResult,
     Engine,
     Event,
@@ -94,6 +95,7 @@ defmodule ALLM.Chat do
     StepResult,
     StreamCollector,
     StreamRunner,
+    Telemetry,
     Thread,
     ToolCall,
     ToolRunner,
@@ -180,6 +182,22 @@ defmodule ALLM.Chat do
           {:ok, StepResult.t()}
           | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
   def step(%Engine{} = engine, thread_or_messages, opts \\ []) when is_list(opts) do
+    request_id = Keyword.get(opts, :request_id) || Telemetry.request_id()
+    opts = Keyword.put(opts, :request_id, request_id)
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: engine.model
+    }
+
+    Telemetry.span(:step, start_metadata, fn ->
+      result = do_step_call(engine, thread_or_messages, opts)
+      {result, step_stop_extras(result)}
+    end)
+  end
+
+  defp do_step_call(%Engine{} = engine, thread_or_messages, opts) do
     with {:ok, thread} <- normalise_thread(thread_or_messages),
          :ok <- Validate.thread(thread),
          request <- build_request(thread, engine, opts, stream: false),
@@ -187,6 +205,9 @@ defmodule ALLM.Chat do
       do_step(engine, thread, response, opts)
     end
   end
+
+  defp step_stop_extras({:ok, %StepResult{} = sr}), do: %{step_result: sr}
+  defp step_stop_extras({:error, _}), do: %{step_result: nil}
 
   @doc """
   Execute a single step and return a lazy stream of `ALLM.Event` values.
@@ -251,6 +272,25 @@ defmodule ALLM.Chat do
           {:ok, Enumerable.t()}
           | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
   def stream_step(%Engine{} = engine, thread_or_messages, opts \\ []) when is_list(opts) do
+    request_id = Keyword.get(opts, :request_id) || Telemetry.request_id()
+    opts = Keyword.put(opts, :request_id, request_id)
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: engine.model
+    }
+
+    Telemetry.span(:step, start_metadata, fn ->
+      result = do_stream_step_call(engine, thread_or_messages, opts)
+      # Stream span: don't materialise the lazy enumerable inside the
+      # closure (defeats consumer-driven laziness). :step_result stays nil
+      # on :stop for streaming step spans.
+      {result, %{step_result: nil}}
+    end)
+  end
+
+  defp do_stream_step_call(%Engine{} = engine, thread_or_messages, opts) do
     with {:ok, thread} <- normalise_thread(thread_or_messages),
          :ok <- Validate.thread(thread),
          request <- build_request(thread, engine, opts, stream: true),
@@ -328,6 +368,22 @@ defmodule ALLM.Chat do
     max_turns = resolve_max_turns(engine, opts)
     validate_max_turns!(max_turns)
 
+    request_id = Keyword.get(opts, :request_id) || Telemetry.request_id()
+    opts = Keyword.put(opts, :request_id, request_id)
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: engine.model
+    }
+
+    Telemetry.span(:chat, start_metadata, fn ->
+      result = do_run_call(engine, thread_or_messages, opts, max_turns)
+      {result, chat_stop_extras(result)}
+    end)
+  end
+
+  defp do_run_call(%Engine{} = engine, thread_or_messages, opts, max_turns) do
     with {:ok, thread} <- normalise_thread(thread_or_messages) do
       # `max_turns` is resolved once at entry and threaded through `LoopState`.
       # `opts` flows verbatim to `step/3` and the adapter — no sentinels, no
@@ -345,6 +401,9 @@ defmodule ALLM.Chat do
       run_loop(state)
     end
   end
+
+  defp chat_stop_extras({:ok, %ChatResult{} = cr}), do: %{chat_result: cr}
+  defp chat_stop_extras({:error, _}), do: %{chat_result: nil}
 
   @doc """
   Stream a multi-turn chat loop and return a lazy stream of `ALLM.Event`
@@ -425,6 +484,23 @@ defmodule ALLM.Chat do
     max_turns = resolve_max_turns(engine, opts)
     validate_max_turns!(max_turns)
 
+    request_id = Keyword.get(opts, :request_id) || Telemetry.request_id()
+    opts = Keyword.put(opts, :request_id, request_id)
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: engine.model
+    }
+
+    Telemetry.span(:chat, start_metadata, fn ->
+      result = do_stream_call(engine, thread_or_messages, opts, max_turns)
+      # Lazy enumerable — see Phase 9.1 design line 490.
+      {result, %{chat_result: nil}}
+    end)
+  end
+
+  defp do_stream_call(%Engine{} = engine, thread_or_messages, opts, max_turns) do
     with {:ok, thread} <- normalise_thread(thread_or_messages),
          :ok <- Validate.thread(thread),
          {:ok, first_step_stream} <- stream_step(engine, thread, opts) do
@@ -801,6 +877,10 @@ defmodule ALLM.Chat do
   # tool calls and mode != :manual) or skips straight to Phase C.
   defp transition_a_to_b(%{collector: collector, engine: engine, opts: opts} = data) do
     response = StreamCollector.to_response(collector)
+    # Phase 9.4: populate Usage cost fields when LLMDB is loaded.
+    resolved_model = Engine.resolve_model(engine, opts)
+    usage = Capability.populate_costs(response.usage, resolved_model)
+    response = %Response{response | usage: usage}
     assistant_msg = build_assistant_message(response)
     mode = Keyword.get(opts, :mode, :auto)
 

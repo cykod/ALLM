@@ -1,3 +1,22 @@
+## [FEAT] Phase 9: telemetry, retry, capability, ModelRef
+*Saturday, April 25th at 11pm*
+Ships Phase 9 in four sub-phases: ALLM.Telemetry wraps every Layer C entry 
+point with :telemetry.span/3 and threads a per-call request_id through 
+generate/stream/step/chat plus per-tool spans inside ToolRunner (spec §29); 
+ALLM.Retry runs the spec §6.1 default policy with bounded additive jitter and 
+emits [:allm, :adapter, :retry] per attempt, integrated end-to-end via the Fake 
+adapter's retry_until_call: opt; ALLM.Capability adds 
+preflight/populate_costs/select gated on Code.ensure_loaded?(LLMDB) with an 
+Application.put_env override-based dep-free smoke test, plus the ALLM.ModelRef 
+Layer A struct (spec §6.3) and the :unsupported_capability ValidationError 
+vocabulary extension. Test suite grows from 1054 to 1095 tests (0 failures); 
+coverage 94.79 percent global with 100/97/95 percent on the new modules; mix 
+credo --strict and mix dialyzer remain clean. The :allm event prefix is used 
+throughout in deliberate deviation from spec §29's [:llm, ...] (Decision #15) 
+— a non-blocking spec-amendment ticket follows.
+
+---
+
 ## [FEAT] Phase 8: ALLM.Session stateful continuation
 *Saturday, April 25th at 7pm*
 Implements Layer D ALLM.Session stateful continuation per spec §11 and §13.2. 
@@ -119,6 +138,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+
+### Phase 9.4 — `ALLM.Capability` + `ALLM.ModelRef` + LLMDB optional gate (spec §6.3)
+
+#### Added
+- `ALLM.ModelRef` — new Layer A struct (spec §6.3 lines 637-648). Carries the catalog's view of a single model: `:provider`, `:id`, `:capabilities`, `:limits`, `:pricing` (per-million-token rates), and an opaque `:metadata` bag. Plain serializable data; ETF round-trip is byte-identical, JSON round-trip preserves the outer struct shape with the documented Layer-A nested-map asymmetry (opaque map fields keep STRING keys post-`Jason.encode!/1` → `Serializer.from_json/1`, matching the Phase 1 `Engine.metadata` carve-out). Registered in `ALLM.Serializer.@known_modules`. `__from_tagged__/1` restores `:provider` via `String.to_existing_atom/1`; opaque map fields hydrate as-is.
+- `ALLM.Capability` — new Layer B helper (spec §6.3). Three public functions, all gated on the optional `LLMDB` Hex package's load state: `preflight/2` (rejects `request.tools != []` against tools-disabled models with `{[:tools], :tools_disabled}`; rejects `response_format: %{type: :json_schema, ...}` against non-`json_native` models with `{[:response_format], :json_native_disabled}`; both errors accumulate in a single `%ValidationError{reason: :unsupported_capability}`). Pattern-matches both atom-keyed and string-keyed `:capabilities` shapes so JSON-rehydrated `%ModelRef{}` values pre-flight identically to in-process ones. `populate_costs/2` fills `Usage.{input_cost, output_cost, total_cost}` from per-million-token pricing (never overwrites a non-nil cost); tolerates string-keyed pricing maps. `select/1` delegates to `LLMDB.select/1` for capability-based selection. `catalog_loaded?/0` checks `Application.get_env(:allm, :force_capability_absent, false)` BEFORE `Code.ensure_loaded?(Module.concat(["LLMDB"]))` so the dep-free smoke test can simulate catalog absence.
+- `ALLM.Error.ValidationError.@type reason` and `@legal_reasons` extended with `:unsupported_capability` (one new atom; surfaces from `Capability.preflight/2` only).
+- `test/support/llm_db.ex` — test-only fake catalog mimicking the published `:llm_db` Hex package surface verbatim (no `ALLM.` prefix). Compiled only in `:test` via `elixirc_paths(:test)`. Provides a small fixture catalog covering `openai:gpt-4.1-mini` (tools + json_native + pricing), `local:no-tools` (tools-disabled), and `local:no-json-native` (non-`json_native`).
+
+#### Changed
+- `ALLM.StreamRunner.run/3` — pre-flight chain now calls `Capability.preflight(resolved_request.model, request)` after `ALLM.Validate.request/1` and after `Engine.resolve_model/2`. The resolved `%ModelRef{}` (or bare string/tuple) is threaded into opts as `:resolved_model` for downstream `Capability.populate_costs/2` calls. `@phase_5_layer_opts` strip-list extended with `:resolved_model` and `:request_id` (Phase 9 internal — must not leak to adapters).
+- `ALLM.Runner.do_run/3` and `ALLM.Chat.transition_a_to_b/1` — populate `Usage` cost fields via `Capability.populate_costs/2` post-collection (not in `StreamCollector` — keeps the collector Layer-A/pure and avoids an LLMDB-loaded conditional inside the fold). Phase 9 design Decision #5.
+- `mix.exs` — no `{:llm_db, ...}` line added per Phase 9 design Decision #6 / DoD line 745. Detection is via `Code.ensure_loaded?(Module.concat(["LLMDB"]))` at runtime.
+
+### Phase 9.3 — `ALLM.Retry` (spec §6.1)
+
+#### Added
+- `ALLM.Retry` — new internal Layer B helper. `default_policy/0` returns the spec §6.1 closed map (`max_attempts: 3`, `base_delay_ms: 500`, `max_delay_ms: 30_000`, `retry_on: [429, 500, 502, 503, 504, :timeout]`, `jitter_ms: 250`, `respect_retry_after: true`). `materialize/1` accepts `:default | false | keyword()`; unknown keys raise `ArgumentError` (a typo like `max_atempts:` fails loudly). `run/3` invokes a closure under a materialised policy with bounded exponential backoff and additive `[0, jitter_ms]` jitter; emits `[:allm, :adapter, :retry]` per attempt with measurements `%{system_time}` and metadata `%{attempt, delay_ms, reason}` plus caller-supplied `:request_id` / `:provider`. Closure-raised exceptions propagate unchanged (spec §6.1 "exception is not retryable"). The final attempt emits no retry event — the surrounding `[:allm, :adapter, :stop]` span fires instead.
+- `ALLM.Providers.Fake` — non-streaming `generate/2` now wraps adapter dispatch in `Retry.run/3` when `adapter_opts: [retry_until_call: n]` is set, returning `{:retry, 0, :timeout}` until the n-th call; the streaming `stream/2` arm does NOT call `Retry.run/3` (spec §6.1 prohibits streaming retries).
+
+#### Notes
+- **v0.2 surface caveat** — the public Layer-C entry points (`ALLM.generate/3`, `ALLM.step/3`, `ALLM.chat/3`) all route through `ALLM.StreamRunner` which calls the adapter's streaming callback. Per spec §6.1 streaming calls are not retried, so retry telemetry does not fire from any public façade in v0.2; it fires only when adapters are invoked directly (the Fake retry round-trip). Real-provider Phase 10/11 adapters reuse `Retry.run/3` from their non-streaming `c:ALLM.Adapter.generate/3` callbacks. Documented inline in `ALLM.Retry` and `ALLM.Runner` `@moduledoc`s. See review Finding #3.
+
+### Phase 9.2 — Tool spans (spec §29)
+
+#### Added
+- `ALLM.ToolRunner` — per-tool `[:allm, :tool, :start | :stop | :exception]` spans wrap `execute_one_tool/3` inside the `Task.async_stream/5` worker process so `:duration` reflects only that tool's execution and the auto-exception trap captures only that tool's raise (Phase 9 design Decision #9). Metadata: `:tool` (`%ALLM.Tool{}`), `:tool_call` (`%ToolCall{}`), `:engine`, `:model` (lifted from the engine for parity with the other Layer-C spans — review Finding #4 fix), `:request_id` (threaded from the wrapping `:step`/`:chat` span via `opts[:request_id]`); `:stop` adds `:result` (the dispatch tuple). For `Task.async_stream/5`-killed timeouts (`:on_timeout: :kill_task`), the parent process synthesises `[:allm, :tool, :exception]` with `%{kind: :exit, reason: :timeout, duration: 0}` since the killed worker can't reach its `:stop` arm.
+
+### Phase 9.1 — Telemetry spans + `:request_id` correlation (spec §29)
+
+#### Added
+- `ALLM.Telemetry` — new internal Layer B helper. `event_prefix/0` returns `[:allm]` (Phase 9 design Decision #15 — uses the project namespace, not the spec §29 `[:llm, ...]` prefix; spec amendment slated as non-blocking follow-up). `request_id/0` produces a 22-character URL-safe Base64 id from 16 cryptographic random bytes. `span/3` wraps a closure in `:telemetry.span/3` under `[:allm, name]` for `name in [:generate, :stream, :step, :chat, :tool]`; raises `ArgumentError` on unrecognised names (typo guard). `execute/3` emits a single non-span event under `[:allm | suffix_path]` (used by `ALLM.Retry`).
+- `ALLM.Runner.run/3` and `ALLM.StreamRunner.run/3` — wrapped in `Telemetry.span(:generate, ...)` / `Telemetry.span(:stream, ...)`. Common metadata: `:request_id`, `:engine`, `:model`. `:generate :stop` carries `:response` (the reduced `%Response{}`); `:stream :stop` carries `:response => nil` per the documented carve-out (materialising the wrapped enumerable would defeat consumer-driven laziness — see review Finding #2 and `ALLM.Telemetry.span/3` `@doc`).
+- `ALLM.Chat.run/3`, `ALLM.Chat.stream/3`, `ALLM.Chat.step/3`, `ALLM.Chat.stream_step/3` — wrapped in `Telemetry.span(:chat, ...)` / `Telemetry.span(:step, ...)`. `:request_id` is generated at the outermost call and threaded into inner calls via `opts[:request_id]` (Phase 9 Decision #7). `Response.request_id` is populated post-collection so a consumer who never attaches a telemetry handler still has the correlation id on the response.
+
+#### Changed
+- `ALLM.Response` — `:request_id` populated post-collection in every Phase-5/6/7/8 path (DoD line 741). The id matches the outermost span's `:request_id` metadata; populated only when the underlying span generated a fresh id (i.e., not when an adapter set `request_id` on the response itself).
+- `ALLM.StreamRunner` `@phase_5_layer_opts` — extended with `:request_id` so the telemetry-correlation id is read by this module but stripped from adapter-facing opts.
 
 ### Phase 8.4 — Cross-cutting tests + §31 session round-trip activation
 

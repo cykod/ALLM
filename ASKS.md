@@ -47,3 +47,11 @@
 [DSGN] sat 4/25 5pm - Design Phase 8: ALLM.Session stateful continuation
 
 [BUILD] sat 4/25 5pm - Build Phase 8 from PHASE_8_DESIGN.md
+
+[MILE] sat 4/25 7pm - Committed Phase 8 ALLM.Session stateful continuation (start/reply/continue/step/submit_tool_result(s) + StreamReducer + SessionError + cross-cutting equivalence and status-transition tests)
+
+[DSGN] sat 4/25 7pm - Design Phase 9: telemetry, capability pre-flight, and retries
+
+[BUILD] sat 4/25 8pm - Build all 4 sub-phases of Phase 9 (telemetry, retry, capability, ModelRef) from steering/PHASE_9_DESIGN.md
+
+[DSGN] sat 4/25 11pm - Design Phase 10 OpenAI provider adapter

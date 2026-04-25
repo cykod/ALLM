@@ -372,9 +372,39 @@ defmodule ALLM.ToolRunner do
 
   defp run_one_indexed(%ToolCall{} = tc, idx, ctx) do
     tool = find_tool(ctx.tools, tc.name)
-    dispatch = execute_one_tool(tc, tool, ctx)
+
+    # Phase 9.2: wrap per-tool execution in `ALLM.Telemetry.span(:tool, ...)`.
+    # The span fires INSIDE the per-tool worker process so `:duration`
+    # reflects only this tool's execution and the auto-exception trap
+    # captures only this tool's raise (Phase 9 design Decision #9). The
+    # parent's `normalize_task_element/2` synthesises the `:exception`
+    # event for timeout-killed tasks because the closure can't trap a
+    # kill signal from outside the worker.
+    start_metadata = %{
+      tool: tool,
+      tool_call: tc,
+      engine: ctx.engine,
+      model: tool_span_model(ctx.engine),
+      request_id: Keyword.get(ctx.opts, :request_id)
+    }
+
+    dispatch =
+      ALLM.Telemetry.span(:tool, start_metadata, fn ->
+        result = execute_one_tool(tc, tool, ctx)
+        {result, %{result: result}}
+      end)
+
     {idx, tc, dispatch}
   end
+
+  # Phase 9.2 fix-pass (review Finding #4): include `:model` on the
+  # `:tool` span metadata for parity with `:generate | :stream | :step |
+  # :chat` spans (Phase 9 design Decision #3 / DoD line 737). The model
+  # is always reachable via `meta.engine.model`, but lifting it to a
+  # top-level key matches the documented common-metadata contract so
+  # consumers don't have to special-case the `:tool` shape.
+  defp tool_span_model(%Engine{model: model}), do: model
+  defp tool_span_model(_), do: nil
 
   # Convert a Task.async_stream/5 stream element into the canonical
   # `{index, tool_call, dispatch}` shape. `zip_input_on_exit: true` gives
@@ -382,6 +412,25 @@ defmodule ALLM.ToolRunner do
   defp normalize_task_element({:ok, {idx, tc, dispatch}}, _ctx), do: {idx, tc, dispatch}
 
   defp normalize_task_element({:exit, {{%ToolCall{} = tc, idx}, :timeout}}, ctx) do
+    # Phase 9.2: synthesise `[:allm, :tool, :exception]` because the
+    # per-tool span's auto-trap can't fire — `Task.async_stream/5`'s
+    # `:on_timeout: :kill_task` killed the worker externally before the
+    # closure reached its `:stop` arm. `:duration` is `0` because the
+    # precise per-task duration is unrecoverable post-kill (Phase 9
+    # design Decision #9 + Phase 9.2 implementation note).
+    tool = find_tool(ctx.tools, tc.name)
+
+    ALLM.Telemetry.execute([:tool, :exception], %{duration: 0}, %{
+      tool: tool,
+      tool_call: tc,
+      engine: ctx.engine,
+      model: tool_span_model(ctx.engine),
+      request_id: Keyword.get(ctx.opts, :request_id),
+      kind: :exit,
+      reason: :timeout,
+      stacktrace: []
+    })
+
     err = ToolError.new(:timeout, tool_name: tc.name, tool_call_id: tc.id)
     dispatch = route_error(err, tc, ctx)
     {idx, tc, dispatch}

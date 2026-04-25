@@ -37,7 +37,11 @@ defmodule ALLM.Test.Assertions do
     sort_by_id = fn msgs -> Enum.sort_by(msgs, & &1.tool_call_id) end
 
     assert sort_by_id.(a.tool_results) == sort_by_id.(b.tool_results)
-    assert a.response == b.response
+
+    # Phase 9.1: `Response.request_id` is generated per-call and legitimately
+    # differs across two independent calls; compare responses modulo that
+    # field so the equivalence relation isn't broken by telemetry-only state.
+    assert normalise_response(a.response) == normalise_response(b.response)
     assert a.done? == b.done?
 
     assert Enum.reject(a.thread.messages, &(&1.role == :tool)) ==
@@ -84,7 +88,7 @@ defmodule ALLM.Test.Assertions do
     assert a.pending_question == b.pending_question
     assert a.pending_tool_call_id == b.pending_tool_call_id
     assert a.metadata == b.metadata
-    assert a.final_response == b.final_response
+    assert normalise_response(a.final_response) == normalise_response(b.final_response)
 
     assert Enum.reject(a.thread.messages, &(&1.role == :tool)) ==
              Enum.reject(b.thread.messages, &(&1.role == :tool))
@@ -164,6 +168,12 @@ defmodule ALLM.Test.Assertions do
   defp assert_equivalent_result(%ALLM.StepResult{} = a, %ALLM.StepResult{} = b) do
     assert_equivalent_step_result(a, b)
   end
+
+  # Phase 9.1: zero out request_id so equivalence assertions stay stable
+  # across two independent calls that legitimately get different ids.
+  defp normalise_response(nil), do: nil
+
+  defp normalise_response(%ALLM.Response{} = r), do: %ALLM.Response{r | request_id: nil}
 
   defp diff_maps(a, b) do
     only_a = Map.drop(a, Map.keys(b))

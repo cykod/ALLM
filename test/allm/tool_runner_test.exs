@@ -3,6 +3,7 @@ defmodule ALLM.ToolRunnerTest do
 
   alias ALLM.{Engine, Event, Message, Tool, ToolCall, ToolRunner}
   alias ALLM.Error.{EngineError, ToolError}
+  alias ALLM.ToolExecutor.Default, as: DefaultToolExecutor
 
   doctest ToolRunner
 
@@ -1503,6 +1504,358 @@ defmodule ALLM.ToolRunnerTest do
 
       assert meta.halted_reason == :plan_submitted
       assert meta.halt_result == %{r: 1}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Phase 9.2 — per-tool telemetry spans
+  # ---------------------------------------------------------------------------
+
+  describe "telemetry spans (Phase 9.2)" do
+    alias ALLM.Test.TelemetryCapture
+
+    setup do
+      :ok =
+        TelemetryCapture.attach([
+          [:allm, :tool, :start],
+          [:allm, :tool, :stop],
+          [:allm, :tool, :exception]
+        ])
+
+      on_exit(fn -> TelemetryCapture.detach() end)
+      :ok
+    end
+
+    test "single tool execution emits one :start and one :stop with full metadata" do
+      tc = echo_call("c0", %{"x" => 1})
+      tool = echo_tool()
+      eng = engine()
+      rid = "req-9-2-single-#{System.unique_integer([:positive])}"
+
+      assert {:ok, [_msg]} =
+               ToolRunner.run_tool_calls([tc], [tool], engine: eng, request_id: rid)
+
+      :ok = TelemetryCapture.drain()
+      events = TelemetryCapture.events()
+
+      starts =
+        for {[:allm, :tool, :start], _m, %{request_id: ^rid} = md} <- events, do: md
+
+      stops = for {[:allm, :tool, :stop], _m, %{request_id: ^rid} = md} <- events, do: md
+
+      assert length(starts) == 1
+      assert length(stops) == 1
+
+      [start_md] = starts
+      assert %ToolCall{id: "c0"} = start_md.tool_call
+      assert %Tool{name: "echo"} = start_md.tool
+      assert start_md.engine == eng
+      assert start_md.request_id == rid
+
+      [stop_md] = stops
+      assert stop_md.tool_call.id == "c0"
+      assert stop_md.tool.name == "echo"
+      assert stop_md.engine == eng
+      assert stop_md.request_id == rid
+      # The :stop metadata carries the dispatch tuple as :result.
+      assert match?({:continue, %Message{}, _extra}, stop_md.result)
+    end
+
+    test ":tool span metadata carries :model lifted from the engine (review Finding #4)" do
+      # Phase 9.2 fix-pass: per design Decision #3 / DoD line 737 the
+      # `:tool` span shares `:engine | :request_id | :model` common
+      # metadata with the other Layer-C spans. Original review captured
+      # `:model` absent; this test pins the lift.
+      tc = echo_call("c0", %{"x" => 1})
+      tool = echo_tool()
+      eng = Engine.new(adapter: ALLM.Providers.Fake, model: "fake-tool-model")
+      rid = "req-9-2-model-#{System.unique_integer([:positive])}"
+
+      assert {:ok, [_msg]} =
+               ToolRunner.run_tool_calls([tc], [tool], engine: eng, request_id: rid)
+
+      :ok = TelemetryCapture.drain()
+      events = TelemetryCapture.events()
+
+      starts = for {[:allm, :tool, :start], _m, %{request_id: ^rid} = md} <- events, do: md
+      stops = for {[:allm, :tool, :stop], _m, %{request_id: ^rid} = md} <- events, do: md
+
+      [start_md] = starts
+      [stop_md] = stops
+      assert start_md.model == "fake-tool-model"
+      assert stop_md.model == "fake-tool-model"
+    end
+
+    test "three parallel tool executions emit 3× :start and 3× :stop with distinct ids" do
+      tools = [echo_tool()]
+      tc_a = echo_call("a", %{"n" => 1})
+      tc_b = echo_call("b", %{"n" => 2})
+      tc_c = echo_call("c", %{"n" => 3})
+      rid = "req-9-2-parallel-#{System.unique_integer([:positive])}"
+
+      assert {:ok, msgs} =
+               ToolRunner.run_tool_calls([tc_a, tc_b, tc_c], tools,
+                 engine: engine(),
+                 request_id: rid
+               )
+
+      assert length(msgs) == 3
+
+      :ok = TelemetryCapture.drain()
+      events = TelemetryCapture.events()
+
+      start_ids =
+        for {[:allm, :tool, :start], _m, %{request_id: ^rid, tool_call: %ToolCall{id: id}}} <-
+              events,
+            do: id
+
+      stop_ids =
+        for {[:allm, :tool, :stop], _m, %{request_id: ^rid, tool_call: %ToolCall{id: id}}} <-
+              events,
+            do: id
+
+      assert length(start_ids) == 3
+      assert length(stop_ids) == 3
+      assert Enum.sort(start_ids) == ["a", "b", "c"]
+      assert Enum.sort(stop_ids) == ["a", "b", "c"]
+    end
+
+    test "Default-executor-caught raise emits :stop (no :exception); siblings unaffected" do
+      tools = [
+        echo_tool(),
+        Tool.new(
+          name: "boom",
+          description: "",
+          schema: %{},
+          handler: fn _ -> raise "kapow" end
+        )
+      ]
+
+      tc_ok = echo_call("ok-id", %{"n" => 1})
+      tc_boom = ToolCall.new(id: "boom-id", name: "boom", arguments: %{})
+      rid = "req-9-2-raise-#{System.unique_integer([:positive])}"
+
+      # on_tool_error: :continue + Default executor: the executor catches
+      # the raise and returns {:error, %ToolError{}}, so the span closure
+      # returns normally — :stop fires for both tools, no :exception.
+      assert {:ok, _} =
+               ToolRunner.run_tool_calls([tc_ok, tc_boom], tools,
+                 engine: engine(),
+                 on_tool_error: :continue,
+                 request_id: rid
+               )
+
+      :ok = TelemetryCapture.drain()
+      events = TelemetryCapture.events()
+
+      exceptions =
+        for {[:allm, :tool, :exception], _m, %{request_id: ^rid} = md} <- events, do: md
+
+      stops =
+        for {[:allm, :tool, :stop], _m, %{request_id: ^rid} = md} <- events, do: md
+
+      stop_ids = for %{tool_call: %ToolCall{id: id}} <- stops, do: id
+      assert Enum.sort(stop_ids) == ["boom-id", "ok-id"]
+      assert exceptions == []
+    end
+
+    test "closure raise (executor bypasses default catch) emits :exception only for that tool" do
+      # Custom executor that raises directly so the raise propagates out
+      # of the per-tool span closure — exercising `:telemetry.span/3`'s
+      # auto-trap. The raise propagates to the parent `Task.async_stream/5`
+      # caller (us), so we run the call in an isolated Task with
+      # `Process.flag(:trap_exit, true)` to capture the exit cleanly
+      # instead of crashing the test process.
+      defmodule ClosureRaiseExecutor do
+        @moduledoc false
+        @behaviour ALLM.ToolExecutor
+        @impl true
+        def execute(%ALLM.Tool{name: "boom"}, _args, _opts), do: raise("closure-raise")
+
+        def execute(%ALLM.Tool{} = tool, args, opts) do
+          DefaultToolExecutor.execute(tool, args, opts)
+        end
+      end
+
+      tools = [
+        echo_tool(),
+        Tool.new(name: "boom", description: "", schema: %{}, handler: fn _ -> {:ok, :nope} end)
+      ]
+
+      tc_ok = echo_call("ok-id", %{"n" => 1})
+      tc_boom = ToolCall.new(id: "boom-id", name: "boom", arguments: %{})
+      eng = engine()
+      rid = "req-9-2-closure-raise-#{System.unique_integer([:positive])}"
+
+      # Run in an isolated, unlinked process so the raise (which
+      # propagates through Task.async_stream/5's worker) doesn't kill
+      # the test process. The telemetry handler still captures via the
+      # owner-pid send mechanism.
+      {pid, ref} =
+        spawn_monitor(fn ->
+          try do
+            ToolRunner.run_tool_calls([tc_ok, tc_boom], tools,
+              engine: eng,
+              tool_executor: ClosureRaiseExecutor,
+              on_tool_error: :continue,
+              request_id: rid
+            )
+          rescue
+            _ -> :ok
+          catch
+            :exit, _ -> :ok
+          end
+        end)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _} -> :ok
+      after
+        5_000 -> flunk("isolated runner did not finish within 5s")
+      end
+
+      :ok = TelemetryCapture.drain(200)
+      events = TelemetryCapture.events()
+
+      exceptions =
+        for {[:allm, :tool, :exception], _m, %{request_id: ^rid} = md} <- events, do: md
+
+      refute exceptions == []
+      assert Enum.any?(exceptions, fn md -> md.tool_call.id == "boom-id" end)
+
+      [exc] = Enum.filter(exceptions, fn md -> md.tool_call.id == "boom-id" end)
+      assert exc.tool.name == "boom"
+      assert exc.request_id == rid
+
+      # No :exception event for the sibling.
+      refute Enum.any?(exceptions, fn md -> md.tool_call.id == "ok-id" end)
+    end
+
+    test "request_id in tool spans equals request_id in parent :step span (inheritance)" do
+      :ok = TelemetryCapture.detach()
+
+      :ok =
+        TelemetryCapture.attach([
+          [:allm, :step, :start],
+          [:allm, :tool, :start]
+        ])
+
+      on_exit(fn -> TelemetryCapture.detach() end)
+
+      eng =
+        Engine.new(
+          adapter: ALLM.Providers.Fake,
+          adapter_opts: [
+            script: [
+              {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+              {:finish, :tool_calls}
+            ]
+          ],
+          tools: [echo_tool()]
+        )
+
+      thread = ALLM.Thread.from_messages([ALLM.user("hi")])
+
+      # Inject a unique :request_id at the outer call so we can filter
+      # globally-broadcast telemetry events down to just this test's
+      # invocation (handlers are process-global; parallel async tests
+      # share the dispatch table).
+      my_rid = "req-9-2-step-inherit-#{System.unique_integer([:positive])}"
+
+      assert {:ok, _step_result} = ALLM.Chat.step(eng, thread, request_id: my_rid)
+
+      :ok = TelemetryCapture.drain()
+      events = TelemetryCapture.events()
+
+      step_ids =
+        for {[:allm, :step, :start], _m, %{request_id: ^my_rid} = md} <- events, do: md.request_id
+
+      tool_ids =
+        for {[:allm, :tool, :start], _m, %{request_id: ^my_rid} = md} <- events, do: md.request_id
+
+      assert match?([_], step_ids)
+      refute tool_ids == []
+      [parent_rid] = step_ids
+      assert parent_rid == my_rid
+      assert Enum.all?(tool_ids, fn rid -> rid == parent_rid end)
+    end
+
+    test "{:ask_user, _} emits :stop with :result set to the raw {:ask_user, _, _} tuple" do
+      tool =
+        Tool.new(
+          name: "ask",
+          description: "",
+          schema: %{},
+          handler: fn _ -> {:ask_user, "really?"} end
+        )
+
+      tc = ToolCall.new(id: "c0", name: "ask", arguments: %{})
+      rid = "req-9-2-ask-#{System.unique_integer([:positive])}"
+
+      assert {:ok, [_msg], _meta} =
+               ToolRunner.run_tool_calls([tc], [tool],
+                 engine: engine(),
+                 request_id: rid
+               )
+
+      :ok = TelemetryCapture.drain()
+
+      stops =
+        for {[:allm, :tool, :stop], _m, %{request_id: ^rid} = md} <- TelemetryCapture.events(),
+            do: md
+
+      assert [stop_md] = stops
+      # The span sees the dispatch tuple; :extra carries the raw return.
+      # Per Phase 9.2 spec: "The :result for a tool that returns
+      # {:ask_user, _} is the raw tuple — the span sees the handler's
+      # raw return; encoding happens later." The span closure returns
+      # the dispatch tuple {:halt, msg, %{raw_result: {:ask_user, _, _}}};
+      # the raw_result inside the dispatch's extra map is the raw tuple.
+      assert {:halt, %Message{}, %{raw_result: raw}} = stop_md.result
+      assert match?({:ask_user, "really?", []}, raw)
+    end
+
+    test "tool that times out emits :exception with :reason: :timeout (synthesised from parent)" do
+      tool =
+        Tool.new(
+          name: "slow",
+          description: "",
+          schema: %{},
+          handler: fn _ ->
+            Process.sleep(200)
+            {:ok, :never}
+          end
+        )
+
+      tc = ToolCall.new(id: "slow-id", name: "slow", arguments: %{})
+      rid = "req-9-2-timeout-#{System.unique_integer([:positive])}"
+
+      assert {:ok, [_msg]} =
+               ToolRunner.run_tool_calls([tc], [tool],
+                 engine: engine(),
+                 tool_timeout: 50,
+                 on_tool_error: :continue,
+                 request_id: rid
+               )
+
+      :ok = TelemetryCapture.drain(150)
+      events = TelemetryCapture.events()
+
+      exceptions =
+        for {[:allm, :tool, :exception], _m, %{request_id: ^rid} = md} <- events, do: md
+
+      stops =
+        for {[:allm, :tool, :stop], _m, %{request_id: ^rid} = md} <- events, do: md
+
+      assert length(exceptions) == 1
+      assert stops == []
+      [exc] = exceptions
+      assert exc.tool_call.id == "slow-id"
+      assert exc.tool.name == "slow"
+      assert exc.engine != nil
+      assert exc.request_id == rid
+      assert exc.kind == :exit
+      assert exc.reason == :timeout
+      assert exc.stacktrace == []
     end
   end
 end

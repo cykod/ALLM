@@ -28,6 +28,7 @@ defmodule ALLM.Error.ValidationError do
           | :invalid_thread
           | :invalid_session
           | :invalid_session_input
+          | :unsupported_capability
           | :vision_not_in_v0_2
 
   @type t :: %__MODULE__{
@@ -45,6 +46,7 @@ defmodule ALLM.Error.ValidationError do
     invalid_thread
     invalid_session
     invalid_session_input
+    unsupported_capability
     vision_not_in_v0_2
   )a
 

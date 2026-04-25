@@ -56,6 +56,14 @@ defmodule ALLM.Engine do
 
   @type retry :: :default | false | keyword()
 
+  @typedoc """
+  Late-resolved model value returned by `resolve_model/2`. A bare string,
+  a provider-tagged tuple, a struct (typically `%ALLM.ModelRef{}` when
+  the optional `LLMDB` catalog is loaded — spec §6.3), or `nil` when the
+  engine has no model and no override was passed.
+  """
+  @type resolved_model :: String.t() | tuple() | struct() | nil
+
   @type t :: %__MODULE__{
           adapter: module() | nil,
           adapter_opts: keyword(),
@@ -282,7 +290,7 @@ defmodule ALLM.Engine do
       iex> ALLM.Engine.resolve_model(ALLM.Engine.new(model: {:openai, "gpt-x"}), [])
       {:openai, "gpt-x"}
   """
-  @spec resolve_model(t(), keyword()) :: String.t() | tuple() | struct() | nil
+  @spec resolve_model(t(), keyword()) :: resolved_model()
   def resolve_model(%__MODULE__{} = engine, opts) when is_list(opts) do
     chosen = Keyword.get(opts, :model) || engine.model
 

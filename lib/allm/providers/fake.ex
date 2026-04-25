@@ -204,13 +204,17 @@ defmodule ALLM.Providers.Fake do
     adapter_opts = Keyword.get(opts, :adapter_opts, [])
     :ok = Script.validate!(adapter_opts)
 
-    case resolve_scripts_for_generate(adapter_opts) do
-      {:ok, scripts} ->
-        run_generate_call(scripts, adapter_opts)
+    # Phase 9.3: wrap the per-call work in `ALLM.Retry.run/3` so the
+    # `retry_until_call: n` opt drives a real retry loop and emits
+    # `[:allm, :adapter, :retry]` per attempt. Outside of retry tests
+    # the closure returns `{:ok, response}` on first call (the counter
+    # absent path is a no-op).
+    retry_policy = Keyword.get(opts, :retry, :default)
+    telemetry_meta = build_retry_telemetry_meta(opts)
 
-      :empty ->
-        {:error, script_exhausted_error()}
-    end
+    ALLM.Retry.run(retry_policy, telemetry_meta, fn ->
+      generate_attempt(adapter_opts)
+    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -258,13 +262,47 @@ defmodule ALLM.Providers.Fake do
     adapter_opts = Keyword.get(opts, :adapter_opts, [])
     :ok = Script.validate!(adapter_opts)
 
-    case resolve_scripts_for_stream(adapter_opts) do
-      :empty ->
-        {:error, script_exhausted_error()}
+    # Phase 9.3: spec §6.1 — streaming calls are NOT retried. We do
+    # NOT call `ALLM.Retry.run/3` here. Instead, when
+    # `retry_until_call: n` is set we share the same per-process
+    # counter as `generate/2` and, on the first n-1 calls, surface the
+    # transient failure as a terminal `{:error, _}` event mid-stream.
+    # The consumer reduces it to `%Response{finish_reason: :error}`
+    # per CLAUDE.md's "mid-stream errors fold into the response, not
+    # the call-site tuple" invariant.
+    case maybe_retry_transient(adapter_opts) do
+      :retry ->
+        {:ok, transient_error_stream()}
 
-      {:ok, scripts} ->
-        open_stream(scripts, adapter_opts)
+      :proceed ->
+        case resolve_scripts_for_stream(adapter_opts) do
+          :empty ->
+            {:error, script_exhausted_error()}
+
+          {:ok, scripts} ->
+            open_stream(scripts, adapter_opts)
+        end
     end
+  end
+
+  # A minimal stream that emits `:message_started` and a terminal
+  # `{:error, %AdapterError{}}` event. Used when `retry_until_call:` is
+  # set and the counter says this call should fail transiently; the
+  # downstream collector folds the terminal error into
+  # `%Response{finish_reason: :error}`.
+  defp transient_error_stream do
+    err = AdapterError.new(:timeout, message: "scripted transient stream failure")
+
+    Stream.resource(
+      fn ->
+        [{:message_started, %{message: %Message{role: :assistant, content: ""}}}, {:error, err}]
+      end,
+      fn
+        [] -> {:halt, []}
+        events -> {events, []}
+      end,
+      fn _ -> :ok end
+    )
   end
 
   # ---------------------------------------------------------------------------
@@ -318,8 +356,86 @@ defmodule ALLM.Providers.Fake do
   def cursor_index(pid) when is_pid(pid), do: Agent.get(pid, & &1)
 
   # ---------------------------------------------------------------------------
-  # Internals — generate/2
+  # Internals — generate/2 + retry plumbing
   # ---------------------------------------------------------------------------
+
+  # One attempt of the scripted generate path. Returns one of the
+  # `ALLM.Retry.closure_result/1` shapes (`{:ok, _} | {:retry, _, _}
+  # | {:error, _}`). When `retry_until_call: n` is set on
+  # `adapter_opts`, the first n-1 attempts return `{:retry, 0,
+  # :fake_transient}`; attempt n returns the scripted `{:ok, response}`
+  # (or `{:error, _}` if the script is configured to fail there).
+  defp generate_attempt(adapter_opts) do
+    case maybe_retry_transient(adapter_opts) do
+      :retry ->
+        # `:timeout` is in the default `retry_on` set (spec §6.1) so the
+        # bare-atom error matches under the default policy. Tests
+        # exercising custom `retry_on` lists pass a policy that
+        # includes `:timeout`.
+        {:retry, 0, :timeout}
+
+      :proceed ->
+        case resolve_scripts_for_generate(adapter_opts) do
+          {:ok, scripts} -> wrap_generate_result(run_generate_call(scripts, adapter_opts))
+          :empty -> {:error, script_exhausted_error()}
+        end
+    end
+  end
+
+  # Convert the raw `run_generate_call/2` return into the
+  # `closure_result/1` shape consumed by `ALLM.Retry.run/3`. The Fake
+  # uses non-retryable `{:error, _}` for scripted errors (a real adapter
+  # would inspect the status code and decide).
+  defp wrap_generate_result({:ok, _} = ok), do: ok
+  defp wrap_generate_result({:error, %AdapterError{} = err}), do: {:error, err}
+
+  # Decrement the per-process retry counter (keyed by the
+  # `retry_until_call:` opt's identity). Returns `:retry` while the
+  # counter is > 1 and `:proceed` when the counter has reached 1 (the
+  # call that should succeed). Absent opt → always `:proceed`.
+  defp maybe_retry_transient(adapter_opts) do
+    case Keyword.get(adapter_opts, :retry_until_call) do
+      nil ->
+        :proceed
+
+      n when is_integer(n) and n >= 1 ->
+        decrement_retry_counter(n)
+    end
+  end
+
+  # The counter lives in the calling process's process dictionary so the
+  # streaming and non-streaming arms share state — the test plan
+  # specifies that `Fake.stream/2` honours `retry_until_call:` from the
+  # SAME counter as `Fake.generate/2`. Test isolation is per-PID
+  # (`async: true` is safe — each ExUnit test runs in its own process).
+  @retry_counter_key {__MODULE__, :retry_until_call}
+
+  defp decrement_retry_counter(initial) do
+    current = Process.get(@retry_counter_key, initial)
+
+    if current > 1 do
+      Process.put(@retry_counter_key, current - 1)
+      :retry
+    else
+      # The successful attempt: reset the counter so a subsequent test
+      # in the same process (or a follow-up call) starts fresh.
+      Process.delete(@retry_counter_key)
+      :proceed
+    end
+  end
+
+  # Telemetry metadata attached to every `[:allm, :adapter, :retry]`
+  # event from this adapter. `:request_id` is propagated from the
+  # surrounding span (set by `Runner.run/3` / `StreamRunner.run/3` per
+  # Phase 9.1) so retry events correlate with their parent generate
+  # / step / chat span.
+  defp build_retry_telemetry_meta(opts) do
+    %{provider: :fake}
+    |> maybe_put_meta(:request_id, Keyword.get(opts, :request_id))
+  end
+
+  defp maybe_put_meta(meta, _key, nil), do: meta
+  defp maybe_put_meta(meta, key, value), do: Map.put(meta, key, value)
 
   # generate/2 reads :scripts > :script. :stream_script is ignored per
   # key-precedence table in the moduledoc.

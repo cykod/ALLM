@@ -4,7 +4,7 @@ defmodule ALLM.ChatRunTest do
   alias ALLM.{Chat, ChatResult, Engine, Message, Thread, Tool, ToolCall}
   alias ALLM.Error.{EngineError, ValidationError}
   alias ALLM.Providers.Fake
-  alias ALLM.Test.FakeFixtures
+  alias ALLM.Test.{FakeFixtures, TelemetryCapture}
 
   # ---------------------------------------------------------------------------
   # Helpers
@@ -668,6 +668,34 @@ defmodule ALLM.ChatRunTest do
       # already; this assertion guards the additional invariant that the
       # private sentinel is also absent.
       refute Keyword.has_key?(opts, :max_turns)
+    end
+  end
+
+  describe "run/3 — telemetry (Phase 9.1)" do
+    test "emits [:allm, :chat, :start | :stop] with :request_id, :engine, :model, :chat_result" do
+      TelemetryCapture.attach([
+        [:allm, :chat, :start],
+        [:allm, :chat, :stop]
+      ])
+
+      engine = FakeFixtures.engine([{:text, "hello"}, {:finish, :stop}])
+      assert {:ok, %ChatResult{} = cr} = Chat.run(engine, user_thread())
+
+      events = TelemetryCapture.events()
+      TelemetryCapture.detach()
+
+      assert {[:allm, :chat, :start], _, start_meta} =
+               Enum.find(events, &match?({[:allm, :chat, :start], _, _}, &1))
+
+      assert is_binary(start_meta.request_id)
+      assert start_meta.engine == engine
+      assert Map.has_key?(start_meta, :model)
+
+      assert {[:allm, :chat, :stop], _, stop_meta} =
+               Enum.find(events, &match?({[:allm, :chat, :stop], _, _}, &1))
+
+      assert stop_meta.request_id == start_meta.request_id
+      assert stop_meta.chat_result == cr
     end
   end
 end

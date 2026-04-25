@@ -3,7 +3,7 @@ defmodule ALLM.ChatStreamTest do
 
   alias ALLM.{Chat, ChatResult, Engine, Message, StepResult, Thread, Tool, ToolCall}
   alias ALLM.Error.{EngineError, ValidationError}
-  alias ALLM.Test.FakeFixtures
+  alias ALLM.Test.{FakeFixtures, TelemetryCapture}
 
   import ALLM.Test.AsyncHelpers, only: [wait_for: 2]
 
@@ -656,6 +656,35 @@ defmodule ALLM.ChatStreamTest do
       assert stream_result.thread == run_result.thread
       assert stream_result.final_response.output_text == run_result.final_response.output_text
       assert length(stream_result.steps) == length(run_result.steps)
+    end
+  end
+
+  describe "stream/3 — telemetry (Phase 9.1)" do
+    test "emits [:allm, :chat, :start | :stop] with :request_id, :engine; :chat_result is nil on stream" do
+      TelemetryCapture.attach([
+        [:allm, :chat, :start],
+        [:allm, :chat, :stop]
+      ])
+
+      engine = FakeFixtures.engine([{:text, "hello"}, {:finish, :stop}])
+      assert {:ok, stream} = Chat.stream(engine, user_thread())
+      _ = Enum.to_list(stream)
+
+      events = TelemetryCapture.events()
+      TelemetryCapture.detach()
+
+      assert {[:allm, :chat, :start], _, start_meta} =
+               Enum.find(events, &match?({[:allm, :chat, :start], _, _}, &1))
+
+      assert is_binary(start_meta.request_id)
+      assert start_meta.engine == engine
+
+      assert {[:allm, :chat, :stop], _, stop_meta} =
+               Enum.find(events, &match?({[:allm, :chat, :stop], _, _}, &1))
+
+      assert stop_meta.request_id == start_meta.request_id
+      # Lazy-enumerable carve-out — :chat_result is nil on stream span :stop.
+      assert Map.get(stop_meta, :chat_result) == nil
     end
   end
 end

@@ -35,7 +35,7 @@ defmodule ALLM.StreamRunner do
 
   require Logger
 
-  alias ALLM.{Engine, Request, Validate}
+  alias ALLM.{Capability, Engine, Request, Telemetry, Validate}
   alias ALLM.Error.{AdapterError, EngineError, ValidationError}
 
   # Orchestration opts (Phase 6 and Phase 7 consumers) — stripped before
@@ -47,7 +47,18 @@ defmodule ALLM.StreamRunner do
 
   # Phase 5 streaming-layer opts — read directly from opts by this module,
   # not forwarded to the adapter as params.
-  @phase_5_layer_opts [:emit_text_deltas, :emit_tool_deltas, :include_raw_chunks, :on_event]
+  # Phase 9.4 adds `:resolved_model` (the late-resolved model threaded
+  # downstream for `Capability.populate_costs/2`) and `:request_id` (the
+  # telemetry-correlation id, threaded into adapter_opts via
+  # `maybe_put_request_id/2`).
+  @phase_5_layer_opts [
+    :emit_text_deltas,
+    :emit_tool_deltas,
+    :include_raw_chunks,
+    :on_event,
+    :resolved_model,
+    :request_id
+  ]
 
   @doc """
   Dispatch a streaming request. Validates, resolves params, forwards to
@@ -74,10 +85,44 @@ defmodule ALLM.StreamRunner do
           {:ok, Enumerable.t()}
           | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
   def run(%Engine{} = engine, %Request{} = request, opts \\ []) when is_list(opts) do
+    request_id = Keyword.get(opts, :request_id) || Telemetry.request_id()
+    opts = Keyword.put(opts, :request_id, request_id)
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: request.model || engine.model
+    }
+
+    Telemetry.span(:stream, start_metadata, fn ->
+      result = do_run(engine, request, opts)
+      # Phase 9 design carve-out (review Finding #2): `:stop` metadata's
+      # `:response` is intentionally `nil` for streaming spans — design
+      # DoD line 737 lists `:response` for both `:generate` and `:stream`
+      # spans, but materialising the wrapped enumerable inside the closure
+      # to populate it here would force consumption before any consumer
+      # reduces, defeating consumer-driven laziness. Streaming consumers
+      # that need the canonical `%Response{}` should fold the stream
+      # themselves via `ALLM.StreamCollector.to_response/1` (or
+      # `ALLM.generate/3`, which does exactly this — its `:generate :stop`
+      # span DOES carry `:response`). The `:request_id` on the span
+      # metadata correlates the streaming `:stop` with any post-collection
+      # response the consumer builds.
+      {result, %{response: nil}}
+    end)
+  end
+
+  defp do_run(%Engine{} = engine, %Request{} = request, opts) do
     with :ok <- check_adapter(engine),
          :ok <- check_stream_adapter(engine.adapter),
-         :ok <- Validate.request(request) do
-      dispatch(engine, request, opts)
+         :ok <- Validate.request(request),
+         resolved_request <- resolve_request_model(engine, request, opts),
+         :ok <- Capability.preflight(resolved_request.model, request) do
+      # Thread the resolved model into opts so downstream consumers (the
+      # Runner's cost-population step, Chat's stream_collector finalize)
+      # can call `Capability.populate_costs/2` without re-resolving.
+      opts = Keyword.put(opts, :resolved_model, resolved_request.model)
+      dispatch(engine, resolved_request, opts)
     end
   end
 
@@ -113,10 +158,11 @@ defmodule ALLM.StreamRunner do
 
   defp dispatch(%Engine{} = engine, %Request{} = request, opts) do
     opts = strip_orchestration_opts(opts)
-    final_request = resolve_request_model(engine, request, opts)
     dispatch_opts = build_dispatch_opts(engine, opts)
 
-    engine.adapter.stream(final_request, dispatch_opts)
+    # `request` is already resolved (model attached) by `do_run/3`'s
+    # hoisted `resolve_request_model/3` call (Phase 9.4 Decision #17).
+    engine.adapter.stream(request, dispatch_opts)
     |> post_process(opts)
   end
 
@@ -165,7 +211,17 @@ defmodule ALLM.StreamRunner do
     adapter_opts =
       engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, [])
 
-    Keyword.put(params_kw, :adapter_opts, adapter_opts)
+    params_kw
+    |> Keyword.put(:adapter_opts, adapter_opts)
+    |> maybe_put_request_id(opts)
+    |> Keyword.put(:retry, engine.retry)
+  end
+
+  defp maybe_put_request_id(kw, opts) do
+    case Keyword.get(opts, :request_id) do
+      nil -> kw
+      id -> Keyword.put(kw, :request_id, id)
+    end
   end
 
   # ---------------------------------------------------------------------------

@@ -156,7 +156,9 @@ defmodule ALLM.StreamEquivalenceTest do
       assert {:ok, %Response{} = gen_resp} = run_generate(script)
       assert {:ok, %Response{} = collected_resp} = run_stream_and_collect(script)
 
-      assert gen_resp == collected_resp
+      # Phase 9.1: request_id is generated per-call; legitimately differs.
+      assert %Response{gen_resp | request_id: nil} ==
+               %Response{collected_resp | request_id: nil}
     end
   end
 

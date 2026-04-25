@@ -2,7 +2,7 @@ defmodule ALLM.ChatStreamStepTest do
   use ExUnit.Case, async: true
 
   alias ALLM.{Chat, Engine, Response, Thread, Tool, ToolCall}
-  alias ALLM.Test.FakeFixtures
+  alias ALLM.Test.{FakeFixtures, TelemetryCapture}
 
   # ---------------------------------------------------------------------------
   # Helpers
@@ -510,6 +510,35 @@ defmodule ALLM.ChatStreamStepTest do
       taken = Enum.take(stream, 5)
       assert length(taken) == 5
       # No crash — halt cleanup succeeded.
+    end
+  end
+
+  describe "stream_step/3 — telemetry (Phase 9.1)" do
+    test "emits [:allm, :step, :start | :stop] with :request_id, :engine; :step_result is nil on stream" do
+      TelemetryCapture.attach([
+        [:allm, :step, :start],
+        [:allm, :step, :stop]
+      ])
+
+      engine = FakeFixtures.engine([{:text, "hi"}, {:finish, :stop}])
+      assert {:ok, stream} = Chat.stream_step(engine, user_thread())
+      _ = Enum.to_list(stream)
+
+      events = TelemetryCapture.events()
+      TelemetryCapture.detach()
+
+      assert {[:allm, :step, :start], _, start_meta} =
+               Enum.find(events, &match?({[:allm, :step, :start], _, _}, &1))
+
+      assert is_binary(start_meta.request_id)
+      assert start_meta.engine == engine
+
+      assert {[:allm, :step, :stop], _, stop_meta} =
+               Enum.find(events, &match?({[:allm, :step, :stop], _, _}, &1))
+
+      assert stop_meta.request_id == start_meta.request_id
+      # Lazy-enumerable carve-out — :step_result is nil on stream span :stop.
+      assert Map.get(stop_meta, :step_result) == nil
     end
   end
 end

@@ -7,6 +7,22 @@ defmodule ALLM.Runner do
   `ALLM.StreamCollector`, and wraps the final `%Response{}` in
   `{:ok, _}`.
 
+  ## v0.2 — `generate/3` always streams under the hood
+
+  In v0.2 every public Layer-C entry point (`ALLM.generate/3`,
+  `ALLM.step/3`, `ALLM.chat/3`) routes through this module which then
+  delegates to `ALLM.StreamRunner.run/3`. The non-streaming public API
+  is therefore a stream-collector reduction of the streaming path; the
+  adapter's `c:ALLM.Adapter.generate/3` callback is **never invoked
+  from the public façade in v0.2**. Consequence: `ALLM.Retry`'s
+  `[:allm, :adapter, :retry]` telemetry — which spec §6.1 prohibits on
+  streaming calls — does not fire from `ALLM.generate/3`. The retry
+  surface is exercised in v0.2 by direct adapter calls
+  (`ALLM.Providers.Fake.generate/2`); real-provider Phase 10/11
+  adapters reuse `ALLM.Retry.run/3` from their `generate/2`
+  callbacks. See `ALLM.Retry` `@moduledoc` for the full caveat and
+  review Finding #3.
+
   ## Stream-first (spec §3)
 
   Non-streaming generation is a *reducer* over the streaming path:
@@ -40,7 +56,7 @@ defmodule ALLM.Runner do
   usage and populates `response.usage` — no Runner-side override needed.
   """
 
-  alias ALLM.{Engine, Request, Response, StreamCollector, StreamRunner}
+  alias ALLM.{Capability, Engine, Request, Response, StreamCollector, StreamRunner, Telemetry}
   alias ALLM.Error.{AdapterError, EngineError, ValidationError}
 
   @doc """
@@ -67,6 +83,23 @@ defmodule ALLM.Runner do
           {:ok, Response.t()}
           | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
   def run(%Engine{} = engine, %Request{} = request, opts \\ []) when is_list(opts) do
+    request_id = Keyword.get(opts, :request_id) || Telemetry.request_id()
+    opts = Keyword.put(opts, :request_id, request_id)
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: request.model || engine.model
+    }
+
+    Telemetry.span(:generate, start_metadata, fn ->
+      result = do_run(engine, request, opts, request_id)
+      stop_extras = stop_extras_for(result)
+      {result, stop_extras}
+    end)
+  end
+
+  defp do_run(%Engine{} = engine, %Request{} = request, opts, request_id) do
     with {:ok, stream} <- StreamRunner.run(engine, request, opts) do
       response =
         stream
@@ -75,7 +108,23 @@ defmodule ALLM.Runner do
         end)
         |> StreamCollector.to_response()
 
-      {:ok, response}
+      # Phase 9.4: populate Usage cost fields when the optional LLMDB
+      # catalog is loaded. `Engine.resolve_model/2` is pure; calling
+      # again here costs only a cheap dispatch (StreamRunner already
+      # resolved internally). Pre-flight resolution would have failed
+      # earlier if the catalog was loaded and rejected the request.
+      resolved_model = Engine.resolve_model(engine, opts)
+      usage = Capability.populate_costs(response.usage, resolved_model)
+
+      {:ok,
+       %Response{
+         response
+         | usage: usage,
+           request_id: response.request_id || request_id
+       }}
     end
   end
+
+  defp stop_extras_for({:ok, %Response{} = response}), do: %{response: response}
+  defp stop_extras_for({:error, _}), do: %{response: nil}
 end

@@ -77,6 +77,10 @@ defmodule ALLM.ChatTest do
     # process-dict cursors stay isolated.
     test "ALLM.chat/3 and ALLM.Chat.run/3 return equal results for identical inputs" do
       thread = user_thread()
+      # Phase 9.1: pin request_id so the two delegation arms produce
+      # bytewise-equal ChatResults (Response.request_id is otherwise
+      # generated per-call).
+      opts = [request_id: "fixed-chat-rid-aaaaaaaaaaa"]
 
       build_engine = fn ->
         Engine.new(
@@ -86,11 +90,11 @@ defmodule ALLM.ChatTest do
       end
 
       r_facade =
-        Task.async(fn -> ALLM.chat(build_engine.(), thread) end)
+        Task.async(fn -> ALLM.chat(build_engine.(), thread, opts) end)
         |> Task.await()
 
       r_internal =
-        Task.async(fn -> Chat.run(build_engine.(), thread) end)
+        Task.async(fn -> Chat.run(build_engine.(), thread, opts) end)
         |> Task.await()
 
       assert {:ok, _} = r_facade
@@ -99,6 +103,7 @@ defmodule ALLM.ChatTest do
 
     test "delegation preserves opts (max_turns: 1 surfaces as halted_reason :max_turns)" do
       thread = user_thread()
+      opts = [max_turns: 1, request_id: "fixed-chat-rid-bbbbbbbbbbb"]
 
       build_engine = fn ->
         Engine.new(
@@ -114,11 +119,11 @@ defmodule ALLM.ChatTest do
       end
 
       r_facade =
-        Task.async(fn -> ALLM.chat(build_engine.(), thread, max_turns: 1) end)
+        Task.async(fn -> ALLM.chat(build_engine.(), thread, opts) end)
         |> Task.await()
 
       r_internal =
-        Task.async(fn -> Chat.run(build_engine.(), thread, max_turns: 1) end)
+        Task.async(fn -> Chat.run(build_engine.(), thread, opts) end)
         |> Task.await()
 
       assert {:ok, %ChatResult{halted_reason: :max_turns}} = r_facade

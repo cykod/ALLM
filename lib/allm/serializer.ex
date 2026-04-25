@@ -73,6 +73,7 @@ defmodule ALLM.Serializer do
     ALLM.ChatResult,
     ALLM.Usage,
     ALLM.Engine,
+    ALLM.ModelRef,
     ALLM.Error.EngineError,
     ALLM.Error.AdapterError,
     ALLM.Error.StreamError,

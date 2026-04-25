@@ -3,7 +3,7 @@ defmodule ALLM.ChatStepTest do
 
   alias ALLM.{Chat, Engine, Message, StepResult, Thread, Tool, ToolCall}
   alias ALLM.Error.{EngineError, ValidationError}
-  alias ALLM.Test.FakeFixtures
+  alias ALLM.Test.{FakeFixtures, TelemetryCapture}
 
   doctest Chat
 
@@ -454,6 +454,33 @@ defmodule ALLM.ChatStepTest do
 
       assistant = Enum.find(recovered.messages, &(&1.role == :assistant))
       assert [%ToolCall{id: "c0", name: "echo"}] = assistant.metadata[:tool_calls]
+    end
+  end
+
+  describe "step/3 — telemetry (Phase 9.1)" do
+    test "emits [:allm, :step, :start | :stop] with :request_id, :engine, :step_result" do
+      TelemetryCapture.attach([
+        [:allm, :step, :start],
+        [:allm, :step, :stop]
+      ])
+
+      engine = FakeFixtures.engine([{:text, "hi"}, {:finish, :stop}])
+      assert {:ok, %StepResult{} = sr} = Chat.step(engine, user_thread())
+
+      events = TelemetryCapture.events()
+      TelemetryCapture.detach()
+
+      assert {[:allm, :step, :start], _, start_meta} =
+               Enum.find(events, &match?({[:allm, :step, :start], _, _}, &1))
+
+      assert is_binary(start_meta.request_id)
+      assert start_meta.engine == engine
+
+      assert {[:allm, :step, :stop], _, stop_meta} =
+               Enum.find(events, &match?({[:allm, :step, :stop], _, _}, &1))
+
+      assert stop_meta.request_id == start_meta.request_id
+      assert stop_meta.step_result == sr
     end
   end
 end
