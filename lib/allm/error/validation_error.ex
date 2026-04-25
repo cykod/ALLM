@@ -6,7 +6,9 @@ defmodule ALLM.Error.ValidationError do
   callers can machine-read which fields failed validation and why. Refines
   spec §16's "list of error terms" shape into a first-class struct.
 
-  See Phase 1 design §Sub-phase 1.1 for the closed reason enum.
+  See Phase 1 design §Sub-phase 1.1 for the closed reason enum. Phase 8
+  (sub-phase 8.2) extended the enum with `:invalid_session_input` for the
+  `ALLM.Session.start/3` / `stream_start/3` input-coercion failure.
   """
 
   @typedoc """
@@ -25,6 +27,7 @@ defmodule ALLM.Error.ValidationError do
           | :invalid_tool
           | :invalid_thread
           | :invalid_session
+          | :invalid_session_input
           | :vision_not_in_v0_2
 
   @type t :: %__MODULE__{
@@ -41,6 +44,7 @@ defmodule ALLM.Error.ValidationError do
     invalid_tool
     invalid_thread
     invalid_session
+    invalid_session_input
     vision_not_in_v0_2
   )a
 

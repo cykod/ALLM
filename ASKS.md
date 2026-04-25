@@ -41,3 +41,9 @@
 [DSGN] fri 4/24 10pm - Design Phase 7: stream/3 + chat/3 full orchestration loop
 
 [BUILD] sat 4/25 11am - Build Phase 7 (stream/3 + chat/3 multi-turn orchestration) from PHASE_7_DESIGN.md
+
+[MILE] sat 4/25 5pm - Committed Phase 7 multi-turn chat/3 + stream/3 orchestration with chat-equivalence property
+
+[DSGN] sat 4/25 5pm - Design Phase 8: ALLM.Session stateful continuation
+
+[BUILD] sat 4/25 5pm - Build Phase 8 from PHASE_8_DESIGN.md

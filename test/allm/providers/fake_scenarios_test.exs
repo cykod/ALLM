@@ -5,9 +5,8 @@ defmodule ALLM.Providers.FakeScenariosTest do
   coverage. `mix test --only spec_31` scopes Phase 12's regression audit
   to one file.
 
-  Active coverage after Phase 7: 12 scenarios (3 Phase 4 + 3 Phase 5 +
-  3 Phase 6 + 3 Phase 7). Remaining: 1 scenario tagged `@tag :pending`,
-  deferred to Phase 8.
+  Active coverage after Phase 8: 12 scenarios (3 Phase 4 + 3 Phase 5 +
+  3 Phase 6 + 3 Phase 7 + 1 Phase 8). All §31 scenarios are now active.
 
   | # | Scenario | Phase |
   |---|---|---|
@@ -22,7 +21,7 @@ defmodule ALLM.Providers.FakeScenariosTest do
   | 9 | `max_turns` cap through `ALLM.chat/3` | 7 (active) |
   | 10 | `halt_when` fires through `ALLM.chat/3` | 7 (active) |
   | 11 | single tool call with `mode: :manual` — partial flow via `ALLM.chat/3` | 7 (active) |
-  | 12 | session round-trip | 8 (deferred) |
+  | 12 | session round-trip via `term_to_binary` + `ALLM.Session.reply/4` | 8 (active) |
   """
 
   use ExUnit.Case, async: true
@@ -502,9 +501,38 @@ defmodule ALLM.Providers.FakeScenariosTest do
     end
   end
 
-  @tag :pending
-  test "§31 scenario: session round-trip (Phase 8)" do
-    # Session serialization + `ALLM.Session.reply/4` arrive in Phase 8.
-    :ok
+  describe "§31 scenario: session round-trip (Phase 8)" do
+    test "Session.start/3 → term_to_binary → resume → reply/4 thread matches in-process reply/4" do
+      # Two-script fixture: turn 1 is the initial user query, turn 2 is
+      # the resumption after a (deserialized) reply/4. The cursor is
+      # allocated by `engine_with_scripts/2` and threaded through
+      # adapter_opts so both adapter calls advance through the script
+      # list deterministically.
+      scripts = [
+        [{:text, "first"}, {:finish, :stop}],
+        [{:text, "second"}, {:finish, :stop}]
+      ]
+
+      engine_a = FakeFixtures.engine_with_scripts(scripts)
+      engine_b = FakeFixtures.engine_with_scripts(scripts)
+
+      # In-process arm: start → reply.
+      {:ok, s1, _} = ALLM.Session.start(engine_a, [ALLM.user("hi")])
+      {:ok, s2_inproc, _} = ALLM.Session.reply(engine_a, s1, "more")
+
+      # Persist + resume arm: start → ETF → deETF → reply on the
+      # restored session against a fresh cursor.
+      {:ok, s1_b, _} = ALLM.Session.start(engine_b, [ALLM.user("hi")])
+      serialized = :erlang.term_to_binary(s1_b)
+      s1_restored = :erlang.binary_to_term(serialized)
+
+      assert s1_b == s1_restored
+
+      {:ok, s2_resumed, _} = ALLM.Session.reply(engine_b, s1_restored, "more")
+
+      # Thread shape match — the load-bearing equivalence claim of the
+      # §31 round-trip scenario.
+      assert s2_inproc.thread.messages == s2_resumed.thread.messages
+    end
   end
 end

@@ -11,6 +11,7 @@ defmodule ALLM.Error.ValidationErrorTest do
     :invalid_tool,
     :invalid_thread,
     :invalid_session,
+    :invalid_session_input,
     :vision_not_in_v0_2
   ]
 
@@ -66,6 +67,20 @@ defmodule ALLM.Error.ValidationErrorTest do
     test "default message reflects an empty errors list" do
       err = ValidationError.new(:invalid_tool, [])
       assert err.message == "validation failed: invalid_tool (0 error(s))"
+    end
+
+    test "accepts the :invalid_session_input reason (Phase 8 enum extension)" do
+      err =
+        ValidationError.new(
+          :invalid_session_input,
+          [{:session_input, :invalid_type}],
+          message: "expected %Session{} | %Thread{} | [%Message{}]"
+        )
+
+      assert %ValidationError{
+               reason: :invalid_session_input,
+               errors: [{:session_input, :invalid_type}]
+             } = err
     end
   end
 

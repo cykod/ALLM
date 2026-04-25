@@ -1,3 +1,23 @@
+## [FEAT] Phase 8: ALLM.Session stateful continuation
+*Saturday, April 25th at 7pm*
+Implements Layer D ALLM.Session stateful continuation per spec §11 and §13.2. 
+Adds Session.start/3, reply/4, continue/3, step/3, submit_tool_result/3, and 
+submit_tool_results/2 over a persisted %ALLM.Session{} with a 5-status state 
+machine (:idle, :running, :awaiting_tools, :awaiting_user, :completed, :error). 
+Adds ALLM.Session.StreamReducer wrapping StreamCollector with a :chat | :mode 
+flag for streaming Layer D, ALLM.Error.SessionError as a new Layer A error 
+struct (closed :reason enum), and extends ValidationError with 
+:invalid_session_input. Phase 8.4 cross-cutting tests include a StreamData 
+property asserting Session.start ≡ stream_start |> finalize, an exhaustive 
+25-row status-transition matrix, post-operation ETF + Jason round-trip rows, 
+and activation of the §31 session round-trip scenario (all 12 §31 scenarios 
+now active). Empirical verification of the masking-divergence row in 
+PHASE_8_DESIGN.md §8.4.1 found no metadata divergence between streaming and 
+non-streaming arms; assert_equivalent_session_result/2 asserts :metadata 
+unconditionally.
+
+---
+
 ## [FEAT] Phase 7: chat/3 + stream/3 multi-turn orchestration loop
 *Saturday, April 25th at 5pm*
 Ships the first Layer C surface that orchestrates the full multi-turn loop. 
@@ -99,6 +119,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+
+### Phase 8.4 — Cross-cutting tests + §31 session round-trip activation
+
+#### Added
+- `test/allm/session_equivalence_test.exs` — new `StreamData` property test (`@moduletag :property`) asserting `ALLM.Session.start/3 ≡ ALLM.Session.stream_start/3 |> StreamReducer.finalize/1` across 100 iterations over a multi-turn fixture generator (0–2 tool-calls turns + a terminating text turn against the `echo` tool). Each iteration isolates Fake's per-process cursor via `Task.async/Task.await` per `AGENT_IMPLEMENTATION_SPEC.md` §Property tests. Uses the new `assert_equivalent_session_result/2` helper.
+- `test/allm/session_status_transition_test.exs` — exhaustive 25-row status-transition matrix test covering every `(status, op)` cell from `PHASE_8_DESIGN.md` §Overview: legal arrows assert post-status; illegal status mismatches assert `ArgumentError` raise; `:error`-state cells assert `{:error, %SessionError{reason: :session_in_error_state}}`; the data-mismatch row asserts `{:error, %SessionError{reason: :unknown_tool_call_id}}` for `submit_tool_result/3` with a stale id.
+- `ALLM.Test.Assertions.assert_equivalent_session_result/2` — new test-support helper. Extends `assert_equivalent_chat_result/2` with `s1.status == s2.status`, thread equality (modulo Phase 6 tool-result `tool_call_id` sort), and `pending_*` field equality. `:metadata` is asserted unconditionally — no silent skip. `:id` and `:context` are excluded as identical-by-construction. Accepts both `{Session, ChatResult}` and `{Session, StepResult}` tuple shapes.
+- `ALLM.Test.Assertions.assert_session_round_trip/2` — new test-support helper. ETF round-trip asserted unconditionally; Jason round-trip asserted on every `%Session{}` field except those listed in `opts[:exclude]`. `:exclude` defaults to `[]` (full Jason equality) per `PHASE_8_DESIGN.md` §8.4.1 Invariants 1.
+- `ALLM.Test.FakeFixtures.manual_multi_turn/2` — new test-support fixture. Accepts a list of `{tool_name, args, tool_result_text}` triples and produces a multi-script Fake-adapter engine driven via `start(mode: :manual) → submit_tool_result × N → continue(nil)`.
+- `ALLM.Test.FakeFixtures.ask_user_then_resume/2` — new test-support fixture. Accepts `{question, answer_text}` and produces a two-script engine for the `start → reply(answer)` flow. Caller supplies the ask-user tool handler via `:tools` opt.
+- `test/allm/session_roundtrip_test.exs` — added 10 post-operation round-trip rows covering `start/3`, `reply/4`, `continue/3` (with both `%Message{}` and `nil` message), `step/3`, `submit_tool_result/3` (final + intermediate), `submit_tool_results/2`, `:awaiting_user → reply/4` cycle, and `:error`-status mid-stream-error session. ETF round-trip asserted unconditionally; Jason round-trip excludes `:thread` / `:metadata` for post-`Chat.run/3` cases (Message metadata atom keys are not restored on JSON round-trip per the Phase 1 caller-owned-metadata contract).
+
+#### Changed
+- `test/allm/providers/fake_scenarios_test.exs` — flipped the §31 session round-trip scenario from `@tag :pending` to active. The activated test exercises `Session.start/3 → :erlang.term_to_binary → :erlang.binary_to_term → Session.reply/4` across a two-script Fake fixture and asserts the resumed thread matches the in-process thread. All 12 §31 scenarios are now active; the moduledoc table is updated.
+
+#### Notes
+- **Masking-divergence resolution.** `PHASE_8_DESIGN.md` §8.4.1 reserved a `masking-divergence` row in the relaxation table for `:metadata` between the streaming and non-streaming paths and required a load-bearing fix before Batch 3 ships. Empirical verification (multi-turn / max_turns / manual / ask_user / adapter-error / halt_when fixtures, both arms diffed) found **no metadata divergence**: both paths construct the `%ChatResult{}` via the same `ALLM.Chat.build_chat_result/1` helper (`lib/allm/chat.ex:535`), and `Session.apply_chat_result/2` projects bytewise-identical `cr.metadata` onto both sides. The row is therefore not needed; `assert_equivalent_session_result/2` asserts `:metadata` unconditionally.
+
+### Phase 8.1 + 8.2 — Non-streaming Session API + `ALLM.Session.StreamReducer` + `ALLM.Error.SessionError`
+
+#### Added
+- `ALLM.Session.start/3` — new public Layer D function (spec §11). Coerces a `%Session{}` / `%Thread{}` / `[Message.t()]` input via `coerce_session_input/1`, dispatches to `ALLM.Chat.run/3`, and projects the resulting `%ChatResult{}` onto a fresh `%Session{}` via `apply_chat_result/2`. Returns `{:ok, %Session{}, %ChatResult{}}` or `{:error, %EngineError{} | %AdapterError{} | %ValidationError{} | %SessionError{}}`. Phase 8 Decision #2.
+- `ALLM.Session.reply/4` — new public Layer D function (spec §11). Sugar for `continue/3` with a `%Message{role: :user}` built from the supplied text. Legal on `:idle`, `:awaiting_user` (clears pending fields), `:completed`. Phase 8 Decision #4.
+- `ALLM.Session.continue/3` — new public Layer D function (spec §11). Drives the next adapter turn; accepts `Message.t() | nil`. The `nil` form skips the append and runs on `session.thread` as-is — used for manual-tool-cycle resumption (Phase 8 Decision #4).
+- `ALLM.Session.step/3` — new public Layer D function (spec §11). Single-turn entry point dispatching to `ALLM.Chat.step/3`; does NOT loop. Status follows Phase 6 step semantics via `apply_step_result/2`. Phase 8 Decision #6.
+- `ALLM.Session.submit_tool_result/3` — new public Layer D function (spec §11, return-type widened per Decision #14). In-process state mutation only — no adapter call. Appends a `:tool`-role message to `session.thread` (encoding map content via `Jason.encode!/1` so the resulting thread passes `ALLM.Validate.thread/1`), drops the matched `%ToolCall{}` from `pending_tool_calls`, flips `status` to `:idle` when the last pending call is submitted. Returns `t()` on success or `{:error, %SessionError{reason: :unknown_tool_call_id}}` on a stale id. Phase 8 Decision #3.
+- `ALLM.Session.submit_tool_results/2` — new public Layer D function (spec §11). Batch form folding `submit_tool_result/3` over `[{id, content}]` pairs; first-error-wins short-circuit (no partial mutations) matches `ALLM.Validate`'s hard-reject semantics. Empty list is identity.
+- `ALLM.Session.apply_chat_result/2` and `ALLM.Session.apply_step_result/2` — new internal `@doc false def` helpers projecting `%ChatResult{}` / `%StepResult{}` onto a session. Cross-module visibility is required because `ALLM.Session.StreamReducer.finalize/1` calls them (per Phase 8.1.2 "Visibility decision"). Field-source map matches the table in `steering/PHASE_8_DESIGN.md` §8.2.2.
+- `ALLM.Session.StreamReducer` — new Layer D module (spec §13.2). Wraps a `%StreamCollector{}` plus the originating `%Session{}` and a `:mode` flag (`:chat | :step`). `new/2` validates `:mode` against the closed set; `apply_event/2` delegates to `StreamCollector.apply_event/2` and never short-circuits; `finalize/1` dispatches per Phase 8 Decision #15 — `:chat` returns `{Session.apply_chat_result(session, cr), %ChatResult{}}` (using `StreamCollector.to_chat_result/1`'s `:cancelled` fallback when no `:chat_completed` was folded), `:step` returns `{Session.apply_step_result(session, sr), %StepResult{}}` for the first observed step or `{session, %ChatResult{halted_reason: :cancelled}}` when no step completed.
+- `ALLM.Error.SessionError` — new Layer A error struct (spec §20 atom-vocabulary extension). Closed `:reason` enum: `:session_in_error_state | :invalid_status_for_operation | :no_pending_tool_call | :unknown_tool_call_id`. Mirrors the existing `EngineError` / `AdapterError` shape: `:reason`, `:message`, `:provider` (always `nil`), `:cause`, `:metadata`. Implements `Jason.Encoder` via `ALLM.Serializer.encode_tagged/2` and `__from_tagged__/1`; registered in `ALLM.Serializer.@known_modules` so JSON round-trips. `validate_reason!/1` private helper raises `ArgumentError` on unknown atoms.
+
+#### Changed
+- `ALLM.Error.ValidationError.@type reason` and `@legal_reasons` extended with `:invalid_session_input` (one new atom). Surfaces as `{:error, %ValidationError{reason: :invalid_session_input}}` from `ALLM.Session.start/3` and `stream_start/3` (Batch 2) when the second arg is neither `%Session{}` nor `%Thread{}` nor a list of `%Message{}`. Per Phase 8 §Prerequisites — scoped Phase 1 vocabulary extension.
+- `ALLM.Session` — `@moduledoc` rewritten to document the Phase-8 status-transition matrix (5 statuses × 5 operations, with status-mismatch raise vs. data-mismatch error tuple), mid-stream error projection (`halted_reason: :error` → `status: :error` + `metadata.error`), the manual-tool-cycle pattern (start `:manual` → `submit_tool_result/3 × N` → `continue/3 nil`), `:context` propagation (caller-wins via `merge_session_opts/2`), and `:session_id` propagation (caller-wins; no opt added when `session.id == nil`). Phase 1 helpers (`new/1`, `append/2`, `append_user/2`, `append_tool_result/3`, `pending_tool_calls/1`, `messages/1`, `__from_tagged__/1`) preserved verbatim.
 
 ### Phase 7.5 — `ALLM.chat/3` + `ALLM.stream/3` facade + chat-equivalence property + §31 activations
 

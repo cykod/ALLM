@@ -914,11 +914,18 @@ defmodule ALLM.Session do
   @spec append_tool_result(t(), String.t(), String.t() | map()) :: t()
   def append_tool_result(session, tool_call_id, content)
 
-  @spec submit_tool_result(t(), String.t(), term()) :: t()
+  @spec submit_tool_result(t(), String.t(), term()) ::
+          t() | {:error, ALLM.Error.SessionError.t()}
   def submit_tool_result(session, tool_call_id, result)
 
-  @spec submit_tool_results(t(), [{String.t(), term()}]) :: t()
+  @spec submit_tool_results(t(), [{String.t(), term()}]) ::
+          t() | {:error, ALLM.Error.SessionError.t()}
   def submit_tool_results(session, results)
+  # Amendment: return widened from `t()` to include `{:error,
+  # %SessionError{reason: :unknown_tool_call_id}}` — see
+  # `steering/PHASE_8_DESIGN.md` Non-obvious Decision #14: an unknown id is
+  # data-validation, not a programmer-flow error, so it returns rather than
+  # raises. `submit_tool_results/2` short-circuits on the first error.
 
   @spec pending_tool_calls(t()) :: [ALLM.ToolCall.t()]
   def pending_tool_calls(session)

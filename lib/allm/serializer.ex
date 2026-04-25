@@ -77,7 +77,8 @@ defmodule ALLM.Serializer do
     ALLM.Error.AdapterError,
     ALLM.Error.StreamError,
     ALLM.Error.ValidationError,
-    ALLM.Error.ToolError
+    ALLM.Error.ToolError,
+    ALLM.Error.SessionError
   ]
 
   @type_tag_index Map.new(@known_modules, fn mod -> {inspect(mod), mod} end)

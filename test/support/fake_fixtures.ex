@@ -226,4 +226,90 @@ defmodule ALLM.Test.FakeFixtures do
       when is_binary(text) and is_integer(delay_ms) and delay_ms >= 0 do
     [script: [{:delay, delay_ms}, {:text, text}, {:finish, :stop}]]
   end
+
+  @doc """
+  Manual-mode multi-turn engine.
+
+  Accepts a list of `{tool_name, arguments, tool_result_text}` triples and
+  produces a multi-script Fake-adapter engine driven via
+  `start(mode: :manual) → submit_tool_result × N → continue(nil)`.
+
+  Script 1 surfaces every tool call in the list (each emitted as
+  `{:tool_call, ...}`) and finishes with `:tool_calls`. Each subsequent
+  script emits a plain text `tool_result_text` and finishes with `:stop`.
+  Tool-call ids are deterministically assigned as `"call_0"`, `"call_1"`,
+  ... so tests can pattern-match.
+
+  Returned by this fixture: a fully-constructed `%ALLM.Engine{}` (not raw
+  adapter_opts) — multi-turn fixtures need `engine_with_scripts/2`'s
+  cursor allocation. Pass `engine_opts:` / `tools:` via `opts`.
+
+  ## Options
+
+    * `:tools` — list of `ALLM.Tool` structs (default `[]`).
+    * `:engine_opts` — extra opts merged into engine construction.
+
+  > Reserved for future use. Landed in Phase 8 Batch 3 per
+  > `steering/PHASE_8_DESIGN.md` §8.4 deliverables (L778); the property
+  > test inlined its own generator instead. Will be picked up by Phase 9
+  > manual-mode tests or any future end-to-end `submit_tool_results/2`
+  > coverage.
+  """
+  @spec manual_multi_turn([{String.t(), map(), String.t()}], keyword()) :: Engine.t()
+  def manual_multi_turn(triples, opts \\ []) when is_list(triples) and is_list(opts) do
+    tool_calls =
+      triples
+      |> Enum.with_index()
+      |> Enum.map(fn {{name, args, _result}, idx}
+                     when is_binary(name) and is_map(args) ->
+        {:tool_call, id: "call_#{idx}", name: name, arguments: args}
+      end)
+
+    first_script = tool_calls ++ [{:finish, :tool_calls}]
+
+    follow_scripts =
+      Enum.map(triples, fn {_name, _args, result_text}
+                           when is_binary(result_text) ->
+        [{:text, result_text}, {:finish, :stop}]
+      end)
+
+    scripts = [first_script | follow_scripts]
+    engine_with_scripts(scripts, opts)
+  end
+
+  @doc """
+  Ask-user-then-resume engine.
+
+  Accepts a `{question, answer_text}` 2-tuple and returns an engine whose
+  first turn emits a tool call invoking the supplied `:tools` handler
+  (which the caller wires up to return `{:ask_user, question}`); the
+  second turn (post-resume) emits `answer_text` and finishes with `:stop`.
+
+  The caller is responsible for supplying the `:tools` opt with a tool
+  whose handler yields `{:ask_user, question}` (commonly named `"ask"`).
+  This fixture wires the script shape only; the ask-user signal itself
+  comes from the tool handler.
+
+  Designed to be driven via `start → reply(answer)`.
+
+  ## Options
+
+    * `:tools` — list of `ALLM.Tool` structs. Required for the ask-user
+      handler.
+    * `:tool_name` — the name of the ask-user tool emitted in script 1
+      (default `"ask"`).
+    * `:engine_opts` — extra opts merged into engine construction.
+  """
+  @spec ask_user_then_resume({String.t(), String.t()}, keyword()) :: Engine.t()
+  def ask_user_then_resume({question, answer_text}, opts \\ [])
+      when is_binary(question) and is_binary(answer_text) and is_list(opts) do
+    tool_name = Keyword.get(opts, :tool_name, "ask")
+
+    scripts = [
+      [{:tool_call, id: "call_0", name: tool_name, arguments: %{}}, {:finish, :tool_calls}],
+      [{:text, answer_text}, {:finish, :stop}]
+    ]
+
+    engine_with_scripts(scripts, opts)
+  end
 end
