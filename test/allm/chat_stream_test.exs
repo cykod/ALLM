@@ -687,4 +687,113 @@ defmodule ALLM.ChatStreamTest do
       assert Map.get(stop_meta, :chat_result) == nil
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Phase 10.4 — structured_finalize two-pass orchestration (stream)
+  # ---------------------------------------------------------------------------
+
+  describe "stream/3 — structured_finalize two-pass" do
+    setup do
+      on_exit(fn -> Application.delete_env(:allm, :structured_finalize_nudge) end)
+      :ok
+    end
+
+    defp json_schema_rf do
+      %{type: :json_schema, name: "g", schema: %{type: "object"}, strict: true}
+    end
+
+    defp finalize_scripts_stream do
+      [
+        # Pass 1 turn 1 — tool call.
+        [{:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}}, {:finish, :tool_calls}],
+        # Pass 1 turn 2 — terminal text.
+        [{:text, "tool done"}, {:finish, :stop}],
+        # Pass 2 turn 1 — structured JSON.
+        [{:text, ~s({"answer": "ok"})}, {:finish, :stop}]
+      ]
+    end
+
+    test "two-pass stream emits exactly one :chat_completed (pass 1's is suppressed)" do
+      engine =
+        FakeFixtures.engine_with_scripts(finalize_scripts_stream(), tools: [echo_tool()])
+
+      {:ok, stream} =
+        Chat.stream(engine, user_thread(),
+          structured_finalize: true,
+          response_format: json_schema_rf()
+        )
+
+      events = collect(stream)
+      ts = tags(events)
+
+      assert Enum.count(ts, &(&1 == :chat_completed)) == 1
+      assert List.last(ts) == :chat_completed
+
+      # The terminal :chat_completed carries the merged ChatResult.
+      {:chat_completed, %{result: %ChatResult{} = result}} = List.last(events)
+      assert result.halted_reason == :completed
+      assert result.metadata.structured_finalize.pass_1_halted == :completed
+      assert result.final_response.output_text == ~s({"answer": "ok"})
+    end
+
+    test "stream-equivalence: chat/3 ≡ stream/3 |> StreamCollector.to_chat_result/1" do
+      run_engine =
+        FakeFixtures.engine_with_scripts(finalize_scripts_stream(), tools: [echo_tool()])
+
+      stream_engine =
+        FakeFixtures.engine_with_scripts(finalize_scripts_stream(), tools: [echo_tool()])
+
+      {:ok, run_result} =
+        Chat.run(run_engine, user_thread(),
+          structured_finalize: true,
+          response_format: json_schema_rf()
+        )
+
+      {:ok, stream} =
+        Chat.stream(stream_engine, user_thread(),
+          structured_finalize: true,
+          response_format: json_schema_rf()
+        )
+
+      events = collect(stream)
+      {:chat_completed, %{result: stream_result}} = List.last(events)
+
+      # Tight equivalence on the user-observable fields.
+      assert run_result.halted_reason == stream_result.halted_reason
+      assert run_result.final_response.output_text == stream_result.final_response.output_text
+      assert run_result.metadata.structured_finalize == stream_result.metadata.structured_finalize
+      assert length(run_result.steps) == length(stream_result.steps)
+    end
+
+    test "pass-1 :ask_user halt skips pass 2 and emits a single :chat_completed" do
+      ask_tool =
+        Tool.new(
+          name: "ask",
+          description: "",
+          schema: %{},
+          handler: fn _args -> {:ask_user, "Which one?"} end
+        )
+
+      scripts = [
+        [{:tool_call, id: "c0", name: "ask", arguments: %{}}, {:finish, :tool_calls}],
+        [{:text, ~s({"answer": "x"})}, {:finish, :stop}]
+      ]
+
+      engine = FakeFixtures.engine_with_scripts(scripts, tools: [ask_tool])
+
+      {:ok, stream} =
+        Chat.stream(engine, user_thread(),
+          structured_finalize: true,
+          response_format: json_schema_rf()
+        )
+
+      events = collect(stream)
+      ts = tags(events)
+
+      assert Enum.count(ts, &(&1 == :chat_completed)) == 1
+      {:chat_completed, %{result: %ChatResult{} = result}} = List.last(events)
+      assert result.halted_reason == :ask_user
+      assert result.metadata.structured_finalize.pass_1_halted == :ask_user
+    end
+  end
 end

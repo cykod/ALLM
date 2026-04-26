@@ -55,3 +55,7 @@
 [BUILD] sat 4/25 8pm - Build all 4 sub-phases of Phase 9 (telemetry, retry, capability, ModelRef) from steering/PHASE_9_DESIGN.md
 
 [DSGN] sat 4/25 11pm - Design Phase 10 OpenAI provider adapter
+
+[MILE] sat 4/25 11pm - Committed Phase 9: telemetry, retry, capability, ModelRef across 4 sub-phases (1095 tests, 0 failures, 94.79% coverage)
+
+[BUILD] sun 4/26 12am - Build all phases from steering/PHASE_10_DESIGN.md

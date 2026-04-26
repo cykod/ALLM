@@ -1,0 +1,19 @@
+: synthesized OpenAI Responses API streaming with reasoning summary deltas
+: per https://platform.openai.com/docs/api-reference/responses-streaming accessed 2026-04-26
+: response.reasoning_summary.delta interleaves before output_text deltas
+: hand-crafted; not recorded from the live API
+event: response.reasoning_summary.delta
+data: {"type":"response.reasoning_summary.delta","delta":"Thinking"}
+
+event: response.reasoning_summary.delta
+data: {"type":"response.reasoning_summary.delta","delta":" carefully."}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"Final "}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"answer."}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_stream_reason","status":"completed"}}
+

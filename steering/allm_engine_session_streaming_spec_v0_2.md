@@ -774,6 +774,15 @@ defmodule ALLM.Event do
 end
 ```
 
+> **Payload extension — Phase 10.6.** The `:message_completed` payload may
+> carry an optional `:metadata` (map) key — added Phase 10.6 to surface
+> terminal provider-specific completion metadata such as
+> `Response.metadata.reasoning.summary` from the OpenAI Responses-API
+> streaming path. `ALLM.StreamCollector.apply_event/2` merges the map into
+> `state.metadata` via `Map.merge/2`. Adapters that don't populate it omit
+> the key entirely; consumers that don't read it continue to match
+> non-exhaustively.
+
 ---
 
 ## 9. Request building

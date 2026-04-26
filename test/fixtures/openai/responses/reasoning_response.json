@@ -1,0 +1,22 @@
+{
+  "_comment": "Synthesized OpenAI Responses API body with reasoning. Schema per https://platform.openai.com/docs/api-reference/responses/object + https://platform.openai.com/docs/guides/reasoning accessed 2026-04-26. Will be replaced by a recorded fixture (gpt-5.5, reasoning_effort: medium) in Phase 10.5.",
+  "id": "resp_synth_reasoning",
+  "object": "response",
+  "created_at": 1714089600,
+  "model": "gpt-5.5",
+  "status": "completed",
+  "output_text": "Three primes: 2, 3, 5.",
+  "output": [],
+  "reasoning": {
+    "effort": "medium",
+    "summary": null
+  },
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 9,
+    "output_tokens_details": {
+      "reasoning_tokens": 128
+    },
+    "total_tokens": 21
+  }
+}

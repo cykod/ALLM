@@ -1,0 +1,33 @@
+{
+  "_comment": "Synthesized OpenAI Responses API body with two parallel function_call items. Hand-crafted for Bug #5 (Phase 10 retro): both tool calls share the same response object's output[] array with distinct call_ids; the decoder must surface both with IDs preserved.",
+  "id": "resp_synth_tool_parallel",
+  "object": "response",
+  "created_at": 1714089600,
+  "model": "gpt-5.4-nano",
+  "status": "completed",
+  "output_text": "",
+  "output": [
+    {
+      "type": "function_call",
+      "id": "fc_a",
+      "call_id": "call_a",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Boston\"}"
+    },
+    {
+      "type": "function_call",
+      "id": "fc_b",
+      "call_id": "call_b",
+      "name": "get_time",
+      "arguments": "{\"tz\":\"UTC\"}"
+    }
+  ],
+  "usage": {
+    "input_tokens": 18,
+    "output_tokens": 16,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 34
+  }
+}

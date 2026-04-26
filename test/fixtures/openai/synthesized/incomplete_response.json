@@ -1,0 +1,25 @@
+{
+  "_comment": "Synthesized OpenAI Responses API incomplete body. Per https://platform.openai.com/docs/api-reference/responses/object accessed 2026-04-26: status='incomplete' carries incomplete_details.reason; max_output_tokens is the canonical token-budget exhaustion case. Maps to Response.finish_reason: :length per Phase 10 design Decision #19.",
+  "id": "resp_synth_incomplete",
+  "object": "response",
+  "created_at": 1714089600,
+  "model": "gpt-5.5",
+  "status": "incomplete",
+  "incomplete_details": {
+    "reason": "max_output_tokens"
+  },
+  "output_text": "",
+  "output": [],
+  "reasoning": {
+    "effort": "medium",
+    "summary": null
+  },
+  "usage": {
+    "input_tokens": 8,
+    "output_tokens": 1024,
+    "output_tokens_details": {
+      "reasoning_tokens": 1024
+    },
+    "total_tokens": 1032
+  }
+}

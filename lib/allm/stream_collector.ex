@@ -273,17 +273,25 @@ defmodule ALLM.StreamCollector do
 
   def apply_event(
         %__MODULE__{} = state,
-        {:message_completed, %{message: %Message{} = msg, finish_reason: fr}}
+        {:message_completed, %{message: %Message{} = msg, finish_reason: fr} = payload}
       ) do
     %{
       state
       | last_message: msg,
-        finish_reason: fr || state.finish_reason
+        finish_reason: fr || state.finish_reason,
+        metadata: merge_message_completed_metadata(state.metadata, payload)
     }
   end
 
-  def apply_event(%__MODULE__{} = state, {:message_completed, %{message: %Message{} = msg}}) do
-    %{state | last_message: msg}
+  def apply_event(
+        %__MODULE__{} = state,
+        {:message_completed, %{message: %Message{} = msg} = payload}
+      ) do
+    %{
+      state
+      | last_message: msg,
+        metadata: merge_message_completed_metadata(state.metadata, payload)
+    }
   end
 
   def apply_event(%__MODULE__{} = state, {:raw_chunk, {:usage, map}}) when is_map(map) do
@@ -590,4 +598,15 @@ defmodule ALLM.StreamCollector do
       ask_user_opts: opts
     })
   end
+
+  # Phase 10.6 — `:message_completed` payloads may carry an optional
+  # `:metadata` map (currently used by `ALLM.Providers.OpenAI`'s Responses
+  # streaming path to surface accumulated `reasoning.summary` text). The
+  # adapter's contribution merges into `state.metadata` so it lands on
+  # `Response.metadata` post-collection. Adapter keys win on collision.
+  defp merge_message_completed_metadata(base, %{metadata: extra}) when is_map(extra) do
+    Map.merge(base, extra)
+  end
+
+  defp merge_message_completed_metadata(base, _payload), do: base
 end

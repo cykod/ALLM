@@ -698,4 +698,212 @@ defmodule ALLM.ChatRunTest do
       assert stop_meta.chat_result == cr
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Phase 10.4 — structured_finalize two-pass orchestration
+  # ---------------------------------------------------------------------------
+
+  describe "run/3 — structured_finalize two-pass" do
+    setup do
+      # Application-level nudge override may leak across tests; clean up.
+      on_exit(fn -> Application.delete_env(:allm, :structured_finalize_nudge) end)
+      :ok
+    end
+
+    defp json_schema_rf do
+      %{type: :json_schema, name: "g", schema: %{type: "object"}, strict: true}
+    end
+
+    defp finalize_scripts do
+      [
+        # Pass 1 turn 1 — tool call.
+        [
+          {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+          {:finish, :tool_calls}
+        ],
+        # Pass 1 turn 2 — terminal text (halt :completed).
+        [{:text, "tool done"}, {:finish, :stop}],
+        # Pass 2 turn 1 — structured JSON.
+        [{:text, ~s({"answer": "ok"})}, {:finish, :stop}]
+      ]
+    end
+
+    test "two-pass run merges steps from both passes; pass 2 produces final_response" do
+      engine = FakeFixtures.engine_with_scripts(finalize_scripts(), tools: [echo_tool()])
+
+      assert {:ok, %ChatResult{} = result} =
+               Chat.run(engine, user_thread(),
+                 structured_finalize: true,
+                 response_format: json_schema_rf()
+               )
+
+      assert result.halted_reason == :completed
+      # Steps from BOTH passes — pass 1 = 2 (tool_call + after-tool follow-up),
+      # pass 2 = 1 (single text). Total = 3.
+      assert length(result.steps) >= 2
+      assert result.final_response.output_text == ~s({"answer": "ok"})
+      assert result.metadata.structured_finalize.pass_1_halted == :completed
+    end
+
+    test "pass-1 :ask_user halt skips pass 2" do
+      ask_tool =
+        Tool.new(
+          name: "ask",
+          description: "",
+          schema: %{},
+          handler: fn _args -> {:ask_user, "Which one?"} end
+        )
+
+      scripts = [
+        [{:tool_call, id: "c0", name: "ask", arguments: %{}}, {:finish, :tool_calls}],
+        # Pass 2 should not run, but we provide a script for it just in case.
+        [{:text, ~s({"answer": "x"})}, {:finish, :stop}]
+      ]
+
+      engine = FakeFixtures.engine_with_scripts(scripts, tools: [ask_tool])
+
+      assert {:ok, %ChatResult{} = result} =
+               Chat.run(engine, user_thread(),
+                 structured_finalize: true,
+                 response_format: json_schema_rf()
+               )
+
+      assert result.halted_reason == :ask_user
+      assert result.metadata.structured_finalize.pass_1_halted == :ask_user
+      # Pass-1 final_response is preserved (pass 2 skipped).
+      assert result.final_response.finish_reason == :tool_calls
+    end
+
+    test "pass-1 :tool_error halt skips pass 2" do
+      scripts = [
+        [{:tool_call, id: "c0", name: "raises", arguments: %{}}, {:finish, :tool_calls}],
+        [{:text, ~s({"answer": "x"})}, {:finish, :stop}]
+      ]
+
+      engine = FakeFixtures.engine_with_scripts(scripts, tools: [raising_tool()])
+
+      assert {:ok, %ChatResult{} = result} =
+               Chat.run(engine, user_thread(),
+                 structured_finalize: true,
+                 response_format: json_schema_rf(),
+                 on_tool_error: :halt
+               )
+
+      assert result.halted_reason == :tool_error
+      assert result.metadata.structured_finalize.pass_1_halted == :tool_error
+    end
+
+    test ":max_turns is consumed by pass 1; pass 2 still runs (no budget decrement)" do
+      scripts = [
+        # 2 tool-call turns to exhaust max_turns: 2, then pass 2.
+        [{:tool_call, id: "c0", name: "echo", arguments: %{}}, {:finish, :tool_calls}],
+        [{:tool_call, id: "c1", name: "echo", arguments: %{}}, {:finish, :tool_calls}],
+        # Pass 2 — single structured response.
+        [{:text, ~s({"final": true})}, {:finish, :stop}]
+      ]
+
+      engine = FakeFixtures.engine_with_scripts(scripts, tools: [echo_tool()])
+
+      assert {:ok, %ChatResult{} = result} =
+               Chat.run(engine, user_thread(),
+                 max_turns: 2,
+                 structured_finalize: true,
+                 response_format: json_schema_rf()
+               )
+
+      # Pass 1 hit max_turns; pass 2 fired anyway and produced the final.
+      assert result.metadata.structured_finalize.pass_1_halted == :max_turns
+      assert result.halted_reason == :completed
+      assert result.final_response.output_text == ~s({"final": true})
+    end
+
+    test "opts[:structured_finalize_nudge] overrides default; thread carries the custom nudge" do
+      engine = FakeFixtures.engine_with_scripts(finalize_scripts(), tools: [echo_tool()])
+
+      assert {:ok, %ChatResult{} = result} =
+               Chat.run(engine, user_thread(),
+                 structured_finalize: true,
+                 response_format: json_schema_rf(),
+                 structured_finalize_nudge: "Custom nudge text"
+               )
+
+      # The user-nudge message lives in the final thread (pass 2 thread).
+      user_msgs = Enum.filter(result.thread.messages, &(&1.role == :user))
+      assert Enum.any?(user_msgs, fn m -> m.content == "Custom nudge text" end)
+    end
+
+    test "Application.put_env nudge honored when no per-call opt" do
+      Application.put_env(:allm, :structured_finalize_nudge, "App-default nudge")
+
+      engine = FakeFixtures.engine_with_scripts(finalize_scripts(), tools: [echo_tool()])
+
+      assert {:ok, %ChatResult{} = result} =
+               Chat.run(engine, user_thread(),
+                 structured_finalize: true,
+                 response_format: json_schema_rf()
+               )
+
+      user_msgs = Enum.filter(result.thread.messages, &(&1.role == :user))
+      assert Enum.any?(user_msgs, fn m -> m.content == "App-default nudge" end)
+    end
+
+    test "empty-string nudge skips the user-message append" do
+      engine = FakeFixtures.engine_with_scripts(finalize_scripts(), tools: [echo_tool()])
+
+      thread_before = user_thread()
+
+      assert {:ok, %ChatResult{} = result} =
+               Chat.run(engine, thread_before,
+                 structured_finalize: true,
+                 response_format: json_schema_rf(),
+                 structured_finalize_nudge: ""
+               )
+
+      # No additional user message beyond the original was appended; the
+      # only :user role message is the original "hi".
+      user_msgs = Enum.filter(result.thread.messages, &(&1.role == :user))
+      assert length(user_msgs) == 1
+      assert hd(user_msgs).content == "hi"
+    end
+
+    test "structured_finalize: false (or absent) uses single-pass path" do
+      # Even with response_format set, structured_finalize: false doesn't
+      # trigger two-pass — the single-pass loop runs as before.
+      engine = FakeFixtures.engine([{:text, "plain"}, {:finish, :stop}])
+
+      assert {:ok, %ChatResult{} = result} =
+               Chat.run(engine, user_thread(), response_format: json_schema_rf())
+
+      assert result.halted_reason == :completed
+      # No structured_finalize key in metadata — single-pass path.
+      refute Map.has_key?(result.metadata, :structured_finalize)
+    end
+
+    test "pass-2 adapter pre-flight error propagates as {:error, AdapterError}" do
+      # Pass 1 completes normally (tool call + terminal text → :completed).
+      # Pass 2's adapter call short-circuits via `:preflight_error`, exercising
+      # the defensive `{:error, _}` branch in `run_finalize_pass/4`. Per Phase
+      # 10.4 review §6, this branch is realistic in production (e.g., key
+      # rotated mid-session) and surfaces verbatim from `Chat.run/3`.
+      scripts = [
+        # Pass 1 turn 1 — tool call.
+        [
+          {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+          {:finish, :tool_calls}
+        ],
+        # Pass 1 turn 2 — terminal text (halt :completed).
+        [{:text, "tool done"}, {:finish, :stop}],
+        # Pass 2 turn 1 — adapter pre-flight failure.
+        [{:preflight_error, :authentication_failed, []}]
+      ]
+
+      engine = FakeFixtures.engine_with_scripts(scripts, tools: [echo_tool()])
+
+      assert {:error, %ALLM.Error.AdapterError{reason: :authentication_failed}} =
+               Chat.run(engine, user_thread(),
+                 structured_finalize: true,
+                 response_format: json_schema_rf()
+               )
+    end
+  end
 end

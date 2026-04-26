@@ -1,0 +1,18 @@
+{
+  "_comment": "Synthesized OpenAI Responses API happy-path body. Schema per https://platform.openai.com/docs/api-reference/responses/object accessed 2026-04-26. Will be replaced by a recorded fixture (gpt-5.5, reasoning_effort: minimal) in Phase 10.5.",
+  "id": "resp_synth_happy",
+  "object": "response",
+  "created_at": 1714089600,
+  "model": "gpt-5.5",
+  "status": "completed",
+  "output_text": "hello",
+  "output": [],
+  "usage": {
+    "input_tokens": 9,
+    "output_tokens": 1,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 10
+  }
+}

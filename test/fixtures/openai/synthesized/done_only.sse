@@ -1,0 +1,4 @@
+: synthesized minimal OpenAI Chat Completions stream
+: just a [DONE] sentinel — verifies the synthetic :message_completed path
+data: [DONE]
+

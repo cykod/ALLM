@@ -1,0 +1,12 @@
+: synthesized OpenAI Chat Completions streaming with mid-stream 5xx
+: per https://platform.openai.com/docs/api-reference/chat-streaming
+: 3 happy text chunks; the test stub injects a terminal {:status, 503} frame
+: AFTER these data chunks rather than encoding the 5xx in SSE itself
+: (OpenAI's real wire shape signals mid-stream 5xx by closing the connection
+: with the appropriate status; we model that with FinchStub's :terminal_status frame)
+data: {"id":"chatcmpl-err-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-err-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"part"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-err-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"ial"},"finish_reason":null}]}
+

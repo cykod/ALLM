@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized 401 auth failure body. Modeled after https://platform.openai.com/docs/guides/error-codes — invalid_api_key. Modeled 2026-04-26.",
+  "error": {
+    "message": "Incorrect API key provided: sk-bad. You can find your API key at https://platform.openai.com/account/api-keys.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "invalid_api_key"
+  }
+}

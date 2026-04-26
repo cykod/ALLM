@@ -1,0 +1,26 @@
+{
+  "_comment": "Synthesized OpenAI Responses API single function_call body. Schema per https://platform.openai.com/docs/api-reference/responses/object accessed 2026-04-26. Hand-crafted for Bug #5 (Phase 10 retro): tool calls land in output[] as items with type:function_call carrying call_id, name, and a JSON-encoded arguments string.",
+  "id": "resp_synth_tool_1",
+  "object": "response",
+  "created_at": 1714089600,
+  "model": "gpt-5.4-nano",
+  "status": "completed",
+  "output_text": "",
+  "output": [
+    {
+      "type": "function_call",
+      "id": "fc_xxx",
+      "call_id": "call_yyy",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Boston\"}"
+    }
+  ],
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 8,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 20
+  }
+}

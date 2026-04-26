@@ -1,0 +1,8 @@
+: synthesized malformed-data SSE — happy chunk then unparseable JSON
+: per https://platform.openai.com/docs/api-reference/chat-streaming
+data: {"id":"chatcmpl-mf-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-mf-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"hi "},"finish_reason":null}]}
+
+data: this is not json
+

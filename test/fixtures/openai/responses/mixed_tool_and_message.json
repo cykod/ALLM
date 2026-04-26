@@ -1,0 +1,34 @@
+{
+  "_comment": "Synthesized OpenAI Responses API body mixing a function_call item and a message item in output[]. Hand-crafted for Bug #5 (Phase 10 retro): the decoder must surface tool_calls AND keep output_text intact when both shapes coexist.",
+  "id": "resp_synth_tool_mixed",
+  "object": "response",
+  "created_at": 1714089600,
+  "model": "gpt-5.4-nano",
+  "status": "completed",
+  "output_text": "calling weather",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_1",
+      "role": "assistant",
+      "content": [
+        {"type": "output_text", "text": "calling weather"}
+      ]
+    },
+    {
+      "type": "function_call",
+      "id": "fc_mix",
+      "call_id": "call_mix",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Boston\"}"
+    }
+  ],
+  "usage": {
+    "input_tokens": 9,
+    "output_tokens": 12,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 21
+  }
+}

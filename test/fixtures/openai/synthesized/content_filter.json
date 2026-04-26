@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized 400 content_filter body. Modeled after OpenAI policy block — type contains 'content_filter'. Modeled 2026-04-26.",
+  "error": {
+    "message": "Your input was flagged by the content filter policy.",
+    "type": "content_filter",
+    "param": null,
+    "code": "content_policy_violation"
+  }
+}

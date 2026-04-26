@@ -1,0 +1,33 @@
+{
+  "_comment": "Hand-synthesized Chat Completions single tool-call body. Schema per https://platform.openai.com/docs/api-reference/chat/object accessed 2026-04-26.",
+  "id": "chatcmpl-synth-tool",
+  "object": "chat.completion",
+  "created": 1714089601,
+  "model": "gpt-4.1-mini",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_abc123",
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "arguments": "{\"city\":\"Boston\"}"
+            }
+          }
+        ]
+      },
+      "logprobs": null,
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 42,
+    "completion_tokens": 18,
+    "total_tokens": 60
+  }
+}

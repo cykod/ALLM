@@ -1,3 +1,29 @@
+## [FEAT] Phase 10: OpenAI provider (both endpoints) + BYOK fix
+*Sunday, April 26th at 1pm*
+Ships ALLM.Providers.OpenAI implementing both ALLM.Adapter and
+ALLM.StreamAdapter against /v1/chat/completions and /v1/responses,
+including endpoint dispatch (gpt-5* and o-series → Responses, gpt-4*
+→ Chat Completions), reasoning controls (reasoning_effort,
+reasoning_summary, verbosity), structured_finalize two-pass
+orchestration in ALLM.Chat, ALLM.Capability.preflight contract
+widened to optionally rewrite the request, ALLM.Providers.Support.SSE
+line-buffered decoder shared with future Anthropic adapter, and
+default ALLM.Finch HTTP/1 pool started by ALLM.Application. Adds 9
+runnable example scripts under examples/openai/ targeting
+gpt-5.4-nano with a run_all.exs orchestrator validated live against
+the real provider — the BLOCKING /review gate caught and led to
+fixes for five wire-shape bugs (tool envelope per endpoint,
+reasoning-opts endpoint override, Responses input encoder for tool
+round-trips, Responses output[] tool-call decoder, streaming
+function_call SSE handlers). Also fixes a per-call api_key leak in
+StreamRunner.build_dispatch_opts/2 so SaaS BYOK works end-to-end via
+ALLM.generate(engine, req, api_key: tenant_key), and stops Chat from
+forwarding orchestration opts (:mode, :max_turns, :halt_when) into
+the runner. 1272 tests / 0 failures across 6 sub-phases (10.1
+through 10.6).
+
+---
+
 ## [FEAT] Phase 9: telemetry, retry, capability, ModelRef
 *Saturday, April 25th at 11pm*
 Ships Phase 9 in four sub-phases: ALLM.Telemetry wraps every Layer C entry 

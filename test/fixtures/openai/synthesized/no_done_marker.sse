@@ -1,0 +1,8 @@
+: synthesized stream that omits the [DONE] sentinel
+: tests the Finch-:done synthetic-completion path
+: (Finch's :done message arrives after the data chunks; the adapter
+: synthesizes :message_completed because the SSE side never did)
+data: {"id":"chatcmpl-nd-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-nd-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}
+

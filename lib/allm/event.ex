@@ -24,6 +24,15 @@ defmodule ALLM.Event do
   constructor is preserved and now produces a payload with
   `:finish_reason => nil`; `message_completed/2` threads the caller-supplied
   reason into the payload.
+
+  Phase 10.6 additively extends the `:message_completed` payload with an
+  optional `:metadata` map key. Adapters that surface terminal
+  provider-specific completion metadata (e.g., the OpenAI Responses-API
+  reasoning summary) populate this key; `ALLM.StreamCollector.apply_event/2`
+  merges it into `state.metadata`, so the value lands on
+  `Response.metadata` after collection. The key is OPTIONAL — adapters
+  and existing emitters that don't populate it omit the key entirely, and
+  the StreamCollector treats absence as a no-op merge.
   """
 
   alias ALLM.{ChatResult, Message, Response, Thread}
@@ -54,7 +63,11 @@ defmodule ALLM.Event do
                optional(:content) => String.t()
              }}
           | {:message_completed,
-             %{message: Message.t(), finish_reason: Response.finish_reason() | nil}}
+             %{
+               required(:message) => Message.t(),
+               required(:finish_reason) => Response.finish_reason() | nil,
+               optional(:metadata) => map()
+             }}
           | {:step_completed,
              %{
                response: Response.t(),
@@ -300,6 +313,11 @@ defmodule ALLM.Event do
   carries `:finish_reason => nil`; use `message_completed/2` to populate a
   specific finish reason. See "Payload extensions" in the module doc.
 
+  The payload may also carry an optional `:metadata` map that
+  `ALLM.StreamCollector.apply_event/2` merges into `state.metadata` —
+  see `message_completed/3` and "Payload extensions" in the module doc.
+  This 1-arity helper omits the key (no provider metadata to surface).
+
   ## Examples
 
       iex> msg = %ALLM.Message{role: :assistant, content: "ok"}
@@ -318,6 +336,10 @@ defmodule ALLM.Event do
   lets adapters preserve provider-specific reasons downstream as
   `Response.raw_finish_reason`.
 
+  See `message_completed/3` to additionally attach an optional `:metadata`
+  map to the payload (folded onto `Response.metadata` by
+  `ALLM.StreamCollector`). This 2-arity helper omits the key.
+
   ## Examples
 
       iex> msg = %ALLM.Message{role: :assistant, content: "ok"}
@@ -332,6 +354,44 @@ defmodule ALLM.Event do
   def message_completed(%Message{} = message, finish_reason)
       when is_atom(finish_reason) or is_nil(finish_reason),
       do: {:message_completed, %{message: message, finish_reason: finish_reason}}
+
+  @doc """
+  Build a `:message_completed` event with the finalized message, a
+  finish-reason atom (or `nil`), and an optional `:metadata` map carrying
+  terminal provider-specific completion data (Phase 10.6).
+
+  When `metadata` is non-empty, `ALLM.StreamCollector.apply_event/2` merges
+  it into `state.metadata` via `Map.merge/2`, so the values land on
+  `Response.metadata` after collection. When the map is empty, the key is
+  omitted from the payload to keep the event payload identical to
+  `message_completed/2` (no observable difference for downstream
+  consumers).
+
+  Worked example: the OpenAI Responses-API streaming adapter accumulates
+  reasoning-summary delta chunks into a string and emits
+  `%{reasoning: %{summary: "..."}}` here; the value surfaces as
+  `Response.metadata.reasoning.summary` after stream collection.
+
+  ## Examples
+
+      iex> msg = %ALLM.Message{role: :assistant, content: "Final answer."}
+      iex> ALLM.Event.message_completed(msg, :stop, %{reasoning: %{summary: "Thinking"}})
+      {:message_completed,
+        %{message: msg, finish_reason: :stop, metadata: %{reasoning: %{summary: "Thinking"}}}}
+
+      iex> msg = %ALLM.Message{role: :assistant, content: "ok"}
+      iex> ALLM.Event.message_completed(msg, :stop, %{}) == ALLM.Event.message_completed(msg, :stop)
+      true
+  """
+  @spec message_completed(Message.t(), Response.finish_reason() | nil, map()) :: t()
+  def message_completed(%Message{} = message, finish_reason, metadata)
+      when (is_atom(finish_reason) or is_nil(finish_reason)) and is_map(metadata) do
+    if map_size(metadata) == 0 do
+      {:message_completed, %{message: message, finish_reason: finish_reason}}
+    else
+      {:message_completed, %{message: message, finish_reason: finish_reason, metadata: metadata}}
+    end
+  end
 
   @doc """
   Build a `:step_completed` event with the response and the updated thread.

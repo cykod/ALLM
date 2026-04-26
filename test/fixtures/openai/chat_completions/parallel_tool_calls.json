@@ -1,0 +1,41 @@
+{
+  "_comment": "Hand-synthesized Chat Completions parallel tool-calls body. Schema per https://platform.openai.com/docs/api-reference/chat/object accessed 2026-04-26.",
+  "id": "chatcmpl-synth-parallel",
+  "object": "chat.completion",
+  "created": 1714089602,
+  "model": "gpt-4.1-mini",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_a1",
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "arguments": "{\"city\":\"Boston\"}"
+            }
+          },
+          {
+            "id": "call_b2",
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "arguments": "{\"city\":\"Seattle\"}"
+            }
+          }
+        ]
+      },
+      "logprobs": null,
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 50,
+    "completion_tokens": 35,
+    "total_tokens": 85
+  }
+}

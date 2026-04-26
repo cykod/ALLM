@@ -41,11 +41,20 @@ defmodule ALLM.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:stream_data, "~> 1.1", only: [:test]},
+      # Required by `Req.Test.stub/2` for the OpenAI wire-test Plug shape
+      # (Phase 10.2). Test-only; not in published Hex package.
+      {:plug, "~> 1.16", only: [:test]},
       # Test-only path dep: certifies the two defaults
       # (ALLM.ToolExecutor.Default, ALLM.ToolResultEncoder.JSON) against
       # the shipped conformance harness. See conformance/README.md for
       # the release checklist (path → "~> 0.2" rewrite at publish time).
-      {:allm_conformance, path: "conformance", only: :test}
+      {:allm_conformance, path: "conformance", only: :test},
+      # Dev-only: example scripts under `examples/openai/*.exs` use this
+      # to load `OPENAI_API_KEY` from a project-root `.env` file. NOT
+      # shipped in the published package — `examples/` is excluded via
+      # `package.files` and `only: [:dev]` keeps the dep out of the
+      # published `mix.exs` deps list.
+      {:env_loader, "~> 0.1", only: [:dev]}
     ]
   end
 

@@ -201,10 +201,18 @@ defmodule ALLM.Chat do
     with {:ok, thread} <- normalise_thread(thread_or_messages),
          :ok <- Validate.thread(thread),
          request <- build_request(thread, engine, opts, stream: false),
-         {:ok, response} <- Runner.run(engine, request, opts) do
+         {:ok, response} <- Runner.run(engine, request, drop_orchestration_opts(opts)) do
       do_step(engine, thread, response, opts)
     end
   end
+
+  # Chat consumes the orchestration opts (`:mode`, `:max_turns`, `:halt_when`)
+  # itself and must not forward them to Runner / StreamRunner. Without this
+  # drop, StreamRunner's defensive backstop logs a debug "stripped
+  # orchestration opt" line on every step (visible to anyone running the
+  # examples or live code at debug log level). Keep the keys in sync with
+  # `ALLM.StreamRunner.@orchestration_opts`.
+  defp drop_orchestration_opts(opts), do: Keyword.drop(opts, [:mode, :max_turns, :halt_when])
 
   defp step_stop_extras({:ok, %StepResult{} = sr}), do: %{step_result: sr}
   defp step_stop_extras({:error, _}), do: %{step_result: nil}
@@ -294,7 +302,7 @@ defmodule ALLM.Chat do
     with {:ok, thread} <- normalise_thread(thread_or_messages),
          :ok <- Validate.thread(thread),
          request <- build_request(thread, engine, opts, stream: true),
-         {:ok, adapter_stream} <- StreamRunner.run(engine, request, opts) do
+         {:ok, adapter_stream} <- StreamRunner.run(engine, request, drop_orchestration_opts(opts)) do
       {:ok, build_step_stream(engine, thread, adapter_stream, opts)}
     end
   end
@@ -335,6 +343,32 @@ defmodule ALLM.Chat do
   Adapter pre-flight errors surface as `{:error, struct}` from the FIRST
   step's `step/3` call. Mid-loop adapter errors fold into the step's
   response and surface as `halted_reason: :error` on the `ChatResult`.
+
+  ## structured_finalize semantics (Phase 10.4 — see spec §5.4)
+
+  When called with `opts[:structured_finalize] == true` AND
+  `opts[:response_format] != nil`, `run/3` runs a two-pass orchestration
+  per design Decision #7:
+
+    * **Pass 1** runs the tool loop with `response_format` cleared
+      (tools preserved). Halts naturally per the table above.
+    * **Pass 2** fires only when pass 1 halted on
+      `:completed | :max_turns | :halt_when`. Other halts skip pass 2;
+      the pass-1 result is returned with
+      `metadata.structured_finalize.pass_1_halted == <reason>`.
+    * Pass 2 issues a single tools-disabled adapter call carrying the
+      original `response_format`, after appending a user-nudge message
+      to the thread (override via `opts[:structured_finalize_nudge]` >
+      `Application.get_env(:allm, :structured_finalize_nudge)` >
+      library default `"Now provide your final structured response."`;
+      empty-string nudge skips the append).
+    * The merged `%ChatResult{}` carries `:steps` from BOTH passes,
+      `:final_response` from pass 2, `:halted_reason` from pass 2,
+      `:thread` from pass 2, and
+      `metadata.structured_finalize.pass_1_halted`.
+
+  Per Invariant #4: pass 1 consumes the `max_turns` budget; pass 2's
+  single call does NOT decrement it.
 
   ## Examples
 
@@ -378,9 +412,112 @@ defmodule ALLM.Chat do
     }
 
     Telemetry.span(:chat, start_metadata, fn ->
-      result = do_run_call(engine, thread_or_messages, opts, max_turns)
+      result =
+        if structured_finalize_required?(opts) do
+          run_two_pass(engine, thread_or_messages, opts, max_turns)
+        else
+          do_run_call(engine, thread_or_messages, opts, max_turns)
+        end
+
       {result, chat_stop_extras(result)}
     end)
+  end
+
+  # Phase 10.4 — fires when both `structured_finalize: true` AND
+  # `response_format: <non-nil>` are set on the opts. Per spec §5.4 +
+  # design Decision #7 / Invariant #1.
+  defp structured_finalize_required?(opts) do
+    Keyword.get(opts, :structured_finalize) == true and
+      not is_nil(Keyword.get(opts, :response_format))
+  end
+
+  # Two-pass orchestration: pass 1 runs the tool loop with
+  # `response_format: nil` (tools preserved); pass 2 issues a single
+  # adapter call with `tools: [], response_format: original, structured_finalize: false`.
+  # Pass 2 only fires when pass 1 halted on `:completed | :max_turns | :halt_when`.
+  defp run_two_pass(%Engine{} = engine, thread_or_messages, opts, max_turns) do
+    response_format = Keyword.get(opts, :response_format)
+
+    pass_1_opts =
+      opts
+      |> Keyword.put(:structured_finalize, false)
+      |> Keyword.put(:response_format, nil)
+
+    case do_run_call(engine, thread_or_messages, pass_1_opts, max_turns) do
+      {:ok, %ChatResult{} = pass_1_result} ->
+        if pass_1_result.halted_reason in [:completed, :max_turns, :halt_when] do
+          run_finalize_pass(engine, pass_1_result, response_format, opts)
+        else
+          # :ask_user, :tool_error, or any other halt — skip pass 2.
+          # Surface the pass-1 result with an empty pass_1_halted record
+          # in metadata so callers can introspect.
+          {:ok,
+           %ChatResult{
+             pass_1_result
+             | metadata:
+                 Map.put(pass_1_result.metadata, :structured_finalize, %{
+                   pass_1_halted: pass_1_result.halted_reason
+                 })
+           }}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # Pass 2 — tools-disabled single adapter call producing the structured
+  # final response. Resolves the user-nudge per Decision #8 (per-call opt
+  # > app config > library default; empty-string nudge skips append).
+  defp run_finalize_pass(%Engine{} = engine, %ChatResult{} = pass_1_result, response_format, opts) do
+    nudge =
+      Keyword.get(opts, :structured_finalize_nudge) ||
+        Application.get_env(:allm, :structured_finalize_nudge) ||
+        "Now provide your final structured response."
+
+    pass_2_thread =
+      case nudge do
+        "" -> pass_1_result.thread
+        _ -> Thread.add_message(pass_1_result.thread, %Message{role: :user, content: nudge})
+      end
+
+    # Pass 2 engine has zero tools; the adapter receives `tools: []` so
+    # Engine.resolve_tools/2 returns []. Per Invariant #4: pass 2 does NOT
+    # decrement max_turns budget; budget only governs the loop.
+    finalize_engine = %{engine | tools: []}
+
+    pass_2_opts =
+      opts
+      |> Keyword.put(:structured_finalize, false)
+      |> Keyword.put(:response_format, response_format)
+      |> Keyword.put(:max_turns, 1)
+
+    case do_run_call(finalize_engine, pass_2_thread, pass_2_opts, 1) do
+      {:ok, %ChatResult{} = pass_2_result} ->
+        merged = merge_pass_results(pass_1_result, pass_2_result)
+        {:ok, merged}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # Merge per Invariant #6: steps from BOTH passes; final_response /
+  # halted_reason / thread from pass 2; metadata carries the
+  # structured_finalize observability key.
+  defp merge_pass_results(%ChatResult{} = pass_1, %ChatResult{} = pass_2) do
+    %ChatResult{
+      thread: pass_2.thread,
+      final_response: pass_2.final_response,
+      steps: pass_1.steps ++ pass_2.steps,
+      halted_reason: pass_2.halted_reason,
+      pending_question: pass_2.pending_question,
+      pending_tool_call_id: pass_2.pending_tool_call_id,
+      metadata:
+        Map.put(pass_2.metadata, :structured_finalize, %{
+          pass_1_halted: pass_1.halted_reason
+        })
+    }
   end
 
   defp do_run_call(%Engine{} = engine, thread_or_messages, opts, max_turns) do
@@ -494,11 +631,173 @@ defmodule ALLM.Chat do
     }
 
     Telemetry.span(:chat, start_metadata, fn ->
-      result = do_stream_call(engine, thread_or_messages, opts, max_turns)
+      result =
+        if structured_finalize_required?(opts) do
+          stream_two_pass(engine, thread_or_messages, opts, max_turns)
+        else
+          do_stream_call(engine, thread_or_messages, opts, max_turns)
+        end
+
       # Lazy enumerable — see Phase 9.1 design line 490.
       {result, %{chat_result: nil}}
     end)
   end
+
+  # Phase 10.4 — stream-equivalent two-pass orchestration. Runs pass 1 as
+  # a normal stream, intercepts the terminal `:chat_completed` event to
+  # decide whether to start pass 2 (per the same halt-reason rule as
+  # `run_two_pass/4`), and emits pass 2's events transparently.
+  # Per Invariant #7: exactly one `:chat_completed` event reaches the
+  # consumer (pass 1's is suppressed; only pass 2's bubbles out).
+  defp stream_two_pass(%Engine{} = engine, thread_or_messages, opts, max_turns) do
+    response_format = Keyword.get(opts, :response_format)
+
+    pass_1_opts =
+      opts
+      |> Keyword.put(:structured_finalize, false)
+      |> Keyword.put(:response_format, nil)
+
+    case do_stream_call(engine, thread_or_messages, pass_1_opts, max_turns) do
+      {:ok, pass_1_stream} ->
+        {:ok, build_two_pass_stream(engine, pass_1_stream, response_format, opts)}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp build_two_pass_stream(%Engine{} = engine, pass_1_stream, response_format, opts) do
+    Stream.resource(
+      fn ->
+        {:pass_1,
+         %{
+           cont: seed_step_cont(pass_1_stream),
+           engine: engine,
+           opts: opts,
+           response_format: response_format
+         }}
+      end,
+      &two_pass_next/1,
+      &two_pass_after/1
+    )
+  end
+
+  defp two_pass_next({:pass_1, %{cont: {:suspended, _last, cont}} = data}) do
+    case cont.({:cont, nil}) do
+      {:suspended, {:chat_completed, %{result: %ChatResult{} = pass_1_result}}, _next_cont} ->
+        # Suppress pass-1's :chat_completed; decide pass 2.
+        if pass_1_result.halted_reason in [:completed, :max_turns, :halt_when] do
+          start_pass_2(data, pass_1_result)
+        else
+          # Skip pass 2 — emit a synthesized :chat_completed reflecting
+          # the pass_1 halt augmented with structured_finalize metadata.
+          augmented = %ChatResult{
+            pass_1_result
+            | metadata:
+                Map.put(pass_1_result.metadata, :structured_finalize, %{
+                  pass_1_halted: pass_1_result.halted_reason
+                })
+          }
+
+          {[Event.chat_completed(augmented)], {:done, nil}}
+        end
+
+      {:suspended, event, next_cont} ->
+        new_data = %{data | cont: {:suspended, event, next_cont}}
+        {[event], {:pass_1, new_data}}
+
+      {_done_or_halted, _acc} ->
+        # Pass 1 stream exhausted without :chat_completed (consumer halt
+        # upstream) — degenerate; halt our outer stream too.
+        {:halt, {:done, nil}}
+    end
+  end
+
+  defp two_pass_next(
+         {:pass_2, %{cont: {:suspended, _last, cont}, pass_1_result: pass_1_result} = data}
+       ) do
+    case cont.({:cont, nil}) do
+      {:suspended, {:chat_completed, %{result: %ChatResult{} = pass_2_result}}, _next_cont} ->
+        merged = merge_pass_results(pass_1_result, pass_2_result)
+        {[Event.chat_completed(merged)], {:done, nil}}
+
+      {:suspended, event, next_cont} ->
+        new_data = %{data | cont: {:suspended, event, next_cont}}
+        {[event], {:pass_2, new_data}}
+
+      {_done_or_halted, _acc} ->
+        {:halt, {:done, nil}}
+    end
+  end
+
+  defp two_pass_next({:done, _}), do: {:halt, {:done, nil}}
+
+  defp start_pass_2(
+         %{engine: engine, opts: opts, response_format: response_format},
+         %ChatResult{} = pass_1_result
+       ) do
+    nudge =
+      Keyword.get(opts, :structured_finalize_nudge) ||
+        Application.get_env(:allm, :structured_finalize_nudge) ||
+        "Now provide your final structured response."
+
+    pass_2_thread =
+      case nudge do
+        "" -> pass_1_result.thread
+        _ -> Thread.add_message(pass_1_result.thread, %Message{role: :user, content: nudge})
+      end
+
+    finalize_engine = %{engine | tools: []}
+
+    pass_2_opts =
+      opts
+      |> Keyword.put(:structured_finalize, false)
+      |> Keyword.put(:response_format, response_format)
+      |> Keyword.put(:max_turns, 1)
+
+    case do_stream_call(finalize_engine, pass_2_thread, pass_2_opts, 1) do
+      {:ok, pass_2_stream} ->
+        new_data = %{
+          cont: seed_step_cont(pass_2_stream),
+          pass_1_result: pass_1_result
+        }
+
+        # No events to emit yet — recurse to drain pass-2's first event.
+        two_pass_next({:pass_2, new_data})
+
+      {:error, struct} ->
+        # Pass 2 pre-flight failed; surface a synthesized :chat_completed
+        # carrying the pass_1 result augmented with the error metadata.
+        augmented = %ChatResult{
+          pass_1_result
+          | metadata:
+              Map.merge(pass_1_result.metadata, %{
+                structured_finalize: %{
+                  pass_1_halted: pass_1_result.halted_reason,
+                  pass_2_error: struct
+                }
+              })
+        }
+
+        {[Event.chat_completed(augmented)], {:done, nil}}
+    end
+  end
+
+  defp two_pass_after({:pass_1, %{cont: {:suspended, _last, cont}}}) do
+    _ = cont.({:halt, :consumer_halt})
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp two_pass_after({:pass_2, %{cont: {:suspended, _last, cont}}}) do
+    _ = cont.({:halt, :consumer_halt})
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp two_pass_after({:done, _}), do: :ok
 
   defp do_stream_call(%Engine{} = engine, thread_or_messages, opts, max_turns) do
     with {:ok, thread} <- normalise_thread(thread_or_messages),
@@ -1396,10 +1695,25 @@ defmodule ALLM.Chat do
   # caller invokes, not on this field. We still set it truthfully so that
   # serialized `%Request{}` records round-trip with intent intact.
   defp build_request(%Thread{messages: msgs}, %Engine{} = engine, opts, flags) do
-    Request.new(msgs,
+    base = [
       tools: Engine.resolve_tools(engine, opts),
       stream: Keyword.get(flags, :stream, false)
-    )
+    ]
+
+    extra =
+      [
+        response_format: Keyword.get(opts, :response_format),
+        tool_choice: Keyword.get(opts, :tool_choice)
+      ]
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+    structured =
+      case Keyword.get(opts, :structured_finalize) do
+        true -> [structured_finalize: true]
+        _ -> []
+      end
+
+    Request.new(msgs, base ++ extra ++ structured)
   end
 
   # Phase 6 design Non-obvious Decision #10: construct the assistant

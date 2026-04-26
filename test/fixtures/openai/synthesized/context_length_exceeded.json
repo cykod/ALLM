@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized 400 context_length_exceeded body. Modeled after https://platform.openai.com/docs/guides/error-codes — context_length_exceeded code marker. Modeled 2026-04-26.",
+  "error": {
+    "message": "This model's maximum context length is 8192 tokens. However, your messages resulted in 8200 tokens.",
+    "type": "invalid_request_error",
+    "param": "messages",
+    "code": "context_length_exceeded"
+  }
+}

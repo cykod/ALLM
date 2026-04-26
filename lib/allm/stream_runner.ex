@@ -117,14 +117,32 @@ defmodule ALLM.StreamRunner do
          :ok <- check_stream_adapter(engine.adapter),
          :ok <- Validate.request(request),
          resolved_request <- resolve_request_model(engine, request, opts),
-         :ok <- Capability.preflight(resolved_request.model, request) do
+         {:ok, request} <-
+           normalize_preflight(
+             Capability.preflight(resolved_request.model, request, engine.adapter),
+             request
+           ) do
       # Thread the resolved model into opts so downstream consumers (the
       # Runner's cost-population step, Chat's stream_collector finalize)
       # can call `Capability.populate_costs/2` without re-resolving.
       opts = Keyword.put(opts, :resolved_model, resolved_request.model)
+      # Pre-flight may have rewritten the request (Phase 10.4 —
+      # `structured_finalize: true` auto-set); merge the rewrite back into
+      # the resolved-request so dispatch sees both the rewrite AND the
+      # late-resolved model.
+      resolved_request = %{resolved_request | structured_finalize: request.structured_finalize}
       dispatch(engine, resolved_request, opts)
     end
   end
+
+  # Phase 10.4 — collapse the widened `Capability.preflight/3` return into
+  # a single `{:ok, request}` shape the `with` chain can rebind on. The
+  # original request flows through when pre-flight returns `:ok`; the
+  # rewritten request flows through when pre-flight returns
+  # `{:ok, %Request{}}`. Errors pass through unchanged.
+  defp normalize_preflight(:ok, %Request{} = request), do: {:ok, request}
+  defp normalize_preflight({:ok, %Request{} = request}, _orig), do: {:ok, request}
+  defp normalize_preflight({:error, _} = err, _orig), do: err
 
   # ---------------------------------------------------------------------------
   # Validation chain
@@ -214,6 +232,7 @@ defmodule ALLM.StreamRunner do
     params_kw
     |> Keyword.put(:adapter_opts, adapter_opts)
     |> maybe_put_request_id(opts)
+    |> maybe_put_api_key(opts)
     |> Keyword.put(:retry, engine.retry)
   end
 
@@ -221,6 +240,22 @@ defmodule ALLM.StreamRunner do
     case Keyword.get(opts, :request_id) do
       nil -> kw
       id -> Keyword.put(kw, :request_id, id)
+    end
+  end
+
+  # Forward a per-call `:api_key` opt to the adapter so SaaS BYOK callers
+  # can pass tenant-scoped keys via `ALLM.generate(engine, req, api_key: ...)`.
+  # The engine-field deny-list in `Engine.resolve_params/2` strips
+  # `:api_key` from params (defensively, to keep keys out of the params
+  # map); we re-inject it here as a top-level dispatch_opts key so
+  # `ALLM.Keys.fetch!/2`'s level-1 `opts[:api_key]` lookup resolves it
+  # before falling back to env var / config / store. Mirrors
+  # `Keys.wrap/1`'s nil/empty-string defensive shape.
+  defp maybe_put_api_key(kw, opts) do
+    case Keyword.get(opts, :api_key) do
+      nil -> kw
+      "" -> kw
+      key when is_binary(key) -> Keyword.put(kw, :api_key, key)
     end
   end
 

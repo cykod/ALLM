@@ -1,0 +1,30 @@
+: synthesized OpenAI Responses API streaming wire shape for parallel function calls
+: per https://platform.openai.com/docs/api-reference/responses-streaming accessed 2026-04-26
+: hand-crafted for Bug #5 (Phase 10 retro): two distinct item_ids interleave in the delta stream
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"get_weather","arguments":""}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"get_time","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":0,"delta":"{\"city\":"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_b","output_index":1,"delta":"{\"tz\":"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":0,"delta":"\"Boston\"}"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_b","output_index":1,"delta":"\"UTC\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"get_weather","arguments":"{\"city\":\"Boston\"}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"get_time","arguments":"{\"tz\":\"UTC\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_stream_parallel_tool","status":"completed"}}
+

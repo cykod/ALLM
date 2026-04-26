@@ -80,8 +80,18 @@ defmodule ALLM.Capability do
   alias ALLM.Request
   alias ALLM.Usage
 
-  @typedoc "Result of a pre-flight capability check."
-  @type preflight_result :: :ok | {:error, ValidationError.t()}
+  @typedoc """
+  Result of a pre-flight capability check. Three shapes (Phase 10.4 widened):
+
+    * `:ok` — no rewrite needed, no rejection. The caller dispatches the
+      original request unchanged.
+    * `{:ok, %Request{}}` — pre-flight rewrote the request (e.g. set
+      `structured_finalize: true`); the caller MUST dispatch the returned
+      request, not the original.
+    * `{:error, %ValidationError{}}` — pre-flight rejected the request;
+      the caller MUST surface the error and not dispatch.
+  """
+  @type preflight_result :: :ok | {:ok, Request.t()} | {:error, ValidationError.t()}
 
   @typedoc "Either a resolved `%ModelRef{}` from the catalog, a raw model string/tuple, or `nil`."
   @type model_ref_or_string :: ModelRef.t() | String.t() | tuple() | nil
@@ -119,11 +129,30 @@ defmodule ALLM.Capability do
   @doc """
   Pre-flight a request against the catalog's view of a model.
 
-  Returns `:ok` when the catalog is absent (no-op pass-through), when the
-  model is a bare string/tuple/`nil` (no capability info), or when no
-  rejection rule fires. Returns
-  `{:error, %ValidationError{reason: :unsupported_capability, errors: [...]}}`
-  otherwise. Both rejection rules accumulate in `:errors` when both fire.
+  ## Three return shapes (Phase 10.4)
+
+    * `:ok` — no rewrite needed, no rejection. Caller dispatches the
+      original request unchanged. Returned when the catalog is absent,
+      when the model is a bare string/tuple/`nil` (no capability info),
+      or when no rejection rule fires AND no rewrite predicate matches.
+    * `{:ok, %Request{}}` — pre-flight rewrote the request. v0.2's only
+      rewrite is `structured_finalize: true` (auto-set when the adapter's
+      `requires_structured_finalize?/1` returns `true` for a request that
+      combines tools and a `json_schema` response_format). Caller MUST
+      dispatch the returned request.
+    * `{:error, %ValidationError{reason: :unsupported_capability, errors: [...]}}`
+      — pre-flight rejected the request. Both rejection rules accumulate
+      in `:errors` when both fire.
+
+  ## Adapter argument (Phase 10.4 — optional)
+
+  The third argument carries the adapter module so pre-flight can call
+  `function_exported?(adapter, :requires_structured_finalize?, 1)` to
+  decide the rewrite. Defaults to `nil` (no rewrite) so existing 2-arg
+  callers continue to work — the rewrite branch only fires when the
+  caller threads the adapter through. Per design Decision #14,
+  `requires_structured_finalize?/1` is a regular module function, NOT a
+  `@callback`, so most adapters do not export it.
 
   ## Examples
 
@@ -142,14 +171,44 @@ defmodule ALLM.Capability do
       iex> err.errors
       [{[:tools], :tools_disabled}]
   """
-  @spec preflight(model_ref_or_string(), Request.t()) :: preflight_result()
-  def preflight(model_ref_or_string, %Request{} = request) do
+  @spec preflight(model_ref_or_string(), Request.t(), module() | nil) :: preflight_result()
+  def preflight(model_ref_or_string, %Request{} = request, adapter \\ nil) do
     cond do
-      not catalog_loaded?() -> :ok
-      not is_struct(model_ref_or_string, ModelRef) -> :ok
-      true -> check_capabilities(model_ref_or_string, request)
+      not catalog_loaded?() ->
+        maybe_structured_finalize_rewrite(:ok, request, adapter)
+
+      not is_struct(model_ref_or_string, ModelRef) ->
+        maybe_structured_finalize_rewrite(:ok, request, adapter)
+
+      true ->
+        model_ref_or_string
+        |> check_capabilities(request)
+        |> maybe_structured_finalize_rewrite(request, adapter)
     end
   end
+
+  # Phase 10.4 — auto-set `structured_finalize: true` when the adapter
+  # exports `requires_structured_finalize?/1` AND it returns `true` for
+  # this request. Idempotent: if the request already carries
+  # `structured_finalize: true` we keep `:ok` (no-op rewrite). Errors
+  # pass through unchanged. See spec §5.4 and design Decision #2.
+  defp maybe_structured_finalize_rewrite({:error, _} = err, _request, _adapter), do: err
+
+  defp maybe_structured_finalize_rewrite(:ok, %Request{structured_finalize: true}, _adapter),
+    do: :ok
+
+  defp maybe_structured_finalize_rewrite(:ok, %Request{} = request, adapter)
+       when is_atom(adapter) and not is_nil(adapter) do
+    if Code.ensure_loaded?(adapter) and
+         function_exported?(adapter, :requires_structured_finalize?, 1) and
+         adapter.requires_structured_finalize?(request) == true do
+      {:ok, %Request{request | structured_finalize: true}}
+    else
+      :ok
+    end
+  end
+
+  defp maybe_structured_finalize_rewrite(:ok, _request, _adapter), do: :ok
 
   @doc """
   Populate `Usage.{input_cost, output_cost, total_cost}` from

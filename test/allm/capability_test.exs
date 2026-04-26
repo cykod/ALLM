@@ -151,6 +151,103 @@ defmodule ALLM.CapabilityTest do
       assert errs == [{[:tools], :tools_disabled}]
     end
 
+    # -------------------------------------------------------------------------
+    # Phase 10.4 — structured_finalize auto-set rewrite
+    # -------------------------------------------------------------------------
+
+    test "rewrites request with structured_finalize: true when adapter requires it" do
+      tool = Tool.new(name: "echo", description: "x", schema: %{})
+
+      req =
+        Request.new([%Message{role: :user, content: "hi"}],
+          tools: [tool],
+          response_format: %{type: :json_schema, name: "x", schema: %{}, strict: true}
+        )
+
+      assert {:ok, %Request{} = rewritten} =
+               Capability.preflight("openai:gpt-4o", req, ALLM.Providers.OpenAI)
+
+      assert rewritten.structured_finalize == true
+      # Unchanged fields preserved.
+      assert rewritten.tools == req.tools
+      assert rewritten.response_format == req.response_format
+    end
+
+    test "rewrite is idempotent — returns :ok when structured_finalize is already true" do
+      tool = Tool.new(name: "echo", description: "x", schema: %{})
+
+      req =
+        Request.new([%Message{role: :user, content: "hi"}],
+          tools: [tool],
+          response_format: %{type: :json_schema, name: "x", schema: %{}, strict: true},
+          structured_finalize: true
+        )
+
+      assert Capability.preflight("openai:gpt-4o", req, ALLM.Providers.OpenAI) == :ok
+    end
+
+    test "no rewrite for an adapter that does not export requires_structured_finalize?/1" do
+      tool = Tool.new(name: "echo", description: "x", schema: %{})
+
+      req =
+        Request.new([%Message{role: :user, content: "hi"}],
+          tools: [tool],
+          response_format: %{type: :json_schema, name: "x", schema: %{}, strict: true}
+        )
+
+      assert Capability.preflight("openai:gpt-4o", req, ALLM.Providers.Fake) == :ok
+    end
+
+    test "no rewrite when adapter argument is omitted (2-arg call)" do
+      tool = Tool.new(name: "echo", description: "x", schema: %{})
+
+      req =
+        Request.new([%Message{role: :user, content: "hi"}],
+          tools: [tool],
+          response_format: %{type: :json_schema, name: "x", schema: %{}, strict: true}
+        )
+
+      # Existing 2-arg call sites continue to return :ok unchanged.
+      assert Capability.preflight("openai:gpt-4o", req) == :ok
+    end
+
+    test "rewrite predicate does not fire when tools are empty" do
+      req =
+        Request.new([%Message{role: :user, content: "hi"}],
+          response_format: %{type: :json_schema, name: "x", schema: %{}, strict: true}
+        )
+
+      assert Capability.preflight("openai:gpt-4o", req, ALLM.Providers.OpenAI) == :ok
+    end
+
+    test "rewrite predicate does not fire for json_object response_format" do
+      tool = Tool.new(name: "echo", description: "x", schema: %{})
+
+      req =
+        Request.new([%Message{role: :user, content: "hi"}],
+          tools: [tool],
+          response_format: %{type: :json_object}
+        )
+
+      assert Capability.preflight("openai:gpt-4o", req, ALLM.Providers.OpenAI) == :ok
+    end
+
+    test "rewrite passes through validation errors unchanged" do
+      ref = make_ref(:local, "no-tools", %{tools: %{enabled: false}, json_native: true})
+      tool = Tool.new(name: "echo", description: "x", schema: %{})
+
+      req =
+        Request.new([%Message{role: :user, content: "hi"}],
+          tools: [tool],
+          response_format: %{type: :json_schema, name: "x", schema: %{}, strict: true}
+        )
+
+      # Even with an OpenAI adapter that would normally rewrite, a
+      # capability-rejection wins (errors are not converted to ok+rewrite).
+      assert {:error, %ValidationError{}} =
+               Capability.preflight(ref, req, ALLM.Providers.OpenAI)
+    end
+
     test "accumulates BOTH errors when both rejections fire" do
       ref =
         make_ref(:local, "no-anything", %{

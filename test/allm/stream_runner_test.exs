@@ -354,6 +354,65 @@ defmodule ALLM.StreamRunnerTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Per-call BYOK contract — :api_key opt reaches the adapter (regression
+  # against the engine-field deny-list silently dropping the key from
+  # dispatch_opts; see PHASE_10 and ALLM.Keys five-level resolution chain).
+  # ---------------------------------------------------------------------------
+
+  describe "run/3 — per-call api_key BYOK" do
+    test "per-call api_key reaches adapter via dispatch_opts (SaaS BYOK contract)" do
+      me = self()
+
+      engine =
+        Engine.new(
+          adapter: RecordingAdapter,
+          adapter_opts: [opts_recorder: me]
+        )
+
+      assert {:ok, stream} = StreamRunner.run(engine, req(), api_key: "sk-byok-test")
+      _ = Enum.to_list(stream)
+
+      assert_received {:recorded_opts, recorded}
+      assert Keyword.get(recorded, :api_key) == "sk-byok-test"
+      # The api_key must NOT have leaked into the params map (which goes
+      # to the wire), only the top-level dispatch_opts.
+      refute match?(%{api_key: _}, Map.new(Keyword.delete(recorded, :api_key)))
+    end
+
+    test "per-call api_key: nil is not forwarded (no spurious :api_key key)" do
+      me = self()
+
+      engine =
+        Engine.new(
+          adapter: RecordingAdapter,
+          adapter_opts: [opts_recorder: me]
+        )
+
+      assert {:ok, stream} = StreamRunner.run(engine, req(), api_key: nil)
+      _ = Enum.to_list(stream)
+
+      assert_received {:recorded_opts, recorded}
+      refute Keyword.has_key?(recorded, :api_key)
+    end
+
+    test "per-call api_key: \"\" is not forwarded (mirrors Keys.wrap/1 defensive shape)" do
+      me = self()
+
+      engine =
+        Engine.new(
+          adapter: RecordingAdapter,
+          adapter_opts: [opts_recorder: me]
+        )
+
+      assert {:ok, stream} = StreamRunner.run(engine, req(), api_key: "")
+      _ = Enum.to_list(stream)
+
+      assert_received {:recorded_opts, recorded}
+      refute Keyword.has_key?(recorded, :api_key)
+    end
+  end
+
   defp any_function_in?(term) when is_function(term), do: true
   defp any_function_in?(list) when is_list(list), do: Enum.any?(list, &any_function_in?/1)
 

@@ -1,0 +1,21 @@
+: synthesized OpenAI Responses API streaming wire shape for function calls
+: per https://platform.openai.com/docs/api-reference/responses-streaming accessed 2026-04-26
+: hand-crafted for Bug #5 (Phase 10 retro): the three-phase lifecycle is
+:   response.output_item.added (item.type=function_call, opens with call_id+name)
+:   response.function_call_arguments.delta (incremental arguments fragments keyed by item_id)
+:   response.output_item.done (final form with the full arguments string)
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_stream_1","call_id":"call_stream_1","name":"get_weather","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_stream_1","output_index":0,"delta":"{\"ci"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_stream_1","output_index":0,"delta":"ty\":\"Boston\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_stream_1","call_id":"call_stream_1","name":"get_weather","arguments":"{\"city\":\"Boston\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_stream_tool","status":"completed"}}
+
