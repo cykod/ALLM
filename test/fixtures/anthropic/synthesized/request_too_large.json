@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized 413 body — request_too_large per https://docs.anthropic.com/en/api/errors. Maps to :invalid_request (no specialized atom for 413). Modeled 2026-04-26.",
+  "type": "error",
+  "error": {
+    "type": "request_too_large",
+    "message": "Request body exceeds the maximum allowed size"
+  }
+}

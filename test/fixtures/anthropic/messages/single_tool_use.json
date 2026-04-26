@@ -1,0 +1,21 @@
+{
+  "_comment": "Hand-synthesized single tool_use response. Schema per https://docs.anthropic.com/en/api/messages accessed 2026-04-26.",
+  "id": "msg_synth_tool",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-6",
+  "content": [
+    {
+      "type": "tool_use",
+      "id": "toolu_abc123",
+      "name": "get_weather",
+      "input": { "city": "Boston" }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 42,
+    "output_tokens": 18
+  }
+}

@@ -191,4 +191,27 @@ defmodule ALLM.EngineRoundtripTest do
     assert {:ok, decoded} = engine |> ALLM.Serializer.to_json!() |> ALLM.Serializer.from_json()
     assert decoded == engine
   end
+
+  test "Phase 11.1: Anthropic engine round-trips with no key-shaped string in the binary" do
+    # Per spec §6.4 + Phase 11 obligation: API keys never appear on the
+    # engine. Construct an Anthropic-adapter engine with a plausible key in
+    # the runtime store and assert the serialized binary contains no
+    # key-shaped string.
+    ALLM.Keys.put(:anthropic, "sk-ant-roundtrip-secret-DO-NOT-LEAK")
+    on_exit(fn -> ALLM.Keys.delete(:anthropic) end)
+
+    engine =
+      Engine.new(
+        adapter: ALLM.Providers.Anthropic,
+        model: "claude-sonnet-4-6",
+        adapter_opts: [organization: "org-roundtrip"]
+      )
+
+    binary = :erlang.term_to_binary(engine)
+    refute binary =~ "sk-ant-roundtrip-secret-DO-NOT-LEAK"
+    refute binary =~ "sk-ant-"
+
+    # And the engine itself round-trips equality-preserving.
+    assert engine == binary |> :erlang.binary_to_term()
+  end
 end

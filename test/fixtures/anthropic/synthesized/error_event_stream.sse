@@ -1,0 +1,20 @@
+: synthesized Anthropic Messages API streaming wire shape — mid-stream SSE `error` event
+: per https://docs.anthropic.com/en/api/messages-streaming#error-events
+: hand-crafted; not recorded from the live API
+: exercises Decision #14 row-12 mapping for the named-event `error` SSE frame
+: (overloaded_error → AdapterError reason :provider_unavailable per from_anthropic_error/3)
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_err_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-6","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":8,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hel"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"}}
+
+event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded — please retry"}}
+

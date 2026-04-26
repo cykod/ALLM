@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized 529 body — Anthropic-specific overloaded_error per https://docs.anthropic.com/en/api/errors. Decision #2: 529 is added to the retry closure's retry_on set; maps to :provider_unavailable. Modeled 2026-04-26.",
+  "type": "error",
+  "error": {
+    "type": "overloaded_error",
+    "message": "Overloaded"
+  }
+}

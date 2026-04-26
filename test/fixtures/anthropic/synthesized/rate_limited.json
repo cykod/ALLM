@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized 429 body. Modeled after https://docs.anthropic.com/en/api/errors — rate_limit_error. Sidecar rate_limited.headers.json carries Retry-After: 1. Modeled 2026-04-26.",
+  "type": "error",
+  "error": {
+    "type": "rate_limit_error",
+    "message": "Number of requests has exceeded your rate limit"
+  }
+}

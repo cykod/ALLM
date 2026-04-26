@@ -1,3 +1,21 @@
+## [FEAT] Phase 11: Anthropic provider (non-streaming + streaming + structured output)
+*Sunday, April 26th at 4pm*
+Lands ALLM.Providers.Anthropic implementing both Adapter and StreamAdapter 
+behaviours with non-streaming generate/2 (Req-backed, Retry integration 
+including 529 Overloaded per spec §6.4), streaming stream/2 (Finch HTTP/1 + 
+SSE → ALLM.Event mapper per §7.2 §8 Decision #14), and structured output 
+via the tool-forcing pattern (§5.4) sharing lift_structured_output/1 between 
+both arms. Decision #5b is amended: streamed structured-output now emits 
+:text_delta events (matching OpenAI's native :json_schema streaming) so 
+consumers can write provider-neutral structured-output streaming code; the 
+stream wrapper additionally stamps metadata.structured_output_tool: true on the 
+rewritten :message_completed payload so invariant 14's byte-identical 
+%Response{} guarantee holds across arms (M1 fix from the Phase 11.3 review). 
+Coverage on the new adapter is 91.10%; full suite 1401 tests / 0 failures, 
+credo and dialyzer clean.
+
+---
+
 ## [FEAT] Phase 10: OpenAI provider (both endpoints) + BYOK fix
 *Sunday, April 26th at 1pm*
 Ships ALLM.Providers.OpenAI implementing both ALLM.Adapter and

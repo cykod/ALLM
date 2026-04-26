@@ -6,4 +6,4 @@
 # spec_31` even if it also carries `:pending` — i.e., `--only spec_31` shows
 # all §31 scenarios including the deferred placeholders, while a bare `mix
 # test` excludes them. See `fake_scenarios_test.exs` for the idiom.
-ExUnit.start(exclude: [:pending, :live_openai])
+ExUnit.start(exclude: [:pending, :live_openai, :live_anthropic])

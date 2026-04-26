@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized 400 body — invalid_request_error with the 'prompt is too long' marker the adapter pattern-matches on to map to :context_length_exceeded. Modeled 2026-04-26.",
+  "type": "error",
+  "error": {
+    "type": "invalid_request_error",
+    "message": "prompt is too long: 250000 tokens > 200000 maximum"
+  }
+}

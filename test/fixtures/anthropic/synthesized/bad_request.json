@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized 400 body — generic invalid_request_error. Modeled after https://docs.anthropic.com/en/api/errors. Modeled 2026-04-26.",
+  "type": "error",
+  "error": {
+    "type": "invalid_request_error",
+    "message": "messages: an unexpected role was provided"
+  }
+}

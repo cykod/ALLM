@@ -1,0 +1,21 @@
+{
+  "_comment": "Hand-synthesized Anthropic Messages API response for the structured-output (tool-forcing) path. Phase 11.3 — synthetic respond_with_json_person tool fired. Schema per https://docs.anthropic.com/en/api/messages accessed 2026-04-26. The wire shape models the response Claude emits when forced via tool_choice: {type: 'tool', name: 'respond_with_json_person'} — a single tool_use content block whose `input` is the schema-conforming map. The adapter's lift_structured_output/1 rewrites this to output_text + finish_reason: :stop.",
+  "id": "msg_synth_struct",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-6",
+  "content": [
+    {
+      "type": "tool_use",
+      "id": "toolu_synth_struct",
+      "name": "respond_with_json_person",
+      "input": { "name": "Alice", "age": 30 }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 24,
+    "output_tokens": 18
+  }
+}

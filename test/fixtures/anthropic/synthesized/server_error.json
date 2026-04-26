@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized 500 body. Modeled after Anthropic api_error type. Modeled 2026-04-26.",
+  "type": "error",
+  "error": {
+    "type": "api_error",
+    "message": "Internal server error"
+  }
+}

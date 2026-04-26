@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized 401 auth failure body. Modeled after https://docs.anthropic.com/en/api/errors — authentication_error. Modeled 2026-04-26.",
+  "type": "error",
+  "error": {
+    "type": "authentication_error",
+    "message": "invalid x-api-key"
+  }
+}

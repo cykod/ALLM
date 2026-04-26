@@ -59,3 +59,9 @@
 [MILE] sat 4/25 11pm - Committed Phase 9: telemetry, retry, capability, ModelRef across 4 sub-phases (1095 tests, 0 failures, 94.79% coverage)
 
 [BUILD] sun 4/26 12am - Build all phases from steering/PHASE_10_DESIGN.md
+
+[DSGN] sun 4/26 1pm - Design Phase 11 Anthropic provider adapter
+
+[MILE] sun 4/26 1pm - Committed Phase 10 OpenAI provider (both endpoints) plus the BYOK leak fix
+
+[BUILD] sun 4/26 3pm - Build all 4 sub-phases of Phase 11 (Anthropic provider adapter) from PHASE_11_DESIGN.md
