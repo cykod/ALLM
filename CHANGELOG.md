@@ -1,3 +1,22 @@
+## [DOC] Apply 11 retros into design + implementation spec docs
+*Sunday, April 26th at 7pm*
+Lifted 12 high-priority findings from 11 unapplied retros (Phase 9 through 
+Phase 11.4) into the canonical agent docs. AGENT_DESIGN_SPEC.md gains six new 
+Behaviour design-doc checklist rules (14-19) covering Layer-C reducer-touch 
+enumeration, per-provider wire-field maps, synthesized-vs-recorded fixture 
+policy, detection-mechanism for state-conditioned behavioural deltas, the 
+provider-neutral examples _helpers.exs template, and live-API cost estimation. 
+AGENT_IMPLEMENTATION_SPEC.md adds wall-clock timing assertion guidance under 
+Layer C tests and a new sub-section 4i on closed-enum dual-validation (protocol 
+vs provider acceptance). CLAUDE.md gains an 
+adapter-default-for-required-wire-field invariant plus four 
+Working-on-this-codebase rules: BLOCKING per-provider live-validation, 
+cross-phase bug discipline, Logger deferred form for hot paths, and SSE 
+chunk-mapper one-function-per-event-type pattern. All 11 retros renamed to 
+_applied.md (gitignored, not staged).
+
+---
+
 ## [FEAT] Phase 11.4: provider-neutral examples framework + Anthropic enrollment
 *Sunday, April 26th at 5pm*
 Migrates the nine runnable example scripts from examples/openai/ up to a

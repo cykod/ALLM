@@ -143,6 +143,10 @@ When a test file holds scenarios not yet implementable, use `@tag :pending` + `:
 
 `test/test_helper.exs` configures `ExUnit.start(exclude: [:pending])`. Run with `mix test --only pending`. `--only <tag>` overrides exclude, so `mix test --only spec_31` on a mixed-tag file still surfaces pendings. When implementing a deferred scenario, delete `@tag :pending` AND the `:ok` body together — never leave the tag above new assertions.
 
+### 4i. Closed-enum dual-validation (protocol vs provider acceptance)
+
+Closed enums whose values pass through to a provider (e.g., `@effort_atoms`, future `@thinking_budget_atoms`) MUST distinguish *protocol-level legality* (ALLM accepts the value) from *provider-side acceptance* (provider may reject per-model). Either: (a) split into a protocol enum (validated by `translate_options/2`) AND a per-model acceptance table (validated by the provider, surfaced as `%AdapterError{reason: :invalid_request}`); OR (b) document at the enum's declaration that "values are protocol-legal; provider-side acceptance varies per model." Worked example: PHASE_10.6's `@effort_atoms = [:none, :minimal, :low, :medium, :high, :xhigh]` includes `:minimal` (legal in OpenAI's docs) but `gpt-5.5` rejects it at runtime; surfaced only at PHASE_10.5 live-validation.
+
 ### 5. Quality Gates After Every Phase
 
 ```bash
@@ -327,6 +331,8 @@ The engine itself gets a **serializability test**: `:erlang.term_to_binary/1` su
     assert_receive {:fake_resource_released, ^ref}, 500
   end
   ```
+
+- **Avoid wall-clock timing assertions on multi-process operations.** Tests SHOULD NOT use `assert elapsed_ms <= N` with N < 5000ms on cancellation, async streams, or retry backoff. These flake under CI variance. Prefer deterministic behavioural assertions: event-count (`assert cancel_count == 1`), exit-status (`assert receive_exit(:normal, 5000)`), or message-receipt (`refute_receive {:event, _}, 1000`). Worked example: PHASE_10.3's `assert elapsed_ms <= 500` cancellation test flaked intermittently in 10.3, 10.6, and 11.2 fix follow-up; replacement candidate `assert cancel_count == 1` + `refute_receive {:event, _}, 2000` pins the actual contract without coupling to wall-clock latency.
 
 - **Error contract tests.** Every documented `{:error, %ALLM.Error.X{reason: r}}` gets a Fake-triggered test.
 
