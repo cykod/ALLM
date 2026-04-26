@@ -1,3 +1,79 @@
+## [FEAT] Phase 12: v0.2.0 release polish + case-study tests
+*Sunday, April 26th at 8pm*
+Final v0.2 release polish (see steering/PHASE_12_DESIGN.md). Bumped @version 
+0.0.1 to 0.2.0; added ex_doc groups_for_modules (9 groups 
+Facade/Sessions/Behaviours/Providers/Defaults/Data 
+types/Runtime/Internals/Errors) + extended extras: with CHANGELOG.md; rewrote 
+README with copy-paste Getting Started snippet against ALLM.Providers.Fake plus 
+parallel iex-prompt doctest in lib/allm.ex's @moduledoc (Decision #3). Added 
+§31 audit-gate meta-test (frozen at 18 test-blocks via @case_count 
+introspection per AGENT_DESIGN_SPEC §3 rule 7). Translated 4 
+steering/examples/ case studies (Amesbury, Garden, meal, unllmtd) into 
+deterministic Fake-driven integration tests under test/examples/ — 21 new 
+tests via shared ALLM.Test.ExampleFixtures helper at test/support/. Added audit 
+test enforcing every public lib/ module appears in exactly one ex_doc group, 
+and a README-snippet drift test that parses + evaluates the Getting Started 
+block. CHANGELOG.md gains a v0.2 rollup heading; existing per-phase entries 
+preserved verbatim. mix hex.build dry-run validates a clean tarball whitelist 
+(lib/, mix.exs, README.md, LICENSE, .formatter.exs); mix hex.publish remains an 
+out-of-band maintainer step (Decision #1). Full suite: 1425 tests / 0 failures 
+/ 0 dialyzer warnings. Cite §31, §32.1, §32.4, §33, §34.
+
+---
+
+## v0.2 — 2026-04-26
+
+First public release of ALLM. The v0.2 delta from `0.0.1` (initial scaffolding)
+covers eleven implementation phases plus the release-polish wrap. Per-phase
+entries below remain verbatim; this rollup is the elevator pitch.
+
+- **Layered architecture (Phases 1–2).** Four-layer split — Serializable data
+  (`ALLM.Message`, `Request`, `Response`, `Thread`, `Session`, `Event`, …) /
+  Runtime (`ALLM.Engine` + behaviours) / Stateless execution (`ALLM.generate/3`,
+  `chat/3`, …) / Stateful continuation (`ALLM.Session.*`). Engines and sessions
+  round-trip through `:erlang.term_to_binary/1` and JSON via `ALLM.Serializer`;
+  no PIDs, refs, funs, or API keys leak across the boundary.
+- **Stream-first execution + `ALLM.Providers.Fake` (Phases 4–5).** `stream_*`
+  variants are the primitives; non-streaming `generate/3` / `step/3` / `chat/3`
+  are reducers over an `ALLM.Event` stream. The deterministic Fake adapter is
+  the canonical test vehicle — scripted text, tool-call, finish, error, and
+  delay events drive every §31 property-style scenario without the network.
+- **Tool orchestration with auto + manual modes and ask-user (Phases 6–7).**
+  `chat/3` runs a multi-turn loop with `:auto` mode (executes tool handlers)
+  or `:manual` mode (halts on `finish_reason: :tool_calls` for the caller to
+  submit results). Handlers may return `{:ask_user, q, opts}` to suspend the
+  loop; `on_tool_error: :halt` and a `:halt_when` predicate provide additional
+  per-step gates.
+- **Sessions with serializability (Phase 8).** `ALLM.Session` persists a thread
+  + engine reference + halted state so a paused conversation survives a
+  process restart; `Session.start/3`, `reply/4`, `submit_tool_result/3`, and
+  the streaming variants resume the loop against new input.
+- **Telemetry, retry, and capability cross-cutting (Phase 9).** `ALLM.Telemetry`
+  emits `:request`, `:stream`, `:tool`, and `:retry` events; `ALLM.Retry`
+  centralizes 429/5xx backoff with provider-aware `retry_after` parsing;
+  `ALLM.Capability` + `ALLM.ModelRef` provide pre-flight model-string
+  resolution (optional, falling back gracefully when `llm_db` is absent).
+- **OpenAI + Anthropic adapters with structured output (Phases 10–11).** Both
+  providers ship as `ALLM.Adapter` + `ALLM.StreamAdapter` implementations
+  (Req for non-streaming; Finch HTTP/1 + SSE for streaming). Structured-output
+  via OpenAI's native `:json_schema` `response_format` and Anthropic's
+  tool-forcing pattern with a shared `lift_structured_output/1` helper;
+  streamed structured output emits `:text_delta` events on both providers.
+- **Provider-neutral runnable examples (Phase 11.4).** `examples/_helpers.exs`
+  + nine numbered scripts + `run_all.exs` orchestrator; `ALLM_PROVIDER=openai`
+  or `anthropic` switches the engine. `examples/run_all.exs` is the BLOCKING
+  `/review` validation gate — both providers must exit 0.
+- **§31 testing harness + audit gate freeze (Phase 4 + Phase 12.1).** Spec §31
+  property-style scenarios live in `test/allm/providers/fake_scenarios_test.exs`
+  with a `@case_count`-backed meta-test that fails loudly when a contributor
+  adds or removes a `test` block without bumping the freeze count.
+- **Case-study translations (Phase 12.2).** Four `steering/examples/` case
+  studies (Amesbury, Garden, meal, unllmtd) translated into deterministic
+  Fake-driven integration tests under `test/examples/`, proving the public
+  API surface matches each case study's promised "After" snippets.
+
+---
+
 ## [DOC] Apply 11 retros into design + implementation spec docs
 *Sunday, April 26th at 7pm*
 Lifted 12 high-priority findings from 11 unapplied retros (Phase 9 through 

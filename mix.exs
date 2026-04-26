@@ -1,7 +1,7 @@
 defmodule ALLM.MixProject do
   use Mix.Project
 
-  @version "0.0.1"
+  @version "0.2.0"
   @source_url "https://github.com/cykod/ALLM"
 
   def project do
@@ -74,7 +74,65 @@ defmodule ALLM.MixProject do
     [
       main: "ALLM",
       source_ref: "v#{@version}",
-      extras: ["README.md"]
+      extras: ["README.md", "CHANGELOG.md"],
+      groups_for_modules: [
+        Facade: [ALLM],
+        Sessions: [ALLM.Session, ALLM.Session.StreamReducer],
+        Behaviours: [
+          ALLM.Adapter,
+          ALLM.StreamAdapter,
+          ALLM.ToolExecutor,
+          ALLM.ToolResultEncoder
+        ],
+        Providers: [
+          ALLM.Providers.OpenAI,
+          ALLM.Providers.Anthropic,
+          ALLM.Providers.Fake,
+          ALLM.Providers.Fake.Script,
+          ALLM.Providers.Support.SSE
+        ],
+        Defaults: [
+          ALLM.ToolExecutor.Default,
+          ALLM.ToolResultEncoder.JSON
+        ],
+        "Data types": [
+          ALLM.Message,
+          ALLM.Request,
+          ALLM.Response,
+          ALLM.Thread,
+          ALLM.StepResult,
+          ALLM.ChatResult,
+          ALLM.Event,
+          ALLM.Usage,
+          ALLM.Tool,
+          ALLM.ToolCall,
+          ALLM.ModelRef
+        ],
+        Runtime: [
+          ALLM.Engine,
+          ALLM.Keys,
+          ALLM.Validate,
+          ALLM.Capability,
+          ALLM.Retry,
+          ALLM.Telemetry,
+          ALLM.StreamCollector,
+          ALLM.Serializer
+        ],
+        Internals: [
+          ALLM.Chat,
+          ALLM.Runner,
+          ALLM.StreamRunner,
+          ALLM.ToolRunner
+        ],
+        Errors: [
+          ALLM.Error.AdapterError,
+          ALLM.Error.EngineError,
+          ALLM.Error.SessionError,
+          ALLM.Error.StreamError,
+          ALLM.Error.ToolError,
+          ALLM.Error.ValidationError
+        ]
+      ]
     ]
   end
 end

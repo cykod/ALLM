@@ -13,9 +13,44 @@ Streaming is the primitive execution model: non-streaming functions are reducers
 
 See `steering/allm_engine_session_streaming_spec_v0_2.md` in the source tree for the full design.
 
-## Status
+## Getting Started
 
-Pre-release scaffolding. Data structs and behaviour signatures are being laid down; execution paths and provider adapters are in progress.
+Add ALLM to your `mix.exs` deps:
+
+```elixir
+def deps do
+  [
+    {:allm, "~> 0.2"}
+  ]
+end
+```
+
+Run `mix deps.get`, then drop into `iex -S mix` and try a `chat/3` call against
+the deterministic `ALLM.Providers.Fake` adapter — no API key, no network:
+
+```elixir
+engine =
+  ALLM.Engine.new(
+    adapter: ALLM.Providers.Fake,
+    adapter_opts: [script: [{:text, "Hello, ALLM!"}, {:finish, :stop}]]
+  )
+
+{:ok, %ALLM.ChatResult{final_response: %ALLM.Response{output_text: text}}} =
+  ALLM.chat(engine, [ALLM.user("Hi.")])
+
+text
+# => "Hello, ALLM!"
+```
+
+## Real Providers
+
+For real-provider execution, use one of the bundled adapters:
+
+- `ALLM.Providers.OpenAI` — OpenAI Chat Completions and Responses endpoints.
+- `ALLM.Providers.Anthropic` — Anthropic Messages API.
+
+See [`examples/README.md`](examples/README.md) for the runnable smoke set
+(`ALLM_PROVIDER=openai|anthropic mix run examples/run_all.exs`).
 
 ## Development
 

@@ -1,12 +1,15 @@
 defmodule ALLM.Providers.FakeScenariosTest do
   @moduledoc """
-  Spec §31 property-style scenarios exercised directly against
-  `ALLM.Providers.Fake` (Phase 4) plus the Phase 5 streaming-layer
-  coverage. `mix test --only spec_31` scopes Phase 12's regression audit
-  to one file.
+  Spec §31 property-style scenarios — v0.2 release-polish freeze (Phase 12).
 
-  Active coverage after Phase 8: 12 scenarios (3 Phase 4 + 3 Phase 5 +
-  3 Phase 6 + 3 Phase 7 + 1 Phase 8). All §31 scenarios are now active.
+  Exercised directly against `ALLM.Providers.Fake` (Phase 4) plus the Phase 5
+  streaming-layer coverage. `mix test --only spec_31` scopes Phase 12's
+  regression audit to one file.
+
+  Active coverage at v0.2 release-polish freeze: 12 scenarios (3 Phase 4 +
+  3 Phase 5 + 3 Phase 6 + 3 Phase 7 + 1 Phase 8). Frozen at Phase 12; the
+  meta-test in `describe "§31 audit gate (Phase 12 meta-test)"` enforces
+  the count.
 
   | # | Scenario | Phase |
   |---|---|---|
@@ -22,11 +25,40 @@ defmodule ALLM.Providers.FakeScenariosTest do
   | 10 | `halt_when` fires through `ALLM.chat/3` | 7 (active) |
   | 11 | single tool call with `mode: :manual` — partial flow via `ALLM.chat/3` | 7 (active) |
   | 12 | session round-trip via `term_to_binary` + `ALLM.Session.reply/4` | 8 (active) |
+
+  ## Count freeze
+
+  `@case_count 18` plus the meta-test below freeze the `test`-block count at
+  18 (decomposing the 12 documented §31 scenarios across 13 `describe`
+  blocks). A v0.3 contributor adding a `test` block will fail the meta-test
+  until they bump `@case_count`, forcing acknowledgment of the audit gate.
+
+  The meta-test enumerates registered tests via
+  `__MODULE__.__info__(:functions)` (ExUnit registers each `test` block as
+  a 1-arity public function whose atom name starts with `"test "`) and
+  asserts `length(registered) - @audit_gate_test_count == @case_count`.
+  Both attributes must be bumped in lock-step with structural changes:
+  add a §31 `test` block → bump `@case_count`; add an audit-gate `test`
+  block → bump `@audit_gate_test_count`. Either change in isolation fails
+  the gate.
   """
 
   use ExUnit.Case, async: true
 
   @moduletag :spec_31
+
+  # 18 §31 test-blocks across 13 describe blocks, decomposing the 12
+  # documented scenarios (see §31). Bump together with the audit-gate
+  # count below whenever the file gains or loses a `test` block.
+  @case_count 18
+
+  # Tests in the §31 audit-gate describe block (currently just the
+  # count-equality meta-test below). Subtracted from the introspection
+  # count so the meta-test's own registration doesn't inflate the total.
+  @audit_gate_test_count 1
+
+  @spec case_count() :: pos_integer()
+  def case_count, do: @case_count
 
   alias ALLM.{ChatResult, Engine, Message, Request, Response, StepResult, Thread, Tool}
   alias ALLM.Error.AdapterError
@@ -533,6 +565,23 @@ defmodule ALLM.Providers.FakeScenariosTest do
       # Thread shape match — the load-bearing equivalence claim of the
       # §31 round-trip scenario.
       assert s2_inproc.thread.messages == s2_resumed.thread.messages
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Phase 12 — §31 audit gate. The meta-test below freezes the registered
+  # `test`-block count at @case_count using `__MODULE__.__info__(:functions)`
+  # introspection. See the "## Count freeze" paragraph in the @moduledoc.
+  # ---------------------------------------------------------------------------
+
+  describe "§31 audit gate (Phase 12 meta-test)" do
+    test "registered test count equals @case_count" do
+      registered =
+        for {name, 1} <- __MODULE__.__info__(:functions),
+            String.starts_with?(Atom.to_string(name), "test "),
+            do: name
+
+      assert length(registered) - @audit_gate_test_count == @case_count
     end
   end
 end

@@ -24,6 +24,17 @@ defmodule ALLM do
   `ALLM.Serializer`, and the constructors on this facade. Layers B/C/D
   (engines, adapters, streaming, sessions) land in later phases.
 
+  ## Getting Started
+
+  Drive a `chat/3` round-trip against the deterministic `ALLM.Providers.Fake`
+  adapter — no API key, no network. Parallel to the README's Getting Started
+  snippet (kept in sync by visual review):
+
+      iex> engine = ALLM.Engine.new(adapter: ALLM.Providers.Fake, adapter_opts: [script: [{:text, "Hello, ALLM!"}, {:finish, :stop}]])
+      iex> {:ok, %ALLM.ChatResult{final_response: %ALLM.Response{output_text: text}}} = ALLM.chat(engine, [ALLM.user("Hi.")])
+      iex> text
+      "Hello, ALLM!"
+
   ## Example
 
       iex> messages = [ALLM.system("Be helpful."), ALLM.user("Name three primes.")]

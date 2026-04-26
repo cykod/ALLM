@@ -69,3 +69,9 @@
 [MILE] sun 4/26 4pm - Applied Phase 11.3 review Option A resolution + M1 metadata fix and committed cumulative Phase 11.1–11.3 Anthropic provider work
 
 [DSGN] sun 4/26 6pm - Design phase 12 release polish (examples, docs, audit)
+
+[MILE] sun 4/26 7pm - Applied 11 retros into AGENT_DESIGN_SPEC, AGENT_IMPLEMENTATION_SPEC, and CLAUDE.md (12 changes)
+
+[BUILD] sun 4/26 7pm - Build Phase 12 (v0.2 release polish: §31 freeze, case-study translations, docs, release artifacts) from PHASE_12_DESIGN.md
+
+[PHAS] sun 4/26 8pm - Phase the 0.3 release from the v0.2 streaming spec
