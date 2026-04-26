@@ -1,7 +1,7 @@
-# examples/openai/04_parallel_tool_calls.exs
+# examples/04_parallel_tool_calls.exs
 #
 # Demonstrates: two tool calls within one chat loop — Boston weather AND
-#               Tokyo time. OpenAI may emit them as a parallel turn or as
+#               Tokyo time. Providers may emit them as a parallel turn or as
 #               two consecutive turns; the assertion counts tool messages,
 #               not parallel-turn step indices.
 # Spec section: §4 (chat/3), §10.5, §6 (parallel tools).
@@ -10,16 +10,11 @@
 #                    Assertion: exactly two tool messages on the final thread.
 # Natural alternative (commented out below):
 #   ALLM.user("Tell me Boston's weather and Tokyo's local time.")
-# Run with:    OPENAI_API_KEY=sk-... mix run examples/openai/04_parallel_tool_calls.exs
-#
-# Note: Bug #5 (Responses-API tool-call decoder gap) was fixed in this
-# revision, so this example now runs natively on the Responses endpoint
-# that `gpt-5.4-nano` selects by default.
-
-# Auto-load OPENAI_API_KEY from project-root .env if not already in env.
-if System.get_env("OPENAI_API_KEY") in [nil, ""], do: EnvLoader.load(Path.expand(".env", Path.join(__DIR__, "../..")))
+# Run with:    OPENAI_API_KEY=sk-... mix run examples/04_parallel_tool_calls.exs                                # default
+#         OR:  ANTHROPIC_API_KEY=sk-ant-... ALLM_PROVIDER=anthropic mix run examples/04_parallel_tool_calls.exs
 
 Application.ensure_all_started(:allm)
+Code.require_file("_helpers.exs", __DIR__)
 
 weather =
   ALLM.tool(
@@ -47,15 +42,7 @@ time =
     handler: fn %{"city" => c} -> {:ok, %{local_time: "12:00", city: c}} end
   )
 
-engine =
-  ALLM.Engine.new(
-    adapter: ALLM.Providers.OpenAI,
-    model: System.get_env("ALLM_MODEL", "gpt-5.4-nano"),
-    params: %{reasoning_effort: :low},
-    tool_executor: ALLM.ToolExecutor.Default,
-    tool_result_encoder: ALLM.ToolResultEncoder.JSON,
-    tools: [weather, time]
-  )
+engine = ExamplesHelpers.engine(tools: [weather, time])
 
 messages = [
   ALLM.system(

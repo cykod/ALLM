@@ -1,4 +1,4 @@
-# examples/openai/05_multi_turn_chat.exs
+# examples/05_multi_turn_chat.exs
 #
 # Demonstrates: a two-turn dialogue using `ALLM.chat/3` twice with the
 #               accumulated thread carried across calls.
@@ -7,19 +7,13 @@
 #                    shape-only: thread grows turn-over-turn and the second
 #                    call halts with `:completed`.
 # Natural alternative: this IS the natural form.
-# Run with:    OPENAI_API_KEY=sk-... mix run examples/openai/05_multi_turn_chat.exs
-
-# Auto-load OPENAI_API_KEY from project-root .env if not already in env.
-if System.get_env("OPENAI_API_KEY") in [nil, ""], do: EnvLoader.load(Path.expand(".env", Path.join(__DIR__, "../..")))
+# Run with:    OPENAI_API_KEY=sk-... mix run examples/05_multi_turn_chat.exs                                # default
+#         OR:  ANTHROPIC_API_KEY=sk-ant-... ALLM_PROVIDER=anthropic mix run examples/05_multi_turn_chat.exs
 
 Application.ensure_all_started(:allm)
+Code.require_file("_helpers.exs", __DIR__)
 
-engine =
-  ALLM.Engine.new(
-    adapter: ALLM.Providers.OpenAI,
-    model: System.get_env("ALLM_MODEL", "gpt-5.4-nano"),
-    params: %{reasoning_effort: :none}
-  )
+engine = ExamplesHelpers.engine()
 
 {:ok, result1} =
   ALLM.chat(engine, [ALLM.user("Pick a number between 1 and 9. Reply with just the digit.")])

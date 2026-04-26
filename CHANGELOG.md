@@ -1,3 +1,22 @@
+## [FEAT] Phase 11.4: provider-neutral examples framework + Anthropic enrollment
+*Sunday, April 26th at 5pm*
+Migrates the nine runnable example scripts from examples/openai/ up to a
+unified provider-neutral examples/ directory and introduces examples/_helpers.exs
+with a provider table keyed by ALLM_PROVIDER (default "openai"; "anthropic"
+added as the second row per spec §32.1). Each script's first lines are now
+Code.require_file("_helpers.exs", __DIR__) + engine = ExamplesHelpers.engine()
+(or .engine(tools: [...])); the helper centralizes EnvLoader-based .env
+auto-load, validates the per-provider *_API_KEY env, honors ALLM_MODEL
+override, and bakes params: %{temperature: 0} for cross-provider determinism.
+06_structured_output.exs now branches on ALLM_PROVIDER to assert
+metadata.structured_output_tool == true only for Anthropic per Phase 11
+Decision #4 (OpenAI's native :json_schema response carries no equivalent
+marker). examples/run_all.exs is the BLOCKING /review validation gate — it
+must exit 0 against BOTH providers; per-provider RUN_OUTPUT_OPENAI.md and
+RUN_OUTPUT_ANTHROPIC.md snapshots are committed alongside.
+
+---
+
 ## [FEAT] Phase 11: Anthropic provider (non-streaming + streaming + structured output)
 *Sunday, April 26th at 4pm*
 Lands ALLM.Providers.Anthropic implementing both Adapter and StreamAdapter 

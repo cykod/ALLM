@@ -1,20 +1,20 @@
-# examples/openai/06_structured_output.exs
+# examples/06_structured_output.exs
 #
 # Demonstrates: a JSON-schema constrained response via `ALLM.json_schema/3`
 #               + `response_format:` opt; the model is forced to emit JSON
 #               conforming to the supplied schema.
-# Spec section: §5.4 (response_format), §10.4 (structured_finalize).
+# Spec section: §5.4 (response_format), §10.4 (structured_finalize),
+#               §11 Decision #4 (Anthropic tool-forcing lift + structured_output_tool marker).
 # Steering strategy: tight — `strict: true` schema + system prompt that names
 #                    the schema obligation. Assertion: JSON decodes and the
 #                    `message` field contains "OK".
 # Natural alternative (commented out below):
 #   ALLM.user("Reply with a JSON greeting.")  # without response_format
-# Run with:    OPENAI_API_KEY=sk-... mix run examples/openai/06_structured_output.exs
-
-# Auto-load OPENAI_API_KEY from project-root .env if not already in env.
-if System.get_env("OPENAI_API_KEY") in [nil, ""], do: EnvLoader.load(Path.expand(".env", Path.join(__DIR__, "../..")))
+# Run with:    OPENAI_API_KEY=sk-... mix run examples/06_structured_output.exs                                # default
+#         OR:  ANTHROPIC_API_KEY=sk-ant-... ALLM_PROVIDER=anthropic mix run examples/06_structured_output.exs
 
 Application.ensure_all_started(:allm)
+Code.require_file("_helpers.exs", __DIR__)
 
 schema =
   ALLM.json_schema(
@@ -28,12 +28,7 @@ schema =
     strict: true
   )
 
-engine =
-  ALLM.Engine.new(
-    adapter: ALLM.Providers.OpenAI,
-    model: System.get_env("ALLM_MODEL", "gpt-5.4-nano"),
-    params: %{reasoning_effort: :none}
-  )
+engine = ExamplesHelpers.engine()
 
 messages = [
   ALLM.system("Always emit valid JSON conforming to the schema."),
@@ -62,6 +57,21 @@ unless ok? do
   )
 
   System.halt(1)
+end
+
+# Anthropic-only: structured-output via tool-forcing stamps
+# `metadata.structured_output_tool == true` on the final response per Decision #4.
+# OpenAI's native :json_schema response carries no equivalent marker.
+if System.get_env("ALLM_PROVIDER", "openai") == "anthropic" do
+  unless result.final_response.metadata[:structured_output_tool] == true do
+    IO.puts(
+      :stderr,
+      "FAIL: expected metadata.structured_output_tool == true for Anthropic, got " <>
+        inspect(result.final_response.metadata[:structured_output_tool])
+    )
+
+    System.halt(1)
+  end
 end
 
 IO.puts("OK: structured_output — decoded=#{inspect(decoded)} pass_1=#{inspect(pass_1_halted)}")

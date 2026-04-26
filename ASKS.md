@@ -65,3 +65,5 @@
 [MILE] sun 4/26 1pm - Committed Phase 10 OpenAI provider (both endpoints) plus the BYOK leak fix
 
 [BUILD] sun 4/26 3pm - Build all 4 sub-phases of Phase 11 (Anthropic provider adapter) from PHASE_11_DESIGN.md
+
+[MILE] sun 4/26 4pm - Applied Phase 11.3 review Option A resolution + M1 metadata fix and committed cumulative Phase 11.1–11.3 Anthropic provider work

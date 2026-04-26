@@ -1,4 +1,4 @@
-# examples/openai/09_ask_user.exs
+# examples/09_ask_user.exs
 #
 # Demonstrates: a tool handler returning `{:ask_user, question, opts}` halts
 #               the chat with `halted_reason: :ask_user`; a follow-up turn
@@ -9,16 +9,11 @@
 #                    second-turn assertion is shape-only (`:completed`) since
 #                    the model's final phrasing is variable.
 # Natural alternative: this IS the natural form.
-# Run with:    OPENAI_API_KEY=sk-... mix run examples/openai/09_ask_user.exs
-#
-# Note: Bug #5 (Responses-API tool-call decoder gap) was fixed in this
-# revision, so this example now runs natively on the Responses endpoint
-# that `gpt-5.4-nano` selects by default.
-
-# Auto-load OPENAI_API_KEY from project-root .env if not already in env.
-if System.get_env("OPENAI_API_KEY") in [nil, ""], do: EnvLoader.load(Path.expand(".env", Path.join(__DIR__, "../..")))
+# Run with:    OPENAI_API_KEY=sk-... mix run examples/09_ask_user.exs                                # default
+#         OR:  ANTHROPIC_API_KEY=sk-ant-... ALLM_PROVIDER=anthropic mix run examples/09_ask_user.exs
 
 Application.ensure_all_started(:allm)
+Code.require_file("_helpers.exs", __DIR__)
 
 weather =
   ALLM.tool(
@@ -38,15 +33,7 @@ weather =
     end
   )
 
-engine =
-  ALLM.Engine.new(
-    adapter: ALLM.Providers.OpenAI,
-    model: System.get_env("ALLM_MODEL", "gpt-5.4-nano"),
-    params: %{reasoning_effort: :low},
-    tool_executor: ALLM.ToolExecutor.Default,
-    tool_result_encoder: ALLM.ToolResultEncoder.JSON,
-    tools: [weather]
-  )
+engine = ExamplesHelpers.engine(tools: [weather])
 
 messages = [
   ALLM.system(
