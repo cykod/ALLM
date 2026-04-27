@@ -9,7 +9,7 @@ defmodule ALLM.AllmEditImageTest do
   sugar produces a struct byte-equal (modulo `:request_id`) to the
   explicit `ALLM.image_request/2`-built equivalent.
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   use ExUnitProperties
 
   alias ALLM.Engine
@@ -27,38 +27,28 @@ defmodule ALLM.AllmEditImageTest do
     Engine.new(image_adapter: FakeImages, adapter_opts: [image_script: script])
   end
 
-  defmodule CaptureAdapter do
-    @moduledoc false
-    @behaviour ALLM.ImageAdapter
-    def supported_operations, do: [:generate, :edit, :variation]
+  # An engine using FakeImages with an empty-image scripted response and a
+  # `:capture_pid` side-channel back to the test pid. Replaces the prior
+  # file-scoped `CaptureAdapter` defmodule + `Process.register/2` pattern
+  # (Phase 14.2 retro Finding 3). The script is sized to cover the
+  # property-test's repeated calls.
+  defp capture_engine do
+    script = for _ <- 1..200, do: {:ok, []}
 
-    def generate(req, opts) do
-      pid = Process.get(:capture_adapter_pid) || :erlang.whereis(:edit_capture)
-      if is_pid(pid), do: send(pid, {:request, req, opts})
-      {:ok, %ALLM.ImageResponse{images: [], usage: %ALLM.ImageUsage{}}}
-    end
-  end
-
-  setup do
-    name = :edit_capture
-
-    case :erlang.whereis(name) do
-      :undefined -> :ok
-      _pid -> Process.unregister(name)
-    end
-
-    Process.register(self(), name)
-    :ok
+    Engine.new(
+      image_adapter: FakeImages,
+      adapter_opts: [image_script: script, capture_pid: self()]
+    )
   end
 
   describe "three call shapes (Decision #6)" do
     test "single base image: edit_image(engine, base, prompt) builds %ImageRequest{operation: :edit, input_images: [base], mask: nil}" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
       base = single_image()
 
       assert {:ok, _} = ALLM.edit_image(engine, base, "make sky pink")
 
-      assert_received {:request, req, _opts}
+      assert_receive {FakeImages, :call, %{request: req}}
 
       assert %ImageRequest{
                operation: :edit,
@@ -69,13 +59,13 @@ defmodule ALLM.AllmEditImageTest do
     end
 
     test "list form [base, mask]: edit_image(engine, [base, mask], prompt) builds input_images: [base, mask], mask: nil" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
       base = single_image()
       mask = single_image()
 
       assert {:ok, _} = ALLM.edit_image(engine, [base, mask], "make sky pink")
 
-      assert_received {:request, req, _opts}
+      assert_receive {FakeImages, :call, %{request: req}}
 
       assert %ImageRequest{
                operation: :edit,
@@ -86,13 +76,13 @@ defmodule ALLM.AllmEditImageTest do
     end
 
     test "explicit mask kw: edit_image(engine, base, prompt, mask: mask) builds input_images: [base], mask: mask" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
       base = single_image()
       mask = single_image()
 
       assert {:ok, _} = ALLM.edit_image(engine, base, "make sky pink", mask: mask)
 
-      assert_received {:request, req, _opts}
+      assert_receive {FakeImages, :call, %{request: req}}
 
       assert %ImageRequest{
                operation: :edit,
@@ -115,13 +105,14 @@ defmodule ALLM.AllmEditImageTest do
 
   describe "opt forwarding" do
     test "forwards n, size, quality into the request" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
       base = single_image()
 
       assert {:ok, _} =
                ALLM.edit_image(engine, base, "x", n: 3, size: {512, 512}, quality: :high)
 
-      assert_received {:request, %ImageRequest{n: 3, size: {512, 512}, quality: :high}, _opts}
+      assert_receive {FakeImages, :call,
+                      %{request: %ImageRequest{n: 3, size: {512, 512}, quality: :high}}}
     end
 
     test "happy path through FakeImages returns %ImageResponse{}" do
@@ -141,10 +132,10 @@ defmodule ALLM.AllmEditImageTest do
             ) do
         base = single_image()
 
-        engine = Engine.new(image_adapter: CaptureAdapter)
+        engine = capture_engine()
         {:ok, _} = ALLM.edit_image(engine, base, prompt, n: n)
 
-        assert_received {:request, sugar_req, _opts}
+        assert_receive {FakeImages, :call, %{request: sugar_req}}
 
         explicit =
           ALLM.image_request(prompt,

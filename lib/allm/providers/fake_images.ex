@@ -41,6 +41,21 @@ defmodule ALLM.Providers.FakeImages do
   `start_script_cursor/0` to share / isolate cursors explicitly across
   processes.
 
+  ## Test-only capture seam
+
+  Pass `adapter_opts[:capture_pid]` with a pid to receive a side-channel
+  message every time `generate/2` is invoked, BEFORE the script is
+  consulted. The message has the form:
+
+      {ALLM.Providers.FakeImages, :call, %{request: request, opts: opts}}
+
+  This is purely a side-channel — it does NOT affect the response. It
+  exists so test files can assert on what the adapter received without
+  the `Process.register/2` + named-pid pattern (which forces
+  `async: false`). With `:capture_pid` in scope, tests stay
+  `async: true` and use `assert_receive {ALLM.Providers.FakeImages,
+  :call, _}` to pattern-match on the captured payload.
+
   ## Examples
 
       iex> img = ALLM.Image.from_binary(<<137, 80, 78, 71>>, "image/png")
@@ -100,6 +115,11 @@ defmodule ALLM.Providers.FakeImages do
   script does not already populate it. Round-trips `request.metadata`
   onto `response.metadata` when the script does not populate it.
 
+  When `opts[:adapter_opts][:capture_pid]` is a pid, sends
+  `{ALLM.Providers.FakeImages, :call, %{request: request, opts: opts}}`
+  to that pid BEFORE the operation gate fires (so even rejected calls
+  are captured). Side-channel only — does not affect the response.
+
   ## Examples
 
       iex> img = ALLM.Image.from_url("https://example.com/x.png")
@@ -108,11 +128,24 @@ defmodule ALLM.Providers.FakeImages do
       iex> {:ok, resp} = ALLM.Providers.FakeImages.generate(req, opts)
       iex> resp.usage.images
       1
+
+      iex> img = ALLM.Image.from_binary(<<1>>, "image/png")
+      iex> req = ALLM.ImageRequest.new(prompt: "a kestrel")
+      iex> opts = [adapter_opts: [image_script: [{:ok, [img]}], capture_pid: self()]]
+      iex> {:ok, _} = ALLM.Providers.FakeImages.generate(req, opts)
+      iex> receive do
+      ...>   {ALLM.Providers.FakeImages, :call, %{request: ^req}} -> :ok
+      ...> after
+      ...>   0 -> :no_message
+      ...> end
+      :ok
   """
   @impl ALLM.ImageAdapter
   @spec generate(ImageRequest.t(), keyword()) ::
           {:ok, ImageResponse.t()} | {:error, ImageAdapterError.t()}
   def generate(%ImageRequest{} = request, opts) when is_list(opts) do
+    maybe_capture(request, opts)
+
     if request.operation in supported_operations() do
       run_scripted(request, opts)
     else
@@ -195,6 +228,23 @@ defmodule ALLM.Providers.FakeImages do
   # ---------------------------------------------------------------------------
   # Internals
   # ---------------------------------------------------------------------------
+
+  # Test-only side-channel. Sends a tagged message to the configured pid
+  # BEFORE the operation gate / script consult so that even rejected
+  # operations are captured. No-op when `:capture_pid` is absent or not a
+  # live pid.
+  defp maybe_capture(%ImageRequest{} = request, opts) do
+    adapter_opts = Keyword.get(opts, :adapter_opts, [])
+
+    case Keyword.get(adapter_opts, :capture_pid) do
+      pid when is_pid(pid) ->
+        send(pid, {__MODULE__, :call, %{request: request, opts: opts}})
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
 
   defp run_scripted(%ImageRequest{} = request, opts) do
     adapter_opts = Keyword.get(opts, :adapter_opts, [])

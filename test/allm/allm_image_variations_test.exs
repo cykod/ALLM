@@ -7,7 +7,7 @@ defmodule ALLM.AllmImageVariationsTest do
   the cross-function mirror property against `ALLM.image_request/2` per
   Decision #6.
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   use ExUnitProperties
 
   alias ALLM.Engine
@@ -25,38 +25,28 @@ defmodule ALLM.AllmImageVariationsTest do
     Engine.new(image_adapter: FakeImages, adapter_opts: [image_script: script])
   end
 
-  defmodule CaptureAdapter do
-    @moduledoc false
-    @behaviour ALLM.ImageAdapter
-    def supported_operations, do: [:generate, :edit, :variation]
+  # An engine using FakeImages with an empty-image scripted response and a
+  # `:capture_pid` side-channel back to the test pid. Replaces the prior
+  # file-scoped `CaptureAdapter` defmodule + `Process.register/2` pattern
+  # (Phase 14.2 retro Finding 3). The script is sized to cover the
+  # property-test's repeated calls.
+  defp capture_engine do
+    script = for _ <- 1..200, do: {:ok, []}
 
-    def generate(req, opts) do
-      pid = :erlang.whereis(:variation_capture)
-      if is_pid(pid), do: send(pid, {:request, req, opts})
-      {:ok, %ALLM.ImageResponse{images: [], usage: %ALLM.ImageUsage{}}}
-    end
-  end
-
-  setup do
-    name = :variation_capture
-
-    case :erlang.whereis(name) do
-      :undefined -> :ok
-      _pid -> Process.unregister(name)
-    end
-
-    Process.register(self(), name)
-    :ok
+    Engine.new(
+      image_adapter: FakeImages,
+      adapter_opts: [image_script: script, capture_pid: self()]
+    )
   end
 
   describe "builder shape" do
     test "image_variations(engine, img) builds %ImageRequest{operation: :variation, input_images: [img], prompt: nil}" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
       img = single_image()
 
       assert {:ok, _} = ALLM.image_variations(engine, img)
 
-      assert_received {:request, req, _opts}
+      assert_receive {FakeImages, :call, %{request: req}}
 
       assert %ImageRequest{
                operation: :variation,
@@ -66,11 +56,12 @@ defmodule ALLM.AllmImageVariationsTest do
     end
 
     test "image_variations(engine, img, n: 4) sets n: 4" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
       img = single_image()
 
       assert {:ok, _} = ALLM.image_variations(engine, img, n: 4)
-      assert_received {:request, %ImageRequest{n: 4, operation: :variation}, _opts}
+
+      assert_receive {FakeImages, :call, %{request: %ImageRequest{n: 4, operation: :variation}}}
     end
   end
 
@@ -98,9 +89,9 @@ defmodule ALLM.AllmImageVariationsTest do
       check all(n <- StreamData.integer(1..4)) do
         img = single_image()
 
-        engine = Engine.new(image_adapter: CaptureAdapter)
+        engine = capture_engine()
         {:ok, _} = ALLM.image_variations(engine, img, n: n)
-        assert_received {:request, sugar_req, _opts}
+        assert_receive {FakeImages, :call, %{request: sugar_req}}
 
         # DELIBERATE BYPASS of `ALLM.image_request/2` — see Phase 14.2 retro
         # Finding 4. `image_request/2` requires a binary prompt, but

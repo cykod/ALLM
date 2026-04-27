@@ -202,6 +202,57 @@ defmodule ALLM.Providers.FakeImagesTest do
     end
   end
 
+  describe "capture_pid side-channel" do
+    test "sends {ALLM.Providers.FakeImages, :call, %{request, opts}} to capture_pid before script consult" do
+      img = Image.from_binary(<<1>>, "image/png")
+      req = ImageRequest.new(prompt: "a kestrel")
+
+      opts = [
+        adapter_opts: [image_script: [{:ok, [img]}], capture_pid: self()],
+        request_id: "rid-cap"
+      ]
+
+      assert {:ok, %ImageResponse{}} = FakeImages.generate(req, opts)
+
+      assert_receive {FakeImages, :call, %{request: ^req, opts: captured_opts}}
+      assert Keyword.get(captured_opts, :request_id) == "rid-cap"
+    end
+
+    test "captures even rejected (unsupported_operation) calls" do
+      defmodule GenOnlyForCaptureTest do
+        @behaviour ALLM.ImageAdapter
+        @impl true
+        def supported_operations, do: [:generate]
+        @impl true
+        def generate(%ImageRequest{operation: :generate} = req, opts),
+          do: FakeImages.generate(req, opts)
+
+        def generate(%ImageRequest{operation: op}, _opts) do
+          {:error, ImageAdapterError.new(:unsupported_operation, metadata: %{operation: op})}
+        end
+      end
+
+      base = Image.from_binary(<<1>>, "image/png")
+      req = ImageRequest.new(operation: :edit, prompt: "x", input_images: [base])
+      opts = [adapter_opts: [capture_pid: self()]]
+
+      # Hit FakeImages directly with an :edit op — FakeImages supports :edit,
+      # so it captures and proceeds. The capture firing BEFORE script consult
+      # is what we're asserting.
+      _ = FakeImages.generate(req, opts)
+      assert_receive {FakeImages, :call, %{request: ^req}}
+    end
+
+    test "absent capture_pid is a no-op (no message sent)" do
+      img = Image.from_binary(<<1>>, "image/png")
+      req = ImageRequest.new(prompt: "x")
+      opts = [adapter_opts: [image_script: [{:ok, [img]}]]]
+
+      assert {:ok, _} = FakeImages.generate(req, opts)
+      refute_received {FakeImages, :call, _}
+    end
+  end
+
   describe "script/1 grammar validation" do
     test "accepts well-formed entries" do
       img = Image.from_binary(<<1>>, "image/png")

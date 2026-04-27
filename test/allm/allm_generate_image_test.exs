@@ -9,7 +9,7 @@ defmodule ALLM.AllmGenerateImageTest do
   pass-through. NO telemetry, NO preflight, NO retry yet (Phase 14.3
   scope).
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias ALLM.Engine
   alias ALLM.Error.{EngineError, ImageAdapterError}
@@ -19,18 +19,6 @@ defmodule ALLM.AllmGenerateImageTest do
   doctest ALLM, only: [generate_image: 3]
 
   @png_bytes <<137, 80, 78, 71, 13, 10, 26, 10>>
-
-  defmodule CaptureAdapter do
-    @moduledoc false
-    @behaviour ALLM.ImageAdapter
-    def supported_operations, do: [:generate, :edit, :variation]
-
-    def generate(req, opts) do
-      pid = :erlang.whereis(:gen_image_capture)
-      if is_pid(pid), do: send(pid, {:request, req, opts})
-      {:ok, %ALLM.ImageResponse{images: [], usage: %ALLM.ImageUsage{}}}
-    end
-  end
 
   defmodule NilReqIdAdapter do
     @moduledoc false
@@ -74,20 +62,20 @@ defmodule ALLM.AllmGenerateImageTest do
     end
   end
 
-  setup do
-    name = :gen_image_capture
-
-    case :erlang.whereis(name) do
-      :undefined -> :ok
-      _pid -> Process.unregister(name)
-    end
-
-    Process.register(self(), name)
-    :ok
-  end
-
   defp engine_with_script(script) do
     Engine.new(image_adapter: FakeImages, adapter_opts: [image_script: script])
+  end
+
+  # An engine that uses FakeImages with an empty-image scripted response and
+  # captures the call payload to the test pid via `:capture_pid`. Replaces
+  # the prior file-scoped `CaptureAdapter` defmodule + `Process.register/2`
+  # pattern (Phase 14.2 retro Finding 3).
+  defp capture_engine(extra_adapter_opts \\ []) do
+    adapter_opts =
+      [image_script: [{:ok, []}, {:ok, []}, {:ok, []}, {:ok, []}], capture_pid: self()] ++
+        extra_adapter_opts
+
+    Engine.new(image_adapter: FakeImages, adapter_opts: adapter_opts)
   end
 
   defp single_image, do: Image.from_binary(@png_bytes, "image/png")
@@ -111,31 +99,39 @@ defmodule ALLM.AllmGenerateImageTest do
 
   describe "string-prompt sugar" do
     test "generate_image(engine, \"a kestrel\") builds a generate-shaped request and dispatches" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
 
       assert {:ok, _} = ALLM.generate_image(engine, "a kestrel")
-      assert_received {:request, %ImageRequest{operation: :generate, prompt: "a kestrel"}, _opts}
+
+      assert_receive {FakeImages, :call,
+                      %{request: %ImageRequest{operation: :generate, prompt: "a kestrel"}}}
     end
 
     test "merges opts into the request (n, size)" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
 
       assert {:ok, _} =
                ALLM.generate_image(engine, "a kestrel", n: 2, size: {1024, 1024})
 
-      assert_received {:request, %ImageRequest{n: 2, size: {1024, 1024}, prompt: "a kestrel"},
-                       _opts}
+      assert_receive {FakeImages, :call,
+                      %{
+                        request: %ImageRequest{
+                          n: 2,
+                          size: {1024, 1024},
+                          prompt: "a kestrel"
+                        }
+                      }}
     end
   end
 
   describe "struct form" do
     test "with %ImageRequest{} dispatches the struct verbatim (does NOT re-wrap)" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
       img = single_image()
       input = %ImageRequest{operation: :variation, input_images: [img], prompt: nil}
 
       assert {:ok, _} = ALLM.generate_image(engine, input)
-      assert_received {:request, ^input, _opts}
+      assert_receive {FakeImages, :call, %{request: ^input}}
     end
 
     test "manually-built %ImageRequest{prompt: \"\"} dispatches without validating (Decision #13)" do
@@ -147,20 +143,20 @@ defmodule ALLM.AllmGenerateImageTest do
 
   describe "request_id propagation" do
     test "generates a request_id when opts has none and forwards to the adapter via opts[:request_id]" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
       assert {:ok, _} = ALLM.generate_image(engine, "x")
 
-      assert_received {:request, _req, opts}
+      assert_receive {FakeImages, :call, %{opts: opts}}
       id = Keyword.get(opts, :request_id)
       assert is_binary(id)
       assert byte_size(id) > 0
     end
 
     test "forwards opts[:request_id] verbatim" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
 
       assert {:ok, _} = ALLM.generate_image(engine, "x", request_id: "caller-supplied")
-      assert_received {:request, _req, opts}
+      assert_receive {FakeImages, :call, %{opts: opts}}
       assert Keyword.get(opts, :request_id) == "caller-supplied"
     end
 
@@ -204,10 +200,10 @@ defmodule ALLM.AllmGenerateImageTest do
     end
 
     test "adapter does NOT receive :stream in dispatch opts (Phase 14.2 fix)" do
-      engine = Engine.new(image_adapter: CaptureAdapter)
+      engine = capture_engine()
 
       assert {:ok, _} = ALLM.generate_image(engine, "x", stream: true)
-      assert_received {:request, _req, opts}
+      assert_receive {FakeImages, :call, %{opts: opts}}
       refute Keyword.has_key?(opts, :stream)
     end
   end
@@ -218,16 +214,12 @@ defmodule ALLM.AllmGenerateImageTest do
       # adapter_opts: [foo: :call]. With `++` precedent (Keyword.get returns
       # first occurrence), engine wins. With Keyword.merge/2 (the pre-fix
       # bug), call would have won.
-      engine =
-        Engine.new(
-          image_adapter: CaptureAdapter,
-          adapter_opts: [foo: :engine]
-        )
+      engine = capture_engine(foo: :engine)
 
       assert {:ok, _} =
                ALLM.generate_image(engine, "x", adapter_opts: [foo: :call])
 
-      assert_received {:request, _req, opts}
+      assert_receive {FakeImages, :call, %{opts: opts}}
       merged = Keyword.get(opts, :adapter_opts)
       assert Keyword.get(merged, :foo) == :engine
     end
