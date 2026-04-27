@@ -1,3 +1,135 @@
+## [FEAT] Phase 13: v0.3 Layer A image data structs + facade + validator
+*Monday, April 27th at 10am*
+First v0.3 slice (see steering/PHASE_13_image_layer_a.md). Adds Layer A image 
+data structs ALLM.Image, ALLM.ImageRequest, ALLM.ImageResponse, ALLM.ImageUsage 
+with full constructors (from_file/from_binary/from_url/from_base64), pure 
+resolvers (to_binary/to_data_uri), Jason.Encoder + __from_tagged__/1 hydrators, 
+and ETF/JSON round-trip serializability across all four :source variants. 
+Public surface: ALLM.image_request/2 facade and ALLM.Validate.image_request/1 
+validator with exhaustive 11-atom field-error vocabulary (accumulator pattern 
+matching Validate.request/1 precedent). Extended ALLM.Serializer.@known_modules 
+18 to 22; extended hydrate_with/2 rescue to forward ValidationError raises 
+(required for [:source, :invalid_base64] field-error path); extended 
+ALLM.Error.ValidationError.@type reason with :invalid_image_request. Engine 
+round-trip extension proves populated image_adapter: doesn't perturb v0.2 
+serializability. ImageUsage cost fields refined to float() | nil from spec 
+§35.2.4's Decimal — spec PR pending alongside v0.3.0. Full suite: 1553 tests 
+/ 0 failures / 0 dialyzer warnings. Cite §35.2.1, §35.2.2, §35.2.3, 
+§35.2.4, §35.4, §35.5; refines §16.
+
+---
+
+## [FEAT] v0.3 Phase 13.3: ALLM.image_request/2 facade + ALLM.Validate.image_request/1 + Engine round-trip extension (§35.4, §35.5)
+
+Public surface for image creation lands.
+
+`ALLM.image_request/2` facade constructor (`lib/allm.ex`) — one-line wrapper
+over `ALLM.ImageRequest.new/1` that puts the positional `prompt` last in
+the opts list (positional argument is authoritative). Mirrors `request/2`'s
+no-validate precedent (Decision #7): unknown keys raise `KeyError` via
+`struct!/2`; validator rejection cases (e.g. `:variation` with a non-empty
+prompt) return the struct anyway — call `Validate.image_request/1`
+explicitly to check.
+
+`ALLM.Validate.image_request/1` validator (`lib/allm/validate.ex`) —
+accumulator pattern matching `request/1`. Returns `:ok` or
+`{:error, %ValidationError{reason: :invalid_image_request, errors: [...]}}`
+accumulating ALL failed rules (no hard-reject). Operation-arity rules per
+spec §35.2.2 (`:generate`/`:edit`/`:variation`); field rules over `:n`,
+`:response_format`, `:size`, `:input_images`, `:mask`. Field-error vocabulary
+is closed against the design's §Error Contract table — atoms include
+`:required_for_operation`, `:not_allowed_for_operation`, `:must_be_empty`,
+`:invalid_count`, `:not_a_list`, `:invalid_image`, `:must_be_positive`,
+`:unknown`, `:invalid_shape`. Indexed paths for `:input_images` element
+rejections (`{[:input_images, idx], :invalid_image}`).
+
+`ALLM.Error.ValidationError.@type reason` and `@legal_reasons` extended with
+`:invalid_image_request` (1 atom — closed-set extension; field-reason atoms
+remain open per the v0.2 vocabulary precedent).
+
+`test/allm/engine_roundtrip_test.exs` populated_engine helper now sets
+`image_adapter: ALLM.Engine` (using the engine module itself as a
+stub-but-loaded module, matching the `@stub_handler_module` pattern). The
+existing ETF and JSON round-trip tests now exercise the populated field;
+plus one new explicit test asserts the field decodes to the loaded module
+via `restore_module/1` (`String.to_existing_atom/1` per
+`lib/allm/engine.ex:416`) — belt-and-braces against the silent-success
+failure mode where the field round-trips to `nil` due to a wiring bug.
+
+v0.2 backward-compat invariant holds: full suite at 1553 tests, all green.
+
+---
+
+## [FEAT] v0.3 Phase 13.1: ALLM.Image Layer A struct + four constructors + to_binary/to_data_uri (§35.2.1)
+
+New `ALLM.Image` Layer A struct (`lib/allm/image.ex`) with `@enforce_keys [:source]`
+and four pure constructors — `from_file/1`, `from_binary/2`, `from_url/1`,
+`from_base64/2`. `from_binary/2` and `from_base64/2` carry runtime
+`is_binary(mime_type)` guards backing the `@spec` (nil/integer mime raises
+`FunctionClauseError`). `from_file/1` is pure data — does NOT call
+`File.read/1`; MIME-type lookup is extension-only against the closed set
+`[".png", ".jpg", ".jpeg", ".webp", ".gif"]` (case-insensitive). `to_binary/1`
+resolves `:binary`/`:base64`/`:file` sources; `{:url, _}` returns
+`{:error, :remote_source}` (Decision #2 — Layer A never fetches URLs).
+`to_data_uri/1` likewise returns `{:error, :remote_source}` for `{:url, _}`
+and `{:error, :missing_mime_type}` when `:mime_type` is `nil`; the
+`{:base64, _}` arm is a fast path that forwards the encoded string verbatim.
+JSON `Jason.Encoder` impl pre-pass-transforms `:source` from a tuple into a
+`%{"type" => "...", "value" => ...}` map (Base64-encoding the binary
+variant). `__from_tagged__/1` dispatches `data["source"]["type"]` against
+the closed set `~w[binary base64 url file]`; an unknown type falls through
+to `{:_unknown, :atom_decode_failed}`, while invalid base64 in a `"binary"`
+source raises a pre-built `ValidationError` carrying
+`{[:source], :invalid_base64}` so the field-error survives the serializer's
+`ArgumentError` rescue. `ALLM.Image` registered in `ALLM.Serializer.@known_modules`.
+
+---
+
+## [FEAT] v0.3 Phase 13.2: ALLM.ImageRequest/ImageResponse/ImageUsage Layer A structs + Serializer registry extension (§35.2.2-4)
+
+Three remaining Layer A image structs land plus the serializer registry
+extension to 22 known modules.
+
+`ALLM.ImageRequest` (`lib/allm/image_request.ex`) carries the closed
+operation enum `:generate | :edit | :variation`, a `:size` type that mixes
+the tuple form `{w, h}` with `String.t()` and `:auto`, a `:quality` open
+type with closed-atom restoration on decode, and the closed
+`:response_format` enum `:binary | :base64 | :url`. `new/1` is `struct!/2`
+over keyword opts — unknown keys raise `KeyError` (mirrors
+`ALLM.Request.new/2`). The `__from_tagged__/1` decoder uses dedicated
+`decode_size/1` and `decode_quality/1` private helpers (mirroring
+`lib/allm/request.ex:94-99`'s closed-set-with-binary-fall-through pattern)
+and routes the atom-only fields through `ALLM.Serializer.to_atom_field/1`
+directly. JSON encodes the `:size` tuple as a 2-element array.
+
+`ALLM.ImageResponse` (`lib/allm/image_response.ex`) carries an `:images`
+list, an `:usage` field defaulting to `%ALLM.ImageUsage{}` (NEVER nil), an
+opaque `:raw` term (caller responsibility to keep JSON-encodable — same
+contract as `ALLM.Response.raw`), plus `:id`/`:request_id`/`:model`
+correlation fields. ETF round-trip is total.
+
+`ALLM.ImageUsage` (`lib/allm/image_usage.ex`) carries `:images`
+(default `0`), the `:size` and `:quality` strings the provider returned, and
+optional token + cost fields for token-priced models like gpt-image-1.
+
+**NOTE — spec refinement (Decision #1).** `ALLM.ImageUsage` cost fields are
+typed `float() | nil`, NOT `Decimal.t() | nil` as spec §35.2.4 currently
+reads. Rationale: `ALLM.Usage.cost` is already `float()`
+(`lib/allm/usage.ex:11`); adopting `Decimal` solely for `ImageUsage` would
+split the cost type and add a runtime dep (`:decimal` is not in `mix.exs`)
+for no semantic gain. Float-summation drift on
+`total_cost = input_cost + output_cost` is bounded at ≤1 ULP, well below
+provider cent-level pricing precision. A spec PR against
+`steering/allm_engine_session_streaming_spec_v0_2.md` §35.2.4 will land
+alongside v0.3.0 recording this refinement.
+
+`ALLM.Serializer.@known_modules` extended from 18 to 22 entries — adds
+`ALLM.Image`, `ALLM.ImageRequest`, `ALLM.ImageResponse`, `ALLM.ImageUsage`.
+`mix.exs` `groups_for_modules: ["Data types": …]` extended likewise so
+`ex_doc` groups the four new structs with v0.2 data types.
+
+---
+
 ## [FEAT] Phase 12: v0.2.0 release polish + case-study tests
 *Sunday, April 26th at 8pm*
 Final v0.2 release polish (see steering/PHASE_12_DESIGN.md). Bumped @version 

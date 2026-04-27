@@ -75,3 +75,9 @@
 [BUILD] sun 4/26 7pm - Build Phase 12 (v0.2 release polish: §31 freeze, case-study translations, docs, release artifacts) from PHASE_12_DESIGN.md
 
 [PHAS] sun 4/26 8pm - Phase the 0.3 release from the v0.2 streaming spec
+
+[MILE] sun 4/26 8pm - Committed Phase 12 v0.2.0 release polish: version bump, ex_doc groups, README Getting Started, §31 audit gate, 4 case-study translations
+
+[DSGN] mon 4/27 1am - Design Phase 13 (v0.3 Phase 1): Layer A image data structs, facade constructor, validator, engine image_adapter field
+
+[BUILD] mon 4/27 10am - Build Phase 13 (v0.3 Layer A image data structs, facade, validator) from PHASE_13_image_layer_a.md

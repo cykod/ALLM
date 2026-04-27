@@ -106,7 +106,11 @@ defmodule ALLM.MixProject do
           ALLM.Usage,
           ALLM.Tool,
           ALLM.ToolCall,
-          ALLM.ModelRef
+          ALLM.ModelRef,
+          ALLM.Image,
+          ALLM.ImageRequest,
+          ALLM.ImageResponse,
+          ALLM.ImageUsage
         ],
         Runtime: [
           ALLM.Engine,

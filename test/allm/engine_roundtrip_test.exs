@@ -37,7 +37,7 @@ defmodule ALLM.EngineRoundtripTest do
           tools: [tool_a, tool_b],
           tool_executor: ALLM.Engine,
           tool_result_encoder: ALLM.Engine,
-          image_adapter: nil,
+          image_adapter: ALLM.Engine,
           params: %{temperature: 0.2, top_p: 1.0, system: "be brief"},
           context: %{user_id: 42, mode: "chat"},
           retry: :default,
@@ -60,6 +60,23 @@ defmodule ALLM.EngineRoundtripTest do
     json = ALLM.Serializer.to_json!(engine)
     assert {:ok, decoded} = ALLM.Serializer.from_json(json)
     assert decoded == engine
+  end
+
+  test "populated engine with image_adapter set decodes via String.to_existing_atom/1" do
+    # Phase 13.3 belt-and-braces: the populated engine carries
+    # `image_adapter: ALLM.Engine`. The decoder at `lib/allm/engine.ex:395`
+    # routes through `restore_module/1`, which uses
+    # `String.to_existing_atom/1` (per `lib/allm/engine.ex:416`). This test
+    # asserts the field round-trips to a non-nil module value through the
+    # JSON path — guarding against the silent-success failure mode where
+    # `image_adapter:` decodes to `nil` because of a wiring bug.
+    engine = populated_engine()
+    assert engine.image_adapter == ALLM.Engine
+
+    json = ALLM.Serializer.to_json!(engine)
+    assert {:ok, decoded} = ALLM.Serializer.from_json(json)
+    assert decoded.image_adapter == ALLM.Engine
+    refute is_nil(decoded.image_adapter)
   end
 
   test "JSON decode with unloaded adapter module returns atom_decode_failed" do

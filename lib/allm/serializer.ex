@@ -79,7 +79,11 @@ defmodule ALLM.Serializer do
     ALLM.Error.StreamError,
     ALLM.Error.ValidationError,
     ALLM.Error.ToolError,
-    ALLM.Error.SessionError
+    ALLM.Error.SessionError,
+    ALLM.Image,
+    ALLM.ImageRequest,
+    ALLM.ImageResponse,
+    ALLM.ImageUsage
   ]
 
   @type_tag_index Map.new(@known_modules, fn mod -> {inspect(mod), mod} end)
@@ -234,9 +238,23 @@ defmodule ALLM.Serializer do
   end
 
   # Invoke a module's `__from_tagged__/1`, catching atom-decode failures.
+  # Closed-enum decode failures bubble out as `ArgumentError` (from
+  # `String.to_existing_atom/1`) and collapse to `:atom_decode_failed`. A
+  # decoder that needs to surface a precise field-error (e.g.
+  # `ALLM.Image.__from_tagged__/1`'s `[:source, :invalid_base64]`) raises a
+  # pre-built `ValidationError` directly; the rescue forwards it verbatim.
   defp hydrate_with(module, data) do
     {:ok, module.__from_tagged__(data)}
   rescue
+    # ValidationError raises forwarded verbatim — required for
+    # `ALLM.Image.__from_tagged__/1`'s `[{[:source], :invalid_base64}]`
+    # field-error path (Phase 13.1, design Decision §Error Contract row).
+    # ArgumentError stays coerced to `:atom_decode_failed`. Do NOT collapse
+    # this clause back into the ArgumentError rescue — reverting it silently
+    # breaks the field-error invariant for image-source decode failures.
+    err in ValidationError ->
+      {:error, err}
+
     ArgumentError ->
       {:error, validation_error([{:_unknown, :atom_decode_failed}])}
   end

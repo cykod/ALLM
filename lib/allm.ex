@@ -142,6 +142,37 @@ defmodule ALLM do
   end
 
   @doc """
+  Build an `%ALLM.ImageRequest{}` from a prompt and keyword opts.
+  Delegates to `ALLM.ImageRequest.new/1` after putting `:prompt` last in
+  the opts list — the positional `prompt` is authoritative.
+
+  Does **not** validate — call `ALLM.Validate.image_request/1` to check
+  operation-arity and field rules. Mirrors `request/2`'s no-validate
+  precedent (Phase 13.3 design Decision #7). Unknown opts raise `KeyError`
+  via `struct!/2`.
+
+  Callers wanting `:variation` (which forbids a non-empty `:prompt`) should
+  build the struct directly via `ALLM.ImageRequest.new/1`.
+
+  ## Examples
+
+      iex> req = ALLM.image_request("a kestrel")
+      iex> {req.operation, req.prompt, req.n, req.response_format}
+      {:generate, "a kestrel", 1, :binary}
+
+      iex> req = ALLM.image_request("a watercolor kestrel", model: "gpt-image-1", size: {1024, 1024}, n: 2)
+      iex> :ok = ALLM.Validate.image_request(req)
+      iex> json = ALLM.Serializer.to_json!(req)
+      iex> {:ok, ^req} = ALLM.Serializer.from_json(json)
+      iex> {req.model, req.size, req.n}
+      {"gpt-image-1", {1024, 1024}, 2}
+  """
+  @spec image_request(String.t(), keyword()) :: ALLM.ImageRequest.t()
+  def image_request(prompt, opts \\ []) when is_binary(prompt) and is_list(opts) do
+    ALLM.ImageRequest.new(Keyword.put(opts, :prompt, prompt))
+  end
+
+  @doc """
   Build an `%ALLM.Request{}` from a list of messages and keyword opts.
   Delegates to `ALLM.Request.new/2`.
 

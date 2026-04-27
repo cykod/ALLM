@@ -20,7 +20,7 @@ defmodule ALLM.Error.ValidationError do
   """
   @type field_error :: {field :: atom() | [term()], reason :: atom()}
 
-  @typedoc "Closed set of validation error reasons (spec §16, §33)."
+  @typedoc "Closed set of validation error reasons (spec §16, §33, §35.2.2)."
   @type reason ::
           :invalid_request
           | :invalid_message
@@ -30,6 +30,7 @@ defmodule ALLM.Error.ValidationError do
           | :invalid_session_input
           | :unsupported_capability
           | :vision_not_in_v0_2
+          | :invalid_image_request
 
   @type t :: %__MODULE__{
           reason: reason(),
@@ -48,6 +49,7 @@ defmodule ALLM.Error.ValidationError do
     invalid_session_input
     unsupported_capability
     vision_not_in_v0_2
+    invalid_image_request
   )a
 
   defexception [:reason, :message, :cause, errors: [], metadata: %{}]

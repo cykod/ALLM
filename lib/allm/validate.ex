@@ -13,12 +13,13 @@ defmodule ALLM.Validate do
 
   Validators are opt-in: constructors like `ALLM.Request.new/2` do not call
   these functions (see Phase 1 design non-obvious decision #7). Users invoke
-  `request/1`, `message/1`, `tool/1`, `thread/1`, or `session/1` explicitly
-  when they need a check before dispatch.
+  `request/1`, `message/1`, `tool/1`, `thread/1`, `session/1`, or
+  `image_request/1` (Phase 13.3, spec §35.2.2) explicitly when they need a
+  check before dispatch.
   """
 
   alias ALLM.Error.ValidationError
-  alias ALLM.{Message, Request, Session, Thread, Tool}
+  alias ALLM.{Image, ImageRequest, Message, Request, Session, Thread, Tool}
 
   @legal_roles [:system, :user, :assistant, :tool]
   @legal_statuses [:idle, :awaiting_user, :awaiting_tools, :completed, :error]
@@ -223,6 +224,57 @@ defmodule ALLM.Validate do
 
       finalize(:invalid_session, errors)
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # image_request/1
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Validate an `%ALLM.ImageRequest{}` (spec §35.2.2).
+
+  Returns `:ok` when every rule passes, or
+  `{:error, %ALLM.Error.ValidationError{reason: :invalid_image_request, errors: [...]}}`
+  accumulating ALL failed rules — no hard-reject (matches `request/1`'s
+  accumulator pattern).
+
+  Operation-arity rules:
+
+    * `:generate` requires non-empty `:prompt` AND `:input_images == []`.
+    * `:edit` requires non-empty `:prompt` AND `length(:input_images) in 1..2`.
+    * `:variation` requires `:prompt in [nil, ""]` AND `length(:input_images) == 1`.
+
+  Field rules: `:n` integer ≥ 1; `:response_format in [:binary, :base64, :url]`;
+  `:size in {pos_integer, pos_integer} | String.t() | :auto | nil`;
+  `:input_images` a list of `%ALLM.Image{}`; `:mask` `%ALLM.Image{}` or `nil`.
+
+  ## Examples
+
+      iex> ALLM.Validate.image_request(ALLM.ImageRequest.new(prompt: "a kestrel"))
+      :ok
+
+      iex> req = ALLM.ImageRequest.new(prompt: nil, operation: :generate)
+      iex> {:error, err} = ALLM.Validate.image_request(req)
+      iex> err.reason
+      :invalid_image_request
+      iex> {:prompt, :required_for_operation} in err.errors
+      true
+  """
+  @spec image_request(ImageRequest.t()) :: :ok | {:error, ValidationError.t()}
+  def image_request(%ImageRequest{} = req) do
+    errors =
+      []
+      |> validate_image_operation(req.operation)
+      |> validate_image_n(req.n)
+      |> validate_image_response_format(req.response_format)
+      |> validate_image_size(req.size)
+      |> validate_image_input_images_shape(req.input_images)
+      |> validate_image_input_images_elements(req.input_images)
+      |> validate_image_mask(req.mask)
+      |> validate_image_operation_arity(req)
+      |> Enum.reverse()
+
+    finalize(:invalid_image_request, errors)
   end
 
   # ---------------------------------------------------------------------------
@@ -444,4 +496,95 @@ defmodule ALLM.Validate do
   defp finalize(reason, errors) do
     {:error, ValidationError.new(reason, errors)}
   end
+
+  # ---------------------------------------------------------------------------
+  # Internal: image_request rules
+  # ---------------------------------------------------------------------------
+
+  @image_operations [:generate, :edit, :variation]
+  @image_response_formats [:binary, :base64, :url]
+
+  defp validate_image_operation(errs, op) when op in @image_operations, do: errs
+  defp validate_image_operation(errs, _), do: [{:operation, :unknown} | errs]
+
+  defp validate_image_n(errs, n) when is_integer(n) and n >= 1, do: errs
+  defp validate_image_n(errs, _), do: [{:n, :must_be_positive} | errs]
+
+  defp validate_image_response_format(errs, fmt) when fmt in @image_response_formats, do: errs
+  defp validate_image_response_format(errs, _), do: [{:response_format, :unknown} | errs]
+
+  defp validate_image_size(errs, nil), do: errs
+  defp validate_image_size(errs, :auto), do: errs
+  defp validate_image_size(errs, s) when is_binary(s), do: errs
+
+  defp validate_image_size(errs, {w, h})
+       when is_integer(w) and is_integer(h) and w > 0 and h > 0,
+       do: errs
+
+  defp validate_image_size(errs, _), do: [{:size, :invalid_shape} | errs]
+
+  defp validate_image_input_images_shape(errs, list) when is_list(list), do: errs
+  defp validate_image_input_images_shape(errs, _), do: [{:input_images, :not_a_list} | errs]
+
+  defp validate_image_input_images_elements(errs, list) when is_list(list) do
+    list
+    |> Enum.with_index()
+    |> Enum.reduce(errs, fn
+      {%Image{}, _idx}, acc -> acc
+      {_, idx}, acc -> [{[:input_images, idx], :invalid_image} | acc]
+    end)
+  end
+
+  defp validate_image_input_images_elements(errs, _), do: errs
+
+  defp validate_image_mask(errs, nil), do: errs
+  defp validate_image_mask(errs, %Image{}), do: errs
+  defp validate_image_mask(errs, _), do: [{:mask, :invalid_image} | errs]
+
+  defp validate_image_operation_arity(errs, %ImageRequest{operation: :generate} = req) do
+    errs
+    |> require_prompt_for_op(req.prompt)
+    |> require_empty_input_images_for_generate(req.input_images)
+  end
+
+  defp validate_image_operation_arity(errs, %ImageRequest{operation: :edit} = req) do
+    errs
+    |> require_prompt_for_op(req.prompt)
+    |> require_input_images_count_in_edit(req.input_images)
+  end
+
+  defp validate_image_operation_arity(errs, %ImageRequest{operation: :variation} = req) do
+    errs
+    |> reject_prompt_for_variation(req.prompt)
+    |> require_input_images_count_in_variation(req.input_images)
+  end
+
+  defp validate_image_operation_arity(errs, _), do: errs
+
+  defp require_prompt_for_op(errs, prompt) when is_binary(prompt) and prompt != "", do: errs
+  defp require_prompt_for_op(errs, _), do: [{:prompt, :required_for_operation} | errs]
+
+  defp require_empty_input_images_for_generate(errs, []), do: errs
+
+  defp require_empty_input_images_for_generate(errs, list) when is_list(list),
+    do: [{:input_images, :must_be_empty} | errs]
+
+  defp require_empty_input_images_for_generate(errs, _), do: errs
+
+  defp require_input_images_count_in_edit(errs, list) when is_list(list) do
+    if length(list) in 1..2, do: errs, else: [{:input_images, :invalid_count} | errs]
+  end
+
+  defp require_input_images_count_in_edit(errs, _), do: errs
+
+  defp reject_prompt_for_variation(errs, prompt) when is_binary(prompt) and prompt != "",
+    do: [{:prompt, :not_allowed_for_operation} | errs]
+
+  defp reject_prompt_for_variation(errs, _), do: errs
+
+  defp require_input_images_count_in_variation(errs, list) when is_list(list) do
+    if length(list) == 1, do: errs, else: [{:input_images, :invalid_count} | errs]
+  end
+
+  defp require_input_images_count_in_variation(errs, _), do: errs
 end
