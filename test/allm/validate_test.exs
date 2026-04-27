@@ -3,7 +3,20 @@ defmodule ALLM.ValidateTest do
   use ExUnitProperties
 
   alias ALLM.Error.ValidationError
-  alias ALLM.{Image, ImagePart, Message, Request, Session, TextPart, Thread, Tool, ToolCall, Validate}
+
+  alias ALLM.{
+    Image,
+    ImagePart,
+    Message,
+    Request,
+    Session,
+    TextPart,
+    Thread,
+    Tool,
+    ToolCall,
+    Validate
+  }
+
   alias ALLM.Test.Generators
 
   doctest ALLM.Validate
