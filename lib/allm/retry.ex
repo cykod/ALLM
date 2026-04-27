@@ -22,13 +22,19 @@ defmodule ALLM.Retry do
 
   Phase 14.3 added a second caller class: the image-side façade
   (`ALLM.generate_image/3 · edit_image/4 · image_variations/3`) wraps
-  the adapter dispatch in `Retry.run/3` with the same default policy
-  (`default_policy/0`) — image generation reuses chat retry semantics
-  unchanged (design Decision #9). Image-side closures emit `{:retry,
-  delay_ms, %ALLM.Error.ImageAdapterError{}}` for the four
-  retry-engaging reasons (`:rate_limited`, `:provider_unavailable`,
-  `:timeout`, `:network_error`); other reasons surface verbatim with no
-  retry attempt.
+  the adapter dispatch in `Retry.run/3`. Backoff timing reuses the
+  chat-side `default_policy/0` unchanged AT ITS SOURCE; the image
+  façade augments `retry_on` AT THE CALL SITE via
+  `ALLM.augment_image_retry_policy/1` to add the four image-error
+  atoms (`:rate_limited`, `:provider_unavailable`, `:timeout`,
+  `:network_error`) — chat-side `default_policy/0.retry_on` is
+  HTTP-status-coded (`[429, 500, 502, 503, 504, :timeout]`) and the
+  image side surfaces closed-enum atoms only, so without the
+  augmentation only `:timeout` would coincidentally retry. See PHASE 14
+  Decision #9 for the full design rationale. Image-side closures emit
+  `{:retry, delay_ms, %ALLM.Error.ImageAdapterError{}}` for the four
+  retry-engaging reasons; other reasons surface verbatim with no retry
+  attempt.
 
   ## v0.2 surface caveat — public-API retry visibility
 

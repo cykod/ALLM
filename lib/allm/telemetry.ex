@@ -95,11 +95,20 @@ defmodule ALLM.Telemetry do
   Wrap a closure in a `:telemetry.span/3` call under the `[:allm, name]`
   prefix.
 
-  The closure must return `{result, stop_metadata_extras}` per
-  `:telemetry.span/3`'s contract; `stop_metadata_extras` is shallow-merged
-  on top of the start metadata at `:stop` emission time so per-span
-  extras (`:response`, `:step_result`, `:chat_result`, `:result`) appear
-  alongside the common keys.
+  The closure must return either:
+
+    * `{result, stop_metadata_extras}` — the 2-tuple form (default,
+      used by `:generate | :stream | :step | :chat | :tool` spans).
+      `stop_metadata_extras` is shallow-merged on top of the start
+      metadata at `:stop` emission time so per-span extras
+      (`:response`, `:step_result`, `:chat_result`, `:result`) appear
+      alongside the common keys.
+    * `{result, extra_measurements, stop_metadata_extras}` — the
+      3-tuple form, for spans that inject custom `:stop` measurements
+      beyond `:duration` and `:monotonic_time`. Phase 14.3 added this
+      for `:image` spans which carry `:image_count` as a measurement
+      per design Decision #8 (telemetry-stdlib idiom: numeric metrics
+      → measurements; structured context → metadata).
 
   Caller-supplied `start_metadata` is forwarded to the `:start` event
   unchanged and used as the base for the `:stop` event's metadata.

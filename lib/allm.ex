@@ -777,6 +777,15 @@ defmodule ALLM do
   # Internals — Phase 14.3 telemetry + preflight + retry wrap (§35.9, §6.1).
   # ---------------------------------------------------------------------------
 
+  # Image-side retryable reason atoms (Phase 14.3 design Decision #4 +
+  # Decision #9 augmentation). Engaged by both `augment_image_retry_policy/1`
+  # (extends the chat-side `default_policy/0.retry_on` at the call site) and
+  # `dispatch_image_attempt/3` (the per-attempt closure passed to
+  # `Retry.run/3`). Placed at the top of the image-internals block per the
+  # codebase convention (module attributes live above their consumer
+  # cluster, not interleaved between private helpers).
+  @retryable_image_reasons [:rate_limited, :provider_unavailable, :timeout, :network_error]
+
   # Drop call-control opts that would collide with `ImageRequest` struct
   # fields when merged into `ImageRequest.new/1`. `:request_id`, `:stream`,
   # and `:adapter_opts` are call/dispatch-site concerns, not request fields
@@ -888,11 +897,10 @@ defmodule ALLM do
   end
 
   # Per-attempt closure for `Retry.run/3`. Engages the retry loop on the
-  # four documented retryable `ImageAdapterError` reasons; surfaces any
-  # other error verbatim with NO retry attempt (per design Decision #4
-  # error-table + Phase 14.3 spec line 358).
-  @retryable_image_reasons [:rate_limited, :provider_unavailable, :timeout, :network_error]
-
+  # four documented retryable `ImageAdapterError` reasons (see
+  # `@retryable_image_reasons` at the top of this internals block);
+  # surfaces any other error verbatim with NO retry attempt (per design
+  # Decision #4 error-table + Phase 14.3 spec line 358).
   defp augment_image_retry_policy(false), do: :no_retry
 
   defp augment_image_retry_policy(retry_config) do
