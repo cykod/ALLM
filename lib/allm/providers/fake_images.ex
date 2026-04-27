@@ -24,9 +24,16 @@ defmodule ALLM.Providers.FakeImages do
       adapter_opts: [
         image_script: [
           {:ok, [%ALLM.Image{...}], usage: %ALLM.ImageUsage{...}},
-          {:error, %ALLM.Error.ImageAdapterError{reason: :rate_limited}}
+          {:error, %ALLM.Error.ImageAdapterError{reason: :rate_limited}},
+          {:retry_until_call, 3}
         ]
       ]
+
+  `{:retry_until_call, n}` (added in 14.3) returns a synthetic
+  `%ALLM.Error.ImageAdapterError{reason: :rate_limited, retry_after_ms: 0}`
+  for the first `n - 1` calls against this entry, then advances the
+  cursor to the next entry on call `n`. Vehicle for testing
+  `ALLM.Retry.run/3` integration in `ALLM.generate_image/3`.
 
   Multi-call scripting uses the same list — each call advances a
   process-local cursor (or an explicit Agent cursor passed via
@@ -196,6 +203,7 @@ defmodule ALLM.Providers.FakeImages do
           {:ok, [Image.t()]}
           | {:ok, [Image.t()], keyword()}
           | {:error, ImageAdapterError.t()}
+          | {:retry_until_call, pos_integer()}
 
   @doc """
   Start an Agent-backed script cursor for cross-process multi-call
@@ -250,17 +258,28 @@ defmodule ALLM.Providers.FakeImages do
     adapter_opts = Keyword.get(opts, :adapter_opts, [])
     script = Keyword.get(adapter_opts, :image_script, [])
 
-    cursor = advance_cursor(script, adapter_opts)
+    # Peek at the current entry WITHOUT advancing — `:retry_until_call`
+    # entries hold the cursor in place for `n - 1` calls and only
+    # advance on call n. Every other entry shape advances on consult.
+    cursor = peek_cursor(script, adapter_opts)
 
     case Enum.at(script, cursor) do
       nil ->
+        # Past the end. Bump the cursor to keep callers symmetric with
+        # the pre-14.3 behaviour and surface the cursor-exhausted error.
+        _ = advance_cursor(script, adapter_opts)
+
         {:error,
          ImageAdapterError.new(:unknown,
            message: "no scripted image",
            metadata: %{cause: :no_scripted_image}
          )}
 
+      {:retry_until_call, n} ->
+        handle_retry_until_call(script, cursor, n, request, opts, adapter_opts)
+
       entry ->
+        _ = advance_cursor(script, adapter_opts)
         interpret_entry(entry, request, opts)
     end
   end
@@ -281,6 +300,53 @@ defmodule ALLM.Providers.FakeImages do
   # `{:error, %ImageAdapterError{}}` — return struct verbatim.
   defp interpret_entry({:error, %ImageAdapterError{} = err}, _request, _opts) do
     {:error, err}
+  end
+
+  # `{:retry_until_call, n}` (Phase 14.3) — return a synthetic
+  # `:rate_limited` error for the first `n - 1` visits to this cursor
+  # position, then on the n-th visit advance the cursor past this entry
+  # and dispatch the NEXT entry. The per-cursor-position counter lives
+  # in the process dictionary keyed by `(script-hash, cursor)` so it's
+  # isolated per ExUnit test process and per script.
+  defp handle_retry_until_call(script, cursor, n, request, opts, adapter_opts) do
+    visits = bump_retry_visits(script, cursor)
+
+    if visits < n do
+      # Cursor stays put — successive calls visit this same entry until
+      # the budget is exhausted.
+      {:error,
+       ImageAdapterError.new(:rate_limited,
+         message: "FakeImages retry_until_call hint",
+         retry_after_ms: 0
+       )}
+    else
+      # n-th call: advance the script cursor past this entry and run
+      # whatever's next. The per-cursor-position visit counter is left
+      # in place — once the cursor has moved on it's irrelevant.
+      _ = advance_cursor(script, adapter_opts)
+      next_cursor = cursor + 1
+
+      case Enum.at(script, next_cursor) do
+        nil ->
+          {:error,
+           ImageAdapterError.new(:unknown,
+             message: "no scripted image",
+             metadata: %{cause: :no_scripted_image}
+           )}
+
+        next_entry ->
+          # Advance past the next entry too — it's been consumed.
+          _ = advance_cursor(script, adapter_opts)
+          interpret_entry(next_entry, request, opts)
+      end
+    end
+  end
+
+  defp bump_retry_visits(script, cursor) do
+    key = {:allm_fake_images_retry_visits, :erlang.phash2(script), cursor}
+    visits = Process.get(key, 0) + 1
+    Process.put(key, visits)
+    visits
   end
 
   defp build_response(images, usage, %ImageRequest{} = request, opts) do
@@ -318,6 +384,20 @@ defmodule ALLM.Providers.FakeImages do
     current
   end
 
+  # Read the current cursor without advancing — used by `run_scripted/2`
+  # to support the `{:retry_until_call, n}` entry shape (which holds
+  # the cursor in place for `n - 1` calls).
+  defp peek_cursor(script, adapter_opts) do
+    case Keyword.get(adapter_opts, :script_cursor) do
+      nil ->
+        key = {:allm_fake_images_cursor, :erlang.phash2(script)}
+        Process.get(key, 0)
+
+      pid when is_pid(pid) ->
+        Agent.get(pid, & &1)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Validation
   # ---------------------------------------------------------------------------
@@ -328,10 +408,12 @@ defmodule ALLM.Providers.FakeImages do
 
   defp validate_entry!({:error, %ImageAdapterError{}}), do: :ok
 
+  defp validate_entry!({:retry_until_call, n}) when is_integer(n) and n >= 1, do: :ok
+
   defp validate_entry!(other) do
     raise ArgumentError,
           "invalid FakeImages script entry: #{inspect(other)} " <>
             "(expected {:ok, [%Image{}]}, {:ok, [%Image{}], opts}, " <>
-            "or {:error, %ImageAdapterError{}})"
+            "{:error, %ImageAdapterError{}}, or {:retry_until_call, pos_integer})"
   end
 end

@@ -6,9 +6,17 @@ defmodule ALLM.Telemetry do
   Phase 9.1 wires this around every public Layer-C entry point
   (`generate`, `stream_generate`, `step`, `stream_step`, `chat`, `stream`)
   so callers can attach `:telemetry.attach_many/4` handlers to
-  `[:allm, :generate | :stream | :step | :chat | :tool, :start | :stop | :exception]`
+  `[:allm, :generate | :stream | :step | :chat | :tool | :image, :start | :stop | :exception]`
   and observe every execution with `:duration` plus `:request_id`,
   `:engine`, `:model` metadata. See spec §29.
+
+  Phase 14.3 added the `:image` span name for the
+  `ALLM.generate_image/3 · edit_image/4 · image_variations/3` Layer-C
+  façade. The `:image` span's `:stop` measurements include `:image_count`
+  (count of images in the response, `0` on error per design Decision #8);
+  metadata extends with `:operation` (`:generate | :edit | :variation`),
+  `:n` (requested count), `:usage`, `:response`, and `:error`. See spec
+  §35.9.
 
   ## Why request_id is metadata-only
 
@@ -46,10 +54,10 @@ defmodule ALLM.Telemetry do
           optional(atom()) => term()
         }
 
-  @typedoc "Span suffix per spec §29; the prefix [:allm] is fixed."
-  @type span_name :: :generate | :stream | :step | :chat | :tool
+  @typedoc "Span suffix per spec §29 (chat) and §35.9 (image); the prefix [:allm] is fixed."
+  @type span_name :: :generate | :stream | :step | :chat | :tool | :image
 
-  @valid_span_names [:generate, :stream, :step, :chat, :tool]
+  @valid_span_names [:generate, :stream, :step, :chat, :tool, :image]
 
   @doc """
   Return the fixed event-name prefix for every ALLM telemetry event.
@@ -98,7 +106,7 @@ defmodule ALLM.Telemetry do
 
   Raises `ArgumentError` for an unrecognised `name` (typo guard against
   `:chats` / `:steps`); valid names are
-  `:generate | :stream | :step | :chat | :tool`.
+  `:generate | :stream | :step | :chat | :tool | :image`.
 
   ## Carve-out: `:stream :stop` `:response` is `nil`
 
@@ -132,7 +140,11 @@ defmodule ALLM.Telemetry do
       ...> end
       :ok
   """
-  @spec span(span_name(), common_metadata(), (-> {result, map()})) :: result
+  @spec span(
+          span_name(),
+          common_metadata(),
+          (-> {result, map()} | {result, map(), map()})
+        ) :: result
         when result: var
   def span(name, start_metadata, fun)
       when is_atom(name) and is_map(start_metadata) and is_function(fun, 0) do
@@ -145,9 +157,15 @@ defmodule ALLM.Telemetry do
     event = @event_prefix ++ [name]
 
     :telemetry.span(event, start_metadata, fn ->
-      {result, stop_extras} = fun.()
-      stop_metadata = Map.merge(start_metadata, stop_extras || %{})
-      {result, stop_metadata}
+      case fun.() do
+        {result, stop_extras} ->
+          stop_metadata = Map.merge(start_metadata, stop_extras || %{})
+          {result, stop_metadata}
+
+        {result, extra_measurements, stop_extras} ->
+          stop_metadata = Map.merge(start_metadata, stop_extras || %{})
+          {result, extra_measurements || %{}, stop_metadata}
+      end
     end)
   end
 

@@ -270,5 +270,53 @@ defmodule ALLM.Providers.FakeImagesTest do
         FakeImages.script([{:bogus, "shape"}])
       end
     end
+
+    test "accepts {:retry_until_call, n} entries (Phase 14.3)" do
+      assert :ok = FakeImages.script([{:retry_until_call, 3}])
+
+      img = Image.from_binary(<<1>>, "image/png")
+
+      assert :ok =
+               FakeImages.script([{:retry_until_call, 2}, {:ok, [img]}])
+    end
+  end
+
+  describe "retry_until_call (Phase 14.3)" do
+    test "{:retry_until_call, 1} advances on the first call (n - 1 = 0 retries)" do
+      img = Image.from_binary(<<1>>, "image/png")
+      req = ImageRequest.new(prompt: "x")
+      opts = [adapter_opts: [image_script: [{:retry_until_call, 1}, {:ok, [img]}]]]
+
+      assert {:ok, %ImageResponse{images: [^img]}} = FakeImages.generate(req, opts)
+    end
+
+    test "{:retry_until_call, 3} returns :rate_limited for calls 1 and 2; advances on call 3" do
+      img = Image.from_binary(<<1>>, "image/png")
+      req = ImageRequest.new(prompt: "x")
+
+      adapter_opts = [image_script: [{:retry_until_call, 3}, {:ok, [img]}]]
+
+      assert {:error, %ImageAdapterError{reason: :rate_limited, retry_after_ms: 0} = err1} =
+               FakeImages.generate(req, adapter_opts: adapter_opts)
+
+      assert err1.message == "FakeImages retry_until_call hint"
+
+      assert {:error, %ImageAdapterError{reason: :rate_limited}} =
+               FakeImages.generate(req, adapter_opts: adapter_opts)
+
+      assert {:ok, %ImageResponse{images: [^img]}} =
+               FakeImages.generate(req, adapter_opts: adapter_opts)
+    end
+
+    test "{:retry_until_call, n} followed by no successor returns :no_scripted_image after exhaustion" do
+      req = ImageRequest.new(prompt: "x")
+      adapter_opts = [image_script: [{:retry_until_call, 2}]]
+
+      assert {:error, %ImageAdapterError{reason: :rate_limited}} =
+               FakeImages.generate(req, adapter_opts: adapter_opts)
+
+      assert {:error, %ImageAdapterError{reason: :unknown, metadata: %{cause: :no_scripted_image}}} =
+               FakeImages.generate(req, adapter_opts: adapter_opts)
+    end
   end
 end

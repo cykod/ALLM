@@ -8,6 +8,11 @@ defmodule ALLM.Capability do
       the catalog's `%ALLM.ModelRef{}` and surfaces a
       `%ALLM.Error.ValidationError{reason: :unsupported_capability}` before
       the adapter sees a request it can't satisfy.
+    * `preflight_image/2` (Phase 14.3) — sister of `preflight/3` for
+      `ALLM.ImageRequest`: rejects requests against models with
+      `images_enabled: false` or whose `supported_image_operations` does
+      not include the requested op. 2-arity, two-shape return
+      (`:ok | {:error, _}` — no rewrite branch).
     * `populate_costs/2` — fills `Usage.{input_cost, output_cost,
       total_cost}` from the catalog's per-million-token pricing after the
       adapter has reported token counts.
@@ -76,6 +81,7 @@ defmodule ALLM.Capability do
   """
 
   alias ALLM.Error.ValidationError
+  alias ALLM.ImageRequest
   alias ALLM.ModelRef
   alias ALLM.Request
   alias ALLM.Usage
@@ -210,6 +216,65 @@ defmodule ALLM.Capability do
 
   defp maybe_structured_finalize_rewrite(:ok, _request, _adapter), do: :ok
 
+  @typedoc "Two-shape result of `preflight_image/2` (no rewrite branch)."
+  @type image_preflight_result :: :ok | {:error, ValidationError.t()}
+
+  @doc """
+  Pre-flight an `ALLM.ImageRequest` against the catalog's view of a
+  model — sister of `preflight/3`, narrower contract.
+
+  Returns `:ok | {:error, %ValidationError{reason: :unsupported_capability}}`
+  only — there is no `{:ok, %ImageRequest{}}` rewrite branch (image
+  requests have no analogous rewrite need in v0.3, per Phase 14.3
+  design Decision #10). 2-arity by design — symmetric with
+  `populate_costs/2`, NOT with `preflight/3`.
+
+  ## Rejection rules (both accumulate when both fire)
+
+    * `{[:images_enabled], :images_disabled}` — fires when
+      `model_ref.capabilities.images_enabled == false`.
+    * `{[:operation], :unsupported_image_operation}` — fires when
+      `request.operation not in model_ref.capabilities.supported_image_operations`.
+
+  Tolerates JSON-rehydrated `%ModelRef{}` with string-keyed
+  capabilities (`%{"images_enabled" => false, "supported_image_operations" => ["generate"]}`)
+  per the existing pattern in `check_tools/3` / `check_json_native/3`.
+
+  Returns `:ok` early when the catalog is absent
+  (`catalog_loaded?/0 == false`) or when `model_ref_or_string` is a bare
+  string / tuple / `nil` (no capability info).
+
+  ## Examples
+
+      iex> req = ALLM.ImageRequest.new(prompt: "a kestrel")
+      iex> ALLM.Capability.preflight_image("openai:gpt-image-1", req)
+      :ok
+
+      iex> ref = ALLM.ModelRef.new(
+      ...>   provider: :local, id: "no-images",
+      ...>   capabilities: %{images_enabled: false, supported_image_operations: []}
+      ...> )
+      iex> req = ALLM.ImageRequest.new(prompt: "a kestrel")
+      iex> {:error, err} = ALLM.Capability.preflight_image(ref, req)
+      iex> err.reason
+      :unsupported_capability
+      iex> err.errors
+      [{[:images_enabled], :images_disabled}, {[:operation], :unsupported_image_operation}]
+  """
+  @spec preflight_image(model_ref_or_string(), ImageRequest.t()) :: image_preflight_result()
+  def preflight_image(model_ref_or_string, %ImageRequest{} = request) do
+    cond do
+      not catalog_loaded?() ->
+        :ok
+
+      not is_struct(model_ref_or_string, ModelRef) ->
+        :ok
+
+      true ->
+        check_image_capabilities(model_ref_or_string, request)
+    end
+  end
+
   @doc """
   Populate `Usage.{input_cost, output_cost, total_cost}` from
   `model_ref.pricing` (per-million-token rates).
@@ -319,6 +384,62 @@ defmodule ALLM.Capability do
   end
 
   defp check_json_native(acc, _ref, _req), do: acc
+
+  # ---------------------------------------------------------------------------
+  # Private — image preflight (Phase 14.3)
+  # ---------------------------------------------------------------------------
+
+  defp check_image_capabilities(%ModelRef{} = ref, %ImageRequest{} = request) do
+    errors =
+      []
+      |> check_images_enabled(ref)
+      |> check_supported_image_operation(ref, request)
+      |> Enum.reverse()
+
+    case errors do
+      [] ->
+        :ok
+
+      list ->
+        {:error,
+         ValidationError.new(:unsupported_capability, list,
+           message: "model does not support requested image capabilities"
+         )}
+    end
+  end
+
+  defp check_images_enabled(acc, %ModelRef{capabilities: caps}) do
+    # Tolerate JSON-rehydrated %ModelRef{} with string-keyed capabilities
+    # (see @moduledoc "JSON-rehydrated %ModelRef{} tolerance"). Atom-keyed
+    # nested map (in-process) and string-keyed (post-Jason round-trip) both
+    # reject. Anything else passes.
+    case caps do
+      %{images_enabled: false} -> [{[:images_enabled], :images_disabled} | acc]
+      %{"images_enabled" => false} -> [{[:images_enabled], :images_disabled} | acc]
+      _ -> acc
+    end
+  end
+
+  defp check_supported_image_operation(acc, %ModelRef{capabilities: caps}, %ImageRequest{
+         operation: op
+       }) do
+    # Tolerate string-keyed capabilities and string-encoded atoms (the
+    # JSON encoder for capability lists emits `["generate"]` from
+    # `[:generate]`).
+    case caps do
+      %{supported_image_operations: ops} when is_list(ops) ->
+        if op in ops, do: acc, else: [{[:operation], :unsupported_image_operation} | acc]
+
+      %{"supported_image_operations" => ops} when is_list(ops) ->
+        if Atom.to_string(op) in ops or op in ops,
+          do: acc,
+          else: [{[:operation], :unsupported_image_operation} | acc]
+
+      _ ->
+        # No supported_image_operations key — don't reject (no info).
+        acc
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Private — cost math

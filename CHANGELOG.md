@@ -1,3 +1,42 @@
+## [FEAT] Phase 14.3: image telemetry + capability preflight_image + retry integration (§35.9, §6.1)
+*Monday, April 27th*
+Cross-cutting wrap for the v0.3 image pipeline. The bare 14.2 façade
+(`generate_image/3 · edit_image/4 · image_variations/3`) is now wrapped
+in `Telemetry.span(:image, ...)` plus `Capability.preflight_image/2`
+plus `Retry.run/3`-driven dispatch. `ALLM.Telemetry.@valid_span_names`
+extends with `:image` (typedoc + moduledoc updated) — `[:allm, :image,
+:start | :stop | :exception]` events fire per call. `:image, :stop`
+measurements add `:image_count` (length of `response.images` on success
+/ `0` on error per design Decision #8); metadata extends with
+`:operation`, `:n` (request fields, NOT measurements per Decision #8),
+`:usage`, `:response`, and `:error`. `Telemetry.span/3` widened to
+accept either `{result, stop_extras}` or `{result, extra_measurements,
+stop_extras}` from the closure (3-tuple form forwards extras as
+telemetry measurements). `ALLM.Capability.preflight_image/2` added as
+a 2-arity SISTER of `preflight/3` (Decision #10 — narrower contract,
+no rewrite branch): two rejection rules (`:images_disabled`,
+`:unsupported_image_operation`) accumulating per `preflight/3`'s
+field-error precedent; tolerates atom-keyed AND string-keyed
+capabilities per the `lib/allm/capability.ex:296-303` pattern.
+`do_generate_image/3` rewritten as: `Telemetry.span(:image, ...) ->
+adapter-presence gate (FIRST, per Decision #15) -> preflight_image ->
+Retry.run`. `Retry` policy augmented at the call site with the four
+image-side retryable atoms (`:rate_limited`, `:provider_unavailable`,
+`:timeout`, `:network_error`) appended to the chat-side `retry_on`
+default — chat default unchanged (Decision #9). `ALLM.Providers.FakeImages`
+extended with `{:retry_until_call, n}` script entry that holds the
+cursor in place for `n - 1` calls returning synthetic
+`%ImageAdapterError{reason: :rate_limited, retry_after_ms: 0}`, then
+advances on call n. `test/support/llm_db.ex` `@fixtures` map extended
+with three image-capability fixtures (`openai:gpt-image-1`,
+`openai:dall-e-3`, `local:no-images`). Three new test files
+(`telemetry_image_test.exs`, `capability_image_test.exs`,
+`retry_image_test.exs`) and four new cases in
+`fake_images_test.exs`. 1668 tests / 0 failures / 0 dialyzer warnings;
+conformance 66 tests / 0 failures.
+
+---
+
 ## [FEAT] Phase 14.2: ALLM.generate_image/3 · edit_image/4 · image_variations/3 + EngineError :no_image_adapter (§35.4, §35.5)
 *Monday, April 27th*
 Layer C facade for v0.3 image pipeline. Adds `ALLM.generate_image/3`,

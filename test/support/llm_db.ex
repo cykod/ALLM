@@ -14,7 +14,9 @@ defmodule LLMDB do
 
   alias ALLM.ModelRef
 
-  # Fixtures cover all four capability shapes named by the design.
+  # Fixtures cover all four chat-capability shapes named by the Phase 9.4
+  # design plus three image-capability shapes added in Phase 14.3 for the
+  # `Capability.preflight_image/2` rejection-path tests.
   @fixtures %{
     "openai:gpt-4.1-mini" => %ModelRef{
       provider: :openai,
@@ -45,6 +47,45 @@ defmodule LLMDB do
       id: "no-json-native",
       capabilities: %{tools: %{enabled: true}, json_native: false},
       limits: %{context: 8192, output: 2048},
+      pricing: nil,
+      metadata: %{source: :test_fake}
+    },
+    "openai:gpt-image-1" => %ModelRef{
+      provider: :openai,
+      id: "gpt-image-1",
+      capabilities: %{
+        tools: %{enabled: false},
+        json_native: false,
+        images_enabled: true,
+        supported_image_operations: [:generate, :edit]
+      },
+      limits: %{context: 4000, output: nil},
+      pricing: nil,
+      metadata: %{source: :test_fake}
+    },
+    "openai:dall-e-3" => %ModelRef{
+      provider: :openai,
+      id: "dall-e-3",
+      capabilities: %{
+        tools: %{enabled: false},
+        json_native: false,
+        images_enabled: true,
+        supported_image_operations: [:generate]
+      },
+      limits: %{context: 4000, output: nil},
+      pricing: nil,
+      metadata: %{source: :test_fake}
+    },
+    "local:no-images" => %ModelRef{
+      provider: :local,
+      id: "no-images",
+      capabilities: %{
+        tools: %{enabled: false},
+        json_native: false,
+        images_enabled: false,
+        supported_image_operations: []
+      },
+      limits: %{context: 4000, output: nil},
       pricing: nil,
       metadata: %{source: :test_fake}
     }

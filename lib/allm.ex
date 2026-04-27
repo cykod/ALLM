@@ -774,7 +774,7 @@ defmodule ALLM do
   end
 
   # ---------------------------------------------------------------------------
-  # Internals — Phase 14.2 bare dispatch (no telemetry, no preflight, no retry).
+  # Internals — Phase 14.3 telemetry + preflight + retry wrap (§35.9, §6.1).
   # ---------------------------------------------------------------------------
 
   # Drop call-control opts that would collide with `ImageRequest` struct
@@ -786,39 +786,165 @@ defmodule ALLM do
     Keyword.drop(opts, [:request_id, :stream, :mask, :adapter_opts])
   end
 
-  # Bare `with`-chain: adapter-presence gate, then dispatch. Phase 14.3
-  # will wrap this in `Telemetry.span(:image, ...)` + `Capability.preflight_image/2`
-  # + `Retry.run/3`.
-  defp do_generate_image(%Engine{image_adapter: nil}, _request, _opts) do
+  # Phase 14.3: wrap the entire body in `Telemetry.span(:image, ...)` so
+  # the `:start` event ALWAYS fires (even when the adapter is missing or
+  # preflight rejects) — observability is uniform. Inside the span, the
+  # `with`-chain runs in this order (per design Decision #15):
+  #
+  #   (1) adapter-presence gate (`engine.image_adapter != nil`) — FIRST
+  #   (2) `Capability.preflight_image/2` (no-op when catalog absent)
+  #   (3) `Retry.run/3`-wrapped dispatch
+  defp do_generate_image(%Engine{} = engine, %ImageRequest{} = request, opts) do
+    request_id = Keyword.get(opts, :request_id) || ALLM.Telemetry.request_id()
+    resolved_model = Engine.resolve_model(engine, opts)
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: resolved_model,
+      operation: request.operation,
+      n: request.n
+    }
+
+    ALLM.Telemetry.span(:image, start_metadata, fn ->
+      result = do_generate_image_body(engine, request, opts, request_id, resolved_model)
+      {extras, measurements} = image_stop_extras(result)
+      {result, measurements, extras}
+    end)
+  end
+
+  defp do_generate_image_body(
+         %Engine{image_adapter: nil},
+         _request,
+         _opts,
+         _request_id,
+         _resolved_model
+       ) do
+    # Adapter-presence gate fires FIRST — per design Decision #15 and
+    # spec line 817, this short-circuits BEFORE preflight so a missing
+    # adapter + tools-disabled-model surfaces `:no_image_adapter`,
+    # not `:unsupported_capability`.
     {:error, EngineError.new(:no_image_adapter)}
   end
 
-  defp do_generate_image(%Engine{image_adapter: adapter} = engine, %ImageRequest{} = request, opts) do
-    request_id = Keyword.get(opts, :request_id) || ALLM.Telemetry.request_id()
+  defp do_generate_image_body(
+         %Engine{image_adapter: adapter} = engine,
+         %ImageRequest{} = request,
+         opts,
+         request_id,
+         resolved_model
+       ) do
+    with :ok <- ALLM.Capability.preflight_image(resolved_model, request) do
+      # Concat engine.adapter_opts with call-site adapter_opts. `Keyword.get/2`
+      # returns the FIRST occurrence on duplicate keys, so engine wins on
+      # collision. Mirrors the chat-side `StreamRunner.build_dispatch_opts/2`
+      # adapter_opts concat at `lib/allm/stream_runner.ex:229-230` (NOT
+      # `Keyword.merge/2`, which would have OPPOSITE precedence — call wins).
+      merged_adapter_opts =
+        engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, [])
 
-    # Concat engine.adapter_opts with call-site adapter_opts. `Keyword.get/2`
-    # returns the FIRST occurrence on duplicate keys, so engine wins on
-    # collision. Mirrors the chat-side `StreamRunner.build_dispatch_opts/2`
-    # adapter_opts concat at `lib/allm/stream_runner.ex:229-230` (NOT
-    # `Keyword.merge/2`, which would have OPPOSITE precedence — call wins).
-    merged_adapter_opts =
-      engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, [])
+      dispatch_opts =
+        opts
+        |> Keyword.drop([:stream])
+        |> Keyword.put(:request_id, request_id)
+        |> Keyword.put(:adapter_opts, merged_adapter_opts)
 
-    dispatch_opts =
-      opts
-      |> Keyword.drop([:stream])
-      |> Keyword.put(:request_id, request_id)
-      |> Keyword.put(:adapter_opts, merged_adapter_opts)
+      # Pass `telemetry_metadata` to `Retry.run/3` so any
+      # `[:allm, :adapter, :retry]` event shares the surrounding
+      # `:image` span's correlation id (Decision #15).
+      telemetry_metadata = %{
+        request_id: request_id,
+        model: resolved_model,
+        operation: request.operation
+      }
 
+      # Augment the engine's retry policy with the image-side
+      # retryable reasons. v0.2's `default_policy/0.retry_on` is HTTP-
+      # status-coded (`[429, 500, 502, 503, 504, :timeout]`); image
+      # adapters surface closed-enum atoms (`:rate_limited`,
+      # `:provider_unavailable`, `:timeout`, `:network_error`) via
+      # `%ImageAdapterError{}`. We extend `retry_on` here at the call
+      # site so `ALLM.Retry.error_matches?/2` recognises image atoms,
+      # without modifying the chat-side default (Decision #9 — "default
+      # policy reused unchanged").
+      policy = augment_image_retry_policy(engine.retry)
+
+      result =
+        ALLM.Retry.run(policy, telemetry_metadata, fn ->
+          dispatch_image_attempt(adapter, request, dispatch_opts)
+        end)
+
+      case result do
+        {:ok, %ImageResponse{request_id: nil} = response} ->
+          {:ok, %{response | request_id: request_id}}
+
+        {:ok, %ImageResponse{} = response} ->
+          {:ok, response}
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  # Per-attempt closure for `Retry.run/3`. Engages the retry loop on the
+  # four documented retryable `ImageAdapterError` reasons; surfaces any
+  # other error verbatim with NO retry attempt (per design Decision #4
+  # error-table + Phase 14.3 spec line 358).
+  @retryable_image_reasons [:rate_limited, :provider_unavailable, :timeout, :network_error]
+
+  defp augment_image_retry_policy(false), do: :no_retry
+
+  defp augment_image_retry_policy(retry_config) do
+    case ALLM.Retry.materialize(retry_config) do
+      :no_retry ->
+        :no_retry
+
+      %{retry_on: existing} = policy ->
+        # Append image atoms to the chat-side retry_on. Idempotent —
+        # `Enum.uniq/1` keeps the list stable on repeat calls.
+        %{policy | retry_on: Enum.uniq(existing ++ @retryable_image_reasons)}
+    end
+  end
+
+  defp dispatch_image_attempt(adapter, request, dispatch_opts) do
     case adapter.generate(request, dispatch_opts) do
-      {:ok, %ImageResponse{request_id: nil} = response} ->
-        {:ok, %{response | request_id: request_id}}
+      {:ok, _} = ok ->
+        ok
 
-      {:ok, %ImageResponse{} = response} ->
-        {:ok, response}
+      {:error, %ImageAdapterError{reason: reason} = err}
+      when reason in @retryable_image_reasons ->
+        delay = err.retry_after_ms || 0
+        {:retry, delay, err}
 
       {:error, _} = err ->
         err
     end
+  end
+
+  # Compute `:stop`-event extras per design Decision #8: `image_count` is
+  # a MEASUREMENT (numeric — the actual number of images on success /
+  # `0` on error). `:usage`, `:response`, `:error` are METADATA (structured
+  # context). Returns `{metadata_extras, extra_measurements}`.
+  defp image_stop_extras({:ok, %ImageResponse{} = response}) do
+    metadata = %{
+      usage: response.usage,
+      response: response,
+      error: nil
+    }
+
+    measurements = %{image_count: length(response.images)}
+    {metadata, measurements}
+  end
+
+  defp image_stop_extras({:error, error}) do
+    metadata = %{
+      usage: nil,
+      response: nil,
+      error: error
+    }
+
+    measurements = %{image_count: 0}
+    {metadata, measurements}
   end
 end

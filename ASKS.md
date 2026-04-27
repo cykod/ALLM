@@ -81,3 +81,9 @@
 [DSGN] mon 4/27 1am - Design Phase 13 (v0.3 Phase 1): Layer A image data structs, facade constructor, validator, engine image_adapter field
 
 [BUILD] mon 4/27 10am - Build Phase 13 (v0.3 Layer A image data structs, facade, validator) from PHASE_13_image_layer_a.md
+
+[MILE] mon 4/27 10am - Committed Phase 13 v0.3 Layer A image data structs + facade + validator
+
+[DSGN] mon 4/27 11am - Design Phase 14 (v0.3 Phases 2-5): ImageAdapter behaviour + FakeImages + Layer C public API + telemetry/capability/retry + multimodal content parts
+
+[BUILD] mon 4/27 1pm - Build phases from PHASE_14_image_layer_2_5.md steering doc

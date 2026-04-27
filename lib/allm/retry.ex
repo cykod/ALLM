@@ -20,6 +20,16 @@ defmodule ALLM.Retry do
   `adapter_opts: [retry_until_call: n]` plumbing; the same helper is
   consumed by real-provider adapters in Phase 10/11.
 
+  Phase 14.3 added a second caller class: the image-side façade
+  (`ALLM.generate_image/3 · edit_image/4 · image_variations/3`) wraps
+  the adapter dispatch in `Retry.run/3` with the same default policy
+  (`default_policy/0`) — image generation reuses chat retry semantics
+  unchanged (design Decision #9). Image-side closures emit `{:retry,
+  delay_ms, %ALLM.Error.ImageAdapterError{}}` for the four
+  retry-engaging reasons (`:rate_limited`, `:provider_unavailable`,
+  `:timeout`, `:network_error`); other reasons surface verbatim with no
+  retry attempt.
+
   ## v0.2 surface caveat — public-API retry visibility
 
   In v0.2 the public Layer-C entry points (`ALLM.generate/3`,
