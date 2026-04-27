@@ -13,10 +13,9 @@ defmodule ALLM.Providers.OpenAIWireTest do
   use ExUnit.Case, async: true
 
   alias ALLM.Error.AdapterError
-  alias ALLM.Message
+  alias ALLM.{Image, ImagePart, Message, Request, TextPart}
   alias ALLM.Providers.OpenAI
   alias ALLM.Providers.OpenAITestFixtures, as: Fx
-  alias ALLM.Request
 
   setup ctx do
     # Each test uses a unique stub atom (built from the test name) so per-test
@@ -375,5 +374,188 @@ defmodule ALLM.Providers.OpenAIWireTest do
     assert {:ok, response} = call(stub, req(model: "gpt-5.5"))
     assert response.finish_reason == :length
     assert response.metadata.incomplete_details.reason == "max_output_tokens"
+  end
+
+  # ---------------------------------------------------------------------------
+  # Phase 14.4 — wire-shape regression for stringify_content/1 extension
+  # ---------------------------------------------------------------------------
+
+  describe "Phase 14.4: stringify_content/1 multimodal materialization (Chat Completions)" do
+    test "string content emits content as a binary on the wire", %{stub: stub} do
+      body_ok = Fx.chat_completion(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
+      request =
+        Request.new(
+          [%Message{role: :user, content: "hello"}],
+          model: "gpt-4o-mini"
+        )
+
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+      assert [%{"role" => "user", "content" => "hello"}] = body["messages"]
+    end
+
+    test "single [%TextPart{}] content materializes to its text", %{stub: stub} do
+      body_ok = Fx.chat_completion(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
+      request =
+        Request.new(
+          [%Message{role: :user, content: [%TextPart{text: "hello"}]}],
+          model: "gpt-4o-mini"
+        )
+
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+      assert [%{"role" => "user", "content" => "hello"}] = body["messages"]
+    end
+
+    test "multi-TextPart content joins with newline", %{stub: stub} do
+      body_ok = Fx.chat_completion(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
+      request =
+        Request.new(
+          [
+            %Message{
+              role: :user,
+              content: [%TextPart{text: "a"}, %TextPart{text: "b"}]
+            }
+          ],
+          model: "gpt-4o-mini"
+        )
+
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+      assert [%{"role" => "user", "content" => "a\nb"}] = body["messages"]
+    end
+
+    test "[%TextPart{}, %ImagePart{}] mixed content fires the upstream guard",
+         %{stub: _stub} do
+      img = Image.from_url("https://example.com/cat.png")
+
+      request =
+        Request.new(
+          [
+            %Message{
+              role: :user,
+              content: [%TextPart{text: "x"}, %ImagePart{image: img}]
+            }
+          ],
+          model: "gpt-4o-mini"
+        )
+
+      assert {:error, %AdapterError{reason: :unsupported_feature, provider: :openai}} =
+               OpenAI.generate(request, api_key: "sk-test")
+    end
+  end
+
+  describe "Phase 14.4: stringify_content/1 multimodal materialization (Responses)" do
+    test "string content emits input as a string on the Responses wire", %{stub: stub} do
+      body_ok = Fx.responses(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
+      request =
+        Request.new(
+          [%Message{role: :user, content: "hello"}],
+          model: "gpt-5.5"
+        )
+
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+      assert [%{"role" => "user", "content" => "hello"}] = body["input"]
+    end
+
+    test "single [%TextPart{}] content materializes to its text on Responses",
+         %{stub: stub} do
+      body_ok = Fx.responses(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
+      request =
+        Request.new(
+          [%Message{role: :user, content: [%TextPart{text: "hello"}]}],
+          model: "gpt-5.5"
+        )
+
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+      assert [%{"role" => "user", "content" => "hello"}] = body["input"]
+    end
+
+    test "multi-TextPart content joins with newline on Responses", %{stub: stub} do
+      body_ok = Fx.responses(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
+      request =
+        Request.new(
+          [
+            %Message{
+              role: :user,
+              content: [%TextPart{text: "a"}, %TextPart{text: "b"}]
+            }
+          ],
+          model: "gpt-5.5"
+        )
+
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+      assert [%{"role" => "user", "content" => "a\nb"}] = body["input"]
+    end
+
+    test "[%TextPart{}, %ImagePart{}] mixed content fires the upstream guard on Responses",
+         %{stub: _stub} do
+      img = Image.from_url("https://example.com/cat.png")
+
+      request =
+        Request.new(
+          [
+            %Message{
+              role: :user,
+              content: [%TextPart{text: "x"}, %ImagePart{image: img}]
+            }
+          ],
+          model: "gpt-5.5"
+        )
+
+      assert {:error, %AdapterError{reason: :unsupported_feature, provider: :openai}} =
+               OpenAI.generate(request, api_key: "sk-test")
+    end
   end
 end

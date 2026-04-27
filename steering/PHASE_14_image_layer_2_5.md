@@ -12,9 +12,9 @@
 | 14.1  | `ALLM.ImageAdapter` behaviour + `ALLM.Providers.FakeImages` + published `ALLM.Test.ImageAdapterConformance` | B | Completed |
 | 14.2  | `ALLM.generate_image/3 · edit_image/4 · image_variations/3` against `engine.image_adapter` end-to-end through `FakeImages` | C | Completed |
 | 14.3  | `[:allm, :image, :start \| :stop]` telemetry + `ALLM.Capability.preflight_image/2` + `ALLM.Retry` integration + FakeImages `retry_until_call:` extension | B (cross-cutting) | Completed |
-| 14.4  | `ALLM.TextPart`, `ALLM.ImagePart`, `Message.content` widening to `String.t() \| [TextPart.t() \| ImagePart.t()]`; remove v0.2 `[map(), …]` form | A | Not Started |
+| 14.4  | `ALLM.TextPart`, `ALLM.ImagePart`, `Message.content` widening to `String.t() \| [TextPart.t() \| ImagePart.t()]`; remove v0.2 `[map(), …]` form | A | Completed |
 
-**Overall Progress:** 3/4 phases complete
+**Overall Progress:** 4/4 phases complete
 
 ## Overview
 

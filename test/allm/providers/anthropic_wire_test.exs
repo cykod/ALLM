@@ -18,10 +18,9 @@ defmodule ALLM.Providers.AnthropicWireTest do
 
   alias ALLM.Error.AdapterError
   alias ALLM.Error.ValidationError
-  alias ALLM.Message
+  alias ALLM.{Image, ImagePart, Message, Request, TextPart}
   alias ALLM.Providers.Anthropic
   alias ALLM.Providers.AnthropicTestFixtures, as: Fx
-  alias ALLM.Request
 
   setup do
     stub = String.to_atom("anthropic_stub_#{System.unique_integer([:positive])}")
@@ -407,14 +406,134 @@ defmodule ALLM.Providers.AnthropicWireTest do
   # Row 16 — vision rejection (validator-upstream)
   # ---------------------------------------------------------------------------
 
-  test "vision content rejected upstream by ALLM.Validate.request/1", %{stub: _stub} do
+  test "raw map content rejected upstream by ALLM.Validate.request/1 with :invalid_part_type",
+       %{stub: _stub} do
+    # Phase 14.4: raw maps are no longer accepted in content lists; the
+    # validator surfaces :invalid_part_type instead of the removed
+    # :vision_not_in_v0_2 reason.
     request =
       Request.new(
         [%Message{role: :user, content: [%{"type" => "image"}]}],
         model: "claude-sonnet-4-6"
       )
 
-    assert {:error, %ValidationError{reason: :vision_not_in_v0_2}} = ALLM.Validate.request(request)
+    assert {:error, %ValidationError{reason: :invalid_request, errors: errors}} =
+             ALLM.Validate.request(request)
+
+    assert {[:messages, 0, :content], :invalid_part_type} in errors
+  end
+
+  test "ImagePart in content is short-circuited by adapter with :unsupported_feature",
+       %{stub: _stub} do
+    # Phase 14.4 Decision #14(a): the chat adapter rejects ImagePart at the
+    # top of generate/2 with %AdapterError{reason: :unsupported_feature}
+    # before any HTTP call is made.
+    request =
+      Request.new(
+        [
+          %Message{
+            role: :user,
+            content: [%ImagePart{image: Image.from_url("https://example.com/cat.png")}]
+          }
+        ],
+        model: "claude-sonnet-4-6"
+      )
+
+    assert {:error, %AdapterError{reason: :unsupported_feature, provider: :anthropic}} =
+             Anthropic.generate(request, api_key: "sk-ant-test")
+  end
+
+  # ---------------------------------------------------------------------------
+  # Phase 14.4 — wire-shape regression for stringify_content/1 extension
+  # ---------------------------------------------------------------------------
+
+  describe "Phase 14.4: stringify_content/1 multimodal materialization" do
+    test "string content emits content as a binary on the wire", %{stub: stub} do
+      body_ok = Fx.messages_response(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
+      request =
+        Request.new(
+          [%Message{role: :user, content: "hello"}],
+          model: "claude-sonnet-4-6"
+        )
+
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+      assert [%{"role" => "user", "content" => "hello"}] = body["messages"]
+    end
+
+    test "single [%TextPart{}] content materializes to its text", %{stub: stub} do
+      body_ok = Fx.messages_response(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
+      request =
+        Request.new(
+          [%Message{role: :user, content: [%TextPart{text: "hello"}]}],
+          model: "claude-sonnet-4-6"
+        )
+
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+      assert [%{"role" => "user", "content" => "hello"}] = body["messages"]
+    end
+
+    test "multi-TextPart content joins with newline", %{stub: stub} do
+      body_ok = Fx.messages_response(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
+      request =
+        Request.new(
+          [
+            %Message{
+              role: :user,
+              content: [%TextPart{text: "a"}, %TextPart{text: "b"}]
+            }
+          ],
+          model: "claude-sonnet-4-6"
+        )
+
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+      assert [%{"role" => "user", "content" => "a\nb"}] = body["messages"]
+    end
+
+    test "[%TextPart{}, %ImagePart{}] mixed content fires the upstream guard",
+         %{stub: _stub} do
+      img = Image.from_url("https://example.com/cat.png")
+
+      request =
+        Request.new(
+          [
+            %Message{
+              role: :user,
+              content: [%TextPart{text: "x"}, %ImagePart{image: img}]
+            }
+          ],
+          model: "claude-sonnet-4-6"
+        )
+
+      assert {:error, %AdapterError{reason: :unsupported_feature, provider: :anthropic}} =
+               Anthropic.generate(request, api_key: "sk-ant-test")
+    end
   end
 
   # ---------------------------------------------------------------------------

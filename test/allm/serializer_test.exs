@@ -403,7 +403,9 @@ defmodule ALLM.SerializerTest do
             :invalid_tool,
             :invalid_thread,
             :invalid_session,
-            :vision_not_in_v0_2
+            :invalid_session_input,
+            :unsupported_capability,
+            :invalid_image_request
           ] do
         # Note: errors field is a list of tuples — tuples don't survive JSON.
         # The decoder restores them as lists; we store a serializable shape here

@@ -3,7 +3,7 @@ defmodule ALLM.ValidateTest do
   use ExUnitProperties
 
   alias ALLM.Error.ValidationError
-  alias ALLM.{Message, Request, Session, Thread, Tool, ToolCall, Validate}
+  alias ALLM.{Image, ImagePart, Message, Request, Session, TextPart, Thread, Tool, ToolCall, Validate}
   alias ALLM.Test.Generators
 
   doctest ALLM.Validate
@@ -183,7 +183,21 @@ defmodule ALLM.ValidateTest do
       assert {[:tools, 1, :name], :invalid_format} in errors
     end
 
-    test "vision image part in message content returns :vision_not_in_v0_2" do
+    test "vision ImagePart in message content is accepted (v0.3 §35.6)" do
+      img = Image.from_url("https://example.com/cat.png")
+
+      req =
+        Request.new([
+          %Message{
+            role: :user,
+            content: [%TextPart{text: "describe"}, %ImagePart{image: img}]
+          }
+        ])
+
+      assert :ok = Validate.request(req)
+    end
+
+    test "raw map content list element is rejected with :invalid_part_type" do
       req =
         Request.new([
           %Message{
@@ -192,7 +206,10 @@ defmodule ALLM.ValidateTest do
           }
         ])
 
-      assert {:error, %ValidationError{reason: :vision_not_in_v0_2}} = Validate.request(req)
+      assert {:error, %ValidationError{reason: :invalid_request, errors: errors}} =
+               Validate.request(req)
+
+      assert {[:messages, 0, :content], :invalid_part_type} in errors
     end
 
     # Defensive-branch coverage: `Request.new/2` would never produce a
@@ -249,52 +266,62 @@ defmodule ALLM.ValidateTest do
       assert :ok = Validate.message(%Message{role: :user, content: "plain string"})
     end
 
-    test "accepts a list of map content parts (text/tool parts only)" do
+    test "accepts a list of TextPart structs" do
       assert :ok =
                Validate.message(%Message{
                  role: :user,
-                 content: [%{type: "text", text: "hello"}]
+                 content: [%TextPart{text: "hello"}]
                })
     end
 
-    test "rejects image list part with reason :vision_not_in_v0_2" do
-      assert {:error, %ValidationError{reason: :vision_not_in_v0_2, errors: errors}} =
+    test "accepts a mixed list of TextPart and ImagePart structs" do
+      img = Image.from_url("https://example.com/cat.png")
+
+      assert :ok =
                Validate.message(%Message{
                  role: :user,
-                 content: [%{type: "image", url: "https://example.com/cat.png"}]
+                 content: [%TextPart{text: "describe"}, %ImagePart{image: img}]
                })
-
-      assert {:content, :image_part} in errors
     end
 
-    test "rejects image_url list part with reason :vision_not_in_v0_2" do
-      assert {:error, %ValidationError{reason: :vision_not_in_v0_2, errors: errors}} =
+    test "accepts a list of ImagePart structs alone" do
+      img = Image.from_url("https://example.com/cat.png")
+
+      assert :ok =
                Validate.message(%Message{
                  role: :user,
-                 content: [%{type: "image_url", image_url: %{url: "https://..."}}]
+                 content: [%ImagePart{image: img, detail: :high}]
                })
-
-      assert {:content, :image_part} in errors
     end
 
-    test "rejects string-keyed image part (JSON-decoded shape)" do
-      assert {:error, %ValidationError{reason: :vision_not_in_v0_2, errors: errors}} =
+    test "rejects raw map content list element with [{:content, :invalid_part_type}]" do
+      assert {:error, %ValidationError{reason: :invalid_message, errors: errors}} =
+               Validate.message(%Message{
+                 role: :user,
+                 content: [%{type: "text", text: "x"}]
+               })
+
+      assert {:content, :invalid_part_type} in errors
+    end
+
+    test "rejects string-keyed image map (JSON-decoded shape) with :invalid_part_type" do
+      assert {:error, %ValidationError{reason: :invalid_message, errors: errors}} =
                Validate.message(%Message{
                  role: :user,
                  content: [%{"type" => "image", "url" => "https://example.com/cat.png"}]
                })
 
-      assert {:content, :image_part} in errors
+      assert {:content, :invalid_part_type} in errors
     end
 
-    test "rejects string-keyed image_url part (JSON-decoded shape)" do
-      assert {:error, %ValidationError{reason: :vision_not_in_v0_2, errors: errors}} =
+    test "rejects mixed list with one non-Part element with :invalid_part_type" do
+      assert {:error, %ValidationError{reason: :invalid_message, errors: errors}} =
                Validate.message(%Message{
                  role: :user,
-                 content: [%{"type" => "image_url", "image_url" => %{"url" => "https://..."}}]
+                 content: [%TextPart{text: "x"}, "raw string"]
                })
 
-      assert {:content, :image_part} in errors
+      assert {:content, :invalid_part_type} in errors
     end
 
     test "content that is neither string nor list is invalid" do
@@ -424,7 +451,21 @@ defmodule ALLM.ValidateTest do
       assert {[:messages, 2, :tool_call_id], :required} in errors
     end
 
-    test "vision image part in thread message returns :vision_not_in_v0_2" do
+    test "ImagePart in thread message is accepted (v0.3 §35.6)" do
+      img = Image.from_url("https://example.com/cat.png")
+
+      t =
+        Thread.from_messages([
+          %Message{
+            role: :user,
+            content: [%TextPart{text: "describe"}, %ImagePart{image: img}]
+          }
+        ])
+
+      assert :ok = Validate.thread(t)
+    end
+
+    test "raw map content in thread message is rejected with :invalid_part_type" do
       t =
         Thread.from_messages([
           %Message{
@@ -433,7 +474,10 @@ defmodule ALLM.ValidateTest do
           }
         ])
 
-      assert {:error, %ValidationError{reason: :vision_not_in_v0_2}} = Validate.thread(t)
+      assert {:error, %ValidationError{reason: :invalid_thread, errors: errors}} =
+               Validate.thread(t)
+
+      assert {[:messages, 0, :content], :invalid_part_type} in errors
     end
   end
 

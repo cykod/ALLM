@@ -1,9 +1,9 @@
 defmodule ALLM.StreamRunnerTest do
   use ExUnit.Case, async: true
 
-  alias ALLM.{Engine, Message, Request, StreamRunner}
+  alias ALLM.{Engine, Image, ImagePart, Message, Request, StreamRunner}
   alias ALLM.Error.{AdapterError, EngineError, ValidationError}
-  alias ALLM.Providers.Fake
+  alias ALLM.Providers.{Fake, OpenAI}
 
   import ALLM.Test.AsyncHelpers, only: [wait_for: 2]
 
@@ -110,15 +110,22 @@ defmodule ALLM.StreamRunnerTest do
       assert {:messages, :empty} in errors
     end
 
-    test "vision message returns :vision_not_in_v0_2" do
-      engine = fake_engine([{:text, "x"}, {:finish, :stop}])
+    test "vision message: chat adapter short-circuits with :unsupported_feature (Phase 14.4)" do
+      # Phase 14.4 Decision #14: ImagePart in a request to the OpenAI/Anthropic
+      # chat adapter returns {:error, %AdapterError{reason: :unsupported_feature}}
+      # — the upstream guard fires before any HTTP call. The validator no
+      # longer rejects vision content; rejection moved to the adapter.
+      engine = Engine.new(adapter: OpenAI, model: "gpt-4o-mini")
 
       vision_req =
         Request.new([
-          %Message{role: :user, content: [%{type: "image", url: "data:..."}]}
+          %Message{
+            role: :user,
+            content: [%ImagePart{image: Image.from_url("data:image/png;base64,aGk=")}]
+          }
         ])
 
-      assert {:error, %ValidationError{reason: :vision_not_in_v0_2}} =
+      assert {:error, %AdapterError{reason: :unsupported_feature}} =
                StreamRunner.run(engine, vision_req)
     end
 

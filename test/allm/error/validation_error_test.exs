@@ -13,7 +13,7 @@ defmodule ALLM.Error.ValidationErrorTest do
     :invalid_session,
     :invalid_session_input,
     :unsupported_capability,
-    :vision_not_in_v0_2
+    :invalid_image_request
   ]
 
   describe "new/3" do
@@ -95,6 +95,12 @@ defmodule ALLM.Error.ValidationErrorTest do
                reason: :invalid_session_input,
                errors: [{:session_input, :invalid_type}]
              } = err
+    end
+
+    test "raises ArgumentError for the removed :vision_not_in_v0_2 reason (Phase 14.4)" do
+      assert_raise ArgumentError, ~r/unknown reason :vision_not_in_v0_2/, fn ->
+        ValidationError.new(:vision_not_in_v0_2, [])
+      end
     end
   end
 

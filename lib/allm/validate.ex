@@ -8,8 +8,13 @@ defmodule ALLM.Validate do
   `field` is either a single atom (top-level) or a path of atoms/indices
   (e.g. `[:messages, 2, :role]`) when the failure is nested.
 
-  Vision content parts (`%{type: "image", ...}`, `%{type: "image_url", ...}`)
-  are a hard reject with `reason: :vision_not_in_v0_2` per spec §33 non-goals.
+  Multimodal content parts use the `%ALLM.TextPart{}` and `%ALLM.ImagePart{}`
+  Layer A structs (spec §35.6, Phase 14.4). A content list whose elements are
+  not one of those two structs is rejected with
+  `{:content, :invalid_part_type}` — raw maps in content lists are no longer
+  accepted (Phase 14.4 Decision #11; previously the v0.2 validator accepted
+  any list of maps and short-circuited image-typed maps with the now-removed
+  `:vision_not_in_v0_2` reason).
 
   Validators are opt-in: constructors like `ALLM.Request.new/2` do not call
   these functions (see Phase 1 design non-obvious decision #7). Users invoke
@@ -19,7 +24,7 @@ defmodule ALLM.Validate do
   """
 
   alias ALLM.Error.ValidationError
-  alias ALLM.{Image, ImageRequest, Message, Request, Session, Thread, Tool}
+  alias ALLM.{Image, ImagePart, ImageRequest, Message, Request, Session, TextPart, Thread, Tool}
 
   @legal_roles [:system, :user, :assistant, :tool]
   @legal_statuses [:idle, :awaiting_user, :awaiting_tools, :completed, :error]
@@ -39,9 +44,6 @@ defmodule ALLM.Validate do
   Returns `:ok` when every field is well-formed, or
   `{:error, %ALLM.Error.ValidationError{reason: :invalid_request, errors: [...]}}`.
 
-  A vision content part in any message short-circuits with
-  `reason: :vision_not_in_v0_2`.
-
   ## Examples
 
       iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "hi"}])
@@ -57,21 +59,19 @@ defmodule ALLM.Validate do
   """
   @spec request(Request.t()) :: :ok | {:error, ValidationError.t()}
   def request(%Request{} = req) do
-    with :ok <- check_vision_in_messages(req.messages, &[:messages, &1, :content]) do
-      errors =
-        []
-        |> validate_messages_non_empty(req.messages)
-        |> validate_messages_each(req.messages)
-        |> validate_tools_each(req.tools)
-        |> validate_tool_names_unique(req.tools)
-        |> validate_temperature(req.temperature)
-        |> validate_max_tokens(req.max_tokens)
-        |> validate_response_format(req.response_format)
-        |> validate_structured_finalize(req.structured_finalize, req.response_format)
-        |> Enum.reverse()
+    errors =
+      []
+      |> validate_messages_non_empty(req.messages)
+      |> validate_messages_each(req.messages)
+      |> validate_tools_each(req.tools)
+      |> validate_tool_names_unique(req.tools)
+      |> validate_temperature(req.temperature)
+      |> validate_max_tokens(req.max_tokens)
+      |> validate_response_format(req.response_format)
+      |> validate_structured_finalize(req.structured_finalize, req.response_format)
+      |> Enum.reverse()
 
-      finalize(:invalid_request, errors)
-    end
+    finalize(:invalid_request, errors)
   end
 
   # ---------------------------------------------------------------------------
@@ -82,8 +82,9 @@ defmodule ALLM.Validate do
   Validate an `%ALLM.Message{}`.
 
   Returns `:ok` or `{:error, %ALLM.Error.ValidationError{}}`. A content list
-  containing a vision part short-circuits with `reason: :vision_not_in_v0_2`
-  (see spec §33).
+  whose elements are not `%ALLM.TextPart{}` or `%ALLM.ImagePart{}` is
+  rejected with `{:content, :invalid_part_type}` (Phase 14.4 Decision #11);
+  raw maps are no longer accepted in content lists.
 
   ## Examples
 
@@ -98,23 +99,14 @@ defmodule ALLM.Validate do
   """
   @spec message(Message.t()) :: :ok | {:error, ValidationError.t()}
   def message(%Message{} = msg) do
-    case vision_error(msg.content) do
-      :no_vision ->
-        errors =
-          []
-          |> validate_role(msg.role)
-          |> validate_content(msg.content)
-          |> validate_tool_call_id(msg.role, msg.tool_call_id)
-          |> Enum.reverse()
+    errors =
+      []
+      |> validate_role(msg.role)
+      |> validate_content(msg.content)
+      |> validate_tool_call_id(msg.role, msg.tool_call_id)
+      |> Enum.reverse()
 
-        finalize(:invalid_message, errors)
-
-      :vision ->
-        {:error,
-         ValidationError.new(:vision_not_in_v0_2, [{:content, :image_part}],
-           message: "vision content parts are not supported in v0.2 (spec §33)"
-         )}
-    end
+    finalize(:invalid_message, errors)
   end
 
   # ---------------------------------------------------------------------------
@@ -162,8 +154,6 @@ defmodule ALLM.Validate do
   Every message must pass `message/1`. Errors from nested messages carry a
   `[:messages, idx, :field]` path prefix so callers can locate the offender.
 
-  A vision part in any message short-circuits with `:vision_not_in_v0_2`.
-
   ## Examples
 
       iex> t = ALLM.Thread.from_messages([%ALLM.Message{role: :user, content: "hi"}])
@@ -179,13 +169,8 @@ defmodule ALLM.Validate do
   """
   @spec thread(Thread.t()) :: :ok | {:error, ValidationError.t()}
   def thread(%Thread{} = t) do
-    with :ok <- check_vision_in_messages(t.messages, &[:messages, &1, :content]) do
-      errors =
-        t.messages
-        |> collect_message_errors(fn idx -> [:messages, idx] end)
-
-      finalize(:invalid_thread, errors)
-    end
+    errors = collect_message_errors(t.messages, fn idx -> [:messages, idx] end)
+    finalize(:invalid_thread, errors)
   end
 
   # ---------------------------------------------------------------------------
@@ -212,18 +197,15 @@ defmodule ALLM.Validate do
   """
   @spec session(Session.t()) :: :ok | {:error, ValidationError.t()}
   def session(%Session{} = s) do
-    with :ok <-
-           check_vision_in_messages(s.thread.messages, &[:thread, :messages, &1, :content]) do
-      status_errors =
-        []
-        |> validate_status(s.status)
-        |> validate_status_invariants(s)
-        |> Enum.reverse()
+    status_errors =
+      []
+      |> validate_status(s.status)
+      |> validate_status_invariants(s)
+      |> Enum.reverse()
 
-      errors = status_errors ++ thread_errors(s.thread)
+    errors = status_errors ++ thread_errors(s.thread)
 
-      finalize(:invalid_session, errors)
-    end
+    finalize(:invalid_session, errors)
   end
 
   # ---------------------------------------------------------------------------
@@ -346,14 +328,18 @@ defmodule ALLM.Validate do
   defp validate_content(errs, content) when is_binary(content), do: errs
 
   defp validate_content(errs, content) when is_list(content) do
-    if Enum.all?(content, &is_map/1) do
+    if Enum.all?(content, &valid_content_part?/1) do
       errs
     else
-      [{:content, :invalid_type} | errs]
+      [{:content, :invalid_part_type} | errs]
     end
   end
 
   defp validate_content(errs, _), do: [{:content, :invalid_type} | errs]
+
+  defp valid_content_part?(%TextPart{}), do: true
+  defp valid_content_part?(%ImagePart{}), do: true
+  defp valid_content_part?(_), do: false
 
   defp validate_tool_call_id(errs, :tool, nil), do: [{:tool_call_id, :required} | errs]
   defp validate_tool_call_id(errs, _role, _id), do: errs
@@ -420,40 +406,6 @@ defmodule ALLM.Validate do
   # ---------------------------------------------------------------------------
   # Internal: shared helpers
   # ---------------------------------------------------------------------------
-
-  # Returns :ok | {:error, %ValidationError{reason: :vision_not_in_v0_2}}.
-  # `path_fun` is `(index -> path_prefix_list)` used on hit.
-  defp check_vision_in_messages(messages, path_fun) do
-    Enum.reduce_while(Enum.with_index(messages || []), :ok, fn {m, idx}, :ok ->
-      case vision_error(m.content) do
-        :vision ->
-          path = path_fun.(idx)
-
-          {:halt,
-           {:error,
-            ValidationError.new(:vision_not_in_v0_2, [{path, :image_part}],
-              message: "vision content parts are not supported in v0.2 (spec §33)"
-            )}}
-
-        :no_vision ->
-          {:cont, :ok}
-      end
-    end)
-  end
-
-  # Detects image / image_url parts in a message content list. String or
-  # non-list content has no vision parts.
-  defp vision_error(content) when is_list(content) do
-    if Enum.any?(content, &image_part?/1), do: :vision, else: :no_vision
-  end
-
-  defp vision_error(_), do: :no_vision
-
-  defp image_part?(%{type: "image"}), do: true
-  defp image_part?(%{type: "image_url"}), do: true
-  defp image_part?(%{"type" => "image"}), do: true
-  defp image_part?(%{"type" => "image_url"}), do: true
-  defp image_part?(_), do: false
 
   # Validates each message; returns a list of {path ++ [field], reason} tuples.
   defp collect_message_errors(messages, path_prefix_fun) do

@@ -1,7 +1,7 @@
 defmodule ALLM.ResponseTest do
   use ExUnit.Case, async: true
 
-  alias ALLM.{Message, Response, ToolCall, Usage}
+  alias ALLM.{Message, Response, TextPart, ToolCall, Usage}
 
   doctest Response
 
@@ -63,7 +63,7 @@ defmodule ALLM.ResponseTest do
     end
 
     test "returns nil when message.content is a list (not a binary)" do
-      msg = %Message{role: :assistant, content: [%{type: "text", text: "x"}]}
+      msg = %Message{role: :assistant, content: [%TextPart{text: "x"}]}
       resp = Response.new(message: msg)
       assert Response.text(resp) == nil
     end

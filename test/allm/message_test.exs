@@ -1,7 +1,7 @@
 defmodule ALLM.MessageTest do
   use ExUnit.Case, async: true
 
-  alias ALLM.Message
+  alias ALLM.{Image, ImagePart, Message, Serializer, TextPart}
 
   doctest Message
 
@@ -58,4 +58,51 @@ defmodule ALLM.MessageTest do
   end
 
   # NOTE: ALLM.Serializer JSON round-trip is deferred to sub-phase 1.5.
+
+  describe "multimodal content (Phase 14.4)" do
+    test "Message with content: [%TextPart{}, %ImagePart{}] round-trips through ETF" do
+      img = Image.from_url("https://example.com/cat.png")
+
+      msg =
+        Message.new(
+          role: :user,
+          content: [%TextPart{text: "hi"}, %ImagePart{image: img}]
+        )
+
+      assert msg == msg |> :erlang.term_to_binary() |> :erlang.binary_to_term()
+    end
+
+    test "Message with content: [%TextPart{}, %ImagePart{}] round-trips through JSON" do
+      img = Image.from_base64("aGk=", "image/png")
+
+      msg =
+        Message.new(
+          role: :user,
+          content: [%TextPart{text: "hi"}, %ImagePart{image: img, detail: :high}]
+        )
+
+      json = Serializer.to_json!(msg)
+      assert {:ok, ^msg} = Serializer.from_json(json)
+    end
+  end
+
+  describe "normalize_content/1" do
+    test "lifts a string to a single-element [%TextPart{}] list" do
+      assert Message.normalize_content("hi") == [%TextPart{text: "hi"}]
+    end
+
+    test "passes a list of parts through unchanged" do
+      img = Image.from_url("https://example.com/cat.png")
+      parts = [%TextPart{text: "x"}, %ImagePart{image: img}]
+      assert Message.normalize_content(parts) == parts
+    end
+
+    test "lifts an empty string to a single empty TextPart" do
+      assert Message.normalize_content("") == [%TextPart{text: ""}]
+    end
+
+    test "passes an empty list through unchanged" do
+      assert Message.normalize_content([]) == []
+    end
+  end
 end

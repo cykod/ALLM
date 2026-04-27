@@ -305,6 +305,13 @@ defmodule ALLM.Providers.Anthropic do
   """
   @spec generate(Request.t(), keyword()) :: {:ok, Response.t()} | {:error, AdapterError.t()}
   def generate(%Request{} = request, opts) when is_list(opts) do
+    case reject_image_parts(request) do
+      :ok -> do_generate(request, opts)
+      {:error, _} = err -> err
+    end
+  end
+
+  defp do_generate(%Request{} = request, opts) do
     {:ok, %Req.Request{} = http_req} = prepare_request(request, opts)
 
     retry_policy = with_anthropic_retry_on(Keyword.get(opts, :retry, :default))
@@ -687,7 +694,43 @@ defmodule ALLM.Providers.Anthropic do
 
   defp stringify_content(c) when is_binary(c), do: c
   defp stringify_content(nil), do: ""
-  defp stringify_content(parts) when is_list(parts), do: parts
+
+  # Phase 14.4 Decision #14(b): materialize a [%TextPart{}, ...] content list
+  # to its joined text. The upstream `reject_image_parts/1` guard ensures
+  # `%ImagePart{}` never reaches this function — the catch-all clause in
+  # `materialize_part/1` is a programmer-error guard for Phase 16/17 wiring.
+  defp stringify_content(parts) when is_list(parts) do
+    Enum.map_join(parts, "\n", &materialize_part/1)
+  end
+
+  defp materialize_part(%ALLM.TextPart{text: t}), do: t
+
+  defp materialize_part(other) do
+    raise ArgumentError,
+          "stringify_content/1 expects a TextPart; got: #{inspect(other)}"
+  end
+
+  # Phase 14.4 Decision #14(a): top-level guard rejecting any ImagePart in a
+  # request's message content list. Vision input is not yet wired in this
+  # adapter; the Phase 16/17 work removes this guard and adds the real
+  # vision translator.
+  defp reject_image_parts(%Request{messages: messages}) do
+    has_image_part? =
+      Enum.any?(messages, fn m ->
+        is_list(m.content) and Enum.any?(m.content, &match?(%ALLM.ImagePart{}, &1))
+      end)
+
+    if has_image_part? do
+      {:error,
+       %AdapterError{
+         provider: :anthropic,
+         reason: :unsupported_feature,
+         message: "vision input not yet wired in this adapter; see Phase 16/17"
+       }}
+    else
+      :ok
+    end
+  end
 
   @doc """
   Map a list of canonical `%ALLM.Tool{}`s to Anthropic's wire shape.
@@ -1127,7 +1170,10 @@ defmodule ALLM.Providers.Anthropic do
   @impl ALLM.StreamAdapter
   @spec stream(Request.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, AdapterError.t()}
   def stream(%Request{} = request, opts) when is_list(opts) do
-    do_stream(request, opts)
+    case reject_image_parts(request) do
+      :ok -> do_stream(request, opts)
+      {:error, _} = err -> err
+    end
   end
 
   defp do_stream(%Request{} = request, opts) do

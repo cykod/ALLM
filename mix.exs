@@ -112,7 +112,9 @@ defmodule ALLM.MixProject do
           ALLM.Image,
           ALLM.ImageRequest,
           ALLM.ImageResponse,
-          ALLM.ImageUsage
+          ALLM.ImageUsage,
+          ALLM.TextPart,
+          ALLM.ImagePart
         ],
         Runtime: [
           ALLM.Engine,

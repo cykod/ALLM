@@ -1,3 +1,44 @@
+## [FEAT] Phase 14.4: ALLM.TextPart + ALLM.ImagePart + Message.content widening + ValidationError :vision_not_in_v0_2 removed (§35.6, BREAKING for raw-map content callers)
+*Monday, April 27th*
+Multimodal Layer A content parts. Two new structs: `%ALLM.TextPart{}`
+(`@enforce_keys [:text]`, `defstruct [:text, metadata: %{}]`) and
+`%ALLM.ImagePart{}` (`@enforce_keys [:image]`, `defstruct [:image,
+detail: :auto, metadata: %{}]`; `:detail` closed-set
+`[:auto, :low, :high]` matching OpenAI's vision wire field). Both expose
+`new/2` constructors with doctests, `__from_tagged__/1` hydrators, and
+`Jason.Encoder` impls — ETF and JSON round-trips total. `ALLM.Message`
+widens `@type t.content` to `String.t() | [TextPart.t() | ImagePart.t()]`
+(spec §35.6); the v0.2 raw-`[map(), …]` shape is removed.
+`Message.normalize_content/1` added as a one-way string→[TextPart] lift
+helper for chat-adapter wire-shape boundaries (Phase 16/17).
+`ALLM.Validate.message/1` rewritten: content lists are accepted iff
+every element is a TextPart or ImagePart; raw maps now fail with
+`{:content, :invalid_part_type}` (Decision #11). The
+`:vision_not_in_v0_2` short-circuit, the four `image_part?/1` clauses,
+the `vision_error/1` helper, the `check_vision_in_messages/2` helper,
+and the `with :ok <- check_vision_in_messages(…)` calls in `request/1`
+/ `thread/1` / `session/1` are all REMOVED. `ALLM.Error.ValidationError`
+removes `:vision_not_in_v0_2` from `@type reason` and `@legal_reasons`
+(Decision #12) — `ValidationError.new(:vision_not_in_v0_2, …)` now
+raises `ArgumentError`. **BREAKING** for any caller pattern-matching on
+`:vision_not_in_v0_2` or passing raw maps in `Message.content` lists.
+`ALLM.Serializer.@known_modules` extends from 23 to 25 entries
+(`ALLM.TextPart`, `ALLM.ImagePart`). `ALLM.Providers.OpenAI` and
+`ALLM.Providers.Anthropic` get TWO co-ordinated changes per Decision
+#14: (a) a top-level `reject_image_parts/1` guard at the start of
+`generate/2` AND `stream/2` returning
+`{:error, %AdapterError{reason: :unsupported_feature}}` for any
+`%ImagePart{}` in a message content list (vision input is not yet wired
+in either adapter — Phase 16/17 territory); (b) `stringify_content/1`
+extended with a list-clause that maps `[%TextPart{text: t}, ...]` to
+the joined text via `Enum.join("\n")`, plus a private
+`materialize_part/1` with a `%TextPart{}` clause and a catch-all
+`raise ArgumentError` programmer-error guard. The `materialize_part/1`
+catch-all is unreachable in v0.3 (the upstream guard ensures only
+TextParts reach it) but documents the expectation for the Phase 16/17
+vision wiring. v0.2 backward-compat invariant load-bearing — every
+existing `Message{content: "string"}` test continues to pass.
+
 ## [FEAT] Phase 14.3: image telemetry + capability preflight_image + retry integration (§35.9, §6.1)
 *Monday, April 27th*
 Cross-cutting wrap for the v0.3 image pipeline. The bare 14.2 façade

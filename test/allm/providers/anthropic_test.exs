@@ -616,10 +616,18 @@ defmodule ALLM.Providers.AnthropicTest do
       assert [%{"role" => "user", "content" => ""}] = Anthropic.to_anthropic_messages([msg])
     end
 
-    test "to_anthropic_messages: list content passes through unchanged" do
-      parts = [%{"type" => "text", "text" => "hi"}]
-      msg = %Message{role: :user, content: parts}
-      assert [%{"role" => "user", "content" => ^parts}] = Anthropic.to_anthropic_messages([msg])
+    test "to_anthropic_messages: [%TextPart{}] content materializes to its text (Phase 14.4)" do
+      msg = %Message{role: :user, content: [%ALLM.TextPart{text: "hi"}]}
+      assert [%{"role" => "user", "content" => "hi"}] = Anthropic.to_anthropic_messages([msg])
+    end
+
+    test "to_anthropic_messages: multi-TextPart content joins with newline (Phase 14.4)" do
+      msg = %Message{
+        role: :user,
+        content: [%ALLM.TextPart{text: "a"}, %ALLM.TextPart{text: "b"}]
+      }
+
+      assert [%{"role" => "user", "content" => "a\nb"}] = Anthropic.to_anthropic_messages([msg])
     end
 
     test "to_anthropic_messages: defensive system-role coercion to user" do
