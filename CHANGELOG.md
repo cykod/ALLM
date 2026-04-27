@@ -1,3 +1,28 @@
+## [FEAT] Phase 14.1: ALLM.ImageAdapter behaviour + ALLM.Providers.FakeImages + ALLM.Test.ImageAdapterConformance harness (§35.3, §35.8)
+*Monday, April 27th*
+Layer B for v0.3 image pipeline. Introduces `ALLM.ImageAdapter` behaviour
+(callbacks: `generate/2`, optional `prepare_request/2`, `supported_operations/0`)
+in `lib/allm/image_adapter.ex` plus `ALLM.Error.ImageAdapterError` — closed-enum
+exception struct (12 reasons: `:authentication_failed`, `:rate_limited`,
+`:invalid_request`, `:content_filter`, `:context_length_exceeded`,
+`:provider_unavailable`, `:timeout`, `:network_error`, `:malformed_response`,
+`:unsupported_feature`, `:unsupported_operation`, `:unknown`) with full ETF +
+JSON round-trip via `ALLM.Serializer` (`@known_modules` 22 → 23). Ships
+`ALLM.Providers.FakeImages` in `lib/` (Decision #1, mirrors `Fake` precedent)
+implementing the behaviour with a process-local cursor, `script/1` validation,
+`start_script_cursor/0` Agent escape hatch, `:unsupported_operation` entry-point
+gate, and `request_id` / `metadata` round-trip per §35.3 invariants.
+`ALLM.Test.ImageAdapterConformance` harness lives at
+`conformance/lib/allm/test/image_adapter_conformance.ex` (Decision #2 — published
+with `allm_conformance`); 9-case `@case_count` matrix with introspection
+seam + meta-test against drift; `ScriptedImageStub` / `GenerateOnlyImageStub`
+fixtures in `conformance/test/support/`. `mix.exs` docs groups extended
+(`ALLM.ImageAdapter` under Behaviours; `ALLM.Providers.FakeImages` under
+Providers; `ALLM.Error.ImageAdapterError` under Errors). 1600 tests / 0
+failures / 0 dialyzer warnings; conformance package 66 tests / 0 failures.
+
+---
+
 ## [FEAT] Phase 13: v0.3 Layer A image data structs + facade + validator
 *Monday, April 27th at 10am*
 First v0.3 slice (see steering/PHASE_13_image_layer_a.md). Adds Layer A image 

@@ -80,6 +80,7 @@ defmodule ALLM.Serializer do
     ALLM.Error.ValidationError,
     ALLM.Error.ToolError,
     ALLM.Error.SessionError,
+    ALLM.Error.ImageAdapterError,
     ALLM.Image,
     ALLM.ImageRequest,
     ALLM.ImageResponse,

@@ -82,13 +82,15 @@ defmodule ALLM.MixProject do
           ALLM.Adapter,
           ALLM.StreamAdapter,
           ALLM.ToolExecutor,
-          ALLM.ToolResultEncoder
+          ALLM.ToolResultEncoder,
+          ALLM.ImageAdapter
         ],
         Providers: [
           ALLM.Providers.OpenAI,
           ALLM.Providers.Anthropic,
           ALLM.Providers.Fake,
           ALLM.Providers.Fake.Script,
+          ALLM.Providers.FakeImages,
           ALLM.Providers.Support.SSE
         ],
         Defaults: [
@@ -134,7 +136,8 @@ defmodule ALLM.MixProject do
           ALLM.Error.SessionError,
           ALLM.Error.StreamError,
           ALLM.Error.ToolError,
-          ALLM.Error.ValidationError
+          ALLM.Error.ValidationError,
+          ALLM.Error.ImageAdapterError
         ]
       ]
     ]
