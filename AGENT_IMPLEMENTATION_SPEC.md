@@ -207,6 +207,8 @@ The 1:1 mapping keeps lookup trivial and prevents one file from accumulating eve
 - **Fixture builders** (Fake scripts, engine constructors with default options, canned messages) → `test/support/fake_fixtures.ex`.
 - **Common assertions** (multi-step event sequences, struct-field-diff) → `test/support/assertions.ex`.
 
+**LLMDB `@fixtures` capability maps populate ONLY the keys the fixture's tests exercise.** Absent keys are treated as "no info" by `Capability.preflight*` functions; defensive dummy padding (`tools: %{enabled: false}` on an image-only fixture) is sprawl, not safety. Phase 14.3's three new image fixtures padded `tools` and `json_native` despite neither being relevant to `preflight_image/2` — six dummy LOC. Future v0.4 audio fixtures: populate `audio_enabled` + `supported_audio_operations` only.
+
 One-off inline helpers are fine for single-file use. Two copies is the moment to extract — each additional copy accrues silent divergence (helper names drift, magic numbers diverge, semantics fork). Worked example of non-extraction cost: `wait_for/2` exists in four places as of Phase 5.4 (conformance harness + `fake_stream_test.exs` + `stream_runner_test.exs` + `fake_scenarios_test.exs`) with the recursion-helper name already divergent (`do_wait_for/2` vs. `do_wait/2`), plus a `Process.sleep(50)` regression at `chat_stream_step_test.exs:472` during Phase 6 Batch 2.
 
 **TODO-tag inline helpers slated for extraction.** When an inline test helper is annotated as "Batch N will lift to module X" (a known second caller is coming in a later batch), prefix the in-source comment with `TODO(<source-batch>→<target-batch>):` so a `git grep 'TODO(8.3'` audit at the target-batch boundary finds it. Comment-text-only annotations are fragile against grep. Trivial change; surfaces planned extraction debt as a mechanical pre-batch check.
@@ -367,6 +369,19 @@ Each struct has at minimum `:reason` (atom from a closed set), `:message` (no se
 - **No swallowed errors.** Every `try/rescue` has a `Logger` call OR an error-tuple return — never both silent.
 - **`:cause` for debugging.** Chain the underlying exception so users can `inspect/1` it.
 
+**Required pieces of every error module.** ALLM ships seven error structs (AdapterError, EngineError, StreamError, ToolError, SessionError, ValidationError, ImageAdapterError); v0.4 will add at least AudioAdapterError. Every closed-enum exception module ships **eight required pieces**:
+
+1. Closed `@type reason :: :foo | :bar | ...` enum
+2. `@legal_reasons` list literal (so `unless reason in @legal_reasons` is compile-checkable)
+3. `defexception` with the six common fields (`:reason, :message, :provider, :cause, :metadata`) plus any specific extras (`:status`, `:retry_after_ms`)
+4. `new/2` with reason-validation + `ArgumentError` + default-message helper
+5. `legal_reasons/0` `@spec () :: [reason()]` introspection seam
+6. `__from_tagged__/1` hydrator
+7. `defimpl Jason.Encoder` via `ALLM.Serializer.encode_tagged/2`
+8. `Exception.message/1` impl with default-message helper, plus doctests on `new/2` and `Exception.message/1`
+
+Cite `lib/allm/error/adapter_error.ex` and `lib/allm/error/image_adapter_error.ex` as parallel templates. Each new error module is otherwise a 150-LOC mostly-mechanical exercise; the checklist prevents silent omission of (e.g.) `legal_reasons/0` or the `__from_tagged__/1` hydrator.
+
 ## Streaming Discipline
 
 - **Every `Stream.resource/3` has a cleanup function.** No exceptions. Test with early consumer halt.
@@ -452,6 +467,8 @@ Measurements: `:duration` (native), `:input_tokens`, `:output_tokens`, `:cost` (
 
 **Don't add new telemetry events without a spec amendment.** Telemetry is a public contract.
 
+**`Telemetry.span/3`'s closure may return either shape.** `{result, stop_metadata_extras}` (2-tuple, metadata-only) or `{result, extra_measurements, stop_metadata_extras}` (3-tuple, when the `:stop` event carries non-default measurements beyond `:duration` and `:monotonic_time`). Phase 14.3 widened this to ship `image_count` as a `:stop` measurement per its Decision #8 (`lib/allm/telemetry.ex:146,165-168`). Future spans needing custom measurements use the 3-tuple form; spans without custom measurements use the 2-tuple form (still the dominant shape — `:generate`, `:step`, `:chat`, `:stream`, `:tool` all use it).
+
 ### Logger usage
 
 - `Logger.warning/1` — ops-visible degradations (rate limits, retries).
@@ -478,6 +495,9 @@ Measurements: `:duration` (native), `:input_tokens`, `:output_tokens`, `:cost` (
 - **Don't change public API without a CHANGELOG entry.** Even pre-1.0, the four `steering/examples/` apps depend on the API.
 - **Don't merge a phase with `In Progress` status.** Completed or not done.
 - **Don't skip `mix dialyzer` because it's slow.** First run builds PLT (1–2 min); subsequent runs are seconds.
+- **Don't rely on the default `:erlang.phash2(script)` cursor for multi-engine or content-equal scripts in the same process.** `Fake` and `FakeImages` both default to a process-dict cursor keyed by `:erlang.phash2(scripts)`. Two engines built with byte-equal scripts in the same test process share the cursor and the second exhausts. Use `Fake.start_script_cursor/0` / `FakeImages.start_script_cursor/0` and pass the pid as `adapter_opts[:script_cursor]`. (Phase 12.2 / 14.1 / 14.2 / 14.3 / 14.4 — overdue across five retros.)
+- **`engine.adapter_opts ++ call_site_opts` (NOT `Keyword.merge`).** When a Layer-C façade merges engine-carried `adapter_opts` with call-site `opts[:adapter_opts]`, use `++`. `Keyword.get/2` returns the FIRST occurrence — engine wins on collision. `Keyword.merge/2` would have OPPOSITE semantics (call wins). Mirror: `lib/allm/stream_runner.ex:230`. Phase 14.2 initially shipped `Keyword.merge` and was a silent precedence flip vs the cited precedent.
+- **Layer C façades have TWO drop-points for opts.** One at the request-builder boundary (strips opts that collide with the request struct's fields when merged into `Request.new/1` / `ImageRequest.new/1`), one at the dispatch boundary (strips opts that are call-site-only and the adapter must not see — `:stream`, `:request_id`-as-direct-key, etc.). Conflating them produces silently-forwarded opts that real adapters reject. See `StreamRunner.@phase_5_layer_opts:54-61` for the chat-side dispatch-boundary deny-list pattern.
 
 ### Elixir serialization exception shapes
 
@@ -486,6 +506,7 @@ Three observed behaviors that surprise most Elixir devs writing Layer A/B serial
 - **`:erlang.term_to_binary/1` silently encodes anonymous functions and funs-in-keyword-lists.** Unsafety is at decode-time across BEAM reloads or nodes (`:badfun`), not encode. Don't write `assert_raise ArgumentError, fn -> :erlang.term_to_binary(…fn…) end` — it never fires.
 - **Jason raises `Protocol.UndefinedError`, not `Jason.EncodeError`, when no encoder exists.** `Jason.EncodeError` is for cases where an encoder is defined but rejects input. A function/tuple/struct without `Jason.Encoder` impl produces `Protocol.UndefinedError` at protocol dispatch.
 - **`DateTime` and `Decimal` have Jason encoders (ISO-8601 / string) but no matching decoders in this library.** A metadata map containing `%DateTime{}` round-trips through `term_to_binary` cleanly, but the JSON round-trip is **non-equality-preserving** — the decoded value is an ISO-8601 binary, not a `%DateTime{}`. Tests assert `refute decoded == original`, not encode-time raises.
+- **`metadata: map()` fields on Layer-A structs do NOT preserve atom keys across JSON round-trip.** Atom keys decode as strings via `Jason.decode!/1`. Two patterns: (1) **string-keyed metadata** — the convention used by `Image`, `TextPart`, `ImagePart` — round-trips JSON cleanly but is asymmetric vs. atom-key constructor sugar (`%{source: :test}` round-trip-decodes as `%{"source" => "test"}`). (2) **closed-set atom field with `Serializer.to_atom_field/1` rescue** — the convention used for `:detail` on `ImagePart` (`[:auto, :low, :high]`) — round-trips atoms cleanly via the registered hydrator path. New Layer-A struct authors choosing pattern (1) for `metadata` MUST add a test-comment naming the asymmetry. Worked example: `test/allm/text_part_test.exs:44-50`.
 
 ### Optional-dep detection
 
