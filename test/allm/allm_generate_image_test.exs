@@ -202,5 +202,34 @@ defmodule ALLM.AllmGenerateImageTest do
       engine = engine_with_script([{:ok, [single_image()]}])
       assert {:ok, %ImageResponse{}} = ALLM.generate_image(engine, "x", stream: true)
     end
+
+    test "adapter does NOT receive :stream in dispatch opts (Phase 14.2 fix)" do
+      engine = Engine.new(image_adapter: CaptureAdapter)
+
+      assert {:ok, _} = ALLM.generate_image(engine, "x", stream: true)
+      assert_received {:request, _req, opts}
+      refute Keyword.has_key?(opts, :stream)
+    end
+  end
+
+  describe "adapter_opts merge precedence (Phase 14.2 fix — Finding 1)" do
+    test "engine.adapter_opts wins on collision with call-site adapter_opts (mirrors chat-side `++`)" do
+      # Engine carries adapter_opts: [foo: :engine]; call-site supplies
+      # adapter_opts: [foo: :call]. With `++` precedent (Keyword.get returns
+      # first occurrence), engine wins. With Keyword.merge/2 (the pre-fix
+      # bug), call would have won.
+      engine =
+        Engine.new(
+          image_adapter: CaptureAdapter,
+          adapter_opts: [foo: :engine]
+        )
+
+      assert {:ok, _} =
+               ALLM.generate_image(engine, "x", adapter_opts: [foo: :call])
+
+      assert_received {:request, _req, opts}
+      merged = Keyword.get(opts, :adapter_opts)
+      assert Keyword.get(merged, :foo) == :engine
+    end
   end
 end

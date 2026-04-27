@@ -102,9 +102,17 @@ defmodule ALLM.AllmImageVariationsTest do
         {:ok, _} = ALLM.image_variations(engine, img, n: n)
         assert_received {:request, sugar_req, _opts}
 
-        # Variations require empty/nil prompt; build the explicit form
-        # without the prompt sugar (the facade `image_request/2` requires
-        # a binary prompt, so use ImageRequest.new/1 directly).
+        # DELIBERATE BYPASS of `ALLM.image_request/2` — see Phase 14.2 retro
+        # Finding 4. `image_request/2` requires a binary prompt, but
+        # `image_variations/3` emits `prompt: nil`. `image_request("",
+        # operation: :variation, ...)` would produce `prompt: ""`, which is
+        # NOT byte-equal to `prompt: nil`. So the property here asserts the
+        # weaker invariant: `image_variations/3` produces the same struct as
+        # `ImageRequest.new/1` with `prompt: nil`. This does NOT exercise
+        # the `image_request/2` codepath for variations — the `edit_image/4`
+        # property at `test/allm/allm_edit_image_test.exs` is the one that
+        # exercises the canonical builder. Decision #6's "byte-equal" claim
+        # for variations is therefore via `ImageRequest.new/1` directly.
         explicit =
           ImageRequest.new(
             operation: :variation,

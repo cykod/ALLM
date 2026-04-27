@@ -778,35 +778,35 @@ defmodule ALLM do
   # ---------------------------------------------------------------------------
 
   # Drop call-control opts that would collide with `ImageRequest` struct
-  # fields when merged into `ImageRequest.new/1`. `:request_id` and
-  # `:stream` are call-site concerns, not request fields. `:mask` is
-  # consumed at the `edit_image/4` boundary.
+  # fields when merged into `ImageRequest.new/1`. `:request_id`, `:stream`,
+  # and `:adapter_opts` are call/dispatch-site concerns, not request fields
+  # — `ImageRequest.new/1` would `KeyError` on them via `struct!/2`. `:mask`
+  # is consumed at the `edit_image/4` boundary.
   defp drop_request_opts(opts) when is_list(opts) do
-    Keyword.drop(opts, [:request_id, :stream, :mask])
+    Keyword.drop(opts, [:request_id, :stream, :mask, :adapter_opts])
   end
 
   # Bare `with`-chain: adapter-presence gate, then dispatch. Phase 14.3
   # will wrap this in `Telemetry.span(:image, ...)` + `Capability.preflight_image/2`
   # + `Retry.run/3`.
   defp do_generate_image(%Engine{image_adapter: nil}, _request, _opts) do
-    {:error,
-     EngineError.new(:no_image_adapter,
-       message: "engine has no :image_adapter set"
-     )}
+    {:error, EngineError.new(:no_image_adapter)}
   end
 
   defp do_generate_image(%Engine{image_adapter: adapter} = engine, %ImageRequest{} = request, opts) do
     request_id = Keyword.get(opts, :request_id) || ALLM.Telemetry.request_id()
 
-    # Merge engine.adapter_opts with call-site adapter_opts (call wins on
-    # collision via Keyword.merge/2). Mirrors the chat-side
-    # `StreamRunner.build_dispatch_opts/2` pattern at
-    # `lib/allm/stream_runner.ex:229-230`.
+    # Concat engine.adapter_opts with call-site adapter_opts. `Keyword.get/2`
+    # returns the FIRST occurrence on duplicate keys, so engine wins on
+    # collision. Mirrors the chat-side `StreamRunner.build_dispatch_opts/2`
+    # adapter_opts concat at `lib/allm/stream_runner.ex:229-230` (NOT
+    # `Keyword.merge/2`, which would have OPPOSITE precedence — call wins).
     merged_adapter_opts =
-      Keyword.merge(engine.adapter_opts, Keyword.get(opts, :adapter_opts, []))
+      engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, [])
 
     dispatch_opts =
       opts
+      |> Keyword.drop([:stream])
       |> Keyword.put(:request_id, request_id)
       |> Keyword.put(:adapter_opts, merged_adapter_opts)
 
