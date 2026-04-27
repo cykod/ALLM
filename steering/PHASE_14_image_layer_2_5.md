@@ -134,7 +134,7 @@ end
 **Contract (asserted by the conformance suite).**
 
 - `supported_operations/0` returns a non-empty subset of `[:generate, :edit, :variation]` (closed set per `ALLM.ImageRequest.@type operation`). The suite asserts the function is exported; it does NOT enforce specific atoms (different adapters legitimately support different subsets).
-- `generate/2` MUST return `{:error, {:unsupported_operation, op}}` BEFORE any HTTP I/O when `request.operation not in adapter.supported_operations()`. This is the entry-point gate; per-model gating (e.g., `dall-e-3`-only-supports-generate) is the adapter's internal concern.
+- `generate/2` MUST return `{:error, %ALLM.Error.ImageAdapterError{reason: :unsupported_operation, metadata: %{operation: op}}}` BEFORE any HTTP I/O when `request.operation not in adapter.supported_operations()`. This is the entry-point gate; per-model gating (e.g., `dall-e-3`-only-supports-generate) is the adapter's internal concern. (The earlier `{:error, {:unsupported_operation, op}}` tuple draft was superseded by Decision #4's closed-enum struct typing — see Phase 14.1 review §9 Nit 3.)
 - `generate/2` MUST preserve `opts[:request_id]` onto `response.request_id` when the response shape allows. When `opts[:request_id]` is absent, the adapter is free to populate `response.request_id` from a provider-supplied id (e.g., `x-request-id` HTTP header).
 - `generate/2` MUST round-trip `request.metadata` onto `response.metadata` UNCHANGED when the adapter has no use for it. This is the §35.2.2/§35.2.3 metadata invariant — opaque to the library, transparent to the user.
 - `prepare_request/2` is optional (`@optional_callbacks`). When implemented, returns a configured-but-unfired `Req.Request` with the provider's body, headers, and URL — the caller may further mutate before firing. Mirrors `ALLM.Adapter.prepare_request/2` semantics at `lib/allm/adapter.ex:78-79`.
@@ -218,7 +218,6 @@ end
   {:ok, [%ALLM.Image{...}, ...], usage: %ALLM.ImageUsage{...}},
   {:ok, [%ALLM.Image{...}]},                                              # usage: defaults to %ImageUsage{images: 1}
   {:error, %ALLM.Error.ImageAdapterError{reason: :rate_limited, ...}},    # any closed-enum reason
-  {:error, :no_scripted_image},                                           # bare atom — script-cursor exhausted; converted to %ImageAdapterError{reason: :unknown, message: "no scripted image", metadata: %{cause: :no_scripted_image}}
   {:retry_until_call, n}                                                  # added in 14.3 — see retry section below
 ]
 ```
@@ -226,7 +225,7 @@ end
 - `:ok` 2-tuple — return the listed images plus a default `%ImageUsage{images: length(images)}`.
 - `:ok` 3-tuple — return the listed images plus the supplied usage.
 - `:error` 2-tuple with a `%ImageAdapterError{}` — return the error verbatim.
-- `:error` 2-tuple with a bare atom — internal-use shape for cursor-exhaustion; FakeImages wraps it in a `%ImageAdapterError{reason: :unknown}` before returning so the public API stays in the closed type.
+- Cursor exhaustion (script entry list empty / past the end) is handled internally — `FakeImages` constructs `%ImageAdapterError{reason: :unknown, message: "no scripted image", metadata: %{cause: :no_scripted_image}}` directly and `script/1`'s validator rejects bare-atom script entries. (Earlier drafts described a `{:error, :no_scripted_image}` script-entry shape; the 14.1 implementation simplified this — see Phase 14.1 review §9 Nit 2.)
 - `:retry_until_call` — added in 14.3. Returns a synthetic `%ImageAdapterError{reason: :rate_limited, retry_after_ms: 0}` for the first `n - 1` calls, then advances to the next script entry. Test vehicle for the retry-loop integration (mirrors chat-side `ALLM.Providers.Fake`'s `retry_until_call:` per `lib/allm/providers/fake.ex` retry-test pattern).
 - `:unsupported_operation` rejection (when the request's operation isn't in `supported_operations/0`) is produced by `FakeImages` itself BEFORE consulting the script — not a script entry — and emitted as `%ImageAdapterError{reason: :unsupported_operation, metadata: %{operation: op}}` per the conformance contract.
 

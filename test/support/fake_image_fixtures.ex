@@ -9,8 +9,8 @@ defmodule ALLM.Test.FakeImageFixtures do
   (Decision #1) but its named test fixtures stay test-only.
   """
 
-  alias ALLM.{Image, ImageUsage}
   alias ALLM.Error.ImageAdapterError
+  alias ALLM.{Image, ImageUsage}
 
   @png_bytes <<137, 80, 78, 71, 13, 10, 26, 10>>
 
