@@ -47,8 +47,20 @@ defmodule ALLM do
   public API surface.
   """
 
-  alias ALLM.{ChatResult, Engine, Message, Request, StepResult, Thread, Tool}
-  alias ALLM.Error.{AdapterError, EngineError, ValidationError}
+  alias ALLM.{
+    ChatResult,
+    Engine,
+    Image,
+    ImageRequest,
+    ImageResponse,
+    Message,
+    Request,
+    StepResult,
+    Thread,
+    Tool
+  }
+
+  alias ALLM.Error.{AdapterError, EngineError, ImageAdapterError, ValidationError}
 
   @doc """
   Build a system-role `%ALLM.Message{}` from a text string.
@@ -569,4 +581,244 @@ defmodule ALLM do
           | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
   def stream(engine, thread_or_messages, opts \\ []),
     do: ALLM.Chat.stream(engine, thread_or_messages, opts)
+
+  @doc """
+  Generate one or more images against the engine's `:image_adapter`. See
+  spec §35.4, §35.5.
+
+  Layer C façade. Two input shapes:
+
+    * Binary `prompt` — sugar over `ALLM.image_request/2`. Opts merge into
+      the built `%ALLM.ImageRequest{operation: :generate}`.
+    * Pre-built `%ALLM.ImageRequest{}` — dispatched verbatim.
+
+  ## Adapter-presence gate
+
+  Returns `{:error, %ALLM.Error.EngineError{reason: :no_image_adapter}}`
+  when `engine.image_adapter == nil`. This is the first gate; no other
+  validation runs (per Phase 14.2 design Decision #5).
+
+  ## Validation policy (Decision #13)
+
+  The façade does NOT call `ALLM.Validate.image_request/1`. Caller-opt-in
+  only — mirrors `request/2`'s no-validate precedent. A manually-built
+  request that the validator would reject (e.g., empty prompt for
+  `:generate`) still dispatches.
+
+  ## `request_id` precedence (Decision #7)
+
+  `opts[:request_id]` wins over an auto-generated id from
+  `ALLM.Telemetry.request_id/0`. The id is forwarded to the adapter via
+  `opts[:request_id]`. After the call, `response.request_id` is filled
+  from the forwarded id IFF the adapter left it `nil`; an
+  adapter-populated `:request_id` (e.g. provider's `x-request-id`
+  header) is preserved.
+
+  ## `:stream` opt is silently dropped
+
+  Image generation is non-streaming in v0.3 (phasing principle #2).
+  Passing `stream: true` does not error — the opt is ignored.
+
+  ## Unknown opts
+
+  Forwarded to the adapter via `opts` (matches the chat-side
+  `Engine.resolve_params/2` pass-through pattern).
+
+  ## Examples
+
+      iex> img = ALLM.Image.from_binary(<<137, 80, 78, 71>>, "image/png")
+      iex> engine = ALLM.Engine.new(
+      ...>   image_adapter: ALLM.Providers.FakeImages,
+      ...>   adapter_opts: [image_script: [{:ok, [img]}]]
+      ...> )
+      iex> {:ok, %ALLM.ImageResponse{images: [_]}} = ALLM.generate_image(engine, "a kestrel")
+      iex> :ok
+      :ok
+
+      iex> engine = ALLM.Engine.new()
+      iex> {:error, %ALLM.Error.EngineError{reason: :no_image_adapter}} =
+      ...>   ALLM.generate_image(engine, "a kestrel")
+      iex> :ok
+      :ok
+  """
+  @spec generate_image(Engine.t(), String.t() | ImageRequest.t(), keyword()) ::
+          {:ok, ImageResponse.t()}
+          | {:error, EngineError.t() | ValidationError.t() | ImageAdapterError.t()}
+  def generate_image(engine, prompt_or_request, opts \\ [])
+
+  def generate_image(%Engine{} = engine, prompt, opts) when is_binary(prompt) do
+    request = ALLM.image_request(prompt, drop_request_opts(opts))
+    do_generate_image(engine, request, opts)
+  end
+
+  def generate_image(%Engine{} = engine, %ImageRequest{} = request, opts) do
+    do_generate_image(engine, request, opts)
+  end
+
+  @doc """
+  Edit a base image (optionally with a mask) against the engine's
+  `:image_adapter`. See spec §35.4, §35.5.
+
+  Three call shapes (Phase 14.2 design Decision #6):
+
+    * `edit_image(engine, base_image, prompt)` — single base, no mask;
+      builds `%ImageRequest{operation: :edit, input_images: [base], mask: nil}`.
+    * `edit_image(engine, [base, mask], prompt)` — 2-element list; both
+      images become `:input_images`, `:mask` stays `nil`. The list form
+      does NOT auto-promote the second element to `:mask` — use the
+      explicit `mask:` keyword for that.
+    * `edit_image(engine, base, prompt, mask: mask)` — explicit mask
+      keyword; builds `input_images: [base], mask: mask`.
+
+  Returns `{:error, %EngineError{reason: :no_image_adapter}}` when the
+  engine has no image adapter (first gate, before any other validation).
+
+  Forwards opts (n, size, quality, etc.) onto the request struct via
+  `ALLM.ImageRequest.new/1`. See `generate_image/3` for the full
+  `request_id` and `:stream`-drop semantics — they apply identically.
+
+  ## Examples
+
+      iex> img = ALLM.Image.from_binary(<<137, 80, 78, 71>>, "image/png")
+      iex> engine = ALLM.Engine.new(
+      ...>   image_adapter: ALLM.Providers.FakeImages,
+      ...>   adapter_opts: [image_script: [{:ok, [img]}]]
+      ...> )
+      iex> base = ALLM.Image.from_binary(<<1, 2, 3>>, "image/png")
+      iex> {:ok, %ALLM.ImageResponse{images: [_]}} =
+      ...>   ALLM.edit_image(engine, base, "make sky pink")
+      iex> :ok
+      :ok
+  """
+  @spec edit_image(Engine.t(), Image.t() | [Image.t()], String.t(), keyword()) ::
+          {:ok, ImageResponse.t()}
+          | {:error, EngineError.t() | ValidationError.t() | ImageAdapterError.t()}
+  def edit_image(engine, image_or_list, prompt, opts \\ [])
+
+  def edit_image(%Engine{} = engine, %Image{} = base, prompt, opts) when is_binary(prompt) do
+    {mask, rest} = Keyword.pop(opts, :mask)
+    request_opts = drop_request_opts(rest)
+
+    request =
+      ImageRequest.new(
+        Keyword.merge(request_opts,
+          operation: :edit,
+          prompt: prompt,
+          input_images: [base],
+          mask: mask
+        )
+      )
+
+    do_generate_image(engine, request, opts)
+  end
+
+  def edit_image(%Engine{} = engine, images, prompt, opts)
+      when is_list(images) and is_binary(prompt) do
+    request_opts = drop_request_opts(opts)
+
+    request =
+      ImageRequest.new(
+        Keyword.merge(request_opts,
+          operation: :edit,
+          prompt: prompt,
+          input_images: images,
+          mask: nil
+        )
+      )
+
+    do_generate_image(engine, request, opts)
+  end
+
+  @doc """
+  Build variations of a single input image against the engine's
+  `:image_adapter`. See spec §35.4, §35.5.
+
+  Builds `%ImageRequest{operation: :variation, input_images: [image],
+  prompt: nil}` and forwards opts. Returns
+  `{:error, %EngineError{reason: :no_image_adapter}}` when the engine
+  has no image adapter (first gate).
+
+  See `generate_image/3` for the full `request_id` and `:stream`-drop
+  semantics.
+
+  ## Examples
+
+      iex> img = ALLM.Image.from_binary(<<137, 80, 78, 71>>, "image/png")
+      iex> engine = ALLM.Engine.new(
+      ...>   image_adapter: ALLM.Providers.FakeImages,
+      ...>   adapter_opts: [image_script: [{:ok, [img]}]]
+      ...> )
+      iex> input = ALLM.Image.from_binary(<<1, 2, 3>>, "image/png")
+      iex> {:ok, %ALLM.ImageResponse{images: [_]}} = ALLM.image_variations(engine, input)
+      iex> :ok
+      :ok
+  """
+  @spec image_variations(Engine.t(), Image.t(), keyword()) ::
+          {:ok, ImageResponse.t()}
+          | {:error, EngineError.t() | ValidationError.t() | ImageAdapterError.t()}
+  def image_variations(engine, image, opts \\ [])
+
+  def image_variations(%Engine{} = engine, %Image{} = image, opts) do
+    request_opts = drop_request_opts(opts)
+
+    request =
+      ImageRequest.new(
+        Keyword.merge(request_opts,
+          operation: :variation,
+          input_images: [image],
+          prompt: nil
+        )
+      )
+
+    do_generate_image(engine, request, opts)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Internals — Phase 14.2 bare dispatch (no telemetry, no preflight, no retry).
+  # ---------------------------------------------------------------------------
+
+  # Drop call-control opts that would collide with `ImageRequest` struct
+  # fields when merged into `ImageRequest.new/1`. `:request_id` and
+  # `:stream` are call-site concerns, not request fields. `:mask` is
+  # consumed at the `edit_image/4` boundary.
+  defp drop_request_opts(opts) when is_list(opts) do
+    Keyword.drop(opts, [:request_id, :stream, :mask])
+  end
+
+  # Bare `with`-chain: adapter-presence gate, then dispatch. Phase 14.3
+  # will wrap this in `Telemetry.span(:image, ...)` + `Capability.preflight_image/2`
+  # + `Retry.run/3`.
+  defp do_generate_image(%Engine{image_adapter: nil}, _request, _opts) do
+    {:error,
+     EngineError.new(:no_image_adapter,
+       message: "engine has no :image_adapter set"
+     )}
+  end
+
+  defp do_generate_image(%Engine{image_adapter: adapter} = engine, %ImageRequest{} = request, opts) do
+    request_id = Keyword.get(opts, :request_id) || ALLM.Telemetry.request_id()
+
+    # Merge engine.adapter_opts with call-site adapter_opts (call wins on
+    # collision via Keyword.merge/2). Mirrors the chat-side
+    # `StreamRunner.build_dispatch_opts/2` pattern at
+    # `lib/allm/stream_runner.ex:229-230`.
+    merged_adapter_opts =
+      Keyword.merge(engine.adapter_opts, Keyword.get(opts, :adapter_opts, []))
+
+    dispatch_opts =
+      opts
+      |> Keyword.put(:request_id, request_id)
+      |> Keyword.put(:adapter_opts, merged_adapter_opts)
+
+    case adapter.generate(request, dispatch_opts) do
+      {:ok, %ImageResponse{request_id: nil} = response} ->
+        {:ok, %{response | request_id: request_id}}
+
+      {:ok, %ImageResponse{} = response} ->
+        {:ok, response}
+
+      {:error, _} = err ->
+        err
+    end
+  end
 end

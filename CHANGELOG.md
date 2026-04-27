@@ -1,3 +1,31 @@
+## [FEAT] Phase 14.2: ALLM.generate_image/3 · edit_image/4 · image_variations/3 + EngineError :no_image_adapter (§35.4, §35.5)
+*Monday, April 27th*
+Layer C facade for v0.3 image pipeline. Adds `ALLM.generate_image/3`,
+`ALLM.edit_image/4`, `ALLM.image_variations/3` to `lib/allm.ex` — bare
+`with`-chain dispatch against `engine.image_adapter` through
+`ALLM.Providers.FakeImages` (no telemetry, no preflight, no retry — those
+land in 14.3). `generate_image/3` accepts either a binary prompt
+(delegates to `ALLM.image_request/2`) or a pre-built `%ImageRequest{}`.
+`edit_image/4` honors three call shapes per Decision #6: single base
+image, 2-element list `[base, mask]` (becomes `input_images: [base, mask]`,
+`mask: nil`), and explicit `mask:` keyword. `image_variations/3` builds
+`%ImageRequest{operation: :variation, input_images: [image], prompt: nil}`.
+Adapter-presence gate is the FIRST check (before any other validation per
+Decision #5): `engine.image_adapter == nil` returns
+`{:error, %EngineError{reason: :no_image_adapter}}`. `request_id`
+precedence per Decision #7 — `opts[:request_id]` wins over
+`Telemetry.request_id/0`; forwarded to adapter via `opts[:request_id]`;
+`response.request_id` filled post-call IFF adapter left it `nil`.
+`:stream` opt silently dropped (line 294); unknown opts forward to the
+adapter via `opts`. Validator NOT called from facade per Decision #13 —
+caller-opt-in only. `EngineError` `@type reason` and `@legal_reasons`
+extended with `:no_image_adapter` (closed enum 7 → 8 atoms). Property
+tests assert `edit_image/4` and `image_variations/3` produce structs
+byte-equal (modulo `:request_id`) to `ALLM.image_request/2`-built
+equivalents. 1625 tests / 0 failures / 0 dialyzer warnings.
+
+---
+
 ## [FEAT] Phase 14.1: ALLM.ImageAdapter behaviour + ALLM.Providers.FakeImages + ALLM.Test.ImageAdapterConformance harness (§35.3, §35.8)
 *Monday, April 27th*
 Layer B for v0.3 image pipeline. Introduces `ALLM.ImageAdapter` behaviour

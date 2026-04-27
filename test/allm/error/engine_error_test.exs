@@ -12,7 +12,8 @@ defmodule ALLM.Error.EngineErrorTest do
     :missing_key,
     :unknown_tool,
     :invalid_engine,
-    :unsupported_response_format
+    :unsupported_response_format,
+    :no_image_adapter
   ]
 
   describe "new/2" do
@@ -53,6 +54,29 @@ defmodule ALLM.Error.EngineErrorTest do
     test "defaults metadata to an empty map" do
       err = EngineError.new(:missing_adapter)
       assert err.metadata == %{}
+    end
+
+    test "accepts the :no_image_adapter reason (Phase 14.2 §35.4)" do
+      err = EngineError.new(:no_image_adapter)
+      assert err.reason == :no_image_adapter
+      assert err.message == "engine error: no_image_adapter"
+      assert Exception.message(err) == "engine error: no_image_adapter"
+    end
+
+    test ":no_image_adapter accepts opts overrides" do
+      err =
+        EngineError.new(:no_image_adapter,
+          message: "engine has no image_adapter set",
+          provider: :openai,
+          metadata: %{engine_id: "img-engine"}
+        )
+
+      assert %EngineError{
+               reason: :no_image_adapter,
+               message: "engine has no image_adapter set",
+               provider: :openai,
+               metadata: %{engine_id: "img-engine"}
+             } = err
     end
   end
 

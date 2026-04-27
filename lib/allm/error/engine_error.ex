@@ -9,7 +9,7 @@ defmodule ALLM.Error.EngineError do
   See Phase 1 design §Sub-phase 1.1 for the closed reason enum.
   """
 
-  @typedoc "Closed set of engine-level error reasons (spec §20)."
+  @typedoc "Closed set of engine-level error reasons (spec §20, §35.4)."
   @type reason ::
           :missing_adapter
           | :missing_stream_adapter
@@ -18,6 +18,7 @@ defmodule ALLM.Error.EngineError do
           | :unknown_tool
           | :invalid_engine
           | :unsupported_response_format
+          | :no_image_adapter
 
   @type t :: %__MODULE__{
           reason: reason(),
@@ -35,6 +36,7 @@ defmodule ALLM.Error.EngineError do
     unknown_tool
     invalid_engine
     unsupported_response_format
+    no_image_adapter
   )a
 
   defexception [:reason, :message, :provider, :cause, metadata: %{}]
