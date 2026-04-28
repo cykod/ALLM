@@ -16,10 +16,26 @@ provider table:
 
 ```elixir
 @providers %{
-  "openai"    => {ALLM.Providers.OpenAI,    "gpt-5.4-nano",      "OPENAI_API_KEY"},
-  "anthropic" => {ALLM.Providers.Anthropic, "claude-sonnet-4-6", "ANTHROPIC_API_KEY"}
+  "openai" => %{
+    adapter: ALLM.Providers.OpenAI,
+    default_model: "gpt-5.4-nano",
+    key_env: "OPENAI_API_KEY",
+    image_adapter: ALLM.Providers.OpenAI.Images,
+    image_default_model: "dall-e-2"
+  },
+  "anthropic" => %{
+    adapter: ALLM.Providers.Anthropic,
+    default_model: "claude-sonnet-4-6",
+    key_env: "ANTHROPIC_API_KEY",
+    image_adapter: nil,
+    image_default_model: nil
+  }
 }
 ```
+
+The map-shaped row replaced the original 3-tuple in Phase 15.6 (Decision
+#14) so future fields (`:image_adapter`, `:image_default_model`, …) don't
+churn the destructure pattern in the helper.
 
 Every script's first lines are:
 
@@ -103,6 +119,32 @@ captured stdouts are committed as `RUN_OUTPUT_OPENAI.md` and
 | `07_manual_tool_round_trip.exs` | tight | `mode: :manual` halt + caller-supplied tool result |
 | `08_session_round_trip.exs` | tight | `Session` survives `:erlang.term_to_binary/1` round-trip |
 | `09_ask_user.exs` | loose | `{:ask_user, _, _}` halt and follow-up turn |
+| `10_generate_image.exs` | tight | `ALLM.generate_image/3` against `dall-e-2` 256×256 (OpenAI-only) |
+
+## Image generation
+
+Phase 15.6 adds `10_generate_image.exs` — a tight smoke test for
+`ALLM.generate_image/3` against OpenAI's `dall-e-2` model at 256×256.
+The script:
+
+1. Builds an image-adapter engine via `ExamplesHelpers.image_engine/0`
+   (sister to `ExamplesHelpers.engine/0` — looks up `:image_adapter` /
+   `:image_default_model` from the provider table).
+2. Calls `ALLM.generate_image(engine, "a watercolor kestrel in flight", size: "256x256")`.
+3. Materializes `response.images |> hd() |> ALLM.Image.to_binary/1`.
+4. Writes the bytes to `System.tmp_dir!() <> "/10_generate_image_<ts>.png"`.
+5. Asserts the on-disk bytes start with the PNG magic number
+   `<<137, 80, 78, 71>>`.
+
+The script is **OpenAI-only**: a `# Provider: openai` header marker tells
+`run_all.exs` to skip it on `ALLM_PROVIDER=anthropic` (Anthropic has no
+image adapter — see Phase 15.6 Decision #15). Skipped scripts print
+`[SKIP] 10_generate_image.exs (provider gate)` and do not count toward
+`failed`.
+
+Per-clean-run cost: roughly **~$0.016 USD** (one `dall-e-2` 256×256
+generate). Adds ~$0.016 to the OpenAI arm of the dual-provider
+`/review` pass; the Anthropic arm is unaffected.
 
 ## SaaS bring-your-own-key (BYOK)
 

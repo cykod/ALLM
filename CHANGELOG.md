@@ -1,3 +1,71 @@
+## [FEAT] Phase 15: ALLM.Providers.OpenAI.Images per §35.7 (generate/edit/variation)
+*Tuesday, April 28th at 4pm*
+Ships ALLM.Providers.OpenAI.Images implementing ALLM.ImageAdapter against 
+OpenAI's /v1/images/generations, /v1/images/edits, and /v1/images/variations 
+endpoints with model-aware operation gating across dall-e-2, dall-e-3, and 
+gpt-image-1. Includes JSON + multipart/form-data builders, URL-source 
+eager-download with five closed failure modes, gpt-image-1 forced-base64 
+normalization with token-usage mapping, retry integration via ALLM.Retry.run/3, 
+and per-§6.4 key resolution at adapter-call time. Extracts 
+ALLM.Providers.Support.OpenAIHeaders shared between chat and image adapters 
+(REFACTOR). Adds examples/10_generate_image.exs wired into the BLOCKING 
+examples gate via run_all.exs provider-arm gating; six of seven happy-path 
+fixtures recorded against live OpenAI (variation pending API restoration). Test 
+suite grows by 162 tests to 1883 total, all green; coverage 90.71% on images.ex.
+
+---
+
+## [FEAT] examples/10_generate_image.exs runnable against dall-e-2.
+*Monday, April 27th*
+Phase 15.6 deliverable. New `examples/10_generate_image.exs` exercises
+`ALLM.generate_image/3` against OpenAI's `dall-e-2` model at 256×256,
+materializes the resulting `%ALLM.Image{}` to bytes via
+`ALLM.Image.to_binary/1`, writes the PNG to a tmp file under
+`System.tmp_dir!()`, and asserts the on-disk bytes start with the PNG
+magic number `<<137, 80, 78, 71>>`. Header marker `# Provider: openai`
+tells `examples/run_all.exs` to skip the script on
+`ALLM_PROVIDER=anthropic` (provider-arm gating per Phase 15.6 Decision
+#15). `examples/_helpers.exs` `@providers` table restructured from
+3-tuple values to map values
+(`%{adapter:, default_model:, key_env:, image_adapter:, image_default_model:}`)
+per Decision #14; new `image_engine/1` constructor sister to `engine/1`
+raises `ArgumentError` on providers without an image adapter.
+`examples/run_all.exs` learns header-comment provider-arm gating
+(`~r/^#\s*Provider:\s*([\w, ]+)\s*$/m`); skipped scripts print `[SKIP]`
+and do not count toward `failed`. Per-clean-run cost on the OpenAI arm
+of `run_all.exs` adds ~$0.016 USD.
+
+## [REFACTOR] Extract ALLM.Providers.Support.OpenAIHeaders shared between chat and image adapters.
+*Monday, April 27th*
+Phase 15.2 deliverable. The `OpenAI-Beta` / `Authorization` /
+`User-Agent` header construction shared between `ALLM.Providers.OpenAI`
+(chat / Responses) and `ALLM.Providers.OpenAI.Images` (image
+generation) is consolidated into `ALLM.Providers.Support.OpenAIHeaders`.
+Both adapters call the shared helper at request-prepare time; no
+public-API change.
+
+## [FEAT] ALLM.Providers.OpenAI.Images per §35.7 — supports dall-e-2 (generate/edit/variation), dall-e-3 (generate), gpt-image-1 (generate/edit).
+*Monday, April 27th*
+Phase 15 deliverable. New `ALLM.Providers.OpenAI.Images` implements the
+`ALLM.ImageAdapter` behaviour against OpenAI's three image endpoints
+(`/v1/images/generations`, `/v1/images/edits`, `/v1/images/variations`)
+with model-aware operation gating across `dall-e-2` (generate / edit /
+variation), `dall-e-3` (generate), and `gpt-image-1` (generate / edit).
+JSON path covers `:generate` (response_format=`b64_json` for
+`dall-e-2`/`dall-e-3`; gpt-image-1 always returns base64); multipart
+path covers `:edit` and `:variation` with adapter-side URL-source fetch
+(spec §35.7). Closed-enum `%ALLM.Error.ImageAdapterError{}` reasons
+(`:authentication_failed`, `:rate_limited`, `:content_filter`,
+`:invalid_request`, `:provider_unavailable`, `:timeout`,
+`:network_error`, `:malformed_response`, `:unsupported_operation`,
+`:unknown`) wired to OpenAI HTTP statuses + body shapes per the wire-
+field map in `steering/PHASE_15_image_layer_6.md`. Telemetry
+`[:allm, :image, :start | :stop | :exception]` (Phase 14.3) fires
+end-to-end. Live smoke `test/allm/providers/openai/images_live_test.exs`
+covers `dall-e-2` `:generate` and `:edit` cells (`@moduletag
+:live_openai_images`, opt-in via `mix test --include live_openai_images`).
+Per-clean-run live-test cost ≈ $0.04 USD.
+
 ## [FEAT] Phase 14.4: ALLM.TextPart + ALLM.ImagePart + Message.content widening + ValidationError :vision_not_in_v0_2 removed (§35.6, BREAKING for raw-map content callers)
 *Monday, April 27th*
 Multimodal Layer A content parts. Two new structs: `%ALLM.TextPart{}`
@@ -31,7 +99,8 @@ raises `ArgumentError`. **BREAKING** for any caller pattern-matching on
 `%ImagePart{}` in a message content list (vision input is not yet wired
 in either adapter — Phase 16/17 territory); (b) `stringify_content/1`
 extended with a list-clause that maps `[%TextPart{text: t}, ...]` to
-the joined text via `Enum.join("\n")`, plus a private
+the joined text via `Enum.join("
+")`, plus a private
 `materialize_part/1` with a `%TextPart{}` clause and a catch-all
 `raise ArgumentError` programmer-error guard. The `materialize_part/1`
 catch-all is unreachable in v0.3 (the upstream guard ensures only

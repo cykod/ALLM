@@ -1,0 +1,5 @@
+{
+  "_comment": "Synthesized 200 body that is missing the required :data field — exercises the :malformed_response path. Modeled 2026-04-27.",
+  "created": 1730000000,
+  "wrong_key": "no images here"
+}

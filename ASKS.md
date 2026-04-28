@@ -89,3 +89,5 @@
 [BUILD] mon 4/27 1pm - Build phases from PHASE_14_image_layer_2_5.md steering doc
 
 [DSGN] mon 4/27 6pm - Design Phase 15 OpenAI Images real-provider adapter
+
+[BUILD] mon 4/27 6pm - Build all 6 sub-phases (15.1–15.6) of PHASE_15_image_layer_6.md — ALLM.Providers.OpenAI.Images

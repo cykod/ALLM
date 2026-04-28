@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized 400 body for image endpoints — generic invalid_request shape. Modeled after https://platform.openai.com/docs/guides/error-codes — invalid_request_error. Modeled 2026-04-27.",
+  "error": {
+    "message": "'4096x4096' is not one of the allowed values for 'size'.",
+    "type": "invalid_request_error",
+    "param": "size",
+    "code": null
+  }
+}

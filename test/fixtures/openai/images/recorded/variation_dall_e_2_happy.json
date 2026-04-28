@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized fixture pending live recording. OpenAI's /v1/images/variations endpoint returned HTTP 404 (no body) for our recording attempts on 2026-04-28 — scope of the failure is outside this codebase. The synthesized response below mirrors the documented dall-e-2 variations response shape (same envelope as :edit / :generate: top-level created + data array of url|b64_json items, no usage block on dall-e-2).",
+  "created": 1777345564,
+  "data": [
+    {
+      "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQI12NgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg=="
+    }
+  ]
+}

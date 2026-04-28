@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized 429 body for image endpoints. Modeled after https://platform.openai.com/docs/guides/error-codes — rate_limit_exceeded. Sidecar headers carry Retry-After: 1. Modeled 2026-04-27.",
+  "error": {
+    "message": "Rate limit reached for images.generations",
+    "type": "rate_limit_error",
+    "param": null,
+    "code": "rate_limit_exceeded"
+  }
+}

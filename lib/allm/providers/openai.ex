@@ -152,6 +152,7 @@ defmodule ALLM.Providers.OpenAI do
   alias ALLM.Event
   alias ALLM.Keys
   alias ALLM.Message
+  alias ALLM.Providers.Support.OpenAIHeaders
   alias ALLM.Providers.Support.SSE
   alias ALLM.Request
   alias ALLM.Response
@@ -425,25 +426,13 @@ defmodule ALLM.Providers.OpenAI do
       Req.new(
         method: :post,
         url: url,
-        headers: build_headers(api_key, opts),
+        headers: OpenAIHeaders.json_headers(api_key, opts),
         json: body
       )
       |> maybe_apply_req_test_stub(opts)
       |> maybe_apply_request_timeout(opts)
 
     {:ok, req}
-  end
-
-  defp build_headers(api_key, opts) do
-    base = [
-      {"authorization", "Bearer " <> api_key},
-      {"content-type", "application/json"}
-    ]
-
-    case Keyword.get(opts, :adapter_opts, []) |> Keyword.get(:organization) do
-      nil -> base
-      org when is_binary(org) -> [{"openai-organization", org} | base]
-    end
   end
 
   defp path_for(:chat_completions), do: "/chat/completions"
@@ -797,7 +786,7 @@ defmodule ALLM.Providers.OpenAI do
     api_key = Keys.fetch!(:openai, opts)
     body = to_openai_request_body(request, endpoint, opts) |> Map.put("stream", true)
     json_body = Jason.encode!(body)
-    headers = build_headers(api_key, opts)
+    headers = OpenAIHeaders.json_headers(api_key, opts)
     url = @base_url <> path_for(endpoint)
 
     finch_request = Finch.build(:post, url, headers, json_body)

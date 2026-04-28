@@ -357,7 +357,7 @@ Test files under `test/allm/providers/openai/` mirror `lib/allm/providers/openai
 - [ ] Implement `gate_model_op/2` and `endpoint_for/1` (both `@doc false`).
 - [ ] Implement Invariant 0 (test-injection short-circuit, Decision #20): when `opts[:adapter_opts][:image_script]` is non-nil at the top of `generate/2`, delegate to `ALLM.Providers.FakeImages.generate/2` with the same opts and return its result.
 - [ ] Implement `generate/2` performing the four pre-HTTP gates in order (after Invariant 0 check), returning a stub `{:error, %ImageAdapterError{reason: :unknown, message: "phase 15.2 stub"}}` on success. (Phase 15.2 replaces the stub.)
-- [ ] Implement `prepare_request/2` returning the same stub for now.
+- [ ] Implement `prepare_request/2` running the four pre-flight gates first, then returning `{:error, stub_error()}` on success (gate failures surface uniformly across both entry points per Invariant 3); the `:image_script` branch ALSO returns the stub error (no `Req.Request` analogue for scripts).
 - [ ] Add `@spec`s matching this design's contract verbatim.
 - [ ] Wire `ALLM.Providers.Support.OpenAIHeaders` (NEW) — `json_headers/2` and `multipart_headers/2` only; the existing chat adapter is NOT yet refactored to use it. Refactor lands in 15.2 alongside the JSON path.
 - [ ] Coverage ≥90% on new code.
@@ -409,7 +409,7 @@ mix dialyzer
 - `prepare_request/2` returns an unfired `Req.Request` with the correct URL (`/v1/images/generations`), method `:post`, `json:` body matching the request-shape assertions, and the API key in the `Authorization` header.
 
 **Conformance suite:**
-- `use ALLM.Test.ImageAdapterConformance, image_adapter: ALLM.Providers.OpenAI.Images, happy_path_fixture: :stub_via_req_test` — happy path now passes.
+- `use ALLM.Test.ImageAdapterConformance, image_adapter: ALLM.Providers.OpenAI.Images` — happy path now passes. (The conformance harness at `conformance/lib/allm/test/image_adapter_conformance.ex:55` only consumes `:image_adapter`; happy-path wire-stub injection is the adapter's responsibility under `Req.Test`, not a harness option.)
 
 #### 15.2 Implementation Checklist
 
@@ -512,6 +512,7 @@ mix dialyzer
 
 #### 15.4 Implementation Checklist
 
+- [ ] **Field-applicability hint (from 15.3 retro Finding 2):** before writing `to_multipart_body/2`, factor a model-aware predicate layer (e.g. `fields_for(:edit, model)`) shared with `to_json_body/2`'s gpt-image-1 conditional `put_*` clauses (`put_response_format`, `put_background`, `put_output_format`). The shared work is "which fields apply for this model × operation"; only the leaf serializer (map vs `[{name, value}]` tuple list) diverges. Land the predicate first to avoid a parallel re-implementation of the same conditionals.
 - [ ] Implement `to_multipart_body/2` per the wire-field map. Returns `{:ok, [{name, content}, ...]} | {:error, %ImageAdapterError{}}`.
 - [ ] Implement `resolve_image_bytes/2` private helper. Returns `{:ok, bytes, mime_type, filename} | {:error, %ImageAdapterError{}}`:
   - [ ] `{:binary, b}` → `{:ok, b, mime_type, "image.png"}` (filename always "image.png" — OpenAI ignores the filename for content-type resolution).
@@ -593,7 +594,7 @@ Unit tests on the helper module (`examples/_helpers.exs`) are not required (the 
 - [ ] Write `examples/10_generate_image.exs`:
   - [ ] Header comment: `# Provider: openai` (consumed by `run_all.exs` per Decision #15).
   - [ ] Use `image_engine/1` to build the engine.
-  - [ ] Call `ALLM.generate_image(engine, "a watercolor kestrel in flight", size: "256x256")` against `dall-e-2`.
+  - [ ] Call `ALLM.generate_image(engine, "a watercolor kestrel in flight", size: "256x256")` against `dall-e-2`. (Per 15.4 retro — if any future image example needs an input image, prefer a `:binary` or `:file` source over `:url` so the BLOCKING gate does not depend on third-party URL availability.)
   - [ ] Materialize `response.images[0]` via `ALLM.Image.to_binary/1`; write to a tmp file; assert PNG signature.
   - [ ] Print a one-line summary including image count, usage.images, and tmp file path.
   - [ ] Exit non-zero if anything fails — use `IO.puts(:stderr, "FAIL: ...")` and `System.halt(1)` mirroring existing example scripts.

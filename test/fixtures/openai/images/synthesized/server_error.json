@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized 500 body for image endpoints. Modeled after https://platform.openai.com/docs/guides/error-codes — server_error. Modeled 2026-04-27.",
+  "error": {
+    "message": "The server had an error processing your request. Sorry about that! You can retry your request, or contact us through our help center at help.openai.com if you keep seeing this error.",
+    "type": "server_error",
+    "param": null,
+    "code": null
+  }
+}
