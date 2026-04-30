@@ -1,0 +1,23 @@
+{
+  "_comment": "Synthesized vision happy-path body (single URL image). Phase 17.1. Schema per https://platform.openai.com/docs/api-reference/chat/object accessed 2026-04-29. Will be replaced by recorded fixture from scripts/record_openai_vision_fixtures.exs.",
+  "id": "chatcmpl-vision-url",
+  "object": "chat.completion",
+  "created": 1714089600,
+  "model": "gpt-4o-mini",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "I can see a cat sitting on a windowsill."
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1024,
+    "completion_tokens": 12,
+    "total_tokens": 1036
+  }
+}

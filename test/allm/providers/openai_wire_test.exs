@@ -449,8 +449,21 @@ defmodule ALLM.Providers.OpenAIWireTest do
       assert [%{"role" => "user", "content" => "a\nb"}] = body["messages"]
     end
 
-    test "[%TextPart{}, %ImagePart{}] mixed content fires the upstream guard",
-         %{stub: _stub} do
+    # Phase 17.1: ImagePart in user-role content now translates to a
+    # Chat Completions content-block list — the Phase 14.4 reject guard
+    # is replaced by a real translator. Detail field is nested in the
+    # `image_url` map (Chat Completions wire shape).
+    test "[%TextPart{}, %ImagePart{}] mixed content emits Chat Completions content-block list",
+         %{stub: stub} do
+      body_ok = Fx.chat_completion(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
       img = Image.from_url("https://example.com/cat.png")
 
       request =
@@ -458,14 +471,27 @@ defmodule ALLM.Providers.OpenAIWireTest do
           [
             %Message{
               role: :user,
-              content: [%TextPart{text: "x"}, %ImagePart{image: img}]
+              content: [%TextPart{text: "x"}, %ImagePart{image: img, detail: :high}]
             }
           ],
           model: "gpt-4o-mini"
         )
 
-      assert {:error, %AdapterError{reason: :unsupported_feature, provider: :openai}} =
-               OpenAI.generate(request, api_key: "sk-test")
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+
+      assert [%{"role" => "user", "content" => content}] = body["messages"]
+
+      assert content == [
+               %{"type" => "text", "text" => "x"},
+               %{
+                 "type" => "image_url",
+                 "image_url" => %{
+                   "url" => "https://example.com/cat.png",
+                   "detail" => "high"
+                 }
+               }
+             ]
     end
   end
 
@@ -539,8 +565,20 @@ defmodule ALLM.Providers.OpenAIWireTest do
       assert [%{"role" => "user", "content" => "a\nb"}] = body["input"]
     end
 
-    test "[%TextPart{}, %ImagePart{}] mixed content fires the upstream guard on Responses",
-         %{stub: _stub} do
+    # Phase 17.1: ImagePart on the Responses wire now translates to an
+    # `input_image` content-block list with `detail` at sibling level
+    # (NOT nested inside `image_url`).
+    test "[%TextPart{}, %ImagePart{}] mixed content emits Responses content-block list",
+         %{stub: stub} do
+      body_ok = Fx.responses(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
       img = Image.from_url("https://example.com/cat.png")
 
       request =
@@ -548,14 +586,25 @@ defmodule ALLM.Providers.OpenAIWireTest do
           [
             %Message{
               role: :user,
-              content: [%TextPart{text: "x"}, %ImagePart{image: img}]
+              content: [%TextPart{text: "x"}, %ImagePart{image: img, detail: :low}]
             }
           ],
           model: "gpt-5.5"
         )
 
-      assert {:error, %AdapterError{reason: :unsupported_feature, provider: :openai}} =
-               OpenAI.generate(request, api_key: "sk-test")
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+
+      assert [%{"role" => "user", "content" => content}] = body["input"]
+
+      assert content == [
+               %{"type" => "input_text", "text" => "x"},
+               %{
+                 "type" => "input_image",
+                 "image_url" => "https://example.com/cat.png",
+                 "detail" => "low"
+               }
+             ]
     end
   end
 end

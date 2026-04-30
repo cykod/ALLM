@@ -88,6 +88,23 @@ defmodule LLMDB do
       limits: %{context: 4000, output: nil},
       pricing: nil,
       metadata: %{source: :test_fake}
+    },
+    # Phase 17.1 — vision capability fixtures for `check_vision/3`.
+    "openai:gpt-4o-mini" => %ModelRef{
+      provider: :openai,
+      id: "gpt-4o-mini",
+      capabilities: %{tools: %{enabled: true}, json_native: true, vision: true},
+      limits: %{context: 128_000, output: 16_000},
+      pricing: %{input: 0.15, output: 0.6},
+      metadata: %{source: :test_fake}
+    },
+    "local:no-vision" => %ModelRef{
+      provider: :local,
+      id: "no-vision",
+      capabilities: %{tools: %{enabled: false}, json_native: false, vision: false},
+      limits: %{context: 4000, output: nil},
+      pricing: nil,
+      metadata: %{source: :test_fake}
     }
   }
 

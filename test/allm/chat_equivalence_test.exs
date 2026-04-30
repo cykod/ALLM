@@ -51,7 +51,7 @@ defmodule ALLM.ChatEquivalenceTest do
 
   @moduletag :property
 
-  alias ALLM.{Chat, ChatResult, StreamCollector, Thread, Tool}
+  alias ALLM.{Chat, ChatResult, Image, ImagePart, Message, StreamCollector, TextPart, Thread, Tool}
   alias ALLM.Test.Assertions
   alias ALLM.Test.FakeFixtures
 
@@ -192,34 +192,70 @@ defmodule ALLM.ChatEquivalenceTest do
     {fn -> FakeFixtures.engine(script, tools: [raising_tool()]) end, [on_tool_error: :halt]}
   end
 
+  # Phase 17.1 — vision-only multi-turn fixture (row 10). User message
+  # carries `[%TextPart{}, %ImagePart{}]`; the Fake script is text-only
+  # for both arms so the chat-equivalence property holds verbatim.
+  defp fixture(:vision_multi_turn) do
+    {fn ->
+       FakeFixtures.engine([{:text, "I see a cat."}, {:finish, :stop}])
+     end, [thread: vision_thread()]}
+  end
+
+  defp vision_thread do
+    img = Image.from_url("https://example.com/cat.png")
+
+    Thread.from_messages([
+      %Message{
+        role: :user,
+        content: [
+          %TextPart{text: "What's in this image?"},
+          %ImagePart{image: img, detail: :high}
+        ]
+      }
+    ])
+  end
+
   # ---------------------------------------------------------------------------
   # Path runners — Task.async isolation per path so the Fake cursor is
   # scoped to a single call's process.
   # ---------------------------------------------------------------------------
 
   defp run_chat(engine_builder, opts) do
-    Task.async(fn -> Chat.run(engine_builder.(), user_thread(), opts) end)
+    {thread, opts} = pop_thread(opts)
+
+    Task.async(fn -> Chat.run(engine_builder.(), thread, opts) end)
     |> Task.await(:timer.seconds(5))
   end
 
   defp run_stream_chat(engine_builder, opts) do
-    Task.async(fn -> stream_and_collect(engine_builder.(), opts) end)
+    {thread, opts} = pop_thread(opts)
+
+    Task.async(fn -> stream_and_collect(engine_builder.(), thread, opts) end)
     |> Task.await(:timer.seconds(5))
   end
 
-  defp stream_and_collect(engine, opts) do
-    case Chat.stream(engine, user_thread(), opts) do
-      {:ok, stream} -> {:ok, fold_to_chat_result(stream)}
+  defp stream_and_collect(engine, thread, opts) do
+    case Chat.stream(engine, thread, opts) do
+      {:ok, stream} -> {:ok, fold_to_chat_result(stream, thread)}
       {:error, _} = err -> err
     end
   end
 
-  defp fold_to_chat_result(stream) do
+  defp fold_to_chat_result(stream, thread) do
     stream
-    |> Enum.reduce(StreamCollector.new(user_thread()), fn event, acc ->
+    |> Enum.reduce(StreamCollector.new(thread), fn event, acc ->
       StreamCollector.apply_event(acc, event)
     end)
     |> StreamCollector.to_chat_result()
+  end
+
+  # Pop a `thread:` override from opts (used by the Phase 17.1 vision
+  # fixture) — defaults to the canonical text user_thread/0.
+  defp pop_thread(opts) do
+    case Keyword.pop(opts, :thread) do
+      {nil, opts2} -> {user_thread(), opts2}
+      {thread, opts2} -> {thread, opts2}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -235,7 +271,8 @@ defmodule ALLM.ChatEquivalenceTest do
     :ask_user_mid_loop,
     :custom_halt_atom,
     :on_tool_error_fun_continue,
-    :on_tool_error_halt
+    :on_tool_error_halt,
+    :vision_multi_turn
   ]
 
   property "Chat.run/3 ≡ Chat.stream/3 |> StreamCollector.to_chat_result/1 — every fixture × valid opts" do

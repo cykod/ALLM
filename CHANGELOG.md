@@ -1,3 +1,94 @@
+## [FEAT] Phase 17.1: vision input wiring in ALLM.Providers.OpenAI per §35.6 (Chat Completions + Responses translators)
+*Wednesday, April 29th*
+Replaces the Phase 14.4 `reject_image_parts/1` guard with a full
+content-block translator. `[%ALLM.TextPart{}, %ALLM.ImagePart{}]`
+content lists now flow end-to-end through both OpenAI endpoints:
+`to_openai_messages/1` (Chat Completions, `lib/allm/providers/openai.ex`)
+emits `{type: "image_url", image_url: %{url, detail}}` blocks (detail
+nested in the image_url map), and `to_responses_input/1` (Responses API)
+emits `{type: "input_image", image_url, detail}` blocks (detail at
+sibling level). Both translators dispatch through a shared private
+`to_openai_content_blocks/2` helper, mirroring the Phase 14.4 rule that
+content-shape changes must touch both endpoints.
+
+Adds `ALLM.Providers.Support.ImageMime` (Layer B helper) with `validate/2`,
+`accept_mimes/1`, and `validate_request/2`. Per-image MIME and 20-MB
+size validation runs in adapter pre-flight; URL sources skip size
+validation (no network fetch). Per-image errors accumulate as
+`{[:content, msg_idx, part_idx], reason}` field tuples in a
+`%ALLM.Error.ValidationError{reason: :invalid_message}`.
+
+System-message `ImagePart` is hard-rejected at pre-flight via a new
+private `reject_image_in_system_messages/1` helper —
+`{[:messages, idx, :content], :image_in_system_message}`. Pre-flight
+order is fixed: system-rejection → capability gate → MIME/size validate
+→ translate → HTTP. Order is asserted by a unit test.
+
+Extends `ALLM.Capability.preflight/3` with a `:vision` rule (Decision
+#5). When the request contains any `%ImagePart{}` AND the resolved
+`%ModelRef{}.capabilities` map says `vision: false`, pre-flight surfaces
+`{[:vision], :vision_disabled}` as a per-field error in
+`%ValidationError{reason: :unsupported_capability}`. No-op when the
+catalog is absent or the model record has no `:vision` key. Tolerates
+JSON-rehydrated `%ModelRef{}` with string-keyed capabilities matching
+the existing dual-keyed accessor pattern.
+
+Decoder extension (Decision #11): non-streaming-only assistant ImagePart
+output. The Chat Completions response decoder now handles list-shaped
+`choices[0].message.content` — `{type: "text"}` → `%TextPart{}`,
+`{type: "image_url"}` / `{type: "output_image"}` → `%ImagePart{}`.
+Streaming-side assistant image output is out of scope for v0.3; spec
+§35.6 is satisfied by the non-streaming path. Forward-compat synthesized
+fixture under
+`test/fixtures/openai/chat_completions/synthesized/vision_assistant_image_output.json`.
+
+Test surface:
+- `test/allm/providers/openai_vision_test.exs` (28 tests) — translator,
+  pre-flight ordering, decoder, and `:live_openai`-tagged smoke test
+  against `gpt-4o-mini`.
+- `test/allm/providers/support/image_mime_test.exs` (17 tests + 7
+  doctests) — helper unit tests.
+- `test/allm/capability_vision_test.exs` (8 tests) — vision-gate
+  per-rule pre-flight tests.
+- `test/allm/chat_equivalence_test.exs` — adds row 10
+  (`:vision_multi_turn`).
+- `test/allm/stream_equivalence_test.exs` — extends §31 vocabulary with
+  ImagePart-bearing user message; equivalence property holds.
+- Wire fixtures under
+  `test/fixtures/openai/{chat_completions,responses}/vision/` (4
+  source-shapes × 2 endpoints, synthesized — re-record via
+  `scripts/record_openai_vision_fixtures.exs` with `OPENAI_API_KEY` set).
+- Flips `test/allm/providers/openai_wire_test.exs:467,557` and
+  `test/allm/stream_runner_test.exs:113` from
+  `:unsupported_feature`-rejection to happy-path translation.
+
+LLMDB test fixture extended with `openai:gpt-4o-mini` (`vision: true`)
+and `local:no-vision` (`vision: false`) entries.
+
+Vocabulary additions: `:vision` (capability key) and `:vision_disabled`
+(rejection reason). NO change to `ValidationError.@type reason` —
+reuses `:invalid_message` and `:unsupported_capability` per Decision
+#6.
+
+Anthropic vision wiring is out of scope for this sub-phase (covered in
+17.2). The `reject_image_parts/1` guard at
+`lib/allm/providers/anthropic.ex:717-733` is intentionally left in
+place.
+
+Deviation from design doc: fixtures use the existing project `.json`
+convention (consistent with `test/fixtures/openai/chat_completions/*.json`)
+rather than the `.exs` shape mentioned in the design's Module Tree.
+`scripts/record_openai_vision_fixtures.exs` writes pretty-printed JSON.
+A live re-record is required before `/review` to replace the
+synthesized fixtures with real OpenAI wire shapes (CLAUDE.md "every
+bundled provider adapter ships with a live BLOCKING gate" — deferred
+because no `OPENAI_API_KEY` is available in this scratch environment).
+
+`mix test`: 1936 tests / 0 failures (53 new); `mix credo --strict`,
+`mix format --check-formatted`, `mix dialyzer` all green.
+
+---
+
 ## [FEAT] Phase 15: ALLM.Providers.OpenAI.Images per §35.7 (generate/edit/variation)
 *Tuesday, April 28th at 4pm*
 Ships ALLM.Providers.OpenAI.Images implementing ALLM.ImageAdapter against 

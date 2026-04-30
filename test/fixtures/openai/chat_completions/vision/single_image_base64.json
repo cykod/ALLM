@@ -1,0 +1,23 @@
+{
+  "_comment": "Synthesized vision happy-path body (single base64 image). Phase 17.1.",
+  "id": "chatcmpl-vision-b64",
+  "object": "chat.completion",
+  "created": 1714089601,
+  "model": "gpt-4o-mini",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The image is small and abstract."
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1100,
+    "completion_tokens": 8,
+    "total_tokens": 1108
+  }
+}

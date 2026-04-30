@@ -1,0 +1,23 @@
+{
+  "_comment": "Synthesized vision happy-path body (multiple images in one user message). Phase 17.1.",
+  "id": "chatcmpl-vision-multi",
+  "object": "chat.completion",
+  "created": 1714089603,
+  "model": "gpt-4o-mini",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The two images show similar scenes with subtle differences in lighting."
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 2150,
+    "completion_tokens": 14,
+    "total_tokens": 2164
+  }
+}

@@ -19,11 +19,26 @@ defmodule ALLM.StreamEquivalenceTest do
 
   @moduletag :property
 
-  alias ALLM.{Engine, Message, Request, Response, StreamCollector}
+  alias ALLM.{Engine, Image, ImagePart, Message, Request, Response, StreamCollector, TextPart}
   alias ALLM.Error.AdapterError
   alias ALLM.Providers.Fake
 
   defp fake_request, do: Request.new([%Message{role: :user, content: "hi"}])
+
+  # Phase 17.1 — §31 vocabulary extension: an ImagePart-bearing user
+  # message. Fake doesn't branch on request content shape, so the
+  # equivalence property holds verbatim with this request swapped in.
+  defp vision_request do
+    Request.new([
+      %Message{
+        role: :user,
+        content: [
+          %TextPart{text: "what's in this image?"},
+          %ImagePart{image: Image.from_url("https://example.com/cat.png"), detail: :auto}
+        ]
+      }
+    ])
+  end
 
   defp engine_of(script) do
     Engine.new(adapter: Fake, adapter_opts: [script: script])
@@ -157,6 +172,44 @@ defmodule ALLM.StreamEquivalenceTest do
       assert {:ok, %Response{} = collected_resp} = run_stream_and_collect(script)
 
       # Phase 9.1: request_id is generated per-call; legitimately differs.
+      assert %Response{gen_resp | request_id: nil} ==
+               %Response{collected_resp | request_id: nil}
+    end
+  end
+
+  # Phase 17.1 — vision request shape extension. The equivalence property
+  # holds against ImagePart-bearing requests because Fake's emission
+  # logic depends on the script, not the request content shape.
+  property "generate/3 ≡ stream_generate/3 |> collect (vision-input request)" do
+    check all(script <- spec31_script_gen(), max_runs: 25) do
+      assert {:ok, %Response{} = gen_resp} =
+               Task.async(fn ->
+                 engine = engine_of(script)
+                 ALLM.generate(engine, vision_request(), include_raw_chunks: true)
+               end)
+               |> Task.await(:timer.seconds(5))
+
+      assert {:ok, %Response{} = collected_resp} =
+               Task.async(fn ->
+                 engine = engine_of(script)
+
+                 case ALLM.stream_generate(engine, vision_request(), include_raw_chunks: true) do
+                   {:error, _} = err ->
+                     err
+
+                   {:ok, stream} ->
+                     response =
+                       stream
+                       |> Enum.reduce(StreamCollector.new(), fn e, s ->
+                         StreamCollector.apply_event(s, e)
+                       end)
+                       |> StreamCollector.to_response()
+
+                     {:ok, response}
+                 end
+               end)
+               |> Task.await(:timer.seconds(5))
+
       assert %Response{gen_resp | request_id: nil} ==
                %Response{collected_resp | request_id: nil}
     end

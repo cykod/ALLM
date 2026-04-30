@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized 400 error body for unsupported image format on Chat Completions vision. Phase 17.1.",
+  "error": {
+    "message": "Invalid image format: image/svg+xml is not supported. Supported formats: image/png, image/jpeg, image/webp, image/gif.",
+    "type": "invalid_request_error",
+    "param": "messages[0].content[1].image_url",
+    "code": "invalid_image_format"
+  }
+}

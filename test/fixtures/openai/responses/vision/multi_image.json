@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthesized Responses-API vision happy-path (multi-image). Phase 17.1.",
+  "id": "resp-vision-multi",
+  "object": "response",
+  "created_at": 1714089613,
+  "model": "gpt-5.5",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [{"type": "output_text", "text": "Two similar scenes."}]
+    }
+  ],
+  "output_text": "Two similar scenes.",
+  "usage": {"input_tokens": 2150, "output_tokens": 5, "total_tokens": 2155}
+}

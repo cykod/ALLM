@@ -33,6 +33,26 @@ defmodule ALLM.Providers.OpenAITestFixtures do
   end
 
   @doc """
+  Load a Chat Completions vision fixture by name (Phase 17.1).
+
+  Names map to files under `test/fixtures/openai/chat_completions/vision/<name>.json`.
+  """
+  @spec chat_vision(atom()) :: body()
+  def chat_vision(name) when is_atom(name) do
+    load_json(Path.join([@fixtures_root, "chat_completions/vision", "#{name}.json"]))
+  end
+
+  @doc """
+  Load a Responses-API vision fixture by name (Phase 17.1).
+
+  Names map to files under `test/fixtures/openai/responses/vision/<name>.json`.
+  """
+  @spec responses_vision(atom()) :: body()
+  def responses_vision(name) when is_atom(name) do
+    load_json(Path.join([@fixtures_root, "responses/vision", "#{name}.json"]))
+  end
+
+  @doc """
   Load a synthesized fixture by name.
 
   Names map to files under `test/fixtures/openai/synthesized/<name>.json`.

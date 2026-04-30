@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthesized Responses-API vision happy-path (base64 image). Phase 17.1.",
+  "id": "resp-vision-b64",
+  "object": "response",
+  "created_at": 1714089611,
+  "model": "gpt-5.5",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [{"type": "output_text", "text": "Small image."}]
+    }
+  ],
+  "output_text": "Small image.",
+  "usage": {"input_tokens": 1100, "output_tokens": 4, "total_tokens": 1104}
+}

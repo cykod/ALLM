@@ -93,7 +93,8 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Fake.Script,
           ALLM.Providers.FakeImages,
           ALLM.Providers.Support.SSE,
-          ALLM.Providers.Support.OpenAIHeaders
+          ALLM.Providers.Support.OpenAIHeaders,
+          ALLM.Providers.Support.ImageMime
         ],
         Defaults: [
           ALLM.ToolExecutor.Default,

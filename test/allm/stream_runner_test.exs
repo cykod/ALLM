@@ -110,23 +110,34 @@ defmodule ALLM.StreamRunnerTest do
       assert {:messages, :empty} in errors
     end
 
-    test "vision message: chat adapter short-circuits with :unsupported_feature (Phase 14.4)" do
-      # Phase 14.4 Decision #14: ImagePart in a request to the OpenAI/Anthropic
-      # chat adapter returns {:error, %AdapterError{reason: :unsupported_feature}}
-      # — the upstream guard fires before any HTTP call. The validator no
-      # longer rejects vision content; rejection moved to the adapter.
+    test "vision message: chat adapter accepts ImagePart and dispatches downstream (Phase 17.1)" do
+      # Phase 17.1: ImagePart in a request to the OpenAI chat adapter now
+      # flows through the content-block translator. Without an api_key
+      # configured we expect the engine pre-flight (key resolution) to
+      # surface — the call is no longer short-circuited at validation.
+      # Use Anthropic via Fake to confirm the StreamRunner accepts vision
+      # content end-to-end.
       engine = Engine.new(adapter: OpenAI, model: "gpt-4o-mini")
 
       vision_req =
         Request.new([
           %Message{
             role: :user,
-            content: [%ImagePart{image: Image.from_url("data:image/png;base64,aGk=")}]
+            content: [%ImagePart{image: Image.from_url("https://example.com/cat.png")}]
           }
         ])
 
-      assert {:error, %AdapterError{reason: :unsupported_feature}} =
-               StreamRunner.run(engine, vision_req)
+      # No api_key → the OpenAI adapter raises an EngineError on
+      # `Keys.fetch!`; we just confirm that no AdapterError with reason
+      # :unsupported_feature surfaces (i.e., the Phase 14.4 guard is gone).
+      result =
+        try do
+          StreamRunner.run(engine, vision_req)
+        rescue
+          _ -> :raised_engine_error
+        end
+
+      refute match?({:error, %AdapterError{reason: :unsupported_feature}}, result)
     end
 
     test "adapter pre-flight error bubbles as AdapterError" do

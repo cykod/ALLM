@@ -1,0 +1,26 @@
+{
+  "_comment": "Synthesized Chat Completions response where the assistant emits a list-shaped content array containing both a text block and an image_url block. No current OpenAI model emits this shape (2026-04-29) but the spec §35.6 contract states that assistant-side ImagePart output deserializes back to %ALLM.ImagePart{}; this fixture exercises the decoder. Phase 17.1 Decision #11.",
+  "id": "chatcmpl-vision-assistant-img",
+  "object": "chat.completion",
+  "created": 1714089700,
+  "model": "gpt-future-multimodal",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {"type": "text", "text": "Here is the image you asked for:"},
+          {"type": "image_url", "image_url": {"url": "https://example.com/result.png"}}
+        ]
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 30,
+    "completion_tokens": 18,
+    "total_tokens": 48
+  }
+}

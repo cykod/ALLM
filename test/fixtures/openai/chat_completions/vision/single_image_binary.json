@@ -1,0 +1,23 @@
+{
+  "_comment": "Synthesized vision happy-path body (single binary image). Phase 17.1.",
+  "id": "chatcmpl-vision-bin",
+  "object": "chat.completion",
+  "created": 1714089602,
+  "model": "gpt-4o-mini",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The image shows a placeholder."
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1050,
+    "completion_tokens": 6,
+    "total_tokens": 1056
+  }
+}

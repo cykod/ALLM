@@ -81,7 +81,9 @@ defmodule ALLM.Capability do
   """
 
   alias ALLM.Error.ValidationError
+  alias ALLM.ImagePart
   alias ALLM.ImageRequest
+  alias ALLM.Message
   alias ALLM.ModelRef
   alias ALLM.Request
   alias ALLM.Usage
@@ -342,6 +344,7 @@ defmodule ALLM.Capability do
       []
       |> check_tools(ref, request)
       |> check_json_native(ref, request)
+      |> check_vision(ref, request)
       |> Enum.reverse()
 
     case errors do
@@ -384,6 +387,34 @@ defmodule ALLM.Capability do
   end
 
   defp check_json_native(acc, _ref, _req), do: acc
+
+  # Phase 17.1 — vision capability gate (§35.6, design Decision #5).
+  # Fires when the request contains any %ImagePart{} AND the resolved
+  # model's capabilities map says `vision: false` (atom-keyed) or
+  # `"vision" => false` (string-keyed JSON-rehydrated). When the catalog
+  # has no `:vision` key at all, no-op (graceful degradation matches the
+  # `:tools_disabled` precedent).
+  defp check_vision(acc, %ModelRef{capabilities: caps}, %Request{messages: messages}) do
+    if request_has_image_part?(messages) do
+      case caps do
+        %{vision: false} -> [{[:vision], :vision_disabled} | acc]
+        %{"vision" => false} -> [{[:vision], :vision_disabled} | acc]
+        _ -> acc
+      end
+    else
+      acc
+    end
+  end
+
+  defp request_has_image_part?(messages) when is_list(messages) do
+    Enum.any?(messages, fn
+      %Message{content: content} when is_list(content) ->
+        Enum.any?(content, &match?(%ImagePart{}, &1))
+
+      _ ->
+        false
+    end)
+  end
 
   # ---------------------------------------------------------------------------
   # Private — image preflight (Phase 14.3)

@@ -149,14 +149,19 @@ defmodule ALLM.Providers.OpenAI do
 
   alias ALLM.Error.AdapterError
   alias ALLM.Error.StreamError
+  alias ALLM.Error.ValidationError
   alias ALLM.Event
+  alias ALLM.Image
+  alias ALLM.ImagePart
   alias ALLM.Keys
   alias ALLM.Message
+  alias ALLM.Providers.Support.ImageMime
   alias ALLM.Providers.Support.OpenAIHeaders
   alias ALLM.Providers.Support.SSE
   alias ALLM.Request
   alias ALLM.Response
   alias ALLM.Retry
+  alias ALLM.TextPart
   alias ALLM.ToolCall
   alias ALLM.Usage
 
@@ -470,6 +475,19 @@ defmodule ALLM.Providers.OpenAI do
   (`POST /v1/chat/completions`). Both endpoints return canonical
   `%Response{}` shapes so callers do not need to know which wire ran.
 
+  ## Vision input (Phase 17.1)
+
+  `[%ALLM.TextPart{}, %ALLM.ImagePart{}]` content lists translate to
+  OpenAI's content-block wire shape automatically. URL-source images
+  pass through verbatim; binary/base64/file sources resolve to a
+  `data:<mime>;base64,...` URI via `ALLM.Image.to_data_uri/1`.
+  `ImagePart.detail` (`:auto | :low | :high`) maps to the wire string
+  via `Atom.to_string/1` and is always emitted (Decision #7 Q2). System
+  messages remain text-only — an `%ImagePart{}` in a system role is
+  hard-rejected as `%ValidationError{reason: :invalid_message}` before
+  any HTTP call. Per-image MIME / 20 MB size validation runs in
+  pre-flight via `ALLM.Providers.Support.ImageMime`.
+
   ## Examples
 
       iex> ALLM.Keys.put(:openai, "sk-doctest-gen")
@@ -485,12 +503,22 @@ defmodule ALLM.Providers.OpenAI do
       ...>   )
       iex> ALLM.Keys.delete(:openai)
       :ok
+
+      iex> # Vision pre-flight rejects an ImagePart in a system message.
+      iex> img = ALLM.Image.from_url("https://example.com/x.png")
+      iex> sys = %ALLM.Message{role: :system, content: [%ALLM.ImagePart{image: img}]}
+      iex> req = ALLM.Request.new([sys, %ALLM.Message{role: :user, content: "hi"}], model: "gpt-4o-mini")
+      iex> {:error, %ALLM.Error.ValidationError{reason: :invalid_message}} =
+      ...>   ALLM.Providers.OpenAI.generate(req, api_key: "sk-x")
+      iex> :ok
+      :ok
   """
-  @spec generate(Request.t(), keyword()) :: {:ok, Response.t()} | {:error, AdapterError.t()}
+  @spec generate(Request.t(), keyword()) ::
+          {:ok, Response.t()} | {:error, AdapterError.t() | ValidationError.t()}
   def generate(%Request{} = request, opts) when is_list(opts) do
-    case reject_image_parts(request) do
-      :ok -> do_generate(request, opts)
-      {:error, _} = err -> err
+    with :ok <- reject_image_in_system_messages(request),
+         :ok <- ImageMime.validate_request(request, :openai) do
+      do_generate(request, opts)
     end
   end
 
@@ -770,11 +798,12 @@ defmodule ALLM.Providers.OpenAI do
       iex> match?(%Stream{}, stream)
       true
   """
-  @spec stream(Request.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, AdapterError.t()}
+  @spec stream(Request.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, AdapterError.t() | ValidationError.t()}
   def stream(%Request{} = request, opts) when is_list(opts) do
-    case reject_image_parts(request) do
-      :ok -> do_stream(request, opts)
-      {:error, _} = err -> err
+    with :ok <- reject_image_in_system_messages(request),
+         :ok <- ImageMime.validate_request(request, :openai) do
+      do_stream(request, opts)
     end
   end
 
@@ -1491,6 +1520,14 @@ defmodule ALLM.Providers.OpenAI do
     [responses_simple_input_item(msg)]
   end
 
+  defp responses_simple_input_item(%Message{role: :user, content: c}) do
+    %{"role" => "user", "content" => user_content(c, :responses)}
+  end
+
+  defp responses_simple_input_item(%Message{role: :assistant, content: c}) do
+    %{"role" => "assistant", "content" => assistant_content(c, :responses)}
+  end
+
   defp responses_simple_input_item(%Message{role: role, content: c}) do
     %{"role" => Atom.to_string(role), "content" => stringify_content(c)}
   end
@@ -1619,6 +1656,9 @@ defmodule ALLM.Providers.OpenAI do
   end
 
   defp to_openai_message(%Message{role: :tool, content: c, tool_call_id: tcid}) do
+    # Tool-result content is text-only on OpenAI's wire (no multimodal
+    # tool results in v0.3); use `stringify_content/1` to flatten any
+    # text-only content list.
     %{
       "role" => "tool",
       "content" => stringify_content(c),
@@ -1627,7 +1667,7 @@ defmodule ALLM.Providers.OpenAI do
   end
 
   defp to_openai_message(%Message{role: :assistant, content: c, metadata: meta}) do
-    base = %{"role" => "assistant", "content" => stringify_content(c)}
+    base = %{"role" => "assistant", "content" => assistant_content(c, :chat_completions)}
 
     case Map.get(meta, :tool_calls) do
       nil -> base
@@ -1636,9 +1676,36 @@ defmodule ALLM.Providers.OpenAI do
     end
   end
 
-  defp to_openai_message(%Message{role: role, content: c}) when role in [:system, :user] do
-    %{"role" => Atom.to_string(role), "content" => stringify_content(c)}
+  defp to_openai_message(%Message{role: :system, content: c}) do
+    # System messages remain text-only by Phase 17 design Out-of-scope #2;
+    # `reject_image_in_system_messages/1` guards upstream of the wire.
+    %{"role" => "system", "content" => stringify_content(c)}
   end
+
+  defp to_openai_message(%Message{role: :user, content: c}) do
+    %{"role" => "user", "content" => user_content(c, :chat_completions)}
+  end
+
+  # User-side content emission (Phase 17.1):
+  #   - binary  → forwarded verbatim (v0.2 backward-compat)
+  #   - list with any %ImagePart{} → translated to content-block list
+  #   - list with only %TextPart{} → flattened to joined text (preserves
+  #     Phase 14.4 wire-shape: tests assert `content: "a\nb"`)
+  defp user_content(c, _endpoint) when is_binary(c) or is_nil(c), do: stringify_content(c)
+
+  defp user_content(parts, endpoint) when is_list(parts) do
+    if Enum.any?(parts, &match?(%ImagePart{}, &1)) do
+      to_openai_content_blocks(parts, endpoint)
+    else
+      stringify_content(parts)
+    end
+  end
+
+  # Assistant-side content for a request (i.e. `messages[]` echoed back to
+  # the model from `Thread.messages`). Multi-turn vision typically only
+  # carries images in the user role; assistant content remains text in
+  # practice. Mirror `user_content/2` for safety.
+  defp assistant_content(c, endpoint), do: user_content(c, endpoint)
 
   defp tool_call_to_wire(%ToolCall{id: id, name: name, raw_arguments: raw, arguments: args}) do
     arg_string = raw || Jason.encode!(args)
@@ -1653,41 +1720,127 @@ defmodule ALLM.Providers.OpenAI do
   defp stringify_content(c) when is_binary(c), do: c
   defp stringify_content(nil), do: ""
 
-  # Phase 14.4 Decision #14(b): materialize a [%TextPart{}, ...] content list
-  # to its joined text. The upstream `reject_image_parts/1` guard ensures
-  # `%ImagePart{}` never reaches this function — the catch-all clause in
-  # `materialize_part/1` is a programmer-error guard for Phase 16/17 wiring.
+  # Flatten a text-only content list (Phase 14.4 Decision #14(b)).
+  # Image-bearing lists are routed through `to_openai_content_blocks/2`
+  # by `user_content/2`/`assistant_content/2` BEFORE reaching this helper;
+  # tool/system role messages always carry text or text-only lists.
   defp stringify_content(parts) when is_list(parts) do
     Enum.map_join(parts, "\n", &materialize_part/1)
   end
 
-  defp materialize_part(%ALLM.TextPart{text: t}), do: t
+  defp materialize_part(%TextPart{text: t}), do: t
+  # Defensive: ImagePart should be filtered upstream for tool/system
+  # contexts; render to empty string rather than raising — text-only
+  # contexts that accidentally see one degrade gracefully.
+  defp materialize_part(%ImagePart{}), do: ""
 
   defp materialize_part(other) do
     raise ArgumentError,
           "stringify_content/1 expects a TextPart; got: #{inspect(other)}"
   end
 
-  # Phase 14.4 Decision #14(a): top-level guard rejecting any ImagePart in a
-  # request's message content list. Vision input is not yet wired in this
-  # adapter; the Phase 16/17 work removes this guard and adds the real
-  # vision translator.
-  defp reject_image_parts(%Request{messages: messages}) do
-    has_image_part? =
-      Enum.any?(messages, fn m ->
-        is_list(m.content) and Enum.any?(m.content, &match?(%ALLM.ImagePart{}, &1))
+  # Phase 17.1 — system-message ImagePart rejection (design Decision #7,
+  # Q1 lock-in). System messages are text-only in v0.3; an ImagePart in
+  # a system role is a hard reject before any other validation runs.
+  # See spec §35.6 Out-of-scope #2.
+  @spec reject_image_in_system_messages(Request.t()) ::
+          :ok | {:error, ValidationError.t()}
+  defp reject_image_in_system_messages(%Request{messages: messages}) do
+    errors =
+      messages
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {%Message{role: role, content: c}, idx} ->
+        if role == :system and system_has_image_part?(c) do
+          [{[:messages, idx, :content], :image_in_system_message}]
+        else
+          []
+        end
       end)
 
-    if has_image_part? do
-      {:error,
-       %AdapterError{
-         provider: :openai,
-         reason: :unsupported_feature,
-         message: "vision input not yet wired in this adapter; see Phase 16/17"
-       }}
-    else
-      :ok
+    case errors do
+      [] ->
+        :ok
+
+      list ->
+        {:error,
+         ValidationError.new(:invalid_message, list,
+           message: "image content is not supported in system-role messages"
+         )}
     end
+  end
+
+  defp system_has_image_part?(content) when is_list(content) do
+    Enum.any?(content, &match?(%ImagePart{}, &1))
+  end
+
+  defp system_has_image_part?(_), do: false
+
+  # Phase 17.1 — content-block translator (design §3.2). Both endpoints
+  # flow list-shaped content lists through this; the endpoint atom
+  # selects the wire-shape divergence:
+  #
+  #   * `:chat_completions` — `{type: "image_url", image_url: %{url, detail}}`
+  #     (detail nested in image_url map).
+  #   * `:responses` — `{type: "input_image", image_url, detail}`
+  #     (detail at sibling level).
+  #
+  # Mirror invariant: `to_openai_message/1` (Chat Completions) and
+  # `responses_simple_input_item/1` (Responses) BOTH route list content
+  # through `user_content/2` → `to_openai_content_blocks/2`.
+  @spec to_openai_content_blocks(
+          [TextPart.t() | ImagePart.t()],
+          :chat_completions | :responses
+        ) :: [map()]
+  defp to_openai_content_blocks(parts, endpoint) when is_list(parts) do
+    Enum.map(parts, &part_to_block(&1, endpoint))
+  end
+
+  defp part_to_block(%TextPart{text: t}, :chat_completions),
+    do: %{"type" => "text", "text" => t}
+
+  defp part_to_block(%TextPart{text: t}, :responses),
+    do: %{"type" => "input_text", "text" => t}
+
+  # URL fast-path: forward as a URL string; never call `to_data_uri/1`
+  # (which returns `{:error, :remote_source}` for `{:url, _}` sources).
+  defp part_to_block(
+         %ImagePart{image: %Image{source: {:url, u}}, detail: d},
+         :chat_completions
+       ) do
+    %{
+      "type" => "image_url",
+      "image_url" => %{"url" => u, "detail" => Atom.to_string(d)}
+    }
+  end
+
+  defp part_to_block(%ImagePart{image: img, detail: d}, :chat_completions) do
+    {:ok, uri} = Image.to_data_uri(img)
+
+    %{
+      "type" => "image_url",
+      "image_url" => %{"url" => uri, "detail" => Atom.to_string(d)}
+    }
+  end
+
+  defp part_to_block(
+         %ImagePart{image: %Image{source: {:url, u}}, detail: d},
+         :responses
+       ) do
+    %{
+      "type" => "input_image",
+      "image_url" => u,
+      "detail" => Atom.to_string(d)
+    }
+  end
+
+  defp part_to_block(%ImagePart{image: img, detail: d}, :responses) do
+    {:ok, uri} = Image.to_data_uri(img)
+
+    %{
+      "type" => "input_image",
+      "image_url" => uri,
+      "detail" => Atom.to_string(d)
+    }
   end
 
   # Phase 10.6 will land the Responses-API `input:` encoder; the design
@@ -1772,7 +1925,8 @@ defmodule ALLM.Providers.OpenAI do
     {finish_reason, raw_keep} = map_chat_finish_reason(raw_finish)
 
     tool_calls = decode_tool_calls(Map.get(message_map, "tool_calls", []))
-    content = Map.get(message_map, "content")
+    raw_content = Map.get(message_map, "content")
+    content = decode_assistant_content(raw_content)
 
     message = %Message{
       role: :assistant,
@@ -1784,7 +1938,7 @@ defmodule ALLM.Providers.OpenAI do
       id: Map.get(body, "id"),
       model: Map.get(body, "model"),
       message: message,
-      output_text: content,
+      output_text: assistant_output_text(content),
       tool_calls: tool_calls,
       finish_reason: finish_reason,
       raw_finish_reason: raw_keep,
@@ -1792,6 +1946,64 @@ defmodule ALLM.Providers.OpenAI do
       raw: body,
       metadata: %{}
     }
+  end
+
+  # Phase 17.1 (Decision #11) — assistant-side ImagePart decoding.
+  # Chat Completions's `choices[0].message.content` is usually a string,
+  # but the decoder accepts a list-shaped content block array for forward
+  # compat with multimodal-output models. Each block decodes to a
+  # `%TextPart{}` or `%ImagePart{}`; unknown block types fall through to
+  # an empty TextPart so the decode is total.
+  defp decode_assistant_content(content) when is_binary(content), do: content
+  defp decode_assistant_content(nil), do: nil
+
+  defp decode_assistant_content(blocks) when is_list(blocks) do
+    Enum.map(blocks, &decode_assistant_block/1)
+  end
+
+  defp decode_assistant_block(%{"type" => "text", "text" => t}) when is_binary(t),
+    do: %TextPart{text: t}
+
+  defp decode_assistant_block(%{"type" => "image_url", "image_url" => %{"url" => u}})
+       when is_binary(u) do
+    %ImagePart{image: image_from_assistant_url(u)}
+  end
+
+  defp decode_assistant_block(%{"type" => "image_url", "image_url" => u}) when is_binary(u) do
+    %ImagePart{image: image_from_assistant_url(u)}
+  end
+
+  defp decode_assistant_block(%{"type" => "output_image"} = block) do
+    url = Map.get(block, "image_url") || Map.get(block, "url")
+
+    if is_binary(url) do
+      %ImagePart{image: image_from_assistant_url(url)}
+    else
+      %TextPart{text: ""}
+    end
+  end
+
+  defp decode_assistant_block(_other), do: %TextPart{text: ""}
+
+  # Build an Image from an assistant-emitted URL string. `data:` URIs are
+  # stored verbatim (not parsed into base64+mime today — keeps the decode
+  # path total; consumers wanting bytes can call `Image.to_binary/1` on a
+  # `{:url, "data:..."}` source which returns `:remote_source` — accepted
+  # asymmetry).
+  defp image_from_assistant_url(url) when is_binary(url),
+    do: Image.from_url(url)
+
+  # `output_text` is a flattened string convenience. When `content` is a
+  # list of TextPart/ImagePart, join the text parts; image parts emit
+  # nothing.
+  defp assistant_output_text(content) when is_binary(content), do: content
+  defp assistant_output_text(nil), do: nil
+
+  defp assistant_output_text(parts) when is_list(parts) do
+    Enum.map_join(parts, "", fn
+      %TextPart{text: t} -> t
+      _ -> ""
+    end)
   end
 
   defp tool_calls_metadata([]), do: %{}

@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthesized Responses-API vision happy-path (binary image). Phase 17.1.",
+  "id": "resp-vision-bin",
+  "object": "response",
+  "created_at": 1714089612,
+  "model": "gpt-5.5",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [{"type": "output_text", "text": "Placeholder image."}]
+    }
+  ],
+  "output_text": "Placeholder image.",
+  "usage": {"input_tokens": 1050, "output_tokens": 5, "total_tokens": 1055}
+}

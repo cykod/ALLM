@@ -1,0 +1,23 @@
+{
+  "_comment": "Synthesized Responses-API vision happy-path body (single URL image). Phase 17.1. Schema per https://platform.openai.com/docs/api-reference/responses/object accessed 2026-04-29.",
+  "id": "resp-vision-url",
+  "object": "response",
+  "created_at": 1714089610,
+  "model": "gpt-5.5",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {"type": "output_text", "text": "I see a cat on a windowsill."}
+      ]
+    }
+  ],
+  "output_text": "I see a cat on a windowsill.",
+  "usage": {
+    "input_tokens": 1024,
+    "output_tokens": 8,
+    "total_tokens": 1032
+  }
+}
