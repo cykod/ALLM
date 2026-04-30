@@ -1,0 +1,16 @@
+{
+  "_comment": "Synthesized vision happy-path body (single base64 image). Phase 17.2. Schema per https://docs.anthropic.com/en/api/messages accessed 2026-04-29. Will be replaced by recorded fixture from scripts/record_anthropic_vision_fixtures.exs.",
+  "id": "msg_synth_vision_b64",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-haiku-4-5-20251001",
+  "content": [
+    { "type": "text", "text": "It's a small image." }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 320,
+    "output_tokens": 6
+  }
+}

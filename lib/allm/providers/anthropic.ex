@@ -144,11 +144,19 @@ defmodule ALLM.Providers.Anthropic do
   matches the synthetic prefix; when found, the synthetic injection is
   SKIPPED so user-defined tools remain callable on subsequent turns.
 
-  ## Vision (out of scope for v0.2)
+  ## Vision input (Phase 17.2)
 
-  Vision content parts are rejected by `ALLM.Validate.request/1` upstream
-  with `%ValidationError{reason: :vision_not_in_v0_2}`. The adapter trusts
-  the validator and does not re-check (spec §33).
+  `[%ALLM.TextPart{}, %ALLM.ImagePart{}]` content lists translate to
+  Anthropic's Messages-API content-block shape automatically. URL-source
+  images flow through `source: %{type: "url", url: u}`; binary, base64,
+  and file sources resolve to `source: %{type: "base64", media_type:
+  mime, data: ...}`. `ImagePart.detail` is NOT supported by Anthropic and
+  is dropped silently with a one-time `Logger.debug/1` per process
+  (Decision #3). System messages remain text-only — an `%ImagePart{}` in
+  a system role is hard-rejected as
+  `%ValidationError{reason: :invalid_message}` before any HTTP call.
+  Per-image MIME / 20 MB size validation runs in pre-flight via
+  `ALLM.Providers.Support.ImageMime`.
   """
 
   @behaviour ALLM.Adapter
@@ -169,15 +177,22 @@ defmodule ALLM.Providers.Anthropic do
 
   alias ALLM.Error.AdapterError
   alias ALLM.Error.StreamError
+  alias ALLM.Error.ValidationError
   alias ALLM.Event
+  alias ALLM.Image
+  alias ALLM.ImagePart
   alias ALLM.Keys
   alias ALLM.Message
+  alias ALLM.Providers.Support.ImageMime
   alias ALLM.Providers.Support.SSE
   alias ALLM.Request
   alias ALLM.Response
   alias ALLM.Retry
+  alias ALLM.TextPart
   alias ALLM.ToolCall
   alias ALLM.Usage
+
+  require Logger
 
   # ---------------------------------------------------------------------------
   # Public API — Adapter callbacks
@@ -287,6 +302,25 @@ defmodule ALLM.Providers.Anthropic do
   `{:ok, %Response{}}` on 2xx success or `{:error, %AdapterError{}}` on
   every failure shape.
 
+  ## Vision input (Phase 17.2)
+
+  `[%ALLM.TextPart{}, %ALLM.ImagePart{}]` content lists translate to
+  Anthropic's content-block wire shape automatically. URL-source images
+  use `source: %{type: "url", url: u}`; base64/binary/file sources
+  resolve to `source: %{type: "base64", media_type: mime, data: ...}`.
+
+  > #### Note: `ImagePart.detail` is dropped {: .info}
+  >
+  > Anthropic's Messages API has no `detail` field. The translator drops
+  > the value silently and emits a single `Logger.debug/1` per process
+  > the first time an `ImagePart` with `detail: :auto | :low | :high`
+  > flows through. The wire shape never carries detail (Decision #3).
+
+  System messages remain text-only — an `%ImagePart{}` in a system role
+  is hard-rejected as `%ValidationError{reason: :invalid_message}`
+  before any HTTP call. Per-image MIME / 20 MB size validation runs in
+  pre-flight via `ALLM.Providers.Support.ImageMime`.
+
   ## Examples
 
       iex> ALLM.Keys.put(:anthropic, "sk-ant-doctest-gen")
@@ -302,12 +336,22 @@ defmodule ALLM.Providers.Anthropic do
       ...>   )
       iex> ALLM.Keys.delete(:anthropic)
       :ok
+
+      iex> # Vision pre-flight rejects an ImagePart in a system message.
+      iex> img = ALLM.Image.from_url("https://example.com/x.png")
+      iex> sys = %ALLM.Message{role: :system, content: [%ALLM.ImagePart{image: img}]}
+      iex> req = ALLM.Request.new([sys, %ALLM.Message{role: :user, content: "hi"}], model: "claude-sonnet-4-6")
+      iex> {:error, %ALLM.Error.ValidationError{reason: :invalid_message}} =
+      ...>   ALLM.Providers.Anthropic.generate(req, api_key: "sk-x")
+      iex> :ok
+      :ok
   """
-  @spec generate(Request.t(), keyword()) :: {:ok, Response.t()} | {:error, AdapterError.t()}
+  @spec generate(Request.t(), keyword()) ::
+          {:ok, Response.t()} | {:error, AdapterError.t() | ValidationError.t()}
   def generate(%Request{} = request, opts) when is_list(opts) do
-    case reject_image_parts(request) do
-      :ok -> do_generate(request, opts)
-      {:error, _} = err -> err
+    with :ok <- reject_image_in_system_messages(request),
+         :ok <- ImageMime.validate_request(request, :anthropic) do
+      do_generate(request, opts)
     end
   end
 
@@ -657,16 +701,20 @@ defmodule ALLM.Providers.Anthropic do
   end
 
   defp to_anthropic_message(%Message{role: :assistant, content: c, metadata: meta}) do
-    base_text = stringify_content(c)
-
     case Map.get(meta, :tool_calls) do
       nil ->
-        %{"role" => "assistant", "content" => base_text}
+        %{"role" => "assistant", "content" => user_content(c)}
 
       [] ->
-        %{"role" => "assistant", "content" => base_text}
+        %{"role" => "assistant", "content" => user_content(c)}
 
       calls ->
+        # tool_use carries auxiliary blocks; combine with text-only base
+        # by materializing list-shaped content to a single text block
+        # (multimodal assistant input echoed to a model is rare; mirror
+        # OpenAI's `assistant_content/2` text-flatten convention).
+        base_text = stringify_content(c)
+
         text_block =
           case base_text do
             "" -> []
@@ -683,7 +731,7 @@ defmodule ALLM.Providers.Anthropic do
   end
 
   defp to_anthropic_message(%Message{role: :user, content: c}) do
-    %{"role" => "user", "content" => stringify_content(c)}
+    %{"role" => "user", "content" => user_content(c)}
   end
 
   defp to_anthropic_message(%Message{role: :system, content: c}) do
@@ -692,44 +740,158 @@ defmodule ALLM.Providers.Anthropic do
     %{"role" => "user", "content" => stringify_content(c)}
   end
 
+  # Phase 17.2: user-side content emission.
+  #   - binary  → forwarded verbatim (v0.2 backward-compat)
+  #   - list with any %ImagePart{} → translated to content-block list
+  #   - list with only %TextPart{} → flattened to joined text (preserves
+  #     Phase 14.4 wire-shape: tests assert `content: "a\nb"`)
+  defp user_content(c) when is_binary(c) or is_nil(c), do: stringify_content(c)
+
+  defp user_content(parts) when is_list(parts) do
+    if Enum.any?(parts, &match?(%ImagePart{}, &1)) do
+      to_anthropic_content_blocks(parts)
+    else
+      stringify_content(parts)
+    end
+  end
+
   defp stringify_content(c) when is_binary(c), do: c
   defp stringify_content(nil), do: ""
 
-  # Phase 14.4 Decision #14(b): materialize a [%TextPart{}, ...] content list
-  # to its joined text. The upstream `reject_image_parts/1` guard ensures
-  # `%ImagePart{}` never reaches this function — the catch-all clause in
-  # `materialize_part/1` is a programmer-error guard for Phase 16/17 wiring.
+  # Flatten a text-only content list (Phase 14.4 Decision #14(b)).
+  # Image-bearing lists are routed through `to_anthropic_content_blocks/1`
+  # by `user_content/1` BEFORE reaching this helper; tool/system role
+  # messages always carry text or text-only lists.
   defp stringify_content(parts) when is_list(parts) do
     Enum.map_join(parts, "\n", &materialize_part/1)
   end
 
-  defp materialize_part(%ALLM.TextPart{text: t}), do: t
+  defp materialize_part(%TextPart{text: t}), do: t
+  # Defensive: ImagePart should be filtered upstream for tool/system
+  # contexts; render to empty string rather than raising — text-only
+  # contexts that accidentally see one degrade gracefully. This mirrors
+  # the OpenAI adapter's Phase 17.1 contract — see retro 2026-04-30
+  # finding 5 (the symmetry decision).
+  defp materialize_part(%ImagePart{}), do: ""
 
   defp materialize_part(other) do
     raise ArgumentError,
           "stringify_content/1 expects a TextPart; got: #{inspect(other)}"
   end
 
-  # Phase 14.4 Decision #14(a): top-level guard rejecting any ImagePart in a
-  # request's message content list. Vision input is not yet wired in this
-  # adapter; the Phase 16/17 work removes this guard and adds the real
-  # vision translator.
-  defp reject_image_parts(%Request{messages: messages}) do
-    has_image_part? =
-      Enum.any?(messages, fn m ->
-        is_list(m.content) and Enum.any?(m.content, &match?(%ALLM.ImagePart{}, &1))
+  # Phase 17.2 — system-message ImagePart rejection (mirror of OpenAI's
+  # Phase 17.1 helper; design Decision #7 Q1 lock-in). System messages
+  # are text-only in v0.3; an ImagePart in a system role is a hard reject
+  # before any other validation runs. See spec §35.6 Out-of-scope #2.
+  @spec reject_image_in_system_messages(Request.t()) ::
+          :ok | {:error, ValidationError.t()}
+  defp reject_image_in_system_messages(%Request{messages: messages}) do
+    errors =
+      messages
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {%Message{role: role, content: c}, idx} ->
+        if role == :system and system_has_image_part?(c) do
+          [{[:messages, idx, :content], :image_in_system_message}]
+        else
+          []
+        end
       end)
 
-    if has_image_part? do
-      {:error,
-       %AdapterError{
-         provider: :anthropic,
-         reason: :unsupported_feature,
-         message: "vision input not yet wired in this adapter; see Phase 16/17"
-       }}
-    else
-      :ok
+    case errors do
+      [] ->
+        :ok
+
+      list ->
+        {:error,
+         ValidationError.new(:invalid_message, list,
+           message: "image content is not supported in system-role messages"
+         )}
     end
+  end
+
+  defp system_has_image_part?(content) when is_list(content) do
+    Enum.any?(content, &match?(%ImagePart{}, &1))
+  end
+
+  defp system_has_image_part?(_), do: false
+
+  # Phase 17.2 — content-block translator (design §3.3). Routes
+  # `[TextPart | ImagePart]` content lists to Anthropic's Messages-API
+  # content-block shape:
+  #
+  #   * `TextPart`  → `%{"type" => "text", "text" => t}`
+  #   * `ImagePart` with `{:url, _}`     → `source: {type: "url", url}`
+  #   * `ImagePart` with `{:base64, _}`  → `source: {type: "base64", media_type, data}`
+  #   * `ImagePart` with `{:binary, _}`  → encode64 → base64 source
+  #   * `ImagePart` with `{:file, _}`    → to_binary + encode64 → base64 source
+  #
+  # `ImagePart.detail` is read but NOT emitted on the wire (Anthropic has
+  # no `detail` field — Decision #3); a single `Logger.debug/1` per
+  # process surfaces the drop.
+  @spec to_anthropic_content_blocks([TextPart.t() | ImagePart.t()]) :: [map()]
+  defp to_anthropic_content_blocks(parts) when is_list(parts) do
+    Enum.map(parts, &part_to_block/1)
+  end
+
+  defp part_to_block(%TextPart{text: t}) do
+    %{"type" => "text", "text" => t}
+  end
+
+  # URL fast-path: forward URL string under Anthropic's url-source shape.
+  # Never call `to_binary/1` (returns `{:error, :remote_source}` for URL).
+  defp part_to_block(%ImagePart{image: %Image{source: {:url, u}}, detail: d}) do
+    detail_drop_check(d)
+    %{"type" => "image", "source" => %{"type" => "url", "url" => u}}
+  end
+
+  defp part_to_block(%ImagePart{
+         image: %Image{source: {:base64, s}, mime_type: mime},
+         detail: d
+       }) do
+    detail_drop_check(d)
+
+    %{
+      "type" => "image",
+      "source" => %{"type" => "base64", "media_type" => mime, "data" => s}
+    }
+  end
+
+  defp part_to_block(%ImagePart{image: %Image{mime_type: mime} = img, detail: d}) do
+    detail_drop_check(d)
+    {:ok, bytes} = Image.to_binary(img)
+
+    %{
+      "type" => "image",
+      "source" => %{
+        "type" => "base64",
+        "media_type" => mime,
+        "data" => Base.encode64(bytes)
+      }
+    }
+  end
+
+  # Phase 17.2 Decision #3: ImagePart.detail is not supported by Anthropic.
+  # When a non-nil detail is observed, fire a single deferred-form
+  # `Logger.debug/1` per process and stash a flag in the process dict so
+  # subsequent calls in the same process stay silent.
+  defp detail_drop_check(nil), do: :ok
+
+  defp detail_drop_check(_detail) do
+    warn_detail_dropped_once()
+    :ok
+  end
+
+  defp warn_detail_dropped_once do
+    if !Process.get(:allm_anthropic_detail_warned, false) do
+      Logger.debug(fn ->
+        "ALLM.Providers.Anthropic: ImagePart.detail is not supported by Anthropic; dropping. " <>
+          "This warning fires once per process."
+      end)
+
+      Process.put(:allm_anthropic_detail_warned, true)
+    end
+
+    :ok
   end
 
   @doc """
@@ -1168,11 +1330,12 @@ defmodule ALLM.Providers.Anthropic do
       :ok
   """
   @impl ALLM.StreamAdapter
-  @spec stream(Request.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, AdapterError.t()}
+  @spec stream(Request.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, AdapterError.t() | ValidationError.t()}
   def stream(%Request{} = request, opts) when is_list(opts) do
-    case reject_image_parts(request) do
-      :ok -> do_stream(request, opts)
-      {:error, _} = err -> err
+    with :ok <- reject_image_in_system_messages(request),
+         :ok <- ImageMime.validate_request(request, :anthropic) do
+      do_stream(request, opts)
     end
   end
 

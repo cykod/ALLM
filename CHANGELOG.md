@@ -1,3 +1,82 @@
+## [FEAT] Phase 17.2: vision input wiring in ALLM.Providers.Anthropic per §35.6 — Messages API content-block translator with base64/URL source dispatch; ImagePart.detail dropped with one-shot debug log
+*Wednesday, April 29th*
+Mirror of Phase 17.1 for Anthropic. Replaces the Phase 14.4
+`reject_image_parts/1` guard in `lib/allm/providers/anthropic.ex` with a
+full content-block translator. `[%ALLM.TextPart{}, %ALLM.ImagePart{}]`
+content lists now translate to Anthropic's Messages-API wire shape via
+a private `to_anthropic_content_blocks/1` helper:
+
+- `TextPart` → `%{"type" => "text", "text" => t}`
+- `ImagePart` with `{:url, u}` source → `%{"type" => "image", "source" => %{"type" => "url", "url" => u}}`
+- `ImagePart` with `{:base64, s}, mime` → base64 source shape with `data` passed verbatim
+- `ImagePart` with `{:binary, b}, mime` → `Base.encode64(b)` then base64 source shape
+- `ImagePart` with `{:file, _}, mime` → `Image.to_binary/1` + `Base.encode64/1` then base64 source shape
+
+URL sources are dispatched on a fast-path BEFORE calling
+`Image.to_binary/1` (which returns `{:error, :remote_source}` for
+`{:url, _}` sources). `to_anthropic_messages/1`'s list-content path
+now delegates to the new translator for image-bearing lists; pure
+TextPart lists still flatten to joined text per the Phase 14.4
+backward-compat invariant.
+
+`ImagePart.detail` is **dropped silently** on the wire — Anthropic's
+Messages API has no `detail` field (Decision #3). A single deferred-form
+`Logger.debug/1` fires once per process the first time a non-nil
+`detail` flows through; subsequent calls in the same process stay
+silent. Detection mechanism: `Process.get/2` + `Process.put/2` flag
+keyed on `:allm_anthropic_detail_warned`. Tested with `:capture_log`
+asserting exactly one debug emission across two ImagePart-bearing calls
+in the same process.
+
+Pre-flight order in `generate/2` (`:307-308`) and `stream/2` (`:1172-1173`):
+system-rejection → MIME/size validate → translate → HTTP. Reuses
+`ALLM.Providers.Support.ImageMime.validate_request(request, :anthropic)`
+shipped in Phase 17.1; the accept-set (`image/png`, `image/jpeg`,
+`image/webp`, `image/gif`) matches OpenAI's today (per-provider seam
+preserved for future divergence). System-message `ImagePart` is
+hard-rejected at pre-flight via the mirror helper
+`reject_image_in_system_messages/1` — error tuple
+`{[:messages, idx, :content], :image_in_system_message}` accumulating in
+a `%ValidationError{reason: :invalid_message}`. Capability pre-flight
+(`:vision_disabled`) runs at runner level (`StreamRunner.do_run/3`),
+NOT inside the adapter — same architectural convention as Phase 17.1
+per the 17.1 retro Finding 1 amendment.
+
+Symmetry fix per 17.1 retro Finding 5: `materialize_part(%ImagePart{})`
+in `lib/allm/providers/anthropic.ex` now returns the empty string
+rather than raising `ArgumentError`. Mirrors `lib/allm/providers/openai.ex`'s
+graceful-empty-string contract for stale ImageParts that reach a
+text-only context. Cross-adapter divergence eliminated.
+
+Test surface:
+- `test/allm/providers/anthropic_vision_test.exs` (27 tests) —
+  translator, pre-flight, detail-drop debug log, decoder, and
+  `:live_anthropic`-tagged smoke test against `claude-haiku-4-5-20251001`.
+- 4 synthesized wire fixtures under `test/fixtures/anthropic/messages/vision/`
+  (`single_image_url.json`, `single_image_base64.json`,
+  `single_image_binary.json`, `multi_image.json`). Each carries a
+  `_comment: "Synthesized…"` provenance marker.
+- `scripts/record_anthropic_vision_fixtures.exs` — idempotent
+  live-recorder that overwrites the four fixtures from real
+  `claude-haiku-4-5-20251001` calls.
+- Two flips in `test/allm/providers/anthropic_wire_test.exs` (lines 426
+  and 519): the Phase 14.4 `:unsupported_feature` rejection assertions
+  become happy-path translations.
+
+Audit per Phase 17.2 checklist: `git grep ':vision_not_in_v0_2' test/`
+returns zero hits (already true since Phase 14.4); re-verified.
+
+Cross-phase note: the live-record blocker remains. The committed
+fixtures are synthesized with bodies matching real Anthropic shapes;
+running `ANTHROPIC_API_KEY=… mix run scripts/record_anthropic_vision_fixtures.exs`
+overwrites them with captured wire shapes. Live `:live_anthropic`-tagged
+smoke test deferred to /review per the 17.1 BLOCKING-gate convention.
+
+Spec sections cited: §35.6 (vision content parts), §35.7 (chat-vision
+on Anthropic; no image-gen adapter). Phase 17 design Decisions #3
+(detail drop), #5 (capability gate already wired in 17.1), #7 (pre-flight
+order, runner-level capability gate per 17.1 retro Finding 1).
+
 ## [FEAT] Phase 17.1: vision input wiring in ALLM.Providers.OpenAI per §35.6 (Chat Completions + Responses translators)
 *Wednesday, April 29th*
 Replaces the Phase 14.4 `reject_image_parts/1` guard with a full

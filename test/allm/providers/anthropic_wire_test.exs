@@ -423,11 +423,14 @@ defmodule ALLM.Providers.AnthropicWireTest do
     assert {[:messages, 0, :content], :invalid_part_type} in errors
   end
 
-  test "ImagePart in content is short-circuited by adapter with :unsupported_feature",
-       %{stub: _stub} do
-    # Phase 14.4 Decision #14(a): the chat adapter rejects ImagePart at the
-    # top of generate/2 with %AdapterError{reason: :unsupported_feature}
-    # before any HTTP call is made.
+  test "ImagePart in user-role content is accepted by the chat adapter (Phase 17.2)",
+       %{stub: stub} do
+    # Phase 17.2 lifts the Phase 14.4 reject_image_parts/1 guard. ImagePart
+    # in a user-role message now flows through to_anthropic_content_blocks/1
+    # and is sent to the wire — assert no :unsupported_feature error fires.
+    body_ok = Fx.messages_response(:happy_text)
+    Req.Test.stub(stub, fn conn -> respond_json(conn, 200, body_ok) end)
+
     request =
       Request.new(
         [
@@ -439,8 +442,7 @@ defmodule ALLM.Providers.AnthropicWireTest do
         model: "claude-sonnet-4-6"
       )
 
-    assert {:error, %AdapterError{reason: :unsupported_feature, provider: :anthropic}} =
-             Anthropic.generate(request, api_key: "sk-ant-test")
+    assert {:ok, _} = call(stub, request)
   end
 
   # ---------------------------------------------------------------------------
@@ -516,8 +518,20 @@ defmodule ALLM.Providers.AnthropicWireTest do
       assert [%{"role" => "user", "content" => "a\nb"}] = body["messages"]
     end
 
-    test "[%TextPart{}, %ImagePart{}] mixed content fires the upstream guard",
-         %{stub: _stub} do
+    test "[%TextPart{}, %ImagePart{}] mixed content flows through translator (Phase 17.2)",
+         %{stub: stub} do
+      # Phase 17.2: list-shaped mixed content with an ImagePart now
+      # translates to Anthropic's content-block wire shape. The pre-flight
+      # `reject_image_parts/1` guard from 14.4 is gone.
+      body_ok = Fx.messages_response(:happy_text)
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:request_body, Jason.decode!(raw)})
+        respond_json(conn, 200, body_ok)
+      end)
+
       img = Image.from_url("https://example.com/cat.png")
 
       request =
@@ -531,8 +545,21 @@ defmodule ALLM.Providers.AnthropicWireTest do
           model: "claude-sonnet-4-6"
         )
 
-      assert {:error, %AdapterError{reason: :unsupported_feature, provider: :anthropic}} =
-               Anthropic.generate(request, api_key: "sk-ant-test")
+      assert {:ok, _} = call(stub, request)
+      assert_received {:request_body, body}
+
+      assert [%{"role" => "user", "content" => content}] = body["messages"]
+
+      assert content == [
+               %{"type" => "text", "text" => "x"},
+               %{
+                 "type" => "image",
+                 "source" => %{
+                   "type" => "url",
+                   "url" => "https://example.com/cat.png"
+                 }
+               }
+             ]
     end
   end
 

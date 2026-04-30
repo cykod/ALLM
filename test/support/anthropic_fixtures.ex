@@ -34,6 +34,16 @@ defmodule ALLM.Providers.AnthropicTestFixtures do
   end
 
   @doc """
+  Load a recorded Messages-API vision fixture by name.
+
+  Names map to files under `test/fixtures/anthropic/messages/vision/<name>.json`.
+  """
+  @spec messages_vision(atom()) :: body()
+  def messages_vision(name) when is_atom(name) do
+    load_json(Path.join([@fixtures_root, "messages/vision", "#{name}.json"]))
+  end
+
+  @doc """
   Load a synthesized fixture by name.
 
   Names map to files under `test/fixtures/anthropic/synthesized/<name>.json`.
