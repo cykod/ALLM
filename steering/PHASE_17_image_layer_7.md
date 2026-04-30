@@ -107,7 +107,7 @@ The user-side ImagePart input flows to the wire in the adapter's request builder
 6. **Extending `ValidationError.@type reason` enumeration is NOT required.** Decision #5 reuses `:unsupported_capability`; per-field tuples carry the granular `:vision_disabled` reason. The closed enum at `lib/allm/error/validation_error.ex:30-58` does NOT grow in this phase. Pre-design audit: `grep -nE ':vision|:image_too_large|:unsupported_image_format' lib/allm/error/` returns no matches; the existing `:unsupported_capability` covers vision; `:invalid_message` with `{[:content, idx], :unsupported_image_format | :image_too_large | :missing_mime_type}` covers per-image-part wire-validation failures.
    - **Docs target:** internal — design-time confirmation only.
 
-7. **Adapter pre-flight order is fixed and matters:** `(1) reject_image_in_system_messages → (2) capability_preflight (vision gate) → (3) per-part MIME/size validation → (4) translate → (5) HTTP`. Each step's failure is typed `ValidationError` (per Q1 lock-in below; mirrors the existing `:tools_disabled` / `:json_native_disabled` precedent at `lib/allm/capability.ex:359-386`); the order is asserted by a unit test that confronts each step with a request violating multiple rules and asserts the *first* rule's error surfaces.
+7. **Pre-flight order is layered across the runner and the adapter** (corrected 2026-04-30 per Phase 17.1 retro Finding 1): the runner-level step `(2) capability_preflight (vision gate)` runs in `ALLM.StreamRunner.do_run/3` at `lib/allm/stream_runner.ex:122` against the resolved `%ModelRef{}`; the adapter-internal steps `(1) reject_image_in_system_messages → (3) per-part MIME/size validation → (4) translate → (5) HTTP` run in `OpenAI.generate/2` / `OpenAI.stream/2` at `lib/allm/providers/openai.ex:518-522,803-807`. The adapter does NOT (and cannot, per architecture) re-run capability gating: `Request.model` is a `String.t()` at the adapter boundary, and `Capability.preflight/3` is a no-op for string models (`lib/allm/capability.ex:188-189`). Direct `ALLM.Providers.OpenAI.generate/2` calls bypass capability gating by design — callers wanting it go through `ALLM.generate/3`. Each step's failure is typed `ValidationError` (per Q1 lock-in below; mirrors the existing `:tools_disabled` / `:json_native_disabled` precedent at `lib/allm/capability.ex:359-386`). The adapter-internal order `(1) → (3)` is asserted by `test/allm/providers/openai_vision_test.exs:483-511`. The runner-level `(2) → adapter` composition is exercised by `test/allm/capability_vision_test.exs` (8 tests against `Capability.preflight/3` directly) but a facade-level `(2) → (1) → (3)` end-to-end test does NOT exist in 17.1; deferred to a future fix-step.
    - **Q1 lock-in:** system-message-image rejection returns `%ValidationError{reason: :invalid_message, errors: [{[:messages, idx, :content], :image_in_system_message}]}`, NOT `%AdapterError`. Hard-reject (short-circuits remaining content checks). One field-level atom added (`:image_in_system_message`); no top-level `@type reason` change.
    - **Q2 lock-in:** `ImagePart.detail` is always emitted on the wire as `Atom.to_string(detail)` — no omission of `:auto`. Idempotent against server defaults; explicit emission simplifies debugging and round-trip.
    - **Q3 lock-in:** per-part vision validation lives in `ALLM.Providers.Support.ImageMime.validate_request/2`, not duplicated per adapter. See §3.1.
@@ -244,12 +244,18 @@ Implemented as `Atom.to_string/1` since the union is closed and atoms match wire
 
 **Removed contract:** `reject_image_parts/1` at `lib/allm/providers/openai.ex:1675-1691` is deleted in §17.1. The `ArgumentError` catch-all in `stringify_content/1` at `:1666-1669` is also removed; the function is replaced (see Module Tree). 
 
-**Pre-flight order** (Decision #7) — wired in `generate/2` at `lib/allm/providers/openai.ex:490-491` (currently calls `reject_image_parts/1`) and `stream/2` at `:773-775`, both replaced to call:
-1. `reject_image_in_system_messages/1` (NEW helper)
-2. `ALLM.Capability.preflight/2` already at the chat call site (Phase 6); extended to handle vision per Decision #5
-3. `ALLM.Providers.Support.ImageMime.validate_request(request, :openai)` — lifted helper (Q3); adapter does NOT carry its own `validate_image_parts/1`
-4. `to_openai_content_blocks/2` (translation; pure function, infallible)
-5. HTTP
+**Pre-flight order** (Decision #7, corrected 2026-04-30 per 17.1 retro Finding 1):
+
+- **Runner-level** (`ALLM.StreamRunner.do_run/3` at `lib/allm/stream_runner.ex:122`, runs against the resolved `%ModelRef{}` BEFORE adapter dispatch):
+  2. `ALLM.Capability.preflight/3` — vision gate per Decision #5; no-op when `Request.model` is a string or the catalog isn't loaded.
+
+- **Adapter-internal** (`generate/2` at `lib/allm/providers/openai.ex:518-522` and `stream/2` at `:803-807`, runs after dispatch):
+  1. `reject_image_in_system_messages/1` (NEW helper)
+  3. `ALLM.Providers.Support.ImageMime.validate_request(request, :openai)` — lifted helper (Q3); adapter does NOT carry its own `validate_image_parts/1`
+  4. `to_openai_content_blocks/2` (translation; pure function, infallible)
+  5. HTTP
+
+The adapter does NOT call `Capability.preflight/3` because `Request.model` is `String.t()` at the adapter boundary and `preflight/3` short-circuits to `:ok` for string models (`lib/allm/capability.ex:188-189`). Direct adapter calls bypass capability gating by design.
 
 ### 3.3 Anthropic content-part translator (extension to `lib/allm/providers/anthropic.ex`)
 
@@ -361,25 +367,30 @@ test/allm/
 ├── stream_equivalence_test.exs                    (MODIFY — 17.1+17.2: vision script in §31 vocabulary)
 └── capability_vision_test.exs                     (NEW — 17.1: vision-gate per-rule pre-flight tests)
 
-test/fixtures/
+test/fixtures/                                    (corrected 2026-04-30 per 17.1 retro Findings 2+4:
+                                                    wire fixtures are .json (project convention via
+                                                    Jason.decode!/1 in OpenAITestFixtures /
+                                                    AnthropicTestFixtures); synthesized fixtures live at
+                                                    test/fixtures/<provider>/synthesized/, NOT
+                                                    test/fixtures/<provider>/<endpoint>/synthesized/)
 ├── openai/chat_completions/vision/                (NEW — 17.1: 4 source-shape fixtures × happy-path)
-│   ├── single_image_url.exs
-│   ├── single_image_base64.exs
-│   ├── single_image_binary.exs
-│   ├── multi_image.exs
-│   └── unsupported_format.exs
+│   ├── single_image_url.json
+│   ├── single_image_base64.json
+│   ├── single_image_binary.json
+│   ├── multi_image.json
+│   └── unsupported_format.json
 ├── openai/responses/vision/                       (NEW — 17.1: same 4 source-shapes against Responses API)
-│   ├── single_image_url.exs
-│   ├── single_image_base64.exs
-│   ├── single_image_binary.exs
-│   └── multi_image.exs
-├── openai/chat_completions/synthesized/
-│   └── vision_assistant_image_output.exs          (NEW — 17.1: synthesized assistant→ImagePart decoder)
+│   ├── single_image_url.json
+│   ├── single_image_base64.json
+│   ├── single_image_binary.json
+│   └── multi_image.json
+├── openai/synthesized/
+│   └── vision_assistant_image_output.json         (NEW — 17.1: synthesized assistant→ImagePart decoder)
 └── anthropic/messages/vision/                     (NEW — 17.2: 4 source-shape fixtures)
-    ├── single_image_url.exs
-    ├── single_image_base64.exs
-    ├── single_image_binary.exs
-    └── multi_image.exs
+    ├── single_image_url.json
+    ├── single_image_base64.json
+    ├── single_image_binary.json
+    └── multi_image.json
 
 examples/
 ├── 11_edit_image.exs                              (NEW — 17.3: gpt-image-1 inpaint with mask)

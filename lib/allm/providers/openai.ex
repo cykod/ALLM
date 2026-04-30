@@ -1732,6 +1732,10 @@ defmodule ALLM.Providers.OpenAI do
   # Defensive: ImagePart should be filtered upstream for tool/system
   # contexts; render to empty string rather than raising — text-only
   # contexts that accidentally see one degrade gracefully.
+  # Cross-adapter divergence note: Anthropic still raises here as of
+  # Phase 17.1 (out of 17.1 scope per Phase 17 design). See retro
+  # 2026-04-30 finding 5 — Phase 17.2 should adopt this same
+  # graceful-empty-string contract for symmetry.
   defp materialize_part(%ImagePart{}), do: ""
 
   defp materialize_part(other) do
