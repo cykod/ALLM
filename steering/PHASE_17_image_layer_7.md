@@ -306,6 +306,8 @@ end
 
 Tested with `:capture_log` ensuring exactly one debug emission across two ImagePart-bearing calls in the same process; assertions on `Process.get/2` state.
 
+**Cross-adapter divergence note (added 2026-04-30 per Phase 17.2 retro Finding 3):** the assistant + `tool_calls` + `ImagePart` trinary case is handled differently across the two bundled adapters. Anthropic text-flattens the content list via `stringify_content/1` → `materialize_part(%ImagePart{}) -> ""` (image silently dropped to empty string), then emits `tool_use` blocks alongside the text block; see `lib/allm/providers/anthropic.ex:711-731`. OpenAI, by contrast, routes the same content through the full content-block translator and emits image blocks alongside `tool_calls` (`lib/allm/providers/openai.ex:1670` via `assistant_content/2`). The divergence is deliberate for v0.3 — a model echoing back its own multimodal turn while also requesting a tool is genuinely rare, and Anthropic's Messages API may not accept image blocks alongside `tool_use` blocks in an assistant message. v0.4 may canonize one shape across both adapters; until then the inline comment at `lib/allm/providers/anthropic.ex:711-720` cites this note.
+
 ### 3.4 Capability extension (`lib/allm/capability.ex`)
 
 ```elixir
@@ -386,7 +388,13 @@ test/fixtures/                                    (corrected 2026-04-30 per 17.1
 │   └── multi_image.json
 ├── openai/synthesized/
 │   └── vision_assistant_image_output.json         (NEW — 17.1: synthesized assistant→ImagePart decoder)
-└── anthropic/messages/vision/                     (NEW — 17.2: 4 source-shape fixtures)
+└── anthropic/messages/vision/                     (NEW — 17.2: 4 source-shape fixtures;
+                                                    synthesized-pre-record per 17.1 retro
+                                                    Finding 6 convention. Each carries
+                                                    `_comment: "Synthesized…"`; live recorder at
+                                                    scripts/record_anthropic_vision_fixtures.exs
+                                                    overwrites in-place — `_comment` is stripped
+                                                    on re-record. Loader: AnthropicTestFixtures.messages_vision/1.)
     ├── single_image_url.json
     ├── single_image_base64.json
     ├── single_image_binary.json

@@ -709,10 +709,15 @@ defmodule ALLM.Providers.Anthropic do
         %{"role" => "assistant", "content" => user_content(c)}
 
       calls ->
-        # tool_use carries auxiliary blocks; combine with text-only base
-        # by materializing list-shaped content to a single text block
-        # (multimodal assistant input echoed to a model is rare; mirror
-        # OpenAI's `assistant_content/2` text-flatten convention).
+        # tool_use blocks must coexist with text-only content in Anthropic's
+        # Messages API; ImagePart in an assistant role (model's prior turn
+        # re-fed) is silently text-flattened via `stringify_content/1` →
+        # `materialize_part(%ImagePart{}) -> ""`. Diverges from OpenAI's
+        # `assistant_content/2` (which routes ImageParts through the full
+        # content-block translator and emits image blocks alongside
+        # tool_calls). Multimodal assistant input echoed to a model is
+        # rare; the divergence is deliberate for v0.3 — see Phase 17.2
+        # retro Finding 3 and PHASE_17_image_layer_7.md §17.2 note.
         base_text = stringify_content(c)
 
         text_block =

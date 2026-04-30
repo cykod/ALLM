@@ -322,7 +322,11 @@ defmodule ALLM.Providers.AnthropicVisionTest do
           # — the once-per-process flag is keyed on the calling process
           # dictionary; running in the test process would leak state.
           Task.async(fn ->
-            Logger.configure(level: :debug)
+            # `capture_log([level: :debug], ...)` at the outer scope already
+            # configures the per-process Logger level for the function's
+            # duration (restored on exit). Do NOT call `Logger.configure/1`
+            # here — it mutates application-global state and races with
+            # concurrent `async: true` tests. Per Phase 17.2 retro Finding 1.
             request1 = Request.new([user_text_image("a", img, :high)], model: "claude-sonnet-4-6")
             request2 = Request.new([user_text_image("b", img, :low)], model: "claude-sonnet-4-6")
             assert {:ok, _} = call(stub, request1)
@@ -346,7 +350,8 @@ defmodule ALLM.Providers.AnthropicVisionTest do
       log =
         capture_log([level: :debug], fn ->
           Task.async(fn ->
-            Logger.configure(level: :debug)
+            # See sibling test for rationale: outer `capture_log/2` handles
+            # per-process level; do NOT call `Logger.configure/1` here.
             # detail: nil → no warning fires.
             part = %ImagePart{image: img, detail: nil}
             msg = %Message{role: :user, content: [%TextPart{text: "x"}, part]}
