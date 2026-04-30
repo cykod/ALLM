@@ -91,3 +91,13 @@
 [DSGN] mon 4/27 6pm - Design Phase 15 OpenAI Images real-provider adapter
 
 [BUILD] mon 4/27 6pm - Build all 6 sub-phases (15.1–15.6) of PHASE_15_image_layer_6.md — ALLM.Providers.OpenAI.Images
+
+[MILE] tue 4/28 4pm - Shipped Phase 15: ALLM.Providers.OpenAI.Images full operation × model coverage with live-recorded fixtures and BLOCKING examples gate
+
+[DSGN] wed 4/29 2am - Design phases 7-9 of v0.3 (vision in OpenAI/Anthropic + release polish)
+
+[DSGN] wed 4/29 2am - Design Gemini provider with chat and images support
+
+[BUILD] wed 4/29 7pm - Build phases from PHASE_17_image_layer_7.md
+
+[FIX] thu 4/30 8pm - Fix issues from Phase 17.3 review and retro

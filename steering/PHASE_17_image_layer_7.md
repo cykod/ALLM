@@ -692,7 +692,7 @@ For the example scripts, no unit tests — they're integration smoke runs gated 
 - [ ] Write `examples/13_image_variations.exs`: dall-e-2 variation; provider marker `# Provider: openai`
 - [ ] Update `examples/_helpers.exs`: add `:vision_default_model` to both `@providers` rows; add `vision: true` opt to `engine/1` (Decision #8)
 - [ ] Update `examples/run_all.exs`: include the three new scripts in iteration; provider gating is automatic via marker scanner (`:37`)
-- [ ] Run `OPENAI_API_KEY=... mix run examples/run_all.exs` and `ANTHROPIC_API_KEY=... mix run examples/run_all.exs`; commit `examples/RUN_OUTPUT_OPENAI.md` and `examples/RUN_OUTPUT_ANTHROPIC.md` snapshots (full output redirected per Phase 15.6 pattern)
+- [ ] Run `OPENAI_API_KEY=... mix run examples/run_all.exs` and `ANTHROPIC_API_KEY=... mix run examples/run_all.exs`; commit `examples/RUN_OUTPUT_OPENAI.md` and `examples/RUN_OUTPUT_ANTHROPIC.md` snapshots (full output redirected per Phase 15.6 pattern). **When `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` are not in the implementation environment, snapshot regeneration is deferred BLOCKING alongside the live `run_all.exs` gate; existing `RUN_OUTPUT_*.md` snapshots are NOT modified — stale snapshots beat hand-edited ones, and snapshots regenerated without the matching live run encode wall-clock + model output that can't be reproduced. Per CLAUDE.md "Working on this codebase" snapshot-deferral convention.**
 - [ ] Update `examples/README.md`: brief description of each new script; add cost notes table per Decision #10
 - [ ] Update `README.md`: add a "Generating images" section (15-line worked example using Fake) and a "Vision input" section (10-line example showing `[TextPart, ImagePart]`); link to `examples/12_vision_input.exs` and `examples/10_generate_image.exs`
 - [ ] Roll up CHANGELOG into a v0.3.0 section: one bullet per Phase 13–17 deliverable referencing §35.x
@@ -781,7 +781,7 @@ If a future provider emits an assistant ImagePart output mid-stream, the adapter
 - [ ] `stream_equivalence_test.exs` property holds with vision in §31 vocabulary
 - [ ] `OPENAI_API_KEY=... mix run examples/run_all.exs` exit 0 — BLOCKING
 - [ ] `ANTHROPIC_API_KEY=... mix run examples/run_all.exs` exit 0 — BLOCKING
-- [ ] `examples/RUN_OUTPUT_OPENAI.md` and `examples/RUN_OUTPUT_ANTHROPIC.md` snapshots committed
+- [ ] `examples/RUN_OUTPUT_OPENAI.md` and `examples/RUN_OUTPUT_ANTHROPIC.md` snapshots committed — **BLOCKING — runs alongside the live `run_all.exs` gate before the final v0.3.0 release tag, NOT before phase merge.** Snapshot regen pairs with the live BLOCKING gate: when keys are absent in the implementation environment both defer together; existing snapshots are not modified mid-deferral.
 - [ ] CHANGELOG.md updated with v0.3.0 rollup
 - [ ] `mix.exs @version` is `"0.3.0"`
 - [ ] `mix hex.build` succeeds (dry-run)

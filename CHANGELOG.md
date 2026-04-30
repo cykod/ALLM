@@ -58,10 +58,18 @@ Vocabulary additions over v0.2.x:
 - `Telemetry`: `[:allm, :image, :start | :stop | :exception]` events
   with `:image_count` `:stop` measurement (Phase 14.3).
 
-Live BLOCKING gate: `OPENAI_API_KEY=… mix run examples/run_all.exs`
-and `ANTHROPIC_API_KEY=… ALLM_PROVIDER=anthropic mix run examples/run_all.exs`
-both exit 0. Combined cost ~$0.09 per clean run, ~$0.27
-first-implementation per Phase 17.3 Decision #10.
+Live BLOCKING gate: **deferred** — `OPENAI_API_KEY=…
+mix run examples/run_all.exs` and
+`ANTHROPIC_API_KEY=… ALLM_PROVIDER=anthropic mix run examples/run_all.exs`
+are gated as a BLOCKING pre-publish step. Synthesized fixtures + dry-run
+validate the in-tree code; live re-record runs at release-tag time
+(before `mix hex.publish`). Combined cost ~$0.09 per clean run, ~$0.27
+first-implementation per Phase 17.3 Decision #10. Idempotent recorder
+scripts (`scripts/record_openai_vision_fixtures.exs`,
+`scripts/record_anthropic_vision_fixtures.exs`) ship in the repo for the
+re-record step. The `examples/RUN_OUTPUT_OPENAI.md` /
+`RUN_OUTPUT_ANTHROPIC.md` snapshots are regenerated at the same time as
+the live runs, not before — stale snapshots beat hand-edited ones.
 
 The detailed per-sub-phase narratives below remain for traceability.
 

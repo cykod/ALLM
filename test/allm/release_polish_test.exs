@@ -106,4 +106,31 @@ defmodule ALLM.ReleasePolishTest do
       assert contents =~ "provider_marker_regex"
     end
   end
+
+  describe "mix.exs package files vs docs extras (Phase 17.3 retro Finding 2)" do
+    # ExDoc renders `extras:` files into hexdocs at publish time, but the Hex
+    # source tarball is gated on `package[:files]` only — a file in `extras:`
+    # but not in `:files` ships in hexdocs but NOT in the hex source download.
+    # Assert :files is a superset of docs.extras so CHANGELOG.md (and any
+    # future extra) lands in the published source tarball.
+    test "package[:files] is a superset of docs[:extras]" do
+      config = Mix.Project.config()
+      files = config[:package][:files]
+      extras = config[:docs][:extras]
+
+      missing = Enum.reject(extras, fn extra -> extra in files end)
+
+      assert missing == [],
+             "mix.exs :package[:files] is missing docs[:extras] entries: " <>
+               "#{inspect(missing)} — add to package.files so they ship in the hex tarball"
+    end
+
+    test "CHANGELOG.md is in package[:files]" do
+      files = Mix.Project.config()[:package][:files]
+
+      assert "CHANGELOG.md" in files,
+             "mix.exs :package[:files] missing CHANGELOG.md — Hex source tarball would " <>
+               "ship without it (Phase 17.3 retro Finding 2)"
+    end
+  end
 end
