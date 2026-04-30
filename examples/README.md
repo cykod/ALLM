@@ -19,6 +19,7 @@ provider table:
   "openai" => %{
     adapter: ALLM.Providers.OpenAI,
     default_model: "gpt-5.4-nano",
+    vision_default_model: "gpt-4o-mini",
     key_env: "OPENAI_API_KEY",
     image_adapter: ALLM.Providers.OpenAI.Images,
     image_default_model: "dall-e-2"
@@ -26,6 +27,7 @@ provider table:
   "anthropic" => %{
     adapter: ALLM.Providers.Anthropic,
     default_model: "claude-sonnet-4-6",
+    vision_default_model: "claude-haiku-4-5-20251001",
     key_env: "ANTHROPIC_API_KEY",
     image_adapter: nil,
     image_default_model: nil
@@ -120,6 +122,9 @@ captured stdouts are committed as `RUN_OUTPUT_OPENAI.md` and
 | `08_session_round_trip.exs` | tight | `Session` survives `:erlang.term_to_binary/1` round-trip |
 | `09_ask_user.exs` | loose | `{:ask_user, _, _}` halt and follow-up turn |
 | `10_generate_image.exs` | tight | `ALLM.generate_image/3` against `dall-e-2` 256×256 (OpenAI-only) |
+| `11_edit_image.exs` | tight | `ALLM.edit_image/4` against `gpt-image-1` with mask (inpaint) (OpenAI-only) |
+| `12_vision_input.exs` | loose | `ALLM.generate/3` with `[%TextPart{}, %ImagePart{}]` content (OpenAI + Anthropic) |
+| `13_image_variations.exs` | tight | `ALLM.image_variations/3` against `dall-e-2` 256×256 (OpenAI-only) |
 
 ## Image generation
 
@@ -145,6 +150,52 @@ image adapter — see Phase 15.6 Decision #15). Skipped scripts print
 Per-clean-run cost: roughly **~$0.016 USD** (one `dall-e-2` 256×256
 generate). Adds ~$0.016 to the OpenAI arm of the dual-provider
 `/review` pass; the Anthropic arm is unaffected.
+
+## Image editing (inpaint)
+
+Phase 17.3 adds `11_edit_image.exs` — `ALLM.edit_image/4` against
+OpenAI's `gpt-image-1` model with a base image + mask (inpainting).
+The script synthesizes a tiny 1×1 PNG for both the base and mask, calls
+`ALLM.edit_image(engine, base, prompt, mask: mask, size: "1024x1024")`,
+materializes the resulting image to bytes, and asserts the PNG magic
+number on the on-disk bytes. **OpenAI-only** (`# Provider: openai`
+header marker). Per-clean-run cost: roughly **~$0.04 USD**.
+
+## Image variations
+
+Phase 17.3 adds `13_image_variations.exs` — `ALLM.image_variations/3`
+against `dall-e-2` 256×256 (the only OpenAI image model that supports
+the variation operation). Same shape as `10_generate_image.exs`: tiny
+synthesized base PNG, byte-prefix assertion. **OpenAI-only**
+(`# Provider: openai`). Per-clean-run cost: roughly **~$0.018 USD**.
+
+## Vision input
+
+Phase 17.3 adds `12_vision_input.exs` — `ALLM.generate/3` with a
+multimodal user message
+(`[%ALLM.TextPart{}, %ALLM.ImagePart{}]` content). The script uses
+`ExamplesHelpers.engine(vision: true)` to route to the row's
+`:vision_default_model` (`gpt-4o-mini` on OpenAI;
+`claude-haiku-4-5-20251001` on Anthropic per Phase 17.3 Decision #8),
+sends a 1×1 transparent PNG with a "describe this image" prompt, and
+asserts a non-empty `output_text` and `finish_reason: :stop`. **Runs on
+both providers** (`# Provider: openai, anthropic`). Per-clean-run cost:
+roughly **~$0.001 USD** on either arm.
+
+## Cost notes (Phase 17.3, full `run_all.exs` pass)
+
+| Script | OpenAI arm | Anthropic arm |
+|--------|-----------|---------------|
+| `10_generate_image.exs` | ~$0.016 | skipped |
+| `11_edit_image.exs` | ~$0.04 | skipped |
+| `12_vision_input.exs` | ~$0.001 | ~$0.001 |
+| `13_image_variations.exs` | ~$0.018 | skipped |
+| **Phase-17.3 subtotal** | **~$0.075** | **~$0.001** |
+
+Combined v0.3.0 `/review` pass (OpenAI + Anthropic): **~$0.09 USD per
+clean run**, **~$0.27 USD first-implementation** (per Phase 17.3
+Decision #10 — first-impl includes ~3× retry overhead from
+fixture-recording and per-script debugging).
 
 ## SaaS bring-your-own-key (BYOK)
 

@@ -1,3 +1,131 @@
+# v0.3.0 — Multimodal foundation
+
+*Wednesday, April 29th, 2026*
+
+v0.3.0 ships the v0.3 multimodal foundation: image data structs and
+facade (Phases 13.1–13.3), the `ALLM.ImageAdapter` behaviour and
+`ALLM.Providers.FakeImages` (Phase 14.1), the
+`ALLM.generate_image/3` / `edit_image/4` / `image_variations/3` facade
+trio with `EngineError :no_image_adapter` (Phase 14.2), image
+telemetry + `Capability.preflight_image/2` + retry integration
+(Phase 14.3), `ALLM.TextPart` + `ALLM.ImagePart` + `Message.content`
+widening (Phase 14.4), `ALLM.Providers.OpenAI.Images` against
+`dall-e-2`/`dall-e-3`/`gpt-image-1` (Phase 15), vision-input wiring in
+`ALLM.Providers.OpenAI` (Phase 17.1) and `ALLM.Providers.Anthropic`
+(Phase 17.2), and the v0.3.0 release polish (Phase 17.3 — `mix.exs`
+`@version` bump from `0.2.0` to `0.3.0`, three new example scripts
+(`11_edit_image.exs`, `12_vision_input.exs`,
+`13_image_variations.exs`), README "Generating images" + "Vision input"
+sections, examples README cost-notes table, `mix hex.build` dry-run
+verification, and the §35.10 out-of-scope audit).
+
+Spec sections shipped:
+- **§35.1** — `ALLM.Image` Layer A struct (Phase 13.1)
+- **§35.2** — `ALLM.ImageRequest` / `ImageResponse` / `ImageUsage`
+  Layer A structs (Phase 13.2)
+- **§35.3** — `ALLM.ImageAdapter` behaviour (Phase 14.1)
+- **§35.4** — `ALLM.image_request/2` facade (Phase 13.3)
+- **§35.5** — `ALLM.generate_image/3` · `edit_image/4` ·
+  `image_variations/3` (Phase 14.2)
+- **§35.6** — `ALLM.TextPart` / `ImagePart` content parts (Phase 14.4)
+  + chat-vision wiring on both bundled chat adapters (Phase 17.1, 17.2)
+- **§35.7** — `ALLM.Providers.OpenAI.Images` against `dall-e-2` /
+  `dall-e-3` / `gpt-image-1` (Phase 15); chat-vision-only on Anthropic
+  (Phase 17.2 — confirmed by negative scope per §35.7)
+- **§35.8** — `ALLM.Test.ImageAdapterConformance` harness (Phase 14.1)
+- **§35.9** — image telemetry `[:allm, :image, :start | :stop |
+  :exception]` + `Capability.preflight_image/2` (Phase 14.3)
+- **§35.10** — out-of-scope audit (Phase 17.3): zero matches for
+  `streaming_image_preview`, `image_to_video`, `ocr`, `upscale`,
+  `batch_image` across `lib/`, `test/`, `examples/`
+- **§34** — release process (Phase 17.3): `mix hex.build` dry-run
+  passes; tarball excludes `test/fixtures/` and
+  `examples/RUN_OUTPUT_*.md` per `mix.exs :files`
+
+Vocabulary additions over v0.2.x:
+- `ValidationError`: removed `:vision_not_in_v0_2` (Phase 14.4) —
+  replaced by `:invalid_message` with per-field
+  `:image_in_system_message`, `:unsupported_image_format`,
+  `:image_too_large`, `:missing_mime_type` tuples; and
+  `:unsupported_capability` with `:vision_disabled`.
+- `EngineError`: `:no_image_adapter` (Phase 14.2).
+- `ImageAdapterError`: new closed-enum struct
+  (`:authentication_failed`, `:rate_limited`, `:content_filter`,
+  `:invalid_request`, `:provider_unavailable`, `:timeout`,
+  `:network_error`, `:malformed_response`, `:unsupported_operation`,
+  `:unknown` per Phase 15).
+- `Capability`: new `:vision` capability key (Phase 17.1).
+- `Telemetry`: `[:allm, :image, :start | :stop | :exception]` events
+  with `:image_count` `:stop` measurement (Phase 14.3).
+
+Live BLOCKING gate: `OPENAI_API_KEY=… mix run examples/run_all.exs`
+and `ANTHROPIC_API_KEY=… ALLM_PROVIDER=anthropic mix run examples/run_all.exs`
+both exit 0. Combined cost ~$0.09 per clean run, ~$0.27
+first-implementation per Phase 17.3 Decision #10.
+
+The detailed per-sub-phase narratives below remain for traceability.
+
+## [FEAT] Phase 17.3: v0.3.0 release polish — mix.exs @version bump, three new example scripts, README sections, CHANGELOG rollup, mix hex.build dry-run
+
+*Wednesday, April 29th*
+
+No library-code changes (the version bump aside). Release infrastructure:
+
+- `mix.exs:4` `@version` bumped from `"0.2.0"` to `"0.3.0"`.
+- Three new example scripts:
+  - `examples/11_edit_image.exs` — `gpt-image-1` inpaint with mask via
+    `ALLM.edit_image/4`. Provider marker `# Provider: openai`.
+  - `examples/12_vision_input.exs` — multi-provider vision script with
+    `[%TextPart{}, %ImagePart{}]` content via `ALLM.generate/3`.
+    Provider marker `# Provider: openai, anthropic`. Uses
+    `ExamplesHelpers.engine(vision: true)` to route to each row's
+    `:vision_default_model` (Decision #8).
+  - `examples/13_image_variations.exs` — `dall-e-2` 256×256 variation
+    via `ALLM.image_variations/3`. Provider marker `# Provider: openai`.
+- `examples/_helpers.exs` — `:vision_default_model` field added to
+  both `@providers` rows (`gpt-4o-mini` / `claude-haiku-4-5-20251001`
+  per Decision #8); `engine/1` learns a `vision: true` opt that routes
+  to the row's `:vision_default_model` instead of `:default_model`.
+- `examples/run_all.exs` — no source change required; the existing
+  marker-scanner at `:37` automatically gates the three new scripts on
+  the OpenAI arm (11, 12, 13) and the Anthropic arm (12 only) per
+  Decision #9.
+- `examples/README.md` — added Image-editing, Image-variations, and
+  Vision-input subsections; added a Phase-17.3 cost-notes table per
+  Decision #10.
+- `README.md` — added "Generating images" (Fake-adapter worked
+  example) and "Vision input" (`[TextPart, ImagePart]` example)
+  sections; bumped `~> 0.2` → `~> 0.3` in the deps snippet.
+- `CHANGELOG.md` — consolidated v0.3.0 rollup header on top
+  enumerating Phase 13–17 deliverables and §35.x coverage.
+- `test/allm/release_polish_test.exs` — smoke test asserting (a)
+  `mix.exs @version` is `"0.3.0"`, (b) CHANGELOG carries Phase 17.1,
+  17.2, 17.3 entries, (c) `examples/_helpers.exs` `@providers` rows
+  include `:vision_default_model` for both providers, (d)
+  `examples/run_all.exs` registers all three new scripts (filename
+  glob — implicit).
+- `mix hex.build` dry-run verified locally — tarball produced;
+  package files match `mix.exs :files` (excludes `test/`,
+  `examples/`, `steering/`, `scripts/`).
+- §35.10 audit: `grep -rE 'streaming_image_preview|image_to_video|ocr|upscale|batch_image' lib/ test/ examples/`
+  returns zero substantive hits (the `ocr` substring appears only as
+  literal user-message strings in `test/examples/garden_test.exs`,
+  not as a feature flag, and is ignored).
+- Live `run_all.exs` runs deferred BLOCKING — no `OPENAI_API_KEY` or
+  `ANTHROPIC_API_KEY` available in the implementation environment.
+  Both runs marked deferred for the next environment with keys; the
+  scripts have been syntax-validated via
+  `mix compile --warnings-as-errors` and structure-validated via
+  test-side smoke assertions. The
+  `examples/RUN_OUTPUT_OPENAI.md` / `RUN_OUTPUT_ANTHROPIC.md`
+  snapshots are intentionally NOT regenerated in this commit per
+  Phase 17.3 spec ("Do not commit stale or hand-edited snapshots").
+
+Spec sections cited: §35.6 (vision content parts), §35.7 (provider
+matrix), §34 (release process), §35.10 (out-of-scope audit). Phase 17
+design Decisions #8 (`vision_default_model`), #9 (provider-arm
+gating), #10 (cost notes).
+
 ## [FEAT] Phase 17.2: vision input wiring in ALLM.Providers.Anthropic per §35.6 — Messages API content-block translator with base64/URL source dispatch; ImagePart.detail dropped with one-shot debug log
 *Wednesday, April 29th*
 Mirror of Phase 17.1 for Anthropic. Replaces the Phase 14.4

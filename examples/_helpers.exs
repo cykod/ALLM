@@ -8,7 +8,10 @@ defmodule ExamplesHelpers do
   Two constructors are exposed:
 
     * `engine/1` — chat-adapter engine; reads `:adapter` / `:default_model`
-      / `:key_env` from the provider row.
+      / `:key_env` from the provider row. Pass `vision: true` to route to
+      the row's `:vision_default_model` instead of `:default_model` (Phase
+      17.3 / §35.6) — used by `12_vision_input.exs` to pick a vision-capable
+      model on each provider arm.
     * `image_engine/1` — image-adapter engine (Phase 15.6); reads
       `:image_adapter` / `:image_default_model`. Raises `ArgumentError` for
       providers without an image adapter (e.g. Anthropic).
@@ -22,6 +25,7 @@ defmodule ExamplesHelpers do
     "openai" => %{
       adapter: ALLM.Providers.OpenAI,
       default_model: "gpt-5.4-nano",
+      vision_default_model: "gpt-4o-mini",
       key_env: "OPENAI_API_KEY",
       image_adapter: ALLM.Providers.OpenAI.Images,
       image_default_model: "dall-e-2"
@@ -29,6 +33,7 @@ defmodule ExamplesHelpers do
     "anthropic" => %{
       adapter: ALLM.Providers.Anthropic,
       default_model: "claude-sonnet-4-6",
+      vision_default_model: "claude-haiku-4-5-20251001",
       key_env: "ANTHROPIC_API_KEY",
       image_adapter: nil,
       image_default_model: nil
@@ -44,13 +49,18 @@ defmodule ExamplesHelpers do
   `tool_result_encoder:`, and `params: %{temperature: 0}`.
   """
   def engine(extra_opts \\ []) do
+    {vision?, extra_opts} = Keyword.pop(extra_opts, :vision, false)
+
     %{adapter: adapter, default_model: default_model, key_env: key_env} =
-      lookup_provider_row()
+      row = lookup_provider_row()
 
     ensure_adapter_loaded!(adapter)
     ensure_key_present!(key_env)
 
-    model = System.get_env("ALLM_MODEL", default_model)
+    base_model =
+      if vision?, do: Map.get(row, :vision_default_model) || default_model, else: default_model
+
+    model = System.get_env("ALLM_MODEL", base_model)
 
     base = [
       adapter: adapter,
