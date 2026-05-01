@@ -12,8 +12,12 @@
 # Spec section: §35.6 (vision content parts), §35.7 (provider matrix).
 # Steering strategy: loose — vision models produce free-form descriptions
 #                    of the input image; the assertion is shape-only
-#                    (non-empty text, stop reason). The image is a tiny
-#                    synthesized 1×1 PNG so no on-disk fixture is needed.
+#                    (non-empty text, stop reason). The image is a
+#                    checked-in real 256×256 PNG fixture
+#                    (`fixtures/kestrel_256.png`, generated once via
+#                    dall-e-2) — vision endpoints reject 1×1 synthetic
+#                    placeholders with HTTP 400, so a realistic
+#                    photographic-style fixture is required.
 # Cost: roughly ~$0.001 USD per clean run on either provider (small
 #       image + short response).
 # Run with:    OPENAI_API_KEY=sk-... mix run examples/12_vision_input.exs
@@ -24,14 +28,11 @@ Code.require_file("_helpers.exs", __DIR__)
 
 engine = ExamplesHelpers.engine(vision: true)
 
-# 1×1 transparent PNG — smallest valid PNG. Provider accepts; the model
-# describes "a small/blank image" in a sentence.
-tiny_png =
-  <<137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
-    0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1, 13, 10,
-    45, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130>>
-
-img = ALLM.Image.from_binary(tiny_png, "image/png")
+img =
+  __DIR__
+  |> Path.join("fixtures/kestrel_256.png")
+  |> File.read!()
+  |> ALLM.Image.from_binary("image/png")
 
 msg = %ALLM.Message{
   role: :user,

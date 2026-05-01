@@ -787,12 +787,21 @@ defmodule ALLM do
   @retryable_image_reasons [:rate_limited, :provider_unavailable, :timeout, :network_error]
 
   # Drop call-control opts that would collide with `ImageRequest` struct
-  # fields when merged into `ImageRequest.new/1`. `:request_id`, `:stream`,
-  # and `:adapter_opts` are call/dispatch-site concerns, not request fields
-  # — `ImageRequest.new/1` would `KeyError` on them via `struct!/2`. `:mask`
-  # is consumed at the `edit_image/4` boundary.
+  # fields when merged into `ImageRequest.new/1`. These are call/dispatch-site
+  # concerns, not request fields — `ImageRequest.new/1` would `KeyError` on
+  # them via `struct!/2`. `:mask` is consumed at the `edit_image/4` boundary;
+  # the rest are forwarded to the adapter via `dispatch_opts`.
   defp drop_request_opts(opts) when is_list(opts) do
-    Keyword.drop(opts, [:request_id, :stream, :mask, :adapter_opts])
+    Keyword.drop(opts, [
+      :request_id,
+      :stream,
+      :mask,
+      :adapter_opts,
+      :request_timeout,
+      :retry,
+      :api_key,
+      :telemetry_metadata
+    ])
   end
 
   # Phase 14.3: wrap the entire body in `Telemetry.span(:image, ...)` so
@@ -844,6 +853,14 @@ defmodule ALLM do
          resolved_model
        ) do
     with :ok <- ALLM.Capability.preflight_image(resolved_model, request) do
+      # Stamp the engine-resolved model onto the request so adapters that
+      # gate / shape the wire body off `request.model` (e.g. OpenAI's
+      # multipart `:edit` / `:variation`, which require `model` on the
+      # wire) see it. Mirrors the chat-side `StreamRunner.resolve_request_model/3`
+      # at `lib/allm/stream_runner.ex:209-213`. Preserves an explicitly-set
+      # request model.
+      request = %{request | model: request.model || resolved_model}
+
       # Concat engine.adapter_opts with call-site adapter_opts. `Keyword.get/2`
       # returns the FIRST occurrence on duplicate keys, so engine wins on
       # collision. Mirrors the chat-side `StreamRunner.build_dispatch_opts/2`

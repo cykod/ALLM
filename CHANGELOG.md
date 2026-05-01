@@ -1,3 +1,25 @@
+## [BUG] Stamp engine model on image requests; bundle real PNG fixture for examples
+*Friday, May 1st at 5pm*
+Fixes ALLM.edit_image/4 (and would-be variations) failing with OpenAI HTTP 400 
+'Missing required parameter: model' — do_generate_image_body never propagated 
+the engine-resolved model onto the ImageRequest before dispatch, so the 
+multipart body went out without a model field. /v1/images/generations silently 
+defaulted to dall-e-2 (masking the bug for 10_generate_image), but 
+/v1/images/edits and /v1/images/variations require it. Now mirrors the 
+chat-side StreamRunner.resolve_request_model/3 pattern. Also widens 
+drop_request_opts/1 to drop :request_timeout, :retry, :api_key, 
+:telemetry_metadata so adapter-facing call-control opts don't leak into 
+ImageRequest.new/1 and KeyError. Bundles examples/fixtures/kestrel_256.png 
+(one-time-baked via dall-e-2) and switches 11_edit_image and 12_vision_input to 
+load it — gpt-image-1 moderation and gpt-4o-mini both reject 1×1 synthetic 
+placeholders. Bumps run_all per-script Task.yield 60s→180s for slow 
+gpt-image-1 calls. 13_image_variations remains failing upstream: 
+/v1/images/variations returns Cloudflare HTTP/2 404 with no JSON body for our 
+sk-proj-... key — likely an OpenAI project-permission issue, not a library 
+bug. Test suite: 1975 tests, 0 failures.
+
+---
+
 ## [DOC] Apply Phase 15.x + 17.x retros: 11 steering-doc lifts
 *Friday, May 1st at 4pm*
 Reviewed nine unapplied retros (Phase 15.1–15.6, 17.1–17.3) and applied 11

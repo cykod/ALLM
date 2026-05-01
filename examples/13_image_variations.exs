@@ -30,16 +30,12 @@ Code.require_file("_helpers.exs", __DIR__)
 
 engine = ExamplesHelpers.image_engine()
 
-# 1×1 transparent PNG — smallest valid PNG; dall-e-2 expects square PNG
-# input for variations.
-tiny_png =
-  <<137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
-    0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1, 13, 10,
-    45, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130>>
+# Checked-in real 256×256 PNG fixture (generated once via dall-e-2);
+# `dall-e-2` variations expect a square PNG of a known size.
+base_png = File.read!(Path.join(__DIR__, "fixtures/kestrel_256.png"))
+base = ALLM.Image.from_binary(base_png, "image/png")
 
-base = ALLM.Image.from_binary(tiny_png, "image/png")
-
-case ALLM.image_variations(engine, base, size: "256x256") do
+case ALLM.image_variations(engine, base, size: "256x256", request_timeout: 60_000) do
   {:ok, %ALLM.ImageResponse{images: [image | _] = images, usage: usage}} ->
     case ALLM.Image.to_binary(image) do
       {:ok, <<137, 80, 78, 71, _::binary>> = bytes} ->

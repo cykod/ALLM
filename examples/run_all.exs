@@ -60,7 +60,7 @@ results =
       IO.puts("--- #{Path.basename(path)} ---")
       task = Task.async(fn -> Code.eval_file(path) end)
 
-      case Task.yield(task, 60_000) || Task.shutdown(task, :brutal_kill) do
+      case Task.yield(task, 180_000) || Task.shutdown(task, :brutal_kill) do
         {:ok, _} -> {path, :ok}
         {:exit, reason} -> {path, {:error, reason}}
         nil -> {path, {:error, :timeout}}
