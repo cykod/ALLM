@@ -1,3 +1,18 @@
+## [DOC] Apply Phase 15.x + 17.x retros: 11 steering-doc lifts
+*Friday, May 1st at 4pm*
+Reviewed nine unapplied retros (Phase 15.1–15.6, 17.1–17.3) and applied 11
+deduplicated rules to CLAUDE.md, AGENT_IMPLEMENTATION_SPEC.md, and
+AGENT_DESIGN_SPEC.md. Highlights: synthesized-fixture + recorder + deferred-
+record convention (5x recurrence, finally landed); capability pre-flight runs
+in StreamRunner not adapter; cross-provider helper-name parity (extending
+the OpenAI dual-translator bullet); wire fixtures are .json; mix.exs
+package[:files] must be a superset of docs[:extras]; snapshot/audit-grep/
+async-Logger discipline; public-test-seam @doc false + @spec convention;
+dual-keyed atom/string accessors generalized beyond metadata; Module Tree
+path-existence sanity check.
+
+---
+
 # v0.3.0 — Multimodal foundation
 
 *Wednesday, April 29th, 2026*
