@@ -875,7 +875,12 @@ defmodule ALLM.Providers.Gemini do
     %{"role" => "model", "parts" => text_parts ++ call_parts}
   end
 
-  defp tool_call_to_function_call_part(%ToolCall{id: id, name: name, arguments: args, metadata: meta}) do
+  defp tool_call_to_function_call_part(%ToolCall{
+         id: id,
+         name: name,
+         arguments: args,
+         metadata: meta
+       }) do
     fc_base = %{"name" => name, "args" => args || %{}}
 
     fc =
@@ -1577,7 +1582,14 @@ defmodule ALLM.Providers.Gemini do
     metadata = thought_signature_metadata(part)
 
     events = build_function_call_events(id, name, args_map, raw_args, fc, metadata)
-    partial = %{id: id, name: name, arguments: args_map, raw_arguments: raw_args, metadata: metadata}
+
+    partial = %{
+      id: id,
+      name: name,
+      arguments: args_map,
+      raw_arguments: raw_args,
+      metadata: metadata
+    }
 
     state = %{
       state

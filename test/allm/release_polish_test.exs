@@ -79,22 +79,24 @@ defmodule ALLM.ReleasePolishTest do
   end
 
   describe "examples/run_all.exs registers Phase 17.3 scripts" do
-    test "11_edit_image.exs is on disk and has openai-only provider marker" do
+    test "11_edit_image.exs is on disk and lists openai in its provider marker" do
       path = Path.join(@project_root, "examples/11_edit_image.exs")
       assert File.exists?(path), "examples/11_edit_image.exs missing"
-      assert File.read!(path) =~ ~r/^#\s*Provider:\s*openai\s*$/m
+      assert File.read!(path) =~ ~r/^#\s*Provider:.*\bopenai\b/m
     end
 
-    test "12_vision_input.exs is on disk and has openai+anthropic provider marker" do
+    test "12_vision_input.exs is on disk and lists openai + anthropic in its provider marker" do
       path = Path.join(@project_root, "examples/12_vision_input.exs")
       assert File.exists?(path), "examples/12_vision_input.exs missing"
-      assert File.read!(path) =~ ~r/^#\s*Provider:\s*openai,\s*anthropic\s*$/m
+      contents = File.read!(path)
+      assert contents =~ ~r/^#\s*Provider:.*\bopenai\b/m
+      assert contents =~ ~r/^#\s*Provider:.*\banthropic\b/m
     end
 
-    test "13_image_variations.exs is on disk and has openai-only provider marker" do
+    test "13_image_variations.exs is on disk and lists openai in its provider marker" do
       path = Path.join(@project_root, "examples/13_image_variations.exs")
       assert File.exists?(path), "examples/13_image_variations.exs missing"
-      assert File.read!(path) =~ ~r/^#\s*Provider:\s*openai\s*$/m
+      assert File.read!(path) =~ ~r/^#\s*Provider:.*\bopenai\b/m
     end
 
     test "run_all.exs glob picks up two-digit numbered scripts" do

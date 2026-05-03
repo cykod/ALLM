@@ -74,7 +74,7 @@ defmodule ALLM.Providers.AnthropicLiveTest do
     events = Enum.to_list(stream)
 
     text_deltas = Enum.filter(events, &match?({:text_delta, _}, &1))
-    assert length(text_deltas) >= 1
+    assert text_deltas != []
 
     completed = Enum.filter(events, &match?({:message_completed, _}, &1))
     assert length(completed) == 1

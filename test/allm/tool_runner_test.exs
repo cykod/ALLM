@@ -3,7 +3,6 @@ defmodule ALLM.ToolRunnerTest do
 
   alias ALLM.{Engine, Event, Message, Tool, ToolCall, ToolRunner}
   alias ALLM.Error.{EngineError, ToolError}
-  alias ALLM.ToolExecutor.Default, as: DefaultToolExecutor
 
   doctest ToolRunner
 
@@ -1673,7 +1672,7 @@ defmodule ALLM.ToolRunnerTest do
         def execute(%ALLM.Tool{name: "boom"}, _args, _opts), do: raise("closure-raise")
 
         def execute(%ALLM.Tool{} = tool, args, opts) do
-          DefaultToolExecutor.execute(tool, args, opts)
+          ALLM.ToolExecutor.Default.execute(tool, args, opts)
         end
       end
 

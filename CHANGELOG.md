@@ -1,3 +1,20 @@
+## [BUG] Fix 3 failing tests + lint cleanup post-Phase-16 Gemini
+*Sunday, May 3rd at 1pm*
+Three test failures from post-Phase-16 drift: README test pinned to the renamed 
+'## Getting Started' section (now '## Hello, ALLM'), and two 
+release_polish_test markers asserting strict 'openai'-only / 'openai, 
+anthropic'-only Provider lines on examples 11/12 that Phase 16 widened with 
+gemini. Updated the README test to track the new section heading and relaxed 
+the marker regexes to word-boundary substring matches so additional providers 
+don't break them. Also formatted lib/allm/providers/gemini.ex, replaced four 
+'length(x) >= 1' / '== 1' credo warnings with empty-list comparisons in the 
+live/vision test files, sigil-quoted three readability hits, and cleaned the 
+unused-alias warning in tool_runner_test.exs by inlining the nested-module 
+reference. Full suite now 2201 tests / 0 failures, mix format clean, credo down 
+to 10 advisory design suggestions (no warnings).
+
+---
+
 ## [FEAT] Phase 16: Gemini provider (chat + streaming + tools + vision + images) live-validated
 *Sunday, May 3rd at 11am*
 Ships ALLM.Providers.Gemini and ALLM.Providers.Gemini.Images across six 

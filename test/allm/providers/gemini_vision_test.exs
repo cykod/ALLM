@@ -81,7 +81,7 @@ defmodule ALLM.Providers.GeminiVisionTest do
              ]
     end
 
-    test "ImagePart with mime_type \"image/jpeg\" sets inlineData.mimeType = \"image/jpeg\"",
+    test ~s(ImagePart with mime_type "image/jpeg" sets inlineData.mimeType = "image/jpeg"),
          %{stub: stub} do
       body_ok = Fx.generate_content(:happy_text)
       parent = self()
@@ -499,7 +499,7 @@ defmodule ALLM.Providers.GeminiVisionTest do
       events = Enum.to_list(stream)
       assert match?({:message_started, _}, hd(events))
       text_deltas = Enum.filter(events, &match?({:text_delta, _}, &1))
-      assert length(text_deltas) >= 1
+      assert text_deltas != []
       assert match?({:message_completed, _}, List.last(events))
     end
 

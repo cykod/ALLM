@@ -833,7 +833,7 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
       assert is_integer(usage.output_tokens) and usage.output_tokens > 0
     end
 
-    test "options[:output_format] = \"webp\" → response.images[0].mime_type == \"image/webp\"",
+    test ~s(options[:output_format] = "webp" → response.images[0].mime_type == "image/webp"),
          %{stub: stub} do
       body = recorded("generate_gpt_image_1_happy.json") |> drop_comment()
       Req.Test.stub(stub, fn conn -> respond_json(conn, 200, body) end)
@@ -850,7 +850,7 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
       assert {:ok, %ImageResponse{images: [%Image{mime_type: "image/webp"}]}} = call(stub, req)
     end
 
-    test "options[:output_format] = \"jpeg\" → response.images[0].mime_type == \"image/jpeg\"",
+    test ~s(options[:output_format] = "jpeg" → response.images[0].mime_type == "image/jpeg"),
          %{stub: stub} do
       body = recorded("generate_gpt_image_1_happy.json") |> drop_comment()
       Req.Test.stub(stub, fn conn -> respond_json(conn, 200, body) end)

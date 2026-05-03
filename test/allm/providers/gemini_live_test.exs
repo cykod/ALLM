@@ -80,7 +80,7 @@ defmodule ALLM.Providers.GeminiLiveTest do
     events = Enum.to_list(stream)
 
     text_deltas = Enum.filter(events, &match?({:text_delta, _}, &1))
-    assert length(text_deltas) >= 1
+    assert text_deltas != []
 
     completed = Enum.filter(events, &match?({:message_completed, _}, &1))
     assert length(completed) == 1
@@ -173,6 +173,6 @@ defmodule ALLM.Providers.GeminiLiveTest do
     {:ok, response} = ALLM.generate_image(engine, request)
 
     assert %ALLM.ImageResponse{} = response
-    assert length(response.images) >= 1
+    assert response.images != []
   end
 end
