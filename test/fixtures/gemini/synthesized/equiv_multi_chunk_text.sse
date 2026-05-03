@@ -1,0 +1,7 @@
+: Synthesized for Phase 16.2 stream-equivalence pair 2: multi-chunk text streaming
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"hello "}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"there"}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5},"modelVersion":"gemini-2.5-flash"}
+

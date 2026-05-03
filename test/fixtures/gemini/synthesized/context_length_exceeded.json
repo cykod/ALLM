@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — 400 INVALID_ARGUMENT carrying the substring marker for context-window-exceeded (Decision #15).",
+  "error": {
+    "code": 400,
+    "message": "The input token count exceeds the maximum number of tokens allowed for this model.",
+    "status": "INVALID_ARGUMENT"
+  }
+}

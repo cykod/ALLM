@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — 404 NOT_FOUND (model not found).",
+  "error": {
+    "code": 404,
+    "message": "models/gemini-not-real is not found for API version v1beta, or is not supported for generateContent.",
+    "status": "NOT_FOUND"
+  }
+}

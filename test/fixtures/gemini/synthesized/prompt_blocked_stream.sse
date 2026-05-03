@@ -1,0 +1,4 @@
+: Synthesized for Phase 16.2 — first SSE event carries promptFeedback.blockReason
+: Decision #9 — emits {:error, %AdapterError{reason: :content_filter}} terminator
+data: {"promptFeedback":{"blockReason":"SAFETY"},"modelVersion":"gemini-2.5-flash"}
+

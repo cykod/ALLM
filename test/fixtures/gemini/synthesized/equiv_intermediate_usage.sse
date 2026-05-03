@@ -1,0 +1,6 @@
+: Synthesized for Phase 16.2 stream-equivalence pair 7: usageMetadata on intermediate chunks (Decision #12)
+: collector overwrites-on-read; final usage value is what matters
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"x"}]},"index":0}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1,"totalTokenCount":3},"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"y"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":2,"totalTokenCount":4},"modelVersion":"gemini-2.5-flash"}
+

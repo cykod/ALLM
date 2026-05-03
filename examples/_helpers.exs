@@ -21,6 +21,11 @@ defmodule ExamplesHelpers do
   export them per script.
   """
 
+  # Per-provider rows. The optional `:default_temperature` field (Phase 16.6 /
+  # Decision #20) lets a provider opt out of the OpenAI/Anthropic-friendly
+  # `temperature: 0` baseline; Google explicitly recommends `1.0` for Gemini 3.
+  # Rows that omit the key inherit the `0` default in `engine/1` — caller
+  # `temperature:` overrides still win.
   @providers %{
     "openai" => %{
       adapter: ALLM.Providers.OpenAI,
@@ -37,6 +42,15 @@ defmodule ExamplesHelpers do
       key_env: "ANTHROPIC_API_KEY",
       image_adapter: nil,
       image_default_model: nil
+    },
+    "gemini" => %{
+      adapter: ALLM.Providers.Gemini,
+      default_model: "gemini-3-flash-preview",
+      vision_default_model: "gemini-3-flash-preview",
+      key_env: "GEMINI_API_KEY",
+      image_adapter: ALLM.Providers.Gemini.Images,
+      image_default_model: "gemini-3.1-flash-image-preview",
+      default_temperature: 1.0
     }
   }
 
@@ -62,15 +76,39 @@ defmodule ExamplesHelpers do
 
     model = System.get_env("ALLM_MODEL", base_model)
 
+    # Phase 16.6 / Decision #20 — provider row may declare a `:default_temperature`
+    # (Gemini sets `1.0` per Google's recommendation). Absent → `0` (the historic
+    # OpenAI/Anthropic-friendly baseline). Caller-supplied `params:` still wins,
+    # but `Keyword.merge` SHALLOW-replaces the whole `:params` map; we deep-merge
+    # the `:params` map below so a caller passing `params: %{max_tokens: 100}`
+    # (without a `temperature` key) preserves the row's `default_temperature`
+    # rather than silently losing it. Phase 16.6 retro Finding 3.
+    default_temperature = Map.get(row, :default_temperature, 0)
+
     base = [
       adapter: adapter,
       model: model,
       tool_executor: ALLM.ToolExecutor.Default,
       tool_result_encoder: ALLM.ToolResultEncoder.JSON,
-      params: %{temperature: 0}
+      params: %{temperature: default_temperature}
     ]
 
-    ALLM.Engine.new(Keyword.merge(base, extra_opts))
+    ALLM.Engine.new(merge_with_params(base, extra_opts))
+  end
+
+  # Deep-merge for the `:params` map only — every other keyword key is
+  # shallow-replaced as `Keyword.merge` would. Public test seam for the
+  # Decision #20 invariant (Phase 16.6 retro Finding 3).
+  @doc false
+  def merge_with_params(base, extra_opts) do
+    base_params = Keyword.get(base, :params, %{})
+    extra_params = Keyword.get(extra_opts, :params, %{})
+
+    merged_params = Map.merge(base_params, extra_params)
+
+    base
+    |> Keyword.merge(extra_opts)
+    |> Keyword.put(:params, merged_params)
   end
 
   @doc """
@@ -89,6 +127,7 @@ defmodule ExamplesHelpers do
   def image_engine(extra_opts \\ []) do
     provider = active_provider()
     row = lookup_provider_row()
+
     %{key_env: key_env, image_adapter: image_adapter, image_default_model: image_default_model} =
       row
 

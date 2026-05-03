@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — 400 INVALID_ARGUMENT, generic.",
+  "error": {
+    "code": 400,
+    "message": "Invalid value at 'contents[0].parts[0].text' (string).",
+    "status": "INVALID_ARGUMENT"
+  }
+}

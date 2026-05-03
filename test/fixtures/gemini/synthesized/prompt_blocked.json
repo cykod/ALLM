@@ -1,0 +1,14 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — promptFeedback.blockReason path (Decision #9). 200 with no candidates.",
+  "promptFeedback": {
+    "blockReason": "SAFETY",
+    "safetyRatings": [
+      {
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "probability": "HIGH",
+        "blocked": true
+      }
+    ]
+  },
+  "modelVersion": "gemini-2.5-flash"
+}

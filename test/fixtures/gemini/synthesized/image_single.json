@@ -1,0 +1,26 @@
+{
+  "_comment": "Synthesized for Phase 16.5 — single inlineData candidate from generateContent + responseModalities=[TEXT, IMAGE]. Schema per https://ai.google.dev/api/generate-content (accessed 2026-05-01). Replaced by recorded fixture when scripts/record_gemini_chat_fixtures.exs is run with GEMINI_API_KEY against a Gemini image-preview model.",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "inlineData": {
+              "mimeType": "image/png",
+              "data": "iVBORw0KGgo="
+            }
+          }
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 12,
+    "candidatesTokenCount": 1,
+    "totalTokenCount": 13
+  },
+  "modelVersion": "gemini-3.1-flash-image-preview"
+}

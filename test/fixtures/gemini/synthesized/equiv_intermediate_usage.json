@@ -1,0 +1,12 @@
+{
+  "_comment": "Synthesized for Phase 16.2 stream-equivalence pair 7 — final usage matches the LAST intermediate usage seen on the wire",
+  "candidates": [
+    {
+      "content": {"role": "model", "parts": [{"text": "xy"}]},
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 2, "totalTokenCount": 4},
+  "modelVersion": "gemini-2.5-flash"
+}

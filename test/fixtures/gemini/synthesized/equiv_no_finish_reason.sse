@@ -1,0 +1,3 @@
+: Synthesized for Phase 16.2 stream-equivalence pair 10: no finishReason on any chunk (Finch :done synthesizes message_completed)
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+

@@ -1,0 +1,19 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — usageMetadata uses responseTokenCount fallback (Decision #11).",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [{ "text": "ok" }]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 5,
+    "responseTokenCount": 1,
+    "totalTokenCount": 6
+  },
+  "modelVersion": "gemini-2.5-flash"
+}

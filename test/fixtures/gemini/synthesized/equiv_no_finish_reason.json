@@ -1,0 +1,10 @@
+{
+  "_comment": "Synthesized for Phase 16.2 stream-equivalence pair 10 — no finishReason; non-streaming twin omits it too. parse_finish_reason(nil) returns {nil, nil}.",
+  "candidates": [
+    {
+      "content": {"role": "model", "parts": [{"text": "done"}]},
+      "index": 0
+    }
+  ],
+  "modelVersion": "gemini-2.5-flash"
+}

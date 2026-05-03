@@ -1,6 +1,6 @@
 # examples/11_edit_image.exs
 #
-# Provider: openai
+# Provider: openai, gemini
 #
 # Demonstrates: a non-streaming `ALLM.edit_image/4` call against
 #               `gpt-image-1` with a real 256×256 base image. The
@@ -32,7 +32,11 @@
 Application.ensure_all_started(:allm)
 Code.require_file("_helpers.exs", __DIR__)
 
-engine = ExamplesHelpers.image_engine(model: "gpt-image-1")
+engine =
+  case System.get_env("ALLM_PROVIDER", "openai") do
+    "gemini" -> ExamplesHelpers.image_engine()
+    _ -> ExamplesHelpers.image_engine(model: "gpt-image-1")
+  end
 
 base_png = File.read!(Path.join(__DIR__, "fixtures/kestrel_256.png"))
 base = ALLM.Image.from_binary(base_png, "image/png")
@@ -43,25 +47,33 @@ case ALLM.edit_image(engine, base, "add a small red dot in the center",
      ) do
   {:ok, %ALLM.ImageResponse{images: [image | _] = images, usage: usage}} ->
     case ALLM.Image.to_binary(image) do
-      {:ok, <<137, 80, 78, 71, _::binary>> = bytes} ->
-        path =
-          Path.join(System.tmp_dir!(), "11_edit_image_#{System.os_time(:millisecond)}.png")
+      {:ok, bytes} when is_binary(bytes) ->
+        ext =
+          case bytes do
+            <<137, 80, 78, 71, _::binary>> -> "png"
+            <<255, 216, 255, _::binary>> -> "jpg"
+            _ -> nil
+          end
 
-        File.write!(path, bytes)
+        if ext do
+          path =
+            Path.join(System.tmp_dir!(), "11_edit_image_#{System.os_time(:millisecond)}.#{ext}")
 
-        IO.puts(
-          "OK: edit_image — images=#{length(images)} usage.images=#{usage.images} " <>
-            "bytes=#{byte_size(bytes)} path=#{path}"
-        )
+          File.write!(path, bytes)
 
-      {:ok, other} ->
-        IO.puts(
-          :stderr,
-          "FAIL: edited image bytes did not start with PNG signature; got prefix=" <>
-            inspect(:binary.part(other, 0, min(8, byte_size(other))))
-        )
+          IO.puts(
+            "OK: edit_image — images=#{length(images)} usage.images=#{usage.images} " <>
+              "bytes=#{byte_size(bytes)} path=#{path}"
+          )
+        else
+          IO.puts(
+            :stderr,
+            "FAIL: edited image bytes did not start with PNG/JPEG signature; got prefix=" <>
+              inspect(:binary.part(bytes, 0, min(8, byte_size(bytes))))
+          )
 
-        System.halt(1)
+          System.halt(1)
+        end
 
       {:error, reason} ->
         IO.puts(:stderr, "FAIL: ALLM.Image.to_binary/1 returned error #{inspect(reason)}")

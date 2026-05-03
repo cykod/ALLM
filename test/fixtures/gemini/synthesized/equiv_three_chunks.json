@@ -1,0 +1,12 @@
+{
+  "_comment": "Synthesized for Phase 16.2 stream-equivalence pair 6 — three text chunks aggregated",
+  "candidates": [
+    {
+      "content": {"role": "model", "parts": [{"text": "a b c"}]},
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 3, "totalTokenCount": 6},
+  "modelVersion": "gemini-2.5-flash"
+}

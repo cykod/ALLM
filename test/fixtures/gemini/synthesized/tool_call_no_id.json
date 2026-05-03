@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthesized for Phase 16.3 — functionCall without id (Gemini wire docs say id is optional). Decoder synthesizes a deterministic id from name+args hash, mirroring Anthropic's id-or-generate behaviour at lib/allm/providers/anthropic.ex:1056-1067.",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {"functionCall": {"name": "set_color", "args": {"color": "blue"}}}
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 2, "totalTokenCount": 6},
+  "modelVersion": "gemini-2.5-flash"
+}

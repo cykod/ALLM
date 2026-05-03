@@ -1,0 +1,19 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — multi-turn assistant follow-up. Will be replaced by recorded fixture.",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [{ "text": "It is 4." }]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 24,
+    "candidatesTokenCount": 4,
+    "totalTokenCount": 28
+  },
+  "modelVersion": "gemini-2.5-flash"
+}

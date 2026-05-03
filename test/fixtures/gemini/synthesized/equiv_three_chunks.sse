@@ -1,0 +1,9 @@
+: Synthesized for Phase 16.2 stream-equivalence pair 6: three text chunks split across SSE events
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"a "}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"b "}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"c"}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":3,"totalTokenCount":6},"modelVersion":"gemini-2.5-flash"}
+

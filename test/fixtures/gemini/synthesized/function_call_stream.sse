@@ -1,0 +1,4 @@
+: Synthesized for Phase 16.2 — single SSE event carrying a functionCall part (Phase 16.3 boundary)
+: Decision #14 override: STOP + functionCall parts → finish_reason :tool_calls
+data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"fc_1","name":"get_weather","args":{"city":"Boston"}}}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":4,"totalTokenCount":11},"modelVersion":"gemini-2.5-flash"}
+

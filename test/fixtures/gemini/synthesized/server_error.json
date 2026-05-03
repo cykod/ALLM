@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — 500 INTERNAL.",
+  "error": {
+    "code": 500,
+    "message": "An internal error has occurred.",
+    "status": "INTERNAL"
+  }
+}

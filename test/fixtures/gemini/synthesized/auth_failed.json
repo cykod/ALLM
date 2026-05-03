@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — 401 UNAUTHENTICATED error envelope.",
+  "error": {
+    "code": 401,
+    "message": "API key not valid. Please pass a valid API key.",
+    "status": "UNAUTHENTICATED"
+  }
+}

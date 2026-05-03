@@ -1,0 +1,3 @@
+: Synthesized for Phase 16.2 stream-equivalence pair 4: SAFETY finishReason with raw preserved
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"partial"}]},"finishReason":"SAFETY","index":0}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":1,"totalTokenCount":5},"modelVersion":"gemini-2.5-flash"}
+

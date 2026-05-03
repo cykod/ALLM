@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — 403 PERMISSION_DENIED error envelope.",
+  "error": {
+    "code": 403,
+    "message": "The caller does not have permission.",
+    "status": "PERMISSION_DENIED"
+  }
+}

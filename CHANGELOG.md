@@ -1,3 +1,83 @@
+## [FEAT] Phase 16: Gemini provider (chat + streaming + tools + vision + images) live-validated
+*Sunday, May 3rd at 11am*
+Ships ALLM.Providers.Gemini and ALLM.Providers.Gemini.Images across six 
+sub-phases (16.1–16.6) per steering/GEMINI_DESIGN.md — chat, streaming SSE 
+via Finch, tool calling round-trip, multimodal input, native image 
+generation/edit, and examples wiring. Spec amendments to §32.1 (bundled 
+adapters) and §35.7 (bundled-adapter rule) land alongside. Live 
+ALLM_PROVIDER=gemini mix run examples/run_all.exs now exits 0 with all 12 
+applicable scripts green (10 chat + image-gen + edit + vision-in; 
+13_image_variations correctly skipped); RUN_OUTPUT_GEMINI.md captured. Live 
+validation surfaced four real bugs the wire-stub tests missed: (1) Gemini's 
+OpenAPI-3.0 schema subset rejects 'additionalProperties' — added 
+sanitize_schema/1 to strip it (and $schema) recursively from tool params + 
+responseSchema; (2) :tool message rewrite was sending empty 
+functionResponse.name — added build_tool_call_name_lookup/1 to resolve name 
+from prior assistant turn's tool_calls metadata; (3) Gemini 3 requires 
+thoughtSignature to be echoed on functionCall parts — captured on decode 
+(Decode.decode_function_call/2 + streaming handle_function_call_part/3) and 
+replayed on tool_call_to_function_call_part/1; (4) StreamCollector silently 
+dropped :tool_call_completed.metadata — preserved cleanly now 
+(cross-provider, additive). Includes 79 image tests, 26 stream tests, 26 tool 
+tests, 21 vision tests, 12 wire tests, full conformance harness against 
+ImageAdapterConformance, gemini_live_test (5 :live tagged), 
+examples_helpers_test (Decision #20 caller-override invariant). Coverage: 
+Gemini 90.78%, Gemini.Images 92.42%, Gemini.Decode 100%, GeminiHeaders 100%. 
+mix credo --strict and mix dialyzer green; full suite 2201 tests with 2 
+pre-existing failures (README + intermittent Anthropic stream flake) unrelated 
+to this commit.
+
+---
+
+## [FEAT] Phase 16.6 — Gemini examples wiring + conformance + live-test scaffolding
+*Friday, May 1st at 8pm*
+Final Phase 16 batch wires Gemini into the provider-neutral examples runner
+and adds the conformance + live-test gates. Adds the `"gemini"` row to
+`examples/_helpers.exs` `@providers` map (`adapter: ALLM.Providers.Gemini`,
+`default_model: "gemini-3-flash-preview"`,
+`image_adapter: ALLM.Providers.Gemini.Images`,
+`image_default_model: "gemini-3.1-flash-image-preview"`,
+`default_temperature: 1.0`). Adds `:default_temperature` per-provider field
+support in `engine/1` (Decision #20) — Gemini defaults to `1.0` per Google's
+recommendation; OpenAI / Anthropic rows omit the key and inherit the
+historic `0` baseline; caller-supplied `params: %{temperature: ...}` still
+wins, AND a caller passing `params:` with non-temperature keys (e.g.
+`%{max_tokens: 100}`) now correctly preserves the row's `default_temperature`
+via deep-merge of the `:params` map (`merge_with_params/2`) — the prior
+shallow `Keyword.merge` would have silently dropped the default (Phase
+16.6 retro Finding 3; verified by `test/allm/examples_helpers_test.exs`).
+Adds `test/allm/providers/gemini_live_test.exs` (`@moduletag
+:live_gemini`, excluded by default, skips entirely when `GEMINI_API_KEY`
+is unset) with five `@tag :live` smoke tests covering core scenarios
+(text/stream/tools/vision/image-out — example scripts 01/02/03/06/10);
+the remaining example scripts (04/05/07/08/09) are covered by the live
+BLOCKING `run_all.exs` gate, mirroring the OpenAI / Anthropic live-test
+pattern.
+Adds `conformance/test/gemini_conformance_test.exs` running the full
+9-case `ALLM.Test.ImageAdapterConformance` against
+`ALLM.Providers.Gemini.Images`, plus explicit `supported_operations() ==
+[:generate, :edit]` and `:variation`-rejection assertions (11 tests, 0
+failures). Live `ALLM_PROVIDER=gemini mix run examples/run_all.exs`
+validation **deferred** — implementer environment lacks `GEMINI_API_KEY`;
+will be re-validated by maintainer with key. The synthesized chat / stream
+/ image fixtures from Phases 16.1–16.5 cover the implementation-side wire
+shapes; the live re-record gate per CLAUDE.md applies, and
+`examples/RUN_OUTPUT_GEMINI.md` is intentionally NOT created in this
+commit per the "snapshot regen-or-skip" rule. Model-string verification
+against the live `models?key=$GEMINI_API_KEY` listing is also deferred for
+the same reason; the design-specified preview names ship verbatim. Phase
+16.6 deviates from the design in one place: `ALLM.Test.AdapterConformance`
+and `ALLM.Test.StreamAdapterConformance` are NOT wired against
+`ALLM.Providers.Gemini` — both harnesses drive via `adapter_opts[:script]`
+which the real chat adapter does not implement (parallel to OpenAI /
+Anthropic, which also don't ship those harness invocations). The
+`@moduledoc` of the new conformance test documents this. `mix test`
+remains at 1 pre-existing failure (`readme_getting_started_test.exs`,
+parallel-task issue, untouched per task brief). `cd conformance && mix
+test` is fully green (77 tests, 0 failures).
+
+---
+
 ## [BUG] Stamp engine model on image requests; bundle real PNG fixture for examples
 *Friday, May 1st at 5pm*
 Fixes ALLM.edit_image/4 (and would-be variations) failing with OpenAI HTTP 400 

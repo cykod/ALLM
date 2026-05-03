@@ -89,11 +89,14 @@ defmodule ALLM.MixProject do
           ALLM.Providers.OpenAI,
           ALLM.Providers.OpenAI.Images,
           ALLM.Providers.Anthropic,
+          ALLM.Providers.Gemini,
+          ALLM.Providers.Gemini.Images,
           ALLM.Providers.Fake,
           ALLM.Providers.Fake.Script,
           ALLM.Providers.FakeImages,
           ALLM.Providers.Support.SSE,
           ALLM.Providers.Support.OpenAIHeaders,
+          ALLM.Providers.Support.GeminiHeaders,
           ALLM.Providers.Support.ImageMime
         ],
         Defaults: [

@@ -1,0 +1,6 @@
+: Synthesized for Phase 16.2 — leading happy chunks before a terminal_status injected by FinchStub
+: shape: two text deltas; the test appends {:terminal_status, 503} or 429
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"par"}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"tial"}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+

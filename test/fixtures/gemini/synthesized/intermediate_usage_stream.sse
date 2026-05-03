@@ -1,0 +1,8 @@
+: Synthesized for Phase 16.2 — usageMetadata appears on intermediate chunks (Decision #12)
+: collector overwrites-on-read so the LAST usage seen wins
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"a"}]},"index":0}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":1,"totalTokenCount":5},"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"b"}]},"index":0}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":6},"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":3,"totalTokenCount":7},"modelVersion":"gemini-2.5-flash"}
+

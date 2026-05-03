@@ -1,0 +1,12 @@
+{
+  "_comment": "Synthesized for Phase 16.2 stream-equivalence pair 1 — non-streaming twin of equiv_simple_text.sse",
+  "candidates": [
+    {
+      "content": {"role": "model", "parts": [{"text": "ok"}]},
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3},
+  "modelVersion": "gemini-2.5-flash"
+}

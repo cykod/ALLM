@@ -1,0 +1,3 @@
+: Synthesized for Phase 16.2 stream-equivalence pair 8: single functionCall part → finish_reason :tool_calls
+data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"fc_a","name":"set_color","args":{"color":"red"}}}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":6,"candidatesTokenCount":3,"totalTokenCount":9},"modelVersion":"gemini-2.5-flash"}
+

@@ -1,0 +1,11 @@
+: Synthesized for Phase 16.2 — Gemini streamGenerateContent SSE happy text
+: per https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent
+: shape: three text-bearing chunks then a final chunk with finishReason and usageMetadata
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"hel"}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"lo "}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"world"}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5},"modelVersion":"gemini-2.5-flash"}
+

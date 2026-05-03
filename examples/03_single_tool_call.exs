@@ -46,7 +46,7 @@ ok? =
   result.halted_reason == :completed and
     length(result.steps) == 2 and
     tool_messages != [] and
-    String.contains?(final_text, "sunny")
+    String.contains?(String.downcase(final_text), "sunny")
 
 unless ok? do
   IO.puts(

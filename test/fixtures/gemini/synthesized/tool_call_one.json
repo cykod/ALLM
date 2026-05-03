@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthesized for Phase 16.3 — single functionCall part with STOP finishReason; Decision #14 override path produces finish_reason :tool_calls",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {"functionCall": {"id": "fc_one", "name": "get_weather", "args": {"city": "Boston"}}}
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 4, "totalTokenCount": 11},
+  "modelVersion": "gemini-2.5-flash"
+}

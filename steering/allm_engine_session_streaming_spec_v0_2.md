@@ -1686,12 +1686,13 @@ ALLM does not depend on any other provider-layer library. It ships hand-written 
 
 ### 32.1 Initial bundled adapters
 
-v0.2 ships two first-party adapters, talking to each provider's API directly over `Req`:
+v0.2 / v0.3 ships three first-party chat adapters, talking to each provider's API directly over `Req`:
 
 - `ALLM.Providers.OpenAI` — OpenAI Chat Completions + Responses API
 - `ALLM.Providers.Anthropic` — Anthropic Messages API
+- `ALLM.Providers.Gemini` — Google Generative Language API (`generateContent` / `streamGenerateContent`)
 
-Both implement `ALLM.Adapter` and `ALLM.StreamAdapter`. Additional providers are opt-in and expected to live in separate packages using the same behaviours.
+All three implement `ALLM.Adapter` and `ALLM.StreamAdapter`. Additional providers are opt-in and expected to live in separate packages using the same behaviours.
 
 ### 32.2 Why no `req_llm` dependency
 
@@ -2036,10 +2037,15 @@ Assistant responses that contain images (rare today, but supported by some model
 
 ### 35.7 Provider adapters in v0.3
 
+**Bundled-adapter rule.** v0.3 bundles `ALLM.Providers.OpenAI.Images` and `ALLM.Providers.Gemini.Images`. Both implement `ALLM.ImageAdapter` against their provider's image-generation surface that **shares a translator with the same provider's chat surface** — OpenAI's `/v1/images/*` reuses prompt-text and base64 part shapes; Gemini-native image generation IS the chat surface (`generateContent` with `responseModalities`). Adapters covering wholly distinct image-only API surfaces — Imagen `:predict` (`imagen-4.0-*`), Stability, Replicate, fal.ai — are out of core and ship as separate Hex packages implementing the same `ALLM.ImageAdapter` behaviour. The principle is pragmatic, not architectural: in-tree adapters are the ones whose maintenance overlaps with their provider's already-bundled chat adapter.
+
+Concrete consequence: a future `ALLM.Providers.Gemini.Imagen` (covering Imagen `:predict`) is structurally identical to a bundled adapter — same behaviour, same `Engine.image_adapter` plug-in — but ships as a separate package because its translator does not amortize with `Gemini`'s chat translator.
+
 - **`ALLM.Providers.OpenAI.Images`** — wraps `/v1/images/generations`, `/v1/images/edits`, `/v1/images/variations`. Supports `dall-e-2`, `dall-e-3`, and `gpt-image-1`. `supported_operations/0` returns model-aware: `gpt-image-1` supports generate + edit; `dall-e-3` generate only; `dall-e-2` all three.
+- **`ALLM.Providers.Gemini.Images`** (Phase 16.5) — wraps `generateContent` with `responseModalities: ["TEXT", "IMAGE"]`. Supports `gemini-3.1-flash-image-preview` and successors. `supported_operations/0` returns `[:generate, :edit]`; `:variation` is rejected as `:unsupported_operation`. The translator delegates to `ALLM.Providers.Gemini.to_gemini_request_body/2`.
 - **No Anthropic image-generation adapter.** Anthropic does not offer image generation as of v0.3. The Anthropic chat adapter continues to accept `ALLM.ImagePart` inputs for vision.
 
-Third-party image providers (Stability, Replicate, Google Imagen, fal.ai) are out of core and are expected to ship as separate packages implementing `ALLM.ImageAdapter`.
+Third-party image providers (Stability, Replicate, Google Imagen `:predict`, fal.ai) remain out of core per the bundled-adapter rule above.
 
 ### 35.8 Testing
 

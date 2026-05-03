@@ -1,0 +1,4 @@
+: Synthesized for Phase 16.3 — single SSE event carrying two parallel functionCall parts
+: Decision #14 override: STOP + functionCall parts → finish_reason :tool_calls
+data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"fc_a","name":"get_weather","args":{"city":"Boston"}}},{"functionCall":{"id":"fc_b","name":"set_color","args":{"color":"red"}}}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":6,"totalTokenCount":15},"modelVersion":"gemini-2.5-flash"}
+

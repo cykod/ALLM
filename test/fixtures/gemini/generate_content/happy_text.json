@@ -1,0 +1,19 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — happy-path generateContent body. Schema per https://ai.google.dev/api/generate-content (accessed 2026-05-01). Will be replaced by recorded fixture when scripts/record_gemini_chat_fixtures.exs is run with GEMINI_API_KEY.",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [{ "text": "hello" }]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 9,
+    "candidatesTokenCount": 1,
+    "totalTokenCount": 10
+  },
+  "modelVersion": "gemini-2.5-flash"
+}

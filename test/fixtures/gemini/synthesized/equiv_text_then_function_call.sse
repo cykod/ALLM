@@ -1,0 +1,5 @@
+: Synthesized for Phase 16.2 stream-equivalence pair 9: leading text chunk then functionCall part
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"checking weather"}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"fc_b","name":"get_weather","args":{"city":"Boston"}}}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":5,"totalTokenCount":13},"modelVersion":"gemini-2.5-flash"}
+

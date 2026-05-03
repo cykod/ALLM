@@ -1,0 +1,12 @@
+{
+  "_comment": "Synthesized for Phase 16.2 stream-equivalence pair 3 — MAX_TOKENS",
+  "candidates": [
+    {
+      "content": {"role": "model", "parts": [{"text": "truncated"}]},
+      "finishReason": "MAX_TOKENS",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1, "totalTokenCount": 6},
+  "modelVersion": "gemini-2.5-flash"
+}

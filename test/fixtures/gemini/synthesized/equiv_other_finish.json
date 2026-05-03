@@ -1,0 +1,12 @@
+{
+  "_comment": "Synthesized for Phase 16.2 stream-equivalence pair 11 — NO_IMAGE → :other; raw preserved",
+  "candidates": [
+    {
+      "content": {"role": "model", "parts": [{"text": "text only"}]},
+      "finishReason": "NO_IMAGE",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2, "totalTokenCount": 5},
+  "modelVersion": "gemini-2.5-flash"
+}

@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — 429 RESOURCE_EXHAUSTED.",
+  "error": {
+    "code": 429,
+    "message": "Resource has been exhausted (e.g. check quota).",
+    "status": "RESOURCE_EXHAUSTED"
+  }
+}

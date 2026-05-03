@@ -254,14 +254,15 @@ defmodule ALLM.StreamCollector do
   def apply_event(
         %__MODULE__{} = state,
         {:tool_call_completed,
-         %{id: id, name: name, arguments: arguments, raw_arguments: raw_arguments}}
+         %{id: id, name: name, arguments: arguments, raw_arguments: raw_arguments} = payload}
       )
       when is_binary(id) and is_binary(name) and is_map(arguments) and is_binary(raw_arguments) do
     tool_call = %ToolCall{
       id: id,
       name: name,
       arguments: arguments,
-      raw_arguments: raw_arguments
+      raw_arguments: raw_arguments,
+      metadata: Map.get(payload, :metadata, %{})
     }
 
     %{

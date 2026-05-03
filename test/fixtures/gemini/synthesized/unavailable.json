@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — 503 UNAVAILABLE.",
+  "error": {
+    "code": 503,
+    "message": "The service is currently unavailable.",
+    "status": "UNAVAILABLE"
+  }
+}

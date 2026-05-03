@@ -1,6 +1,6 @@
 # examples/10_generate_image.exs
 #
-# Provider: openai
+# Provider: openai, gemini
 #
 # Demonstrates: a non-streaming `ALLM.generate_image/3` call against
 #               `dall-e-2` (256x256). The response carries a single image
@@ -33,25 +33,33 @@ engine = ExamplesHelpers.image_engine()
 case ALLM.generate_image(engine, "a watercolor kestrel in flight", size: "256x256") do
   {:ok, %ALLM.ImageResponse{images: [image | _] = images, usage: usage}} ->
     case ALLM.Image.to_binary(image) do
-      {:ok, <<137, 80, 78, 71, _::binary>> = bytes} ->
-        path =
-          Path.join(System.tmp_dir!(), "10_generate_image_#{System.os_time(:millisecond)}.png")
+      {:ok, bytes} when is_binary(bytes) ->
+        ext =
+          case bytes do
+            <<137, 80, 78, 71, _::binary>> -> "png"
+            <<255, 216, 255, _::binary>> -> "jpg"
+            _ -> nil
+          end
 
-        File.write!(path, bytes)
+        if ext do
+          path =
+            Path.join(System.tmp_dir!(), "10_generate_image_#{System.os_time(:millisecond)}.#{ext}")
 
-        IO.puts(
-          "OK: generate_image — images=#{length(images)} usage.images=#{usage.images} " <>
-            "bytes=#{byte_size(bytes)} path=#{path}"
-        )
+          File.write!(path, bytes)
 
-      {:ok, other} ->
-        IO.puts(
-          :stderr,
-          "FAIL: generated image bytes did not start with PNG signature; got prefix=" <>
-            inspect(:binary.part(other, 0, min(8, byte_size(other))))
-        )
+          IO.puts(
+            "OK: generate_image — images=#{length(images)} usage.images=#{usage.images} " <>
+              "bytes=#{byte_size(bytes)} path=#{path}"
+          )
+        else
+          IO.puts(
+            :stderr,
+            "FAIL: generated image bytes did not start with PNG/JPEG signature; got prefix=" <>
+              inspect(:binary.part(bytes, 0, min(8, byte_size(bytes))))
+          )
 
-        System.halt(1)
+          System.halt(1)
+        end
 
       {:error, reason} ->
         IO.puts(:stderr, "FAIL: ALLM.Image.to_binary/1 returned error #{inspect(reason)}")

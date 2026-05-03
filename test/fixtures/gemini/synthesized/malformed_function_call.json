@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthesized for Phase 16.3 — MALFORMED_FUNCTION_CALL finishReason; Decision #14 maps to finish_reason :error with raw preserved",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {"text": ""}
+        ]
+      },
+      "finishReason": "MALFORMED_FUNCTION_CALL",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 0, "totalTokenCount": 5},
+  "modelVersion": "gemini-2.5-flash"
+}

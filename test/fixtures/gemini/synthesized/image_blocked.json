@@ -1,0 +1,7 @@
+{
+  "_comment": "Synthesized for Phase 16.5 — promptFeedback.blockReason on an image flow. Per Decision (Phase 16.5 design line 495), the image flow chooses to error rather than return empty content because image generation has no 'empty image' semantics.",
+  "promptFeedback": {
+    "blockReason": "SAFETY"
+  },
+  "modelVersion": "gemini-3.1-flash-image-preview"
+}

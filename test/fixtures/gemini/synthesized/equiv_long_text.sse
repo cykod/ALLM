@@ -1,0 +1,9 @@
+: Synthesized for Phase 16.2 stream-equivalence pair 12: longer text spread over four chunks
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"The "}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"quick "}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"brown "}]},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"fox"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":4,"totalTokenCount":8},"modelVersion":"gemini-2.5-flash"}
+

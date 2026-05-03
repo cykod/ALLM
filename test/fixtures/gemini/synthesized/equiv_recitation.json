@@ -1,0 +1,12 @@
+{
+  "_comment": "Synthesized for Phase 16.2 stream-equivalence pair 5 — RECITATION",
+  "candidates": [
+    {
+      "content": {"role": "model", "parts": [{"text": "some text"}]},
+      "finishReason": "RECITATION",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 2, "totalTokenCount": 6},
+  "modelVersion": "gemini-2.5-flash"
+}

@@ -1,6 +1,6 @@
 # examples/12_vision_input.exs
 #
-# Provider: openai, anthropic
+# Provider: openai, anthropic, gemini
 #
 # Demonstrates: a non-streaming `ALLM.generate/3` call with a multimodal
 #               user message — `[%ALLM.TextPart{}, %ALLM.ImagePart{}]`

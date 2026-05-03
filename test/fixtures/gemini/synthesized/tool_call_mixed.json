@@ -1,0 +1,18 @@
+{
+  "_comment": "Synthesized for Phase 16.3 — mixed text + functionCall parts; output_text preserves text content, finish_reason promotes to :tool_calls",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {"text": "checking weather"},
+          {"functionCall": {"id": "fc_mix", "name": "get_weather", "args": {"city": "Boston"}}}
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 5, "totalTokenCount": 13},
+  "modelVersion": "gemini-2.5-flash"
+}

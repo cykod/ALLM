@@ -1,0 +1,19 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — finishReason MAX_TOKENS path.",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [{ "text": "Lorem ipsum dolor sit amet" }]
+      },
+      "finishReason": "MAX_TOKENS",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 8,
+    "candidatesTokenCount": 16,
+    "totalTokenCount": 24
+  },
+  "modelVersion": "gemini-2.5-flash"
+}

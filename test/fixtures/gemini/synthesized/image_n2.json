@@ -1,0 +1,41 @@
+{
+  "_comment": "Synthesized for Phase 16.5 — n=2 response with two candidates each carrying one inlineData part. Pins the candidate-list walk in decode_image_response/4.",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "inlineData": {
+              "mimeType": "image/png",
+              "data": "iVBORw0KGgo="
+            }
+          }
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    },
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "inlineData": {
+              "mimeType": "image/png",
+              "data": "iVBORw0KGgoB"
+            }
+          }
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 1
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 12,
+    "candidatesTokenCount": 2,
+    "totalTokenCount": 14
+  },
+  "modelVersion": "gemini-3.1-flash-image-preview"
+}

@@ -1,0 +1,18 @@
+{
+  "_comment": "Synthesized for Phase 16.2 stream-equivalence pair 9 — text + functionCall combined",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {"text": "checking weather"},
+          {"functionCall": {"id": "fc_b", "name": "get_weather", "args": {"city": "Boston"}}}
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 5, "totalTokenCount": 13},
+  "modelVersion": "gemini-2.5-flash"
+}

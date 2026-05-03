@@ -1,0 +1,19 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — finishReason SAFETY path (Decision #14 row).",
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [{ "text": "" }]
+      },
+      "finishReason": "SAFETY",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 12,
+    "candidatesTokenCount": 0,
+    "totalTokenCount": 12
+  },
+  "modelVersion": "gemini-2.5-flash"
+}

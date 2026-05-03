@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized for Phase 16.1 — 504 DEADLINE_EXCEEDED.",
+  "error": {
+    "code": 504,
+    "message": "Deadline expired before operation could complete.",
+    "status": "DEADLINE_EXCEEDED"
+  }
+}
