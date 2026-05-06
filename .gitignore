@@ -29,3 +29,4 @@ reviews/
 
 erl_crash.dump
 *.tar
+.claude/settings.local.json
