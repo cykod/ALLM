@@ -35,7 +35,7 @@ defmodule ALLM.Event do
   the StreamCollector treats absence as a no-op merge.
   """
 
-  alias ALLM.{ChatResult, Message, Response, Thread}
+  alias ALLM.{ChatResult, Message, Response, Thread, ToolCall}
 
   @type t ::
           {:message_started, %{message: Message.t()}}
@@ -72,7 +72,8 @@ defmodule ALLM.Event do
              %{
                response: Response.t(),
                thread: Thread.t(),
-               mode: :auto | :manual
+               mode: :auto | :manual,
+               manual_tool_calls: [ToolCall.t()]
              }}
           | {:chat_completed, %{result: ChatResult.t()}}
           | {:raw_chunk, term()}
@@ -396,34 +397,77 @@ defmodule ALLM.Event do
   @doc """
   Build a `:step_completed` event with the response and the updated thread.
 
-  Equivalent to `step_completed(response, thread, :auto)`. The payload's
+  Equivalent to `step_completed(response, thread, :auto, [])`. The payload's
   `:mode` key carries the orchestration mode the step ran under so that
   reducers (`StreamCollector`'s `:step_completed` fold, multi-turn chat
   orchestrators) can produce StepResult metadata identical to the
   non-streaming `Chat.step/3` path. See Phase 7 retro F1+F3.
 
+  The payload also carries `:manual_tool_calls` defaulting to `[]` (Phase
+  18.3 — per-tool manual partition). When per-tool manual is in effect, the
+  list contains the manual-bucket tool calls; otherwise it is empty. See
+  `step_completed/4`.
+
   ## Examples
 
       iex> ALLM.Event.step_completed(%ALLM.Response{output_text: "ok"}, %ALLM.Thread{messages: []})
-      {:step_completed, %{response: %ALLM.Response{output_text: "ok"}, thread: %ALLM.Thread{messages: []}, mode: :auto}}
+      {:step_completed, %{response: %ALLM.Response{output_text: "ok"}, thread: %ALLM.Thread{messages: []}, mode: :auto, manual_tool_calls: []}}
   """
   @spec step_completed(Response.t(), Thread.t()) :: t()
   def step_completed(%Response{} = response, %Thread{} = thread),
-    do: step_completed(response, thread, :auto)
+    do: step_completed(response, thread, :auto, [])
 
   @doc """
   Build a `:step_completed` event with the response, the updated thread,
   and the orchestration mode (`:auto` or `:manual`) the step ran under.
 
+  Equivalent to `step_completed(response, thread, mode, [])` — the payload's
+  `:manual_tool_calls` key defaults to `[]`. See `step_completed/4` to
+  populate the per-tool manual bucket.
+
   ## Examples
 
       iex> ALLM.Event.step_completed(%ALLM.Response{output_text: "ok"}, %ALLM.Thread{messages: []}, :manual)
-      {:step_completed, %{response: %ALLM.Response{output_text: "ok"}, thread: %ALLM.Thread{messages: []}, mode: :manual}}
+      {:step_completed, %{response: %ALLM.Response{output_text: "ok"}, thread: %ALLM.Thread{messages: []}, mode: :manual, manual_tool_calls: []}}
   """
   @spec step_completed(Response.t(), Thread.t(), :auto | :manual) :: t()
   def step_completed(%Response{} = response, %Thread{} = thread, mode)
       when mode in [:auto, :manual],
-      do: {:step_completed, %{response: response, thread: thread, mode: mode}}
+      do: step_completed(response, thread, mode, [])
+
+  @doc """
+  Build a `:step_completed` event with the response, the updated thread,
+  the orchestration mode, and the per-tool manual bucket (Phase 18.3).
+
+  When `mode: :auto` and any called tool has `manual: true`, the chat
+  orchestrator partitions a turn's tool calls into auto + manual buckets;
+  the auto bucket runs eagerly via `ToolRunner` (with corresponding
+  `:tool_execution_*` events) and `manual_tool_calls` carries the manual
+  subset for caller resolution. The list is empty for pure-auto turns and
+  for `mode: :manual` turns (whole-loop manual surfaces calls via
+  `response.tool_calls` instead — see Decision #1 in PHASE_18_DESIGN.md).
+
+  `ALLM.StreamCollector.apply_event/2`'s `:step_completed` fold extracts
+  the list and merges it onto `state.metadata.manual_tool_calls` IFF
+  non-empty (empty-list-is-absence per Decision #12).
+
+  ## Examples
+
+      iex> tc = %ALLM.ToolCall{id: "c1", name: "charge", arguments: %{"amount" => 20}}
+      iex> ALLM.Event.step_completed(%ALLM.Response{output_text: "ok"}, %ALLM.Thread{messages: []}, :auto, [tc])
+      {:step_completed, %{response: %ALLM.Response{output_text: "ok"}, thread: %ALLM.Thread{messages: []}, mode: :auto, manual_tool_calls: [%ALLM.ToolCall{id: "c1", name: "charge", arguments: %{"amount" => 20}}]}}
+  """
+  @spec step_completed(Response.t(), Thread.t(), :auto | :manual, [ToolCall.t()]) :: t()
+  def step_completed(%Response{} = response, %Thread{} = thread, mode, manual_tool_calls)
+      when mode in [:auto, :manual] and is_list(manual_tool_calls) do
+    {:step_completed,
+     %{
+       response: response,
+       thread: thread,
+       mode: mode,
+       manual_tool_calls: manual_tool_calls
+     }}
+  end
 
   @doc """
   Build a `:chat_completed` event wrapping the final `ChatResult`.

@@ -1359,7 +1359,7 @@ defmodule ALLM.Chat do
         stream_next({:phase_c, phase_c_data})
 
       mode == :auto and response.finish_reason == :tool_calls and response.tool_calls != [] ->
-        start_phase_b(data, response, assistant_msg)
+        dispatch_partitioned_stream(data, response, assistant_msg)
 
       true ->
         # Terminal adapter finish (:stop, :length, :content_filter, :error) —
@@ -1375,6 +1375,36 @@ defmodule ALLM.Chat do
         }
 
         stream_next({:phase_c, phase_c_data})
+    end
+  end
+
+  # Phase 18.3 — partition by `Tool.manual` flag (Decision #7). Extracted
+  # from `transition_a_to_b/1` to keep that function under Credo's cyclomatic
+  # complexity threshold; `mode == :manual` short-circuits BEFORE this helper
+  # runs so it sees only the `:auto` arm (Decision #5/#13).
+  defp dispatch_partitioned_stream(
+         %{engine: engine, opts: opts} = data,
+         %Response{} = response,
+         assistant_msg
+       ) do
+    tools = Engine.resolve_tools(engine, opts)
+
+    case partition_tool_calls(response.tool_calls, tools) do
+      {_auto, []} ->
+        # Pure-auto — UNCHANGED path.
+        start_phase_b(data, response, assistant_msg)
+
+      {[], manual_tcs} ->
+        # Pure-manual under :auto — skip Phase B entirely; no
+        # `:tool_execution_*` events; `:step_completed` fires
+        # immediately with `manual_tool_calls: manual_tcs`.
+        start_phase_c_manual_only(data, response, assistant_msg, manual_tcs)
+
+      {auto_tcs, manual_tcs} ->
+        # Mixed — run auto bucket via Phase B; thread manual_tcs
+        # through phase_b_data so the eventual `:step_completed`
+        # event carries it.
+        start_phase_b_partial(data, response, assistant_msg, auto_tcs, manual_tcs)
     end
   end
 
@@ -1401,6 +1431,7 @@ defmodule ALLM.Chat do
           assistant_msg: assistant_msg,
           tool_msgs: [],
           halt_metadata: nil,
+          manual_tcs: [],
           tool_cont: {:suspended, nil, cont}
         }
 
@@ -1416,7 +1447,8 @@ defmodule ALLM.Chat do
           assistant_msg: assistant_msg,
           tool_msgs: [],
           mode: :auto,
-          halt_metadata: nil
+          halt_metadata: nil,
+          manual_tcs: []
         }
 
         # Emit the error event, move to :phase_c which will emit a
@@ -1424,6 +1456,90 @@ defmodule ALLM.Chat do
         # just the assistant message (no tool-role messages).
         {[{:error, err}], {:phase_c, phase_c_data}}
     end
+  end
+
+  # Phase 18.3 — mixed-bucket Phase B bootstrap. Identical to `start_phase_b/3`
+  # except (a) `auto_tcs` (not `response.tool_calls`) is passed to
+  # `ToolRunner.stream_tool_calls/3`, AND (b) `manual_tcs` is threaded through
+  # `phase_b_data` so `transition_b_to_c/1` can write it onto `phase_c_data`
+  # for `emit_step_completed/1`. See PHASE_18_DESIGN.md §18.3.2 + Decision #7.
+  defp start_phase_b_partial(
+         %{engine: engine, thread: thread, opts: opts} = _data,
+         %Response{} = response,
+         assistant_msg,
+         auto_tcs,
+         manual_tcs
+       ) do
+    tools = Engine.resolve_tools(engine, opts)
+    runner_opts = build_runner_opts(engine, response, opts)
+
+    # Preflight is on the FULL response.tool_calls in start_phase_b/3 above;
+    # for the mixed-bucket path the chat-layer cond arm in transition_a_to_b/1
+    # has already partitioned. Unknown-tool names route to the auto bucket
+    # (per partition_tool_calls/2 invariant), so preflight on auto_tcs catches
+    # them — defense-in-depth identical to start_phase_b/3.
+    case preflight_unknown(auto_tcs, tools) do
+      :ok ->
+        tool_stream = ToolRunner.stream_tool_calls(auto_tcs, tools, runner_opts)
+        cont = &Enumerable.reduce(tool_stream, &1, fn event, _ -> {:suspend, event} end)
+
+        phase_b_data = %{
+          engine: engine,
+          thread: thread,
+          opts: opts,
+          response: response,
+          assistant_msg: assistant_msg,
+          tool_msgs: [],
+          halt_metadata: nil,
+          manual_tcs: manual_tcs,
+          tool_cont: {:suspended, nil, cont}
+        }
+
+        pull_next_phase_b(phase_b_data)
+
+      {:error, %EngineError{} = err} ->
+        phase_c_data = %{
+          engine: engine,
+          thread: Thread.add_message(thread, assistant_msg),
+          response: response,
+          assistant_msg: assistant_msg,
+          tool_msgs: [],
+          mode: :auto,
+          halt_metadata: nil,
+          manual_tcs: manual_tcs
+        }
+
+        {[{:error, err}], {:phase_c, phase_c_data}}
+    end
+  end
+
+  # Phase 18.3 — pure-manual streaming sub-arm. Skips Phase B entirely (no
+  # tool execution events, no ToolRunner enumerable to clean up); appends
+  # the assistant message to the thread and routes directly to Phase C with
+  # `manual_tcs` on the phase_c_data so `emit_step_completed/1` includes the
+  # bucket on the `:step_completed` event payload.
+  #
+  # Mirrors the existing whole-loop manual branch's thread shape (assistant
+  # message appended; no `:tool` messages); see PHASE_18_DESIGN.md §18.3.2
+  # implementation checklist line item.
+  defp start_phase_c_manual_only(
+         %{engine: engine, thread: thread} = _data,
+         %Response{} = response,
+         assistant_msg,
+         manual_tcs
+       ) do
+    phase_c_data = %{
+      engine: engine,
+      thread: Thread.add_message(thread, assistant_msg),
+      response: response,
+      assistant_msg: assistant_msg,
+      tool_msgs: [],
+      mode: :auto,
+      halt_metadata: nil,
+      manual_tcs: manual_tcs
+    }
+
+    stream_next({:phase_c, phase_c_data})
   end
 
   # Pre-flight parallel to ToolRunner's: short-circuit unknown tools
@@ -1554,18 +1670,24 @@ defmodule ALLM.Chat do
 
   # --- Phase B → C transition: finalise the thread and queue :step_completed ---
 
-  defp transition_b_to_c(%{
-         engine: engine,
-         thread: thread,
-         response: response,
-         assistant_msg: assistant_msg,
-         tool_msgs: tool_msgs,
-         halt_metadata: halt_metadata
-       }) do
+  defp transition_b_to_c(
+         %{
+           engine: engine,
+           thread: thread,
+           response: response,
+           assistant_msg: assistant_msg,
+           tool_msgs: tool_msgs,
+           halt_metadata: halt_metadata
+         } = data
+       ) do
     final_thread =
       thread
       |> Thread.add_message(assistant_msg)
       |> Thread.add_messages(tool_msgs)
+
+    # Phase 18.3 — thread the manual bucket from phase_b_data into
+    # phase_c_data so emit_step_completed/1 can build the /4-arity event.
+    manual_tcs = Map.get(data, :manual_tcs, [])
 
     phase_c_data = %{
       engine: engine,
@@ -1574,7 +1696,8 @@ defmodule ALLM.Chat do
       assistant_msg: assistant_msg,
       tool_msgs: tool_msgs,
       mode: :auto,
-      halt_metadata: halt_metadata
+      halt_metadata: halt_metadata,
+      manual_tcs: manual_tcs
     }
 
     stream_next({:phase_c, phase_c_data})
@@ -1588,7 +1711,14 @@ defmodule ALLM.Chat do
     # (StreamCollector's `:step_completed` fold + multi-turn chat
     # orchestrators) can produce StepResult metadata identical to the
     # non-streaming `Chat.do_step/4` path.
-    event = Event.step_completed(response, thread, mode)
+    #
+    # Phase 18.3: also thread the per-tool manual bucket through the
+    # payload's :manual_tool_calls key (Decision #7). The /4-arity
+    # constructor accepts an empty list as the default; the StreamCollector
+    # fold extracts the key and merges onto step metadata IFF non-empty
+    # (Decision #12).
+    manual_tcs = Map.get(data, :manual_tcs, [])
+    event = Event.step_completed(response, thread, mode, manual_tcs)
     {[event], {:done, data}}
   end
 
@@ -1693,7 +1823,10 @@ defmodule ALLM.Chat do
     # 1. Read pre-fold outer-collector state to compute StepResult. Mode
     #    flows through the event payload itself (Phase 7 retro F1+F3).
     mode = Map.get(payload, :mode, :auto)
-    step_result = step_result_from_outer_collector(data.collector, r, t, mode)
+    # Phase 18.3 — extract per-tool manual bucket so `terminal_condition/5`
+    # can fire `per_tool_manual?/1` and halt with `:manual_tool_calls`.
+    manual_tcs = Map.get(payload, :manual_tool_calls, [])
+    step_result = step_result_from_outer_collector(data.collector, r, t, mode, manual_tcs)
 
     # 2. NOW fold the :step_completed event into the outer collector
     #    (which resets per-step sub-state per Phase 7 Decision #6).
@@ -1799,9 +1932,10 @@ defmodule ALLM.Chat do
          %StreamCollector{} = c,
          %Response{} = response,
          %Thread{} = thread,
-         mode
+         mode,
+         manual_tcs
        )
-       when mode in [:auto, :manual] do
+       when mode in [:auto, :manual] and is_list(manual_tcs) do
     base_metadata = StreamCollector.merge_halt_metadata(%{}, c.halt)
 
     metadata =
@@ -1809,6 +1943,16 @@ defmodule ALLM.Chat do
         Map.put(base_metadata, :mode, :manual)
       else
         base_metadata
+      end
+
+    # Phase 18.3 / Decision #12: write `manual_tool_calls` onto step
+    # metadata IFF non-empty — empty list is the absence-of-key default
+    # (mirrors StreamCollector.apply_event/2's :step_completed fold).
+    metadata =
+      if manual_tcs != [] do
+        Map.put(metadata, :manual_tool_calls, manual_tcs)
+      else
+        metadata
       end
 
     %StepResult{

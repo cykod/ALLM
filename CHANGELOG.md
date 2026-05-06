@@ -1,3 +1,41 @@
+## [FEAT] Phase 18.3: streaming per-tool manual partition + :step_completed payload key (Layer C)
+*Wednesday, May 6th at 6pm*
+Mirror the non-streaming partition into ALLM.Chat.transition_a_to_b/1 and lift 
+the :manual_tool_calls bucket through the streaming chat-loop. 
+ALLM.Event.step_completed/4 is the new arity carrying the additive 
+:manual_tool_calls payload key (default empty list); existing /2 and /3 forward 
+to /4 unchanged so all existing call sites compile and produce 
+backwards-compatible payloads (per CLAUDE.md 'adding a key to an existing 
+event\'s payload map is NOT breaking'). The streaming partition routes through 
+three new helpers — dispatch_partitioned_stream/3 (Credo 
+cyclomatic-complexity refactor, threshold 9), start_phase_b_partial/5 (mixed 
+bucket — runs auto subset, threads manual_tcs through phase_b_data), and 
+start_phase_c_manual_only/4 (pure-manual — skips Phase B entirely, appends 
+assistant message before constructing phase_c_data). manual_tcs threads through 
+four state-shape sites: phase_b_data, transition_b_to_c/1, 
+emit_step_completed/1, and step_result_from_outer_collector/4 → /5 (the 
+fourth site was design-under-specified — without it terminal_condition/5's 
+per_tool_manual? guard never fires for streaming and the chat-loop hangs on 
+Cell 3; caught by test timeout, fixed in-commit per CLAUDE.md 'Decision text 
+drift is a known failure mode'). StreamCollector.apply_event/2's 
+:step_completed clause merges payload.manual_tool_calls onto 
+step_result.metadata IFF non-empty (Decision #12 empty-list-is-absence) — 
+load-bearing for chat-equivalence: pure-auto turns produce identical metadata 
+keys on both arms (asserted via refute Map.has_key?(metadata, 
+:manual_tool_calls) in the new chat-equivalence smoke). 13 new tests + 1 
+doctest cover the 5-cell stream matrix (pure-auto, mixed, pure-manual under 
+:auto, :manual mixed wins-whole-loop, :manual all-auto whole-loop), 
+Event.step_completed/2-/3-/4 arity round-trip, chat-equivalence smoke (mixed + 
+pure-auto control), :on_event callback pass-through, and manual-bucket order 
+preservation. Full suite 288 doctests / 26 properties / 2241 tests / 0 
+failures; mix credo --strict + mix format --check-formatted + mix dialyzer all 
+clean. Two streaming-side line-cite refreshes in PHASE_18_DESIGN.md 
+(start_phase_b_partial arity bumped to /5 to match implementation); 18.4 cites 
+verified-correct against HEAD; non-streaming + already-implemented streaming 
+cite refreshes batched into 18.5's spec-amendment commit per build skill triage.
+
+---
+
 ## [FEAT] Phase 18.2: chat/3 non-streaming per-tool manual partition (Layer C)
 *Wednesday, May 6th at 5pm*
 Extend ALLM.Chat.do_step/4 with a partition_tool_calls/2 helper that splits a 

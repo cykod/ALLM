@@ -384,6 +384,14 @@ defmodule ALLM.StreamCollector do
     # `terminal_condition/5` halts with `:manual_tool_calls`.
     mode = Map.get(p, :mode, :auto)
 
+    # Phase 18.3 / Decision #12: extract `:manual_tool_calls` from the
+    # payload (added by `Event.step_completed/4`); merge onto step
+    # metadata IFF non-empty. Empty list is the absence-of-key default —
+    # writing `manual_tool_calls: []` for pure-auto turns would diverge
+    # from the non-streaming arm (`Chat.do_step/4` only sets the key when
+    # the partition produces a non-empty bucket) and break chat-equivalence.
+    manual_tcs = Map.get(p, :manual_tool_calls, [])
+
     base_metadata = merge_halt_metadata(%{}, state.halt)
 
     metadata =
@@ -391,6 +399,13 @@ defmodule ALLM.StreamCollector do
         Map.put(base_metadata, :mode, :manual)
       else
         base_metadata
+      end
+
+    metadata =
+      if manual_tcs != [] do
+        Map.put(metadata, :manual_tool_calls, manual_tcs)
+      else
+        metadata
       end
 
     step_result = %StepResult{

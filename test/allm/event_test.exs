@@ -1,7 +1,7 @@
 defmodule ALLM.EventTest do
   use ExUnit.Case, async: true
 
-  alias ALLM.{ChatResult, Event, Message, Response, Thread}
+  alias ALLM.{ChatResult, Event, Message, Response, Thread, ToolCall}
 
   doctest Event
 
@@ -215,22 +215,25 @@ defmodule ALLM.EventTest do
       assert decoded["finish_reason"] == "stop"
     end
 
-    test "step_completed/2 defaults mode: :auto" do
+    test "step_completed/2 defaults mode: :auto and manual_tool_calls: []" do
       resp = %Response{output_text: "ok"}
       thread = %Thread{messages: []}
 
-      assert {:step_completed, %{response: ^resp, thread: ^thread, mode: :auto}} =
+      assert {:step_completed,
+              %{response: ^resp, thread: ^thread, mode: :auto, manual_tool_calls: []}} =
                Event.step_completed(resp, thread)
     end
 
-    test "step_completed/3 carries the orchestration mode" do
+    test "step_completed/3 carries the orchestration mode and defaults manual_tool_calls: []" do
       resp = %Response{output_text: "ok"}
       thread = %Thread{messages: []}
 
-      assert {:step_completed, %{response: ^resp, thread: ^thread, mode: :manual}} =
+      assert {:step_completed,
+              %{response: ^resp, thread: ^thread, mode: :manual, manual_tool_calls: []}} =
                Event.step_completed(resp, thread, :manual)
 
-      assert {:step_completed, %{response: ^resp, thread: ^thread, mode: :auto}} =
+      assert {:step_completed,
+              %{response: ^resp, thread: ^thread, mode: :auto, manual_tool_calls: []}} =
                Event.step_completed(resp, thread, :auto)
     end
 
@@ -240,6 +243,33 @@ defmodule ALLM.EventTest do
 
       assert_raise FunctionClauseError, fn ->
         Event.step_completed(resp, thread, :bogus)
+      end
+    end
+
+    test "step_completed/4 with explicit list propagates the list to payload.manual_tool_calls" do
+      resp = %Response{output_text: "ok"}
+      thread = %Thread{messages: []}
+      tcs = [%ToolCall{id: "c1", name: "charge", arguments: %{"amount" => 20}}]
+
+      assert {:step_completed,
+              %{response: ^resp, thread: ^thread, mode: :auto, manual_tool_calls: ^tcs}} =
+               Event.step_completed(resp, thread, :auto, tcs)
+    end
+
+    test "step_completed/4 accepts an empty list (equivalent to /3)" do
+      resp = %Response{output_text: "ok"}
+      thread = %Thread{messages: []}
+
+      assert Event.step_completed(resp, thread, :manual, []) ==
+               Event.step_completed(resp, thread, :manual)
+    end
+
+    test "step_completed/4 raises on non-list manual_tool_calls" do
+      resp = %Response{output_text: "ok"}
+      thread = %Thread{messages: []}
+
+      assert_raise FunctionClauseError, fn ->
+        Event.step_completed(resp, thread, :auto, :not_a_list)
       end
     end
 
