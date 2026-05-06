@@ -62,6 +62,8 @@ mix dialyzer              # type check
 iex -S mix                # REPL
 ```
 
+Releases run via `mix run scripts/release.exs <patch|minor|major|version>`. The script enforces clean git, runs all quality gates, bumps `mix.exs @version`, calls `mix hex.publish` interactively, and tags on success. Future Claude sessions MUST NOT manually edit `mix.exs @version` — use the script.
+
 Test-only helpers live under `test/support/` (in `elixirc_paths` for `:test` only) — home for `ALLM.Providers.Fake` fixtures and other test-only modules.
 
 The dev container ships Node, Go, and Elixir/OTP via the `rabdulwahhab/devcontainer-features` asdf features — keep `erlang-asdf` in the features list because `elixir-asdf` depends on it.

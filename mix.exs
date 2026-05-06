@@ -47,7 +47,10 @@ defmodule ALLM.MixProject do
       # Test-only path dep: certifies the two defaults
       # (ALLM.ToolExecutor.Default, ALLM.ToolResultEncoder.JSON) against
       # the shipped conformance harness. See conformance/README.md for
-      # the release checklist (path → "~> 0.2" rewrite at publish time).
+      # context. No publish-time rewrite needed: `mix hex.build` strips
+      # all `only: :dev | :test` deps from `metadata.config` automatically
+      # (verified by the Phase 0 tarball audit — `requirements` contains
+      # only `req`, `finch`, `jason`, `telemetry`).
       {:allm_conformance, path: "conformance", only: :test},
       # Dev-only: example scripts under `examples/openai/*.exs` use this
       # to load `OPENAI_API_KEY` from a project-root `.env` file. NOT
