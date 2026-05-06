@@ -3,10 +3,28 @@ defmodule ALLM.Tool do
   A tool the model may call. See spec §5.2 and §15.
 
   Layer A — the struct itself is pure data (`:name`, `:description`, `:schema`,
-  `:metadata` are all serializable), but `:handler` may be an anonymous
-  function. A tool with a `fn` handler is **not** safe to persist via
-  `:erlang.term_to_binary/1`; persist either `:handler | nil` and re-attach
+  `:metadata`, `:manual` are all serializable), but `:handler` may be an
+  anonymous function. A tool with a `fn` handler is **not** safe to persist
+  via `:erlang.term_to_binary/1`; persist either `:handler | nil` and re-attach
   at load time, or use a `{Module, :function}` tuple.
+
+  ## Per-tool manual mode (Phase 18)
+
+  Setting `manual: true` declares this tool will not be auto-executed by
+  `ALLM.chat/3` even when the call uses `mode: :auto`. When the assistant
+  emits a tool call for a `manual: true` tool, the chat orchestrator halts
+  the loop with `halted_reason: :manual_tool_calls` and surfaces the call
+  in `metadata.manual_tool_calls`. The caller resolves the tool result
+  either via `ALLM.Session.submit_tool_result/3` (when running through the
+  `Session` API) or by appending a `:tool` message to the thread and
+  re-issuing `chat/3` (raw stateless flow).
+
+  Default: `false` — the tool is auto-executed under `mode: :auto` (today's
+  behaviour). The flag is silent under `mode: :manual` whole-loop manual
+  (spec §12); the whole-loop short-circuit fires before the per-tool
+  partition runs.
+
+  See spec §12.4 (per-tool manual) and Phase 18 design.
   """
 
   @type schema :: map()
@@ -34,11 +52,12 @@ defmodule ALLM.Tool do
           description: String.t(),
           schema: schema(),
           handler: handler() | nil,
+          manual: boolean(),
           metadata: map()
         }
 
   @enforce_keys [:name, :description, :schema]
-  defstruct [:name, :description, :schema, :handler, metadata: %{}]
+  defstruct [:name, :description, :schema, :handler, manual: false, metadata: %{}]
 
   @doc """
   Build a `%Tool{}` from keyword opts.
@@ -47,6 +66,12 @@ defmodule ALLM.Tool do
   `ArgumentError` via `struct!/2`. `:handler` is optional — a tool may be
   declared without a handler when the caller handles tool calls manually.
 
+  `:manual` is optional and defaults to `false`. It MUST be a boolean —
+  passing `:manual` with a non-boolean value (including `nil`) raises
+  `ArgumentError`. The `defstruct` default protects against omission, but
+  `struct!/2` accepts an explicit `nil` (silently overwriting the default),
+  so this constructor adds an explicit guard.
+
   ## Examples
 
       iex> tool = ALLM.Tool.new(name: "weather", description: "weather by city", schema: %{"type" => "object"})
@@ -54,9 +79,24 @@ defmodule ALLM.Tool do
       "weather"
       iex> tool.handler
       nil
+      iex> tool.manual
+      false
+
+      iex> tool = ALLM.Tool.new(name: "charge", description: "charge a card", schema: %{"type" => "object"}, manual: true)
+      iex> tool.manual
+      true
   """
   @spec new(keyword()) :: t()
-  def new(opts) when is_list(opts), do: struct!(__MODULE__, opts)
+  def new(opts) when is_list(opts) do
+    tool = struct!(__MODULE__, opts)
+
+    unless is_boolean(tool.manual) do
+      raise ArgumentError,
+            "ALLM.Tool :manual must be a boolean, got: #{inspect(tool.manual)}"
+    end
+
+    tool
+  end
 
   @doc false
   @spec __from_tagged__(map()) :: t()
@@ -66,6 +106,7 @@ defmodule ALLM.Tool do
       description: data["description"],
       schema: data["schema"] || %{},
       handler: data["handler"],
+      manual: data["manual"] || false,
       metadata: data["metadata"] || %{}
     }
   end

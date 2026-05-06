@@ -1,3 +1,23 @@
+## [FEAT] Phase 18.1: %ALLM.Tool{manual: boolean()} field (Layer A)
+*Wednesday, May 6th at 5pm*
+Add a manual: boolean() field to %ALLM.Tool{} with default false, plus an 
+explicit is_boolean/1 guard in Tool.new/1 raising ArgumentError on non-boolean 
+:manual (Tool.new/1 uses struct!/2 which silently default-overwrites on nil; 
+the guard makes the manual: boolean() type contract honest at runtime). Extends 
+__from_tagged__/1 to coerce missing/null to false, updates @moduledoc on Tool 
+and Engine to document the per-tool manual semantics, and adds 13 tests + 1 
+doctest covering ETF round-trip, JSON round-trip via Serializer, 
+missing/null/true __from_tagged__ paths, the new/1 guard, and ALLM.tool/1 
+keyword pass-through. Foundation for Phase 18.2-18.5 (chat partition, streaming 
+mirror, session projection, examples). Also lands the PHASE_18_DESIGN.md 
+steering doc with three classify_step/1 line-cite drift fixes (:707 -> :703) 
+and one preemptive 18.4 test bullet for the empty-list-write defensive merge. 
+Full suite 287 doctests / 26 properties / 2214 tests, 0 failures (one 
+pre-existing async cross-test pollution flake in stream wire tests is unrelated 
+and out-of-scope per cross-phase bug discipline).
+
+---
+
 ## [BUG] Fix 3 failing tests + lint cleanup post-Phase-16 Gemini
 *Sunday, May 3rd at 1pm*
 Three test failures from post-Phase-16 drift: README test pinned to the renamed 

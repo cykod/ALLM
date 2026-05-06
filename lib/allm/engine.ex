@@ -32,7 +32,11 @@ defmodule ALLM.Engine do
     * `:model` — `String.t() | nil`.
     * `:tools` — `[ALLM.Tool.t()]` where each tool's `:handler` is `nil` or
       `{Module, :function}`. A tool with an anonymous-function handler is not
-      JSON-serializable (see `ALLM.Tool` moduledoc).
+      JSON-serializable (see `ALLM.Tool` moduledoc). Each tool's `:manual`
+      flag (boolean, default `false` — see Phase 18 / spec §12.4) controls
+      per-tool opt-out of auto-execution: when `manual: true`, `ALLM.chat/3`
+      under `mode: :auto` halts with `:manual_tool_calls` instead of running
+      the handler.
     * `:params`, `:context`, `:metadata` — maps of serializable values whose
       keys are restored as atoms via `String.to_existing_atom/1` on JSON
       decode. Values pass through verbatim — the library does not deep-type
