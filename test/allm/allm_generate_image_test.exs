@@ -47,18 +47,21 @@ defmodule ALLM.AllmGenerateImageTest do
 
   defmodule GenerateOnlyAdapter do
     @moduledoc false
+    alias ALLM.Error.ImageAdapterError
+    alias ALLM.{ImageRequest, ImageResponse, ImageUsage}
+
     @behaviour ALLM.ImageAdapter
     def supported_operations, do: [:generate]
 
-    def generate(%ALLM.ImageRequest{operation: :edit}, _opts) do
+    def generate(%ImageRequest{operation: :edit}, _opts) do
       {:error,
-       ALLM.Error.ImageAdapterError.new(:unsupported_operation,
+       ImageAdapterError.new(:unsupported_operation,
          metadata: %{operation: :edit}
        )}
     end
 
     def generate(_req, _opts) do
-      {:ok, %ALLM.ImageResponse{images: [], usage: %ALLM.ImageUsage{}}}
+      {:ok, %ImageResponse{images: [], usage: %ImageUsage{}}}
     end
   end
 

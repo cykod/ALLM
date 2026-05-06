@@ -276,19 +276,20 @@ The script is a single `scripts/release.exs` file run via `mix run` (so it has a
    - `mix format --check-formatted`
    - `mix deps.get` (idempotent; ensures lock matches)
    - `mix test`
-   - `mix credo --strict`
+   - `mix credo --strict lib/` (release surface — D-level Software Design checks enforced)
+   - `mix credo test/` (non-strict — Warning / Refactor / Consistency / Readability still enforced; D-level Software Design suggestions skipped because alias-ordering / nested-module-aliasing in test files is noise rather than release-blocking signal)
    - `mix dialyzer` (skippable via `--skip-dialyzer`)
    - `mix hex.build` — produces `allm-<old-version>.tar` for inspection.
 8. **Bump `mix.exs @version`** — atomic edit of the `@version "X.Y.Z"` line. Show diff.
 9. *(removed — no CHANGELOG auto-rewrite; the maintainer writes the final heading directly per step 6.)*
-10. **Confirmation prompt #1** — display the proposed version, the `mix.exs` diff, the CHANGELOG diff, the tarball file list (`tar -tzf allm-<new>.tar`). Prompt: `Publish allm <new-version> to Hex? [y/N]` — reject unless answer is `y` or `yes`.
-11. **`mix hex.publish`** — invoke via `Mix.Task.run("hex.publish", [])` so prompts pass through stdin/stdout (never `--yes`). The Hex prompts are the second safety check; the script does NOT bypass them.
-12. **On publish success** — commit + tag locally (NO push):
+10. **Phase A confirmation prompt** — display the proposed version, the `mix.exs` diff, the tarball file list (`tar -tzf allm-<new>.tar`). Prompt: `Ready to invoke mix hex.publish for allm <new-version>? [y/N]` — reject unless answer is `y` or `yes`. On reject, roll back the `mix.exs` edit and exit.
+11. **Phase A handoff — print, don't invoke.** The script does NOT call `mix hex.publish` itself. Two reasons: (a) `Mix.Task.run("hex.publish", [])` from inside `mix run scripts/release.exs` fails with "task could not be found" because Mix archives (where Hex lives) are not auto-loaded into the script's runtime; (b) Hex 2.4.x's device-flow auth attempts `System.cmd("open", ...)` to launch a browser — that crashes with `:enoent` in a headless Linux container. The script prints the next-step `mix hex.publish` command + auth-setup instructions and exits with status 0. The maintainer runs `mix hex.publish` themselves from a real terminal. **Auth pre-provisioning:** `~/.hex/hex.config` must already carry credentials; run `mix hex.user auth` once on a browser-capable workstation and copy the file in, OR set `HEX_API_KEY=<key>` in the env. Hex prompts (publish confirmation, 2FA TOTP) are part of the safety story; never `--yes`.
+12. **Phase B (`--finalize`) — commit + tag locally (NO push, NO publish).** A second invocation `mix run scripts/release.exs --finalize` reads `mix.exs:@version` (set by Phase A), verifies the CHANGELOG entry is still present, and:
     - `git add mix.exs CHANGELOG.md`
     - `git commit -m "Release v<X.Y.Z>"`
     - `git tag -a v<X.Y.Z> -m "v<X.Y.Z>"`
-    - **No `git push`.** The script prints the explicit push command at step 13 for the maintainer to run when ready. Rationale: `mix hex.publish` is the only irreversible step; the maintainer eyeballs the local tag, then pushes as a separate explicit action. A push failure mid-script would otherwise strand the release in a published-but-not-pushed state the idempotent re-run path can't fix.
-13. **Print success summary** — `https://hex.pm/packages/allm/<new>` and `https://hexdocs.pm/allm/<new>/` URLs, the `git push origin main v<X.Y.Z>` command for the maintainer to run, a note that hexdocs `[source]` links 404 until the push lands, plus a reminder to run the smoke test from Phase 2.4 if this is a major bump.
+    - **No `git push`.** Phase B prints the explicit push command at step 13 for the maintainer to run from a workstation with GitHub access. Rationale: `mix hex.publish` is the only irreversible step; Phase B is cheap and recoverable; the push is a separate manual step so a push failure can't strand a published-but-not-pushed release.
+13. **Print success summary** — `https://hex.pm/packages/allm/<new>` and `https://hexdocs.pm/allm/<new>/` URLs, the `git push origin main v<X.Y.Z>` command for the maintainer to run from a workstation with GitHub access, a note that hexdocs `[source]` links 404 until the push lands, plus a reminder to run the smoke test from Phase 2.4 if this is a major bump.
 
 ### 3.3 Failure modes the script handles
 
@@ -300,8 +301,10 @@ The script is a single `scripts/release.exs` file run via `mix run` (so it has a
 | Tag already exists locally | Abort; print existing local tag SHA. Origin is not consulted; Hex's server-side uniqueness check is the backstop for tags pushed from elsewhere. |
 | CHANGELOG missing entry | Abort; print suggestion to run the `/changelog` skill (which regenerates `CHANGELOG.md` with the missing version's heading + body) before re-invoking the release script |
 | Quality gate fails | Abort; print which step failed; no working-tree mutation |
-| `mix hex.publish` fails (network, validation, 2FA timeout) | The `mix.exs` edit is on disk but NOT committed; CHANGELOG.md is unchanged (maintainer-written). Print clear "publish failed; mix.exs edit left in working tree; investigate, fix, and re-run" message. Re-running with the same arg detects the version is already bumped (`mix.exs:4` already at target) and skips step 8 — idempotent re-run path. Since the script no longer pushes, there is no stranded-tag-on-origin failure mode to recover from. |
-| User answers `n` at confirmation #1 | Roll back the `mix.exs` edit via `git checkout -- mix.exs` (CHANGELOG.md is maintainer-written and never touched by the script — must NOT be reverted, or unstaged release notes under `--allow-dirty` would be lost). Working tree returns to pre-script state. |
+| `mix hex.publish` fails (run by the maintainer outside the script) | The maintainer fixes the cause and re-runs `mix hex.publish` themselves; nothing for the release script to do. If the maintainer wants to abandon the release entirely, they run `git checkout -- mix.exs` to undo Phase A's bump. The script's idempotent re-run path (Phase A detects `mix.exs:4` already at target and skips step 8) handles "publish failed mid-flight, fix, retry-Phase-A" without conflict. Since the script no longer pushes, there is no stranded-tag-on-origin failure mode to recover from. |
+| User answers `n` at Phase A confirmation prompt | Roll back the `mix.exs` edit via `git checkout -- mix.exs` (CHANGELOG.md is maintainer-written and never touched by the script — must NOT be reverted, or unstaged release notes under `--allow-dirty` would be lost). Working tree returns to pre-script state. |
+| Phase B invoked but `mix.exs` not at a release version | Phase B trusts `mix.exs:@version` as the source of truth; if Phase A wasn't run first, the version computed for the tag matches whatever's currently in `mix.exs`. The CHANGELOG check (looking for `## ` heading containing `vX.Y.Z`) catches the common mistake (no entry → abort with "run `/changelog` first"). |
+| Phase B finds tag already exists locally | Abort; print existing local tag SHA. The maintainer either deletes the local tag (intended re-finalize) or aborts (release was already finalized). |
 
 ### 3.4 What the script does NOT do
 

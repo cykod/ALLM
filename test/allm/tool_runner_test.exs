@@ -1667,12 +1667,15 @@ defmodule ALLM.ToolRunnerTest do
       # instead of crashing the test process.
       defmodule ClosureRaiseExecutor do
         @moduledoc false
+        alias ALLM.Tool, as: ToolStruct
+        alias ALLM.ToolExecutor.Default, as: DefaultExecutor
+
         @behaviour ALLM.ToolExecutor
         @impl true
-        def execute(%ALLM.Tool{name: "boom"}, _args, _opts), do: raise("closure-raise")
+        def execute(%ToolStruct{name: "boom"}, _args, _opts), do: raise("closure-raise")
 
-        def execute(%ALLM.Tool{} = tool, args, opts) do
-          ALLM.ToolExecutor.Default.execute(tool, args, opts)
+        def execute(%ToolStruct{} = tool, args, opts) do
+          DefaultExecutor.execute(tool, args, opts)
         end
       end
 

@@ -316,10 +316,15 @@ defmodule ALLM.Providers.OpenAIStreamWireTest do
 
   # Telemetry handler — module function (NOT an anonymous fun) to avoid
   # `:telemetry`'s perf warning about local-function attaches. Forwards
-  # `{:retry, meta}` to the parent pid carried in `config`.
+  # `{:retry, meta}` to the parent pid in `config` ONLY when the emitting
+  # process IS the parent. Cross-test contamination (a parallel `async:
+  # true` Anthropic/Gemini test emitting `[:allm, :adapter, :retry]`) is
+  # otherwise indistinguishable from a real retry on the SUT — the
+  # handler is application-global per CLAUDE.md "`:telemetry.attach/4 +
+  # async: true` foot-gun". `self()` here is the emitting process.
   @doc false
   def handle_retry_event(_event, _measurements, meta, config) do
-    send(config.parent, {:retry, meta})
+    if self() == config.parent, do: send(config.parent, {:retry, meta})
     :ok
   end
 

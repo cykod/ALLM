@@ -408,7 +408,7 @@ defmodule ALLM.Chat.PerToolManualTest do
       # Sanity: the bare minimum a guard would catch — uncovered ids exist iff
       # metadata.manual_tool_calls is non-empty.
       assert MapSet.size(uncovered) > 0 ==
-               length(r1.metadata.manual_tool_calls || []) > 0
+               ((r1.metadata.manual_tool_calls || []) != [])
 
       # Suppress unused-alias warning when the AdapterError clause isn't asserted
       # in this Fake-driven test (kept aliased for the docstring above).

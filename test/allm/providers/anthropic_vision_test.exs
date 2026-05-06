@@ -14,6 +14,7 @@ defmodule ALLM.Providers.AnthropicVisionTest do
   alias ALLM.{Image, ImagePart, Message, Request, TextPart}
   alias ALLM.Providers.Anthropic
   alias ALLM.Providers.AnthropicTestFixtures, as: Fx
+  alias ALLM.Providers.Support.ImageMime
 
   setup do
     stub = String.to_atom("anthropic_vision_stub_#{System.unique_integer([:positive])}")
@@ -359,7 +360,7 @@ defmodule ALLM.Providers.AnthropicVisionTest do
             # The pre-flight + translator path runs even when the HTTP plug
             # is missing — but to keep the test independent of HTTP we just
             # call to_anthropic_request_body directly.
-            _ = ALLM.Providers.Anthropic.to_anthropic_request_body(request)
+            _ = Anthropic.to_anthropic_request_body(request)
             :ok
           end)
           |> Task.await(5_000)
@@ -466,8 +467,8 @@ defmodule ALLM.Providers.AnthropicVisionTest do
           model: "claude-haiku-4-5-20251001"
         )
 
-      anthropic_result = ALLM.Providers.Support.ImageMime.validate_request(request, :anthropic)
-      openai_result = ALLM.Providers.Support.ImageMime.validate_request(request, :openai)
+      anthropic_result = ImageMime.validate_request(request, :anthropic)
+      openai_result = ImageMime.validate_request(request, :openai)
 
       # Same input → identical errors today (accept-sets match).
       assert {:error, %ValidationError{reason: :invalid_message, errors: e1}} = anthropic_result

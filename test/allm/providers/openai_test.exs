@@ -16,6 +16,7 @@ defmodule ALLM.Providers.OpenAITest do
   alias ALLM.Error.EngineError
   alias ALLM.Message
   alias ALLM.Providers.OpenAI
+  alias ALLM.Providers.OpenAITestFixtures
   alias ALLM.Request
   alias ALLM.Tool
 
@@ -830,7 +831,7 @@ defmodule ALLM.Providers.OpenAITest do
     # hard-coded `tool_calls: []` and never inspected `output[]` for
     # `function_call` items. These three rows lock the fix in.
     test "single function_call in output[] → tool_calls populated, finish_reason :tool_calls" do
-      body = ALLM.Providers.OpenAITestFixtures.responses(:single_tool_call)
+      body = OpenAITestFixtures.responses(:single_tool_call)
       resp = OpenAI.from_responses_response(body, [])
 
       assert [tc] = resp.tool_calls
@@ -844,7 +845,7 @@ defmodule ALLM.Providers.OpenAITest do
     end
 
     test "parallel function_calls in output[] → both surface with IDs preserved" do
-      body = ALLM.Providers.OpenAITestFixtures.responses(:parallel_tool_calls)
+      body = OpenAITestFixtures.responses(:parallel_tool_calls)
       resp = OpenAI.from_responses_response(body, [])
 
       ids = resp.tool_calls |> Enum.map(& &1.id) |> Enum.sort()
@@ -860,7 +861,7 @@ defmodule ALLM.Providers.OpenAITest do
     end
 
     test "mixed function_call + message item → tool_calls populated AND output_text intact" do
-      body = ALLM.Providers.OpenAITestFixtures.responses(:mixed_tool_and_message)
+      body = OpenAITestFixtures.responses(:mixed_tool_and_message)
       resp = OpenAI.from_responses_response(body, [])
 
       assert resp.output_text == "calling weather"

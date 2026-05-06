@@ -1,22 +1,34 @@
 # scripts/release.exs — ALLM Hex release script
 #
-# Usage
-# -----
+# Usage (two-phase flow)
+# ----------------------
+#
+# Phase A — gates + bump (writes mix.exs only; no commit, no publish):
 #
 #     mix run scripts/release.exs patch          # 0.3.0 -> 0.3.1
 #     mix run scripts/release.exs minor          # 0.3.0 -> 0.4.0
 #     mix run scripts/release.exs major          # 0.3.0 -> 1.0.0
 #     mix run scripts/release.exs 0.4.0-rc.1     # explicit SemVer
+#
+# Then publish manually (so OAuth device flow + interactive prompts get a
+# real terminal):
+#
+#     mix hex.publish
+#
+# Phase B — commit + tag (after publish succeeds):
+#
+#     mix run scripts/release.exs --finalize
+#
 #     mix run scripts/release.exs --help
 #
 # Flags
 # -----
 #
+#     --finalize        Phase B mode (no <bump> arg; reads mix.exs).
 #     --skip-dialyzer   Skip `mix dialyzer` (PLT is slow; OK for patches you
 #                       just ran dialyzer against).
-#     --dry-run         Run every gate including `mix hex.publish --dry-run`,
-#                       stop before the real publish + tag. No working-tree
-#                       mutations.
+#     --dry-run         Run every Phase A gate; stop before bump. No
+#                       working-tree mutations.
 #     --allow-dirty     Bypass the working-tree-clean check. Loud warning.
 #
 # Setup (one-time, per maintainer workstation)
@@ -92,8 +104,15 @@
 # What this script does NOT do
 # ----------------------------
 #
-# - Does NOT skip the `mix hex.publish` interactive confirmation. Hex
-#   prompts ARE part of the safety story. Never `--yes`.
+# - Does NOT invoke `mix hex.publish` itself. Two reasons: (1)
+#   `Mix.Task.run("hex.publish", [])` from inside `mix run scripts/...`
+#   fails with "task could not be found" because Mix archives are not
+#   auto-loaded into the script's runtime; (2) Hex 2.4.x's device-flow
+#   auth crashes with `:enoent` in headless containers when it tries to
+#   `System.cmd("open", ...)` to launch a browser. Phase A hands off to
+#   the maintainer to run `mix hex.publish` directly so its prompts +
+#   OAuth flow get a real terminal; Phase B (`--finalize`) then commits
+#   and tags. Hex prompts ARE part of the safety story; never `--yes`.
 # - Does NOT publish from CI. There is no `--non-interactive` mode by
 #   design.
 # - Does NOT auto-edit CHANGELOG content. Before running this script the
@@ -159,12 +178,23 @@ defmodule ALLM.Release do
       "--help" in argv or "-h" in argv ->
         :help
 
+      "--finalize" in argv ->
+        # Phase B: no positional bump arg; reads current mix.exs:@version
+        # to determine what to commit/tag. Other flags are still valid
+        # (e.g., --allow-dirty, but typically not needed in finalize).
+        flags = Enum.reject(argv, &(&1 == "--finalize"))
+
+        case parse_flags(flags) do
+          {:ok, opts} -> {:ok, Map.put(opts, :phase, :finalize)}
+          {:error, _} = err -> err
+        end
+
       true ->
         {flags, positionals} = Enum.split_with(argv, &String.starts_with?(&1, "--"))
 
         with {:ok, bump} <- parse_bump(positionals),
              {:ok, opts} <- parse_flags(flags) do
-          {:ok, Map.put(opts, :bump, bump)}
+          {:ok, opts |> Map.put(:bump, bump) |> Map.put(:phase, :prepare)}
         end
     end
   end
@@ -192,10 +222,23 @@ defmodule ALLM.Release do
 
   defp print_help do
     IO.puts("""
-    ALLM release script — drives `mix hex.publish` with full quality gates.
+    ALLM release script — runs full quality gates around a manual `mix hex.publish`.
 
     Usage:
-      mix run scripts/release.exs <bump> [flags]
+      mix run scripts/release.exs <bump> [flags]      # Phase A — gates + bump
+      mix run scripts/release.exs --finalize [flags]  # Phase B — commit + tag
+
+    Phase A (`<bump>`):
+      Runs git/branch/tag/CHANGELOG/quality gates, bumps `mix.exs:@version`,
+      prompts for confirmation, then PRINTS the `mix hex.publish` command
+      and exits. The maintainer runs the publish manually so its OAuth
+      device flow + interactive prompts get a real terminal.
+
+    Phase B (`--finalize`):
+      After `mix hex.publish` succeeds, run this to read the bumped
+      version, commit `mix.exs` + `CHANGELOG.md`, create an annotated tag,
+      and print the `git push` command (push is manual — see RELEASE_PLAN
+      §2.3 for why).
 
     <bump>:
       patch          MAJOR.MINOR.(PATCH+1)
@@ -204,8 +247,9 @@ defmodule ALLM.Release do
       <semver>       explicit version, e.g. 0.4.0-rc.1
 
     Flags:
+      --finalize        Phase B mode (no <bump> arg)
       --skip-dialyzer   skip `mix dialyzer` (PLT slow)
-      --dry-run         run every gate; stop before publish + tag; no mutations
+      --dry-run         run every Phase A gate; stop before bump; no mutations
       --allow-dirty     bypass git-clean check (loud warning)
       --help, -h        this message
 
@@ -215,7 +259,34 @@ defmodule ALLM.Release do
 
   # ----- main flow -----------------------------------------------------------
 
-  defp run(opts) do
+  defp run(%{phase: :finalize} = opts), do: run_finalize(opts)
+  defp run(%{phase: :prepare} = opts), do: run_prepare(opts)
+
+  # Phase B: post-publish commit + tag. Reads current `mix.exs:@version`
+  # (set by Phase A's bump), verifies CHANGELOG entry exists, then
+  # `git add` + `git commit` + `git tag` and prints the push command.
+  # NO publish, NO push, NO version computation.
+  defp run_finalize(_opts) do
+    log_step("finalize.1", "read current version from #{@mix_exs_path}")
+    new_version = current_version()
+    tag = "v#{new_version}"
+    IO.puts("  version: #{new_version}")
+    IO.puts("  tag:     #{tag}")
+
+    log_step("finalize.2", "CHANGELOG entry for #{new_version}?")
+    check_changelog(new_version)
+
+    log_step("finalize.3", "tag #{tag} doesn't already exist locally?")
+    check_tag_absent(tag)
+
+    log_step("finalize.4", "git commit + tag (push is manual)")
+    finalize_release!(new_version, tag)
+
+    log_step("finalize.5", "done")
+    print_success(new_version)
+  end
+
+  defp run_prepare(opts) do
     log_step("step 1", "compute new version from #{@mix_exs_path}")
     current = current_version()
     new_version = compute_new_version(current, opts.bump)
@@ -259,41 +330,40 @@ defmodule ALLM.Release do
 
     if opts.dry_run do
       IO.puts("")
-      IO.puts("--- DRY RUN: stopping before mix hex.publish + tag ---")
+      IO.puts("--- DRY RUN: stopping before bump + manual-publish handoff ---")
 
       # Roll back any working-tree mutations done in dry-run mode.
       # (The bump branch above already short-circuits for dry-run, but
       # defensively run a checkout here so a partial edit is cleaned up.)
       rollback_edits(:dry_run)
 
-      log_step("step 10", "would prompt: Publish allm #{new_version} to Hex? [y/N] (skipped)")
-      log_step("step 11", "would run: mix hex.publish --dry-run")
+      log_step("step 10", "would prompt: Ready to invoke mix hex.publish? [y/N] (skipped)")
+      log_step("step 11", "would print Phase A handoff (skipped)")
       run_hex_publish_dry_run()
-      log_step("step 12", "would commit + tag #{tag} locally (skipped); push is manual")
-      log_step("step 13", "would print success URLs (skipped)")
+
+      log_step(
+        "finalize.*",
+        "Phase B (--finalize) would commit + tag #{tag} locally (skipped); push is manual"
+      )
+
       System.halt(0)
     end
 
-    log_step("step 10", "confirmation prompt #1")
+    log_step("step 10", "confirmation prompt")
 
-    case prompt_yes_no("Publish allm #{new_version} to Hex? [y/N] ") do
+    case prompt_yes_no("Ready to invoke `mix hex.publish` for allm #{new_version}? [y/N] ") do
       :yes ->
         :ok
 
       :no ->
-        IO.puts("Aborted; rolling back mix.exs + CHANGELOG.md edits.")
+        IO.puts("Aborted; rolling back mix.exs edits.")
         rollback_edits(:user_declined)
         System.halt(1)
     end
 
-    log_step("step 11", "mix hex.publish (interactive)")
-    publish_to_hex!()
-
-    log_step("step 12", "git commit + tag (push is manual; instructions printed at end)")
-    finalize_release!(new_version, tag)
-
-    log_step("step 13", "done")
-    print_success(new_version)
+    log_step("step 11", "Phase A complete — publish manually")
+    print_phase_a_complete(new_version, tag)
+    System.halt(0)
   end
 
   # ----- step 1: version computation -----------------------------------------
@@ -465,7 +535,15 @@ defmodule ALLM.Release do
       {"mix format --check-formatted", ["format", "--check-formatted"]},
       {"mix deps.get", ["deps.get"]},
       {"mix test", ["test"]},
-      {"mix credo --strict", ["credo", "--strict"]},
+      # `--strict` enables Credo's `Software Design` suggestions (alias
+      # ordering, nested-module aliasing). We apply it to `lib/` (release
+      # surface) but not `test/`, where D-level style suggestions are
+      # noise rather than release-blocking signal. Test code still gets a
+      # plain Credo pass — Warning/Refactor/Consistency/Readability fire.
+      # Credo only filters by paths when given a glob (a bare directory
+      # arg matches zero files), so we pass `lib/**/*.{ex,exs}` etc.
+      {"mix credo --strict lib/", ["credo", "--strict", "lib/**/*.{ex,exs}"]},
+      {"mix credo test/", ["credo", "test/**/*.{ex,exs}"]},
       {"mix hex.build", ["hex.build"]}
     ]
 
@@ -566,27 +644,51 @@ defmodule ALLM.Release do
     IO.puts("  reverted #{@mix_exs_path} (#{reason})")
   end
 
-  # ----- step 11: hex.publish ------------------------------------------------
+  # ----- step 11: print Phase A complete; publish is manual -----------------
 
-  defp publish_to_hex! do
-    # `Mix.Task.run/2` runs in-process so prompts pass through stdin/stdout.
-    # `--yes` is NEVER passed; the Hex prompts are the second safety check.
-    # `run/2` (not `rerun/2`) per RELEASE_PLAN.md §3.2 step 11 — `mix
-    # hex.publish` is not invoked elsewhere in this script, so the
-    # already-run guard `rerun/2` defends against does not apply.
-    Mix.Task.run("hex.publish", [])
-  rescue
-    e ->
-      IO.puts(:stderr, "")
-      IO.puts(:stderr, "mix hex.publish failed: #{Exception.message(e)}")
-
-      IO.puts(
-        :stderr,
-        "mix.exs and CHANGELOG.md edits are LEFT IN WORKING TREE (not committed)."
-      )
-
-      IO.puts(:stderr, "Investigate, fix, and re-run — the script is idempotent.")
-      System.halt(1)
+  # The script no longer invokes `mix hex.publish` itself. Two reasons:
+  #
+  #  1. `Mix.Task.run("hex.publish", [])` from inside `mix run scripts/...`
+  #     fails with "task could not be found" — Mix archives (where Hex
+  #     lives) are not auto-loaded into the script's runtime, even though
+  #     a shell-invoked `mix hex.publish` works fine.
+  #
+  #  2. Hex 2.4.x's device-flow auth attempts `System.cmd("open", ...)`
+  #     to launch a browser; that crashes with `:enoent` in a headless
+  #     Linux container. The maintainer must either pre-provision
+  #     `~/.hex/hex.config` (run `mix hex.user auth` once on a
+  #     browser-capable workstation, copy the config in) or set
+  #     `HEX_API_KEY` in the environment before running `mix hex.publish`.
+  #
+  # The two-phase flow handles both: Phase A bumps + commits-staging the
+  # release; the maintainer runs `mix hex.publish` themselves with full
+  # interactive stdio + auth pre-provisioned; `mix run scripts/release.exs
+  # --finalize` then commits + tags.
+  defp print_phase_a_complete(new_version, tag) do
+    IO.puts("")
+    IO.puts("Phase A complete. mix.exs and CHANGELOG.md staged for v#{new_version}.")
+    IO.puts("All quality gates passed. Working tree carries the version bump.")
+    IO.puts("")
+    IO.puts("Next, run the publish manually so its interactive prompts and")
+    IO.puts("OAuth flow get a real terminal:")
+    IO.puts("")
+    IO.puts("    mix hex.publish")
+    IO.puts("")
+    IO.puts("(Auth setup: `~/.hex/hex.config` must already carry credentials.")
+    IO.puts(" Run `mix hex.user auth` once on a browser-capable workstation")
+    IO.puts(" and copy the file in, OR set `HEX_API_KEY=<key>` in the env.)")
+    IO.puts("")
+    IO.puts("After the publish succeeds, return here and run:")
+    IO.puts("")
+    IO.puts("    mix run scripts/release.exs --finalize")
+    IO.puts("")
+    IO.puts("Phase B will commit (mix.exs + CHANGELOG.md), create annotated")
+    IO.puts("tag #{tag}, and print the `git push` command for you to run from")
+    IO.puts("a workstation with GitHub access.")
+    IO.puts("")
+    IO.puts("If the publish fails or you abort, the working tree carries the")
+    IO.puts("mix.exs bump but no commit/tag — re-run Phase A or roll back via")
+    IO.puts("`git checkout -- #{@mix_exs_path}`.")
   end
 
   defp run_hex_publish_dry_run do
@@ -631,11 +733,12 @@ defmodule ALLM.Release do
   defp print_success(new_version) do
     tag = "v#{new_version}"
     IO.puts("")
-    IO.puts("Released allm v#{new_version} to Hex.")
+    IO.puts("Phase B complete — local commit + annotated tag #{tag} created.")
+    IO.puts("")
+    IO.puts("If `mix hex.publish` already succeeded, the published package is at:")
     IO.puts("  https://hex.pm/packages/allm/#{new_version}")
     IO.puts("  https://hexdocs.pm/allm/#{new_version}/")
     IO.puts("")
-    IO.puts("Local commit + annotated tag #{tag} created.")
     IO.puts("Sync this checkout to a workstation with GitHub access, then push:")
     IO.puts("")
     IO.puts("    git push origin main #{tag}")

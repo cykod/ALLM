@@ -26,11 +26,12 @@ defmodule ALLM.Providers.GeminiStreamTest do
   alias ALLM.StreamCollector
   alias ALLM.Test.FinchStub
 
-  setup do
-    ALLM.Keys.put(:gemini, "AIza-stream-test")
-    on_exit(fn -> ALLM.Keys.delete(:gemini) end)
-    :ok
-  end
+  # No setup that mutates the global `ALLM.Keys.Store` Agent — that races
+  # with parallel `async: true` modules (gemini_test.exs, gemini_tools_test.exs,
+  # etc.) that put/delete the same `:gemini` key. We pass `key:` via opts;
+  # `ALLM.Keys.fetch!/2` resolution checks `:opts` BEFORE `:runtime`
+  # (`lib/allm/keys.ex:155` source order), so the global Agent never
+  # participates here.
 
   defp req(opts \\ []) do
     Request.new(
@@ -48,6 +49,7 @@ defmodule ALLM.Providers.GeminiStreamTest do
       request,
       Keyword.merge(
         [
+          api_key: "AIza-stream-test",
           finch_module: FinchStub,
           finch_stub_ref: stub_ref
         ],
@@ -230,6 +232,7 @@ defmodule ALLM.Providers.GeminiStreamTest do
 
     {:ok, stream} =
       Gemini.stream(req(),
+        api_key: "AIza-stream-test",
         finch_module: FinchStub,
         finch_name: :ignored_when_module_overridden,
         finch_stub_ref: stub
