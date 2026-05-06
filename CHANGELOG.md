@@ -1,3 +1,36 @@
+## [FEAT] Phase 18.4: Session projection lifts manual_tool_calls bucket (Layer D)
+*Wednesday, May 6th at 6pm*
+Wire ALLM.Session through to :awaiting_tools when ALLM.Chat halts with the 
+per-tool manual partition. The internal manual_tool_calls/1 helper now takes a 
+%ChatResult{} (not %Response{}) — first clause matches 
+metadata.manual_tool_calls with an is_list(tcs) and tcs != [] guard (Decision 
+#8 load-bearing); second clause matches final_response.tool_calls for 
+whole-loop backwards-compat; third clause catches all and returns []. The 
+empty-list guard is critical: it prevents a future metadata.manual_tool_calls: 
+[] write (e.g., a defensively-merged StreamCollector fold) from masking the 
+whole-loop fallback. Same shape extends to step_manual/2 (2 clauses with the 
+same guard). classify_step/1 gains a new clause via per_tool_manual_step?/1 
+private predicate — extracted to keep cyclomatic complexity ≤ 9 (third 
+Phase 18 sub-phase to hit this Credo threshold; see retro Finding 1 for the 
+systemic pattern). The clause runs BEFORE the existing meta[:mode] == :manual 
+clause (Decision #11) but produces the same atom — distinction lives in 
+metadata shape (per-tool: manual_tool_calls list; whole-loop: mode: :manual). 
+Phase 8's status-transition matrix passes unchanged. The call site at 
+session.ex:646 changed from manual_tool_calls(cr.final_response) to 
+manual_tool_calls(cr) — without this, the new metadata-clause never matches 
+because metadata lives on cr, not cr.final_response. ALLM.Session @moduledoc 
+gains a 'Per-tool manual cycle (Phase 18)' section. 11 new tests in 
+test/allm/session_per_tool_manual_test.exs cover the full design matrix (8 
+cells from 18.4.1) plus the empty-list-write defensive case (synthesized 
+%ChatResult{metadata: %{manual_tool_calls: []}} → falls through to 
+final_response.tool_calls; preemptive bullet added by 18.1's fix step) plus a 
+parallel defensive case for step_manual/2 driven through 
+Session.apply_step_result/2's @doc false test seam. Full suite 288 doctests / 
+26 properties / 2252 tests / 0 failures; mix credo --strict + mix format 
+--check-formatted clean.
+
+---
+
 ## [FEAT] Phase 18.3: streaming per-tool manual partition + :step_completed payload key (Layer C)
 *Wednesday, May 6th at 6pm*
 Mirror the non-streaming partition into ALLM.Chat.transition_a_to_b/1 and lift 

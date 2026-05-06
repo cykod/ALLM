@@ -75,6 +75,20 @@ defmodule ALLM.Session do
   pending call is submitted. The caller then invokes `continue/3` with a
   `nil` message to drive the next adapter turn.
 
+  ## Per-tool manual cycle (Phase 18)
+
+  When `mode: :auto` and any called tool has `manual: true`,
+  `:awaiting_tools` is entered with `pending_tool_calls` containing
+  **only** the manual subset; auto tools have already executed and their
+  `:tool` messages are in `session.thread`. The same
+  `submit_tool_result/3` flow resolves the manual subset; submitting a
+  result for an AUTO-bucket id returns
+  `{:error, %SessionError{reason: :unknown_tool_call_id}}` because that
+  id already ran and is not in `pending_tool_calls`. `mode: :manual`
+  whole-loop wins over per-tool flags (Phase 18 Decision #5): under
+  `mode: :manual`, `pending_tool_calls` is the full
+  `response.tool_calls` list regardless of any tool's `manual` flag.
+
   ## `context` is caller-owned
 
   The `:context` field is a free-form `map()` the library threads through
@@ -643,7 +657,7 @@ defmodule ALLM.Session do
   end
 
   defp project_chat_result(base, %ChatResult{halted_reason: :manual_tool_calls} = cr) do
-    tool_calls = manual_tool_calls(cr.final_response)
+    tool_calls = manual_tool_calls(cr)
     %{base | status: :awaiting_tools, pending_tool_calls: tool_calls}
   end
 
@@ -665,7 +679,19 @@ defmodule ALLM.Session do
     %{base | status: :completed}
   end
 
-  defp manual_tool_calls(%{tool_calls: tcs}) when is_list(tcs), do: tcs
+  # Phase 18.4 — per-tool manual: prefer `metadata.manual_tool_calls` (the
+  # partition path's bucket) over `final_response.tool_calls` (the whole-loop
+  # path's full list). The empty-list guard (`tcs != []`) on the first clause
+  # is load-bearing: it prevents a future `metadata.manual_tool_calls: []`
+  # write (e.g., from a defensively-merged StreamCollector fold) from masking
+  # the whole-loop fallback. See PHASE_18_DESIGN.md Decision #8.
+  defp manual_tool_calls(%ChatResult{metadata: %{manual_tool_calls: tcs}})
+       when is_list(tcs) and tcs != [],
+       do: tcs
+
+  defp manual_tool_calls(%ChatResult{final_response: %{tool_calls: tcs}}) when is_list(tcs),
+    do: tcs
+
   defp manual_tool_calls(_), do: []
 
   defp chat_result_error(%ChatResult{metadata: meta}, key) when is_map(meta) do
@@ -702,13 +728,35 @@ defmodule ALLM.Session do
 
   defp classify_step(%StepResult{metadata: meta, response: response, done?: done?}) do
     cond do
-      meta[:halted_reason] == :ask_user -> :ask_user
-      meta[:halted_reason] == :tool_error -> :tool_error
-      meta[:mode] == :manual and response.finish_reason == :tool_calls -> :manual_tool_calls
-      response.finish_reason == :error -> :error
-      done? -> :completed
-      true -> :idle
+      meta[:halted_reason] == :ask_user ->
+        :ask_user
+
+      meta[:halted_reason] == :tool_error ->
+        :tool_error
+
+      # Phase 18.4 — per-tool manual halt classification (Decision #11). The
+      # new clause is inserted BEFORE the `meta[:mode] == :manual` clause;
+      # the per-tool path NEVER sets `metadata.mode == :manual`, so the
+      # whole-loop path's behavior is unchanged.
+      per_tool_manual_step?(meta) ->
+        :manual_tool_calls
+
+      meta[:mode] == :manual and response.finish_reason == :tool_calls ->
+        :manual_tool_calls
+
+      response.finish_reason == :error ->
+        :error
+
+      done? ->
+        :completed
+
+      true ->
+        :idle
     end
+  end
+
+  defp per_tool_manual_step?(meta) do
+    is_list(meta[:manual_tool_calls]) and meta.manual_tool_calls != []
   end
 
   defp step_ask_user(base, %StepResult{metadata: meta}) do
@@ -725,6 +773,16 @@ defmodule ALLM.Session do
       Map.get(meta, :on_tool_error_exception) || Map.get(meta, :error) || meta
 
     %{base | status: :error, metadata: Map.put(base.metadata, :error, error_term)}
+  end
+
+  # Phase 18.4 — per-tool manual: prefer `metadata.manual_tool_calls` (the
+  # partition path's bucket) over `response.tool_calls` (the whole-loop
+  # path's full list). The empty-list guard on the first clause mirrors
+  # `manual_tool_calls/1` above (Decision #8 — `tcs != []` prevents an
+  # empty-list write from masking the whole-loop fallback).
+  defp step_manual(base, %StepResult{metadata: %{manual_tool_calls: tcs}})
+       when is_list(tcs) and tcs != [] do
+    %{base | status: :awaiting_tools, pending_tool_calls: tcs}
   end
 
   defp step_manual(base, %StepResult{response: response}) do
