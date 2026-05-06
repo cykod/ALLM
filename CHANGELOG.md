@@ -1,3 +1,33 @@
+## [DOC] Apply 18 retro lifts to CLAUDE/specs + add Phase 19/20/release-plan steering
+*Wednesday, May 6th at 8pm*
+Apply /apply-retro proposals from 11 reviewed retros (Phase 16.1-16.6 + Phase 
+18.1-18.5), routing 18 systemic findings into the standing-rule docs. CLAUDE.md 
+gains 9 amendments: README-never-modified-outside-Module-Tree promoted to 
+top-level invariant after a 6-phase recurrence; :telemetry.attach/4 + async: 
+true foot-gun rule (5-recurrence sibling to Logger.configure/1); live-gate 
+blocked-by-pre-existing-failure framing for half-blocked provider runs; 
+streaming/non-streaming dual-path file:line disambiguation; SSE-chunk-mapper 
+rule generalized to dispatch trees; Layer-A constructors are struct!/2 
+pass-throughs by default; cross-provider helper-name alignment refinement; and 
+two sub-bullets under Decision text drift (type-contract vs test-plan, 
+test-bullet vs test-vehicle). AGENT_DESIGN_SPEC.md gains 4 items: reducer-touch 
+enumeration extends to event-payload keys, helper-name + arm-description 
+anchoring over bare line cites, file structural-stability predicts 
+cite-stability across sub-phases, and spec-amendment commit-range provenance. 
+AGENT_REVIEW_SPEC.md gains the full-suite mix test exit-0 phase-commit gate. 
+AGENT_IMPLEMENTATION_SPEC.md gains four §4 items (4j bounded max_turns on 
+streaming-chat-loop tests, 4k Layer-D session tests through Session public 
+seam, 4l relaxation/strip-set tables co-locate with the property, 4m 
+equivalence properties paired with absolute-shape tests). 11 retro files 
+renamed to _applied.md. Also tracks the three previously-untracked steering 
+docs authored prior to this session: PHASE_19_DESIGN.md (audio I/O), 
+PHASE_20_DESIGN.md (embeddings), and RELEASE_PLAN.md (Hex publish procedure). 
+README.md and ASKS.md changes intentionally left out — README is a 
+stand-alone [DOC] commit per the new top-level invariant; ASKS is the running 
+task log.
+
+---
+
 ## [DOC] Phase 18.5: chat-equivalence property fixtures + spec §5.2/§10.5/§12.4/§17 amendments + examples 14 & 15 + line-cite refresh
 *Wednesday, May 6th at 7pm*
 Final Phase 18 sub-phase — the data + orchestration + projection from 18.1–18.4 

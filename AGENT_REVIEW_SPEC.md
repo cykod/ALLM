@@ -29,6 +29,8 @@ Skip live REPL verification only for genuinely non-functional changes (typo in `
 
 ## 2. Quality Gate Stack
 
+- **Full-suite `mix test` exits 0** before phase commit — not just the new phase's test files. Flaky-in-aggregate failures (test passes in isolation but fails in full-suite mode) are first-class regressions and MUST be triaged before commit. Worked example: PHASE_16.1 through 16.4 each shipped with focused-test gates green but full-suite reporting `1 failure` (`readme_getting_started_test.exs` MatchError); plus PHASE_16.4's full-suite surfaced an `AnthropicStreamWireTest` flake invisible to the focused gate.
+
 Run all six. Capture output verbatim — a review without command output is unverifiable.
 
 ```bash
