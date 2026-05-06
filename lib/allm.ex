@@ -465,8 +465,43 @@ defmodule ALLM do
   | `:halt_when` | `halt_when.(step_result)` returned `true` | `%{halt_when_step_index: idx}` |
   | `:ask_user` | Handler returned `{:ask_user, _}` / `{:ask_user, _, _}` | `%{pending_question: q, pending_tool_call_id: id, ask_user_opts: opts}` (also on top-level `%ChatResult{}`) |
   | `:tool_error` | `on_tool_error: :halt`, fun returned `:halt`, or fun raised | `%{halt_tool_call_id: id}` (plus `:on_tool_error_exception` if fun raised) |
-  | `:manual_tool_calls` | `mode: :manual` and step's `response.finish_reason == :tool_calls` | `%{manual_turn_index: idx}` |
+  | `:manual_tool_calls` | `mode: :manual` and step's `response.finish_reason == :tool_calls`, OR (Phase 18) `mode: :auto` and one or more called tools have `manual: true` | `%{manual_turn_index: idx}` (whole-loop) — additionally `%{manual_tool_calls: [%ToolCall{}, ...]}` (per-tool, only the manual bucket) |
   | atom() (user) | Handler returned `{:halt, reason, result}` not in the above set | `%{halt_tool_call_id: id, halt_result: result}` |
+
+  ## Mixed-bucket re-issue (Phase 18 per-tool manual)
+
+  When `mode: :auto` and at least one called tool has `manual: true`, the
+  loop halts with `halted_reason: :manual_tool_calls` after running the
+  auto-bucket tools. The returned `result.thread` carries the assistant
+  message AND the auto-bucket `:tool` messages — but **NOT** placeholder
+  messages for the manual ids. Naively re-issuing `chat/3` on
+  `result.thread` sends a malformed request to the provider (assistant
+  tool_calls with no matching `:tool` messages for the manual ids),
+  surfacing as `%ALLM.Error.AdapterError{reason: :invalid_request}`.
+
+  Callers MUST append a `:tool` message for each id in
+  `result.metadata.manual_tool_calls` before re-issuing:
+
+      {:ok, result} = ALLM.chat(engine, [ALLM.user("...")])
+
+      # result.halted_reason == :manual_tool_calls
+      # result.metadata.manual_tool_calls == [%ToolCall{id: "cm", ...}]
+
+      # Resolve each manual call out-of-band, then append a :tool message.
+      tool_msg = %ALLM.Message{
+        role: :tool,
+        content: "approved",
+        tool_call_id: "cm"
+      }
+      augmented = ALLM.Thread.add_message(result.thread, tool_msg)
+
+      {:ok, final} = ALLM.chat(engine, augmented)
+
+  The `ALLM.Session` API (`Session.start/3` + `submit_tool_result/3`)
+  enforces this discipline automatically; raw `chat/3` callers must guard
+  by hand. Whole-loop `mode: :manual` callers are unaffected — every
+  tool call surfaces on `result.final_response.tool_calls`, no auto
+  bucket exists.
 
   ## Examples
 

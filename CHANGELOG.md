@@ -1,3 +1,34 @@
+## [FEAT] Phase 18.2: chat/3 non-streaming per-tool manual partition (Layer C)
+*Wednesday, May 6th at 5pm*
+Extend ALLM.Chat.do_step/4 with a partition_tool_calls/2 helper that splits a 
+response's tool calls into auto + manual buckets based on tool.manual; auto 
+bucket runs eagerly via the existing ToolRunner path, then the loop halts with 
+:manual_tool_calls and the manual bucket lands in metadata.manual_tool_calls. 
+Adds a chat-layer preflight_unknown_tools/2 invocation BEFORE the partition 
+(Decision #14) so unknown-tool errors surface with the existing shape, and a 
+new clause in terminal_condition/5 BEFORE the existing :mode clause (Decision 
+#11) that recognizes the per-tool path. The pure-auto sub-arm is 
+byte-equivalent to the original path — zero behavior change for callers 
+without per-tool manual flags. Decision #5 (whole-loop wins) preserved: 
+{:manual, :tool_calls} still short-circuits before partition. ALLM.chat/3 @doc 
+updated with the halt-reason table prose and a 'Mixed-bucket re-issue' worked 
+example for the raw-chat footgun (Decision #4 — naive re-issue without 
+appending tool messages for manual ids surfaces a malformed-thread error). 14 
+new tests in test/allm/chat/per_tool_manual_test.exs cover the 5-cell 
+mode×flag matrix plus 4 edge cases (unknown-tool preflight, empty tool_calls, 
+multi-turn caller-resolves flow, structural footgun probe). Two in-commit 
+divergences: footgun test rephrased to a structural probe (Validate.thread/1 
+doesn't enforce cross-message tool_call_id linkage; Fake adapter doesn't 
+validate wire shape — only live providers reject); helper extraction 
+(run_auto_tool_calls_step/5, dispatch_partitioned_tool_calls/6) to satisfy 
+Credo Refactor.Nesting threshold of 2. Eleven streaming-side line-cite 
+refreshes in PHASE_18_DESIGN.md so 18.3 starts with correct line numbers; 
+non-streaming cite refreshes deferred to 18.5's spec-amendment commit. Full 
+suite 287 doctests / 26 properties / 2228 tests / 0 failures; mix credo 
+--strict + mix format --check-formatted clean.
+
+---
+
 ## [FEAT] Phase 18.1: %ALLM.Tool{manual: boolean()} field (Layer A)
 *Wednesday, May 6th at 5pm*
 Add a manual: boolean() field to %ALLM.Tool{} with default false, plus an 

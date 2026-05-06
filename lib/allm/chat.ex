@@ -97,6 +97,7 @@ defmodule ALLM.Chat do
     StreamRunner,
     Telemetry,
     Thread,
+    Tool,
     ToolCall,
     ToolRunner,
     Validate
@@ -940,11 +941,25 @@ defmodule ALLM.Chat do
       sr.metadata[:halted_reason] == :ask_user -> ask_user_halt(sr)
       sr.metadata[:halted_reason] == :tool_error -> tool_error_halt(sr)
       custom_halt_atom?(sr) -> custom_halt(sr)
+      per_tool_manual?(sr) -> per_tool_manual_halt(sr, step_index)
       sr.metadata[:mode] == :manual -> {:halt, :manual_tool_calls, %{manual_turn_index: step_index}}
       sr.response.finish_reason in [:stop, :length, :content_filter] -> {:halt, :completed, %{}}
       sr.response.finish_reason == :error -> error_halt(sr)
       true -> halt_when_or_max_turns(sr, opts, step_index, max_turns)
     end
+  end
+
+  # Phase 18.2 — per-tool manual halt detector (Decision #11). The new clause
+  # is inserted BEFORE the `metadata[:mode] == :manual` clause; whole-loop
+  # turns NEVER set `metadata.manual_tool_calls`, so this guard's `false` for
+  # whole-loop and the existing path's behavior is unchanged.
+  defp per_tool_manual?(%StepResult{metadata: meta}) do
+    is_list(meta[:manual_tool_calls]) and meta.manual_tool_calls != []
+  end
+
+  defp per_tool_manual_halt(%StepResult{metadata: meta}, step_index) do
+    {:halt, :manual_tool_calls,
+     %{manual_turn_index: step_index, manual_tool_calls: meta.manual_tool_calls}}
   end
 
   defp ask_user_halt(%StepResult{metadata: meta}) do
@@ -1044,7 +1059,7 @@ defmodule ALLM.Chat do
          }}
 
       {:auto, :tool_calls} ->
-        run_tools_non_streaming(engine, thread, assistant_msg, response, opts)
+        run_auto_tool_calls_step(engine, thread, assistant_msg, response, opts)
 
       {_mode, _other} ->
         new_thread = Thread.add_message(thread, assistant_msg)
@@ -1057,6 +1072,151 @@ defmodule ALLM.Chat do
            done?: true,
            metadata: %{}
          }}
+    end
+  end
+
+  # Phase 18.2 — chat-layer preflight runs BEFORE partition (Decision #14) so
+  # the partition never observes an unknown-tool name. Mirrors the streaming
+  # path's preflight at `chat.ex` `start_phase_b/3`. Extracted from `do_step/4`
+  # to keep that function under Credo's nesting threshold.
+  defp run_auto_tool_calls_step(
+         %Engine{} = engine,
+         thread,
+         assistant_msg,
+         %Response{} = response,
+         opts
+       ) do
+    tools = Engine.resolve_tools(engine, opts)
+
+    case preflight_unknown(response.tool_calls, tools) do
+      :ok ->
+        dispatch_partitioned_tool_calls(engine, thread, assistant_msg, response, tools, opts)
+
+      {:error, %EngineError{}} = err ->
+        err
+    end
+  end
+
+  defp dispatch_partitioned_tool_calls(engine, thread, assistant_msg, response, tools, opts) do
+    case partition_tool_calls(response.tool_calls, tools) do
+      {_auto, []} ->
+        # Pure-auto — byte-identical to the original path: no extra
+        # work, run_tools_non_streaming/4 re-resolves tools internally.
+        run_tools_non_streaming(engine, thread, assistant_msg, response, opts)
+
+      {[], manual_tcs} ->
+        # Pure-manual under :auto — equivalent to whole-loop manual for
+        # this turn; no tools execute; metadata.manual_tool_calls (NOT
+        # :mode) distinguishes per-tool path per Decision #1.
+        {:ok, manual_only_step_result(thread, assistant_msg, response, manual_tcs)}
+
+      {auto_tcs, manual_tcs} ->
+        # Mixed — run auto tools eagerly, halt with manual pending.
+        run_tools_then_halt(
+          engine,
+          thread,
+          assistant_msg,
+          response,
+          auto_tcs,
+          manual_tcs,
+          opts
+        )
+    end
+  end
+
+  # Partition `tool_calls` into `{auto, manual}` by `Tool.manual` flag. Input
+  # order is preserved within each bucket (the prepend-then-reverse keeps the
+  # call ordering the model committed to). Unknown-tool names go to the auto
+  # bucket — the chat-layer preflight runs BEFORE this helper, so unknowns
+  # short-circuit the call site before the partition observes them; the auto
+  # routing is defense-in-depth.
+  #
+  # See PHASE_18_DESIGN.md §18.2.2 and Decisions #2, #6, #10.
+  @spec partition_tool_calls([ToolCall.t()], [Tool.t()]) ::
+          {[ToolCall.t()], [ToolCall.t()]}
+  defp partition_tool_calls(tool_calls, tools) do
+    tool_index = Map.new(tools, fn %Tool{name: n} = t -> {n, t} end)
+
+    {auto, manual} =
+      Enum.reduce(tool_calls, {[], []}, fn %ToolCall{name: name} = tc, {auto, manual} ->
+        case Map.get(tool_index, name) do
+          %Tool{manual: true} -> {auto, [tc | manual]}
+          _other -> {[tc | auto], manual}
+        end
+      end)
+
+    {Enum.reverse(auto), Enum.reverse(manual)}
+  end
+
+  # Pure-manual sub-arm: append the assistant message, surface the manual
+  # tool_calls in metadata. The `:mode` key is NOT set — distinguishes the
+  # per-tool path from the whole-loop `mode: :manual` path (Decision #1).
+  defp manual_only_step_result(thread, assistant_msg, %Response{} = response, manual_tcs) do
+    new_thread = Thread.add_message(thread, assistant_msg)
+
+    %StepResult{
+      thread: new_thread,
+      response: response,
+      tool_results: [],
+      done?: false,
+      metadata: %{manual_tool_calls: manual_tcs}
+    }
+  end
+
+  # Mixed sub-arm: run the auto subset via the existing ToolRunner path, then
+  # surface the manual subset in metadata. The thread carries the assistant
+  # message + auto-bucket :tool messages, but NO :tool messages for the manual
+  # ids — those are pending for the caller to resolve (Decision #4).
+  defp run_tools_then_halt(
+         %Engine{} = engine,
+         thread,
+         assistant_msg,
+         %Response{} = response,
+         auto_tcs,
+         manual_tcs,
+         opts
+       ) do
+    tools = Engine.resolve_tools(engine, opts)
+    runner_opts = build_runner_opts(engine, response, opts)
+
+    case ToolRunner.run_tool_calls(auto_tcs, tools, runner_opts) do
+      {:ok, tool_msgs} ->
+        new_thread =
+          thread
+          |> Thread.add_message(assistant_msg)
+          |> Thread.add_messages(tool_msgs)
+
+        {:ok,
+         %StepResult{
+           thread: new_thread,
+           response: response,
+           tool_results: tool_msgs,
+           done?: false,
+           metadata: %{manual_tool_calls: manual_tcs}
+         }}
+
+      {:ok, tool_msgs, halt_meta} ->
+        # Auto-bucket halt (e.g., ask_user, tool_error, custom halt atom)
+        # wins over the per-tool manual surface — the per-call halt is more
+        # urgent than queuing a manual approval. The existing terminal
+        # condition on `halt_meta` keys (handled in terminal_condition/5)
+        # routes the halt; we do NOT append manual_tcs here.
+        new_thread =
+          thread
+          |> Thread.add_message(assistant_msg)
+          |> Thread.add_messages(tool_msgs)
+
+        {:ok,
+         %StepResult{
+           thread: new_thread,
+           response: response,
+           tool_results: tool_msgs,
+           done?: true,
+           metadata: halt_meta
+         }}
+
+      {:error, %EngineError{}} = err ->
+        err
     end
   end
 

@@ -12,7 +12,7 @@
 |-----------|-------------|-------|--------|
 | 18.1 | `%ALLM.Tool{manual: boolean()}` field + serialization round-trip + `ALLM.tool/1` pass-through | A | Not Started |
 | 18.2 | Non-streaming partition in `ALLM.Chat.do_step/4` (`lib/allm/chat.ex:1029`); `step/3` + `chat/3` halt-reason wiring | C | Not Started |
-| 18.3 | Streaming partition mirror in `ALLM.Chat.transition_a_to_b/1` (`lib/allm/chat.ex:1187`); `:step_completed` payload key | C | Not Started |
+| 18.3 | Streaming partition mirror in `ALLM.Chat.transition_a_to_b/1` (`lib/allm/chat.ex:1337`, streaming); `:step_completed` payload key | C | Not Started |
 | 18.4 | `ALLM.Session.manual_tool_calls/1` extension (`lib/allm/session.ex:668-669`) + status-projection table update | D | Not Started |
 | 18.5 | Cross-phase: chat-equivalence property updated; spec § amendments; `examples/14_*` + `examples/15_*`; CHANGELOG | C/D | Not Started |
 
@@ -135,7 +135,7 @@ session.status
 - **Modified Layer A:**
   - `lib/allm/tool.ex` — add `manual: boolean()` field with default `false`. Update `@type t`, `defstruct`, `__from_tagged__/1`. No change to `new/1` (struct field with default is keyword pass-through). `@enforce_keys` stays at `[:name, :description, :schema]` — manual remains optional.
 - **Modified Layer C:**
-  - `lib/allm/chat.ex` — extend `do_step/4` (`chat.ex:1029`) and `transition_a_to_b/1` (`chat.ex:1187`) with the partition. Add private helpers `partition_tool_calls/2` and `manual_step_metadata/1`. The existing `mode: :manual` whole-loop path (`{:manual, :tool_calls}` in `do_step/4`, `chat.ex:1184` in the streaming path) is unchanged — it short-circuits *before* the partition runs.
+  - `lib/allm/chat.ex` — extend `do_step/4` (`chat.ex:1029`, non-streaming; deferred to Phase 18.5 cite-refresh — actual HEAD `chat.ex:1044`) and `transition_a_to_b/1` (`chat.ex:1337`, streaming) with the partition. Add private helpers `partition_tool_calls/2` and `manual_step_metadata/1`. The existing `mode: :manual` whole-loop path (`{:manual, :tool_calls}` in `do_step/4` non-streaming, `chat.ex:1347` in the streaming path) is unchanged — it short-circuits *before* the partition runs.
 - **Modified Layer D:**
   - `lib/allm/session.ex` — extend `manual_tool_calls/1` (`session.ex:668-669`) to read `metadata.manual_tool_calls` first, falling back to `response.tool_calls` for backwards compatibility with the whole-loop path. Update `step_manual/2` (`session.ex:730`) similarly. No new public function.
 - **Modified facade:**
@@ -203,9 +203,9 @@ session.status
 
 12. **`StreamCollector.apply_event/2` MUST extract `payload.manual_tool_calls`.** Without this, the streaming arm produces a `%StepResult{}` with `metadata.manual_tool_calls` absent — the chat-equivalence property (`assertions.ex:90` `assert a.metadata == b.metadata`) breaks immediately. *What the implementation does to maintain this:* the `:step_completed` clause in `StreamCollector.apply_event/2` adds `Map.get(payload, :manual_tool_calls, [])` extraction; merges onto `step_result.metadata` as `manual_tool_calls: list` IFF the list is non-empty (empty list is the absence-of-key default — merging it would diverge from the non-streaming arm which only sets the key when the partition produces a non-empty bucket). Sub-phase 18.3 implementation checklist commits to this fold extension explicitly, not hedge-worded.
 
-13. **`mode: :manual` whole-loop wins; per-tool flag is silent under whole-loop.** *What the implementation does to maintain this:* `do_step/4` at `chat.ex:1029-1061`'s top-level `case` matches `{:manual, :tool_calls}` BEFORE the `{:auto, :tool_calls}` arm. The partition is invoked only inside the `:auto` arm. Verified at `chat.ex:1034` (whole-loop short-circuit position) and `chat.ex:1187` (streaming counterpart, `cond` clause ordering).
+13. **`mode: :manual` whole-loop wins; per-tool flag is silent under whole-loop.** *What the implementation does to maintain this:* `do_step/4` at `chat.ex:1029-1061` (non-streaming; deferred to 18.5 cite-refresh — actual HEAD `chat.ex:1044-1075`)'s top-level `case` matches `{:manual, :tool_calls}` BEFORE the `{:auto, :tool_calls}` arm. The partition is invoked only inside the `:auto` arm. Verified at `chat.ex:1034` (non-streaming whole-loop short-circuit position; deferred — actual HEAD `chat.ex:1049`) and `chat.ex:1337` (streaming counterpart `transition_a_to_b/1`, `cond` clause ordering with `mode == :manual` at `chat.ex:1347`).
 
-14. **`preflight_unknown_tools/2` runs BEFORE partition at the chat layer in BOTH paths.** The streaming path already does this at `chat.ex:1231` (`preflight_unknown(response.tool_calls, tools)`). The non-streaming path delegates preflight to `ToolRunner.run_tool_calls/3` (`tool_runner.ex:202`) — Phase 18 ADDS an explicit chat-layer preflight in `do_step/4`'s `{:auto, :tool_calls}` arm BEFORE `partition_tool_calls/2`. *What the implementation does to maintain this:* sub-phase 18.2 implementation checklist adds a bullet: "in `do_step/4`'s `{:auto, :tool_calls}` arm, call `preflight_unknown_tools(response.tool_calls, tools)` BEFORE `partition_tool_calls/2`; on `{:error, _}` short-circuit with the engine error verbatim." The runner's internal preflight at `tool_runner.ex:202` becomes defense-in-depth (it sees only the auto subset, but never observes an unknown name because the chat-layer preflight short-circuited). Decision #6 ("unknown tools to auto bucket") is now redundant but kept as a safety net — the partition can run on a list that's already passed preflight, so it never sees an unknown name.
+14. **`preflight_unknown_tools/2` runs BEFORE partition at the chat layer in BOTH paths.** The streaming path already does this at `chat.ex:1391` (`start_phase_b/3`'s `preflight_unknown(response.tool_calls, tools)` call; design originally cited `chat.ex:1231`). The non-streaming path delegates preflight to `ToolRunner.run_tool_calls/3` (`tool_runner.ex:202`) — Phase 18 ADDS an explicit chat-layer preflight in `do_step/4`'s `{:auto, :tool_calls}` arm BEFORE `partition_tool_calls/2`. *What the implementation does to maintain this:* sub-phase 18.2 implementation checklist adds a bullet: "in `do_step/4`'s `{:auto, :tool_calls}` arm, call `preflight_unknown_tools(response.tool_calls, tools)` BEFORE `partition_tool_calls/2`; on `{:error, _}` short-circuit with the engine error verbatim." The runner's internal preflight at `tool_runner.ex:202` becomes defense-in-depth (it sees only the auto subset, but never observes an unknown name because the chat-layer preflight short-circuited). Decision #6 ("unknown tools to auto bucket") is now redundant but kept as a safety net — the partition can run on a list that's already passed preflight, so it never sees an unknown name.
 
 9. **Chat-equivalence property: relaxation budget unchanged.** The `chat ≡ stream |> to_chat_result` property must continue to hold across mixed-bucket inputs. Phase 7's `assert_equivalent_chat_result/2` already strips `metadata.mode` divergence; Phase 18 adds `metadata.manual_tool_calls` as a *non-relaxed* assertion (both arms must produce the same list in the same order). *What the implementation does to maintain this:* both arms compute the partition via the same `partition_tool_calls/2` helper called from the shared `Chat.build_chat_result/1` stage; the order is deterministic (input order from `response.tool_calls`). Relaxation table row is added in 18.5; type is `tolerable` (deterministic).
 
@@ -340,7 +340,7 @@ end
 
 ### `ALLM.Chat.transition_a_to_b/1` extension (streaming)
 
-The streaming sibling at `lib/allm/chat.ex:1177-1219` gains the same partition. The existing `cond` keeps the `mode == :manual` short-circuit verbatim and adds a partition step inside the `mode == :auto and response.finish_reason == :tool_calls and response.tool_calls != []` arm:
+The streaming sibling at `lib/allm/chat.ex:1337-1379` (streaming `transition_a_to_b/1`) gains the same partition. The existing `cond` keeps the `mode == :manual` short-circuit verbatim and adds a partition step inside the `mode == :auto and response.finish_reason == :tool_calls and response.tool_calls != []` arm:
 
 ```elixir
 defp transition_a_to_b(%{collector: collector, engine: engine, opts: opts} = data) do
@@ -350,7 +350,7 @@ defp transition_a_to_b(%{collector: collector, engine: engine, opts: opts} = dat
 
   cond do
     mode == :manual and response.finish_reason == :tool_calls ->
-      # UNCHANGED — chat.ex:1187-1199.
+      # UNCHANGED — chat.ex:1347-1359 (streaming).
       ...
 
     mode == :auto and response.finish_reason == :tool_calls and response.tool_calls != [] ->
@@ -358,7 +358,7 @@ defp transition_a_to_b(%{collector: collector, engine: engine, opts: opts} = dat
 
       case partition_tool_calls(response.tool_calls, tools) do
         {_auto, []} ->
-          start_phase_b(data, response, assistant_msg)   # UNCHANGED — chat.ex:1202.
+          start_phase_b(data, response, assistant_msg)   # UNCHANGED — chat.ex:1362 (streaming).
 
         {[], manual_tcs} ->
           start_phase_c_manual_only(data, response, assistant_msg, manual_tcs)
@@ -484,7 +484,7 @@ The halt-tuple's third element flows to `ChatResult.metadata` via `build_chat_re
 | `%ALLM.Tool{manual: false}` is the default when `:manual` is omitted from `new/1` | Verified against `lib/allm/tool.ex` after the field addition; doctest. |
 | `%ALLM.Tool{}` round-trips through `:erlang.term_to_binary/1` with `:manual` preserved | Verified by §31 Layer A property test extension. |
 | `lib/allm/chat.ex:1029` is the non-streaming dispatch ladder entry | Verified against committed source on date 2026-05-01 (commit `a7b934b`). |
-| `lib/allm/chat.ex:1187` is the streaming partition site | Verified against committed source on date 2026-05-01. |
+| `lib/allm/chat.ex:1337` is the streaming partition site (streaming `transition_a_to_b/1`) | Re-verified against HEAD 2026-05-06; design originally cited `chat.ex:1187` against an earlier file revision. |
 | `lib/allm/session.ex:668-669` is the existing `manual_tool_calls/1` helper | Verified against committed source on date 2026-05-01. |
 | `lib/allm/tool.ex:41` is the `defstruct` for `%ALLM.Tool{}` | Verified against committed source on date 2026-05-01. |
 | `:manual_tool_calls` is the existing closed-enum halt-reason for whole-loop manual | Verified against `lib/allm/chat_result.ex:23-30` `@type halted_reason` (atom() tail; `:ask_user`, `:max_turns`, `:halt_when`, `:tool_error`, `:cancelled`, `:completed`, plus open `atom()`). `:manual_tool_calls` is documented in the halt-reason table at `lib/allm.ex:466` and surfaces from `lib/allm/chat.ex:943`. |
@@ -651,8 +651,8 @@ Plus:
 - [ ] Add `step_completed/4` arity with `@spec` and `@doc` covering the new key
 - [ ] Update the `@type t` for `:step_completed` in `lib/allm/event.ex` to include `manual_tool_calls: [ToolCall.t()]` in the payload type
 - [ ] Add `partition_tool_calls/2` invocation inside `transition_a_to_b/1` per the contract above (already authored as a private helper in 18.2 — reuse)
-- [ ] Add `start_phase_b_partial/4` and `start_phase_c_manual_only/4` helpers. **`start_phase_c_manual_only/4` MUST call `Thread.add_message(data.thread, assistant_msg)` before constructing `phase_c_data`** — mirrors the existing whole-loop manual branch at `chat.ex:1191` so the assistant message with tool_calls remains in the thread.
-- [ ] Thread `manual_tool_calls` through THREE state-shape sites: (a) `phase_b_data` at `chat.ex:1236-1245` adds a `:manual_tcs` field; (b) `transition_b_to_c/1` at `chat.ex:1397-1421` reads `phase_b_data.manual_tcs` and writes it into `phase_c_data`; (c) `emit_step_completed/1` at `chat.ex:1425` constructs `Event.step_completed(response, thread, mode, manual_tcs)` using the new `/4` arity. Per Decision #7 (AGENT_DESIGN_SPEC item 14 reducer-touch enumeration).
+- [ ] Add `start_phase_b_partial/4` and `start_phase_c_manual_only/4` helpers. **`start_phase_c_manual_only/4` MUST call `Thread.add_message(data.thread, assistant_msg)` before constructing `phase_c_data`** — mirrors the existing whole-loop manual branch at `chat.ex:1351` (streaming) so the assistant message with tool_calls remains in the thread.
+- [ ] Thread `manual_tool_calls` through THREE state-shape sites (all streaming): (a) `phase_b_data` at `chat.ex:1396` (streaming `start_phase_b/3`) adds a `:manual_tcs` field; (b) `transition_b_to_c/1` at `chat.ex:1557-1581` (streaming) reads `phase_b_data.manual_tcs` and writes it into `phase_c_data`; (c) `emit_step_completed/1` at `chat.ex:1585` (streaming) constructs `Event.step_completed(response, thread, mode, manual_tcs)` using the new `/4` arity. Per Decision #7 (AGENT_DESIGN_SPEC item 14 reducer-touch enumeration).
 - [ ] **Update `StreamCollector.apply_event/2`** (`lib/allm/stream_collector.ex`) — `:step_completed` clause adds `Map.get(payload, :manual_tool_calls, [])` extraction; merges onto `step_result.metadata` IFF the list is non-empty (empty-list-is-absence per Decision #12). This is a BLOCKING requirement for chat-equivalence — without it, the streaming arm's `step_result.metadata` lacks the key and `assert a.metadata == b.metadata` (`test/support/assertions.ex:90`) breaks immediately.
 - [ ] Verify `:on_event` callbacks see the new payload key via the existing pass-through
 
@@ -863,7 +863,7 @@ Adds ~$0.008 to the dual-provider `/review` pass; cumulative `/review` cost rise
 ## Cross-phase consistency check
 
 - Every new event payload key has a reducer case in `StreamCollector.apply_event/2` ✓ (18.3 implementation checklist)
-- Every spec § amendment cites a file:line in `lib/` ✓ (Decision text — `lib/allm/chat.ex:1029`, `chat.ex:1187`, `chat.ex:1184`, `lib/allm/session.ex:668-669`, `lib/allm/tool.ex:41`, `lib/allm.ex:466`)
+- Every spec § amendment cites a file:line in `lib/` ✓ (Decision text — `lib/allm/chat.ex:1029` non-streaming `do_step/4` (deferred to 18.5 cite-refresh — actual HEAD `chat.ex:1044`), `chat.ex:1337` streaming `transition_a_to_b/1` (was `chat.ex:1187` pre-refresh), `chat.ex:1347` streaming whole-loop `mode == :manual` short-circuit (was the ambiguous `chat.ex:1184` pre-refresh), `lib/allm/session.ex:668-669`, `lib/allm/tool.ex:41`, `lib/allm.ex:466`)
 - `@spec` for `partition_tool_calls/2` matches the contract above (18.2 implementation)
 - Hedge-word audit on this design — none found (all "should X" claims carry citations or `(verified … 2026-05-01)` annotations; all atom claims cite committed source)
 - Test-observable claims table at end of "Behaviour & Type Contracts" verified against committed source on 2026-05-01 (commit `a7b934b`)
