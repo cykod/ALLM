@@ -61,10 +61,11 @@
 #
 #    - Patch forward: ship 0.3.1 with the fix, mark 0.3.0 retired.
 #
-# Never `git commit --amend` past a release tag. Once `v0.3.0` is tagged
-# and pushed the commit is immutable; any fix is `v0.3.1`. The script's
-# idempotent-re-run path (mix.exs already at target -> skip the bump)
-# handles "publish failed mid-flight, fix and re-run" without amending.
+# Never `git commit --amend` past a release. Once `mix hex.publish` has
+# uploaded the tarball, the version is committed on Hex regardless of
+# local git state — any fix is `v0.3.1`. The script's idempotent-re-run
+# path (mix.exs already at target -> skip the bump) handles "publish
+# failed mid-flight, fix and re-run" without amending.
 #
 # Co-maintainer onboarding
 # ------------------------
@@ -103,9 +104,22 @@
 #   `v<X.Y.Z>` exists, then commits `CHANGELOG.md` as part of the release
 #   commit. Per-commit history lives in `HISTORY.md` (dev-only, NOT in
 #   `mix.exs` `package.files`). There is no `## [Unreleased]` rewrite.
-# - Does NOT push to origin before the publish succeeds. Order is
-#   publish-first, commit+tag+push-after, so a failed publish leaves no
-#   stranded artifacts.
+# - Does NOT contact `origin` at all — no `git fetch`, no
+#   `git ls-remote`, no `git push`. The release container has hex.pm
+#   credentials but no GitHub auth (no SSH key, no token), so any
+#   network call against origin would fail. Step 4 (up-to-date check)
+#   becomes the maintainer's responsibility: pull pending main changes
+#   on a workstation with GitHub access, sync to this container, then
+#   invoke. Step 5 (tag-doesn't-exist check) only consults the local
+#   ref database; if a co-maintainer pushed the tag from elsewhere
+#   without syncing here, `mix hex.publish` itself will reject the
+#   duplicate version (Hex enforces uniqueness server-side).
+# - Does NOT `git push` on success. Commits + tags locally and prints
+#   the exact `git push origin main v<X.Y.Z>` command for the maintainer
+#   to run from a workstation that has GitHub access. Rationale: same
+#   network-isolation reason as above, plus `mix hex.publish` is the
+#   only irreversible step. Hexdocs `[source]` links 404 until the
+#   maintainer pushes — expected; resolves once the push lands.
 # - Does NOT run the live-API gate (`examples/run_all.exs`). Those cost
 #   real money. The maintainer runs them manually before invoking this
 #   script when image/vision code has changed; the script merely WARNS
@@ -215,7 +229,7 @@ defmodule ALLM.Release do
     log_step("step 3", "on `main`?")
     check_branch()
 
-    log_step("step 4", "up to date with origin/main?")
+    log_step("step 4", "up-to-date check (offline; maintainer's responsibility)")
     check_up_to_date()
 
     log_step("step 5", "tag #{tag} doesn't already exist?")
@@ -255,7 +269,7 @@ defmodule ALLM.Release do
       log_step("step 10", "would prompt: Publish allm #{new_version} to Hex? [y/N] (skipped)")
       log_step("step 11", "would run: mix hex.publish --dry-run")
       run_hex_publish_dry_run()
-      log_step("step 12", "would commit + tag + push origin main #{tag} (skipped)")
+      log_step("step 12", "would commit + tag #{tag} locally (skipped); push is manual")
       log_step("step 13", "would print success URLs (skipped)")
       System.halt(0)
     end
@@ -275,7 +289,7 @@ defmodule ALLM.Release do
     log_step("step 11", "mix hex.publish (interactive)")
     publish_to_hex!()
 
-    log_step("step 12", "git commit + tag + push")
+    log_step("step 12", "git commit + tag (push is manual; instructions printed at end)")
     finalize_release!(new_version, tag)
 
     log_step("step 13", "done")
@@ -341,43 +355,31 @@ defmodule ALLM.Release do
     end
   end
 
+  # Step 4 is intentionally offline. This script runs in environments
+  # without network access to `origin` (the release container has
+  # hex.pm credentials but no GitHub auth). The up-to-date check is
+  # therefore the maintainer's responsibility before invoking — pull
+  # any pending main changes on a workstation with GitHub access, then
+  # bring this container's checkout in sync (rsync, mounted volume,
+  # rebuild — whatever provisioning mechanism is in use).
   defp check_up_to_date do
-    case System.cmd("git", ["fetch", "origin", "main"], stderr_to_stdout: true) do
-      {_out, 0} ->
-        :ok
-
-      {out, code} ->
-        IO.puts(:stderr, out)
-        abort("git fetch origin main failed (exit #{code})")
-    end
-
-    {out, 0} = System.cmd("git", ["rev-list", "--count", "HEAD..origin/main"])
-
-    behind = out |> String.trim() |> String.to_integer()
-
-    if behind == 0 do
-      IO.puts("  up to date")
-    else
-      abort("HEAD is #{behind} commit(s) behind origin/main; `git pull --rebase` first")
-    end
+    IO.puts("  (offline; maintainer is responsible for syncing main before invoking)")
   end
 
+  # Step 5 is local-only for the same reason as step 4. We can detect a
+  # local tag collision (`git rev-parse <tag>`); we cannot consult origin.
+  # If a co-maintainer pushed `<tag>` from another workstation that this
+  # checkout hasn't synced, `mix hex.publish` itself will reject the
+  # version (Hex enforces version uniqueness server-side) — that's the
+  # backstop.
   defp check_tag_absent(tag) do
     case System.cmd("git", ["rev-parse", tag], stderr_to_stdout: true) do
       {_out, 0} ->
         abort("tag #{tag} already exists locally; bump again or delete the local tag")
 
       {_out, _nonzero} ->
-        :ok
+        IO.puts("  tag #{tag} not present locally (origin not consulted; offline)")
     end
-
-    {out, 0} = System.cmd("git", ["ls-remote", "--tags", "origin", tag])
-
-    if String.trim(out) != "" do
-      abort("tag #{tag} already exists on origin; pick a different version")
-    end
-
-    IO.puts("  tag #{tag} is free")
   end
 
   # ----- step 6: CHANGELOG check ---------------------------------------------
@@ -598,13 +600,19 @@ defmodule ALLM.Release do
     end
   end
 
-  # ----- step 12: commit + tag + push ---------------------------------------
+  # ----- step 12: commit + tag (NO push) ------------------------------------
 
+  # The git push is deliberately NOT done by the script. `mix hex.publish`
+  # is the irreversible step (revert window narrows to 1h after the first
+  # 24h); the local commit+tag are cheap and recoverable. If `git push`
+  # were here and failed (network, SSH, branch protection, 2FA), the
+  # maintainer would be left with a published-but-not-pushed state that
+  # the script's idempotent re-run path can't fix. Hand the push back to
+  # the maintainer so they can eyeball the local tag first.
   defp finalize_release!(new_version, tag) do
     run!("git", ["add", @mix_exs_path, @changelog_path])
     run!("git", ["commit", "-m", "Release #{tag}"])
     run!("git", ["tag", "-a", tag, "-m", "v#{new_version}"])
-    run!("git", ["push", "origin", "main", tag])
   end
 
   defp run!(cmd, args) do
@@ -621,10 +629,19 @@ defmodule ALLM.Release do
   # ----- step 13: success ---------------------------------------------------
 
   defp print_success(new_version) do
+    tag = "v#{new_version}"
     IO.puts("")
-    IO.puts("Released allm v#{new_version}.")
+    IO.puts("Released allm v#{new_version} to Hex.")
     IO.puts("  https://hex.pm/packages/allm/#{new_version}")
     IO.puts("  https://hexdocs.pm/allm/#{new_version}/")
+    IO.puts("")
+    IO.puts("Local commit + annotated tag #{tag} created.")
+    IO.puts("Sync this checkout to a workstation with GitHub access, then push:")
+    IO.puts("")
+    IO.puts("    git push origin main #{tag}")
+    IO.puts("")
+    IO.puts("(This container has no GitHub credentials by design.)")
+    IO.puts("Hexdocs `[source]` links will 404 until that push lands.")
     IO.puts("")
     IO.puts("If this was a major bump, run the smoke test from RELEASE_PLAN.md §2.4.")
   end

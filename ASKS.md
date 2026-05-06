@@ -101,3 +101,37 @@
 [BUILD] wed 4/29 7pm - Build phases from PHASE_17_image_layer_7.md
 
 [FIX] thu 4/30 8pm - Fix issues from Phase 17.3 review and retro
+
+[MILE] fri 5/1 4pm - Applied nine Phase 15.x + 17.x retros via /apply-retro: 11 deduplicated rules landed in CLAUDE.md, AGENT_IMPLEMENTATION_SPEC.md, and AGENT_DESIGN_SPEC.md
+
+[BUILD] fri 5/1 4pm - Build phases from GEMINI_DESIGN.md steering doc
+
+[DSGN] fri 5/1 4pm - Design Hex release plan for ALLM package (cykod)
+
+[MILE] fri 5/1 5pm - Stamped engine model onto image requests, bundled a real PNG fixture for the image examples, widened drop_request_opts, and bumped run_all per-script timeout
+
+[IMPL] fri 5/1 5pm - Update README.md with more detailed information and examples for each API level (stateless, session, streaming, non-streaming)
+
+[DSGN] fri 5/1 5pm - Design Phase 18 per-tool manual mode (per-tool opt-out from auto-execution)
+
+[DEVL] fri 5/1 5pm - Quick devil review of PHASE_18_DESIGN.md
+
+[DSGN] sun 5/3 1am - Design Phase 20 embeddings (ALLM.embed/3) per §32.5 / RELEASE_0_3_PHASING.md What-Comes-After
+
+[DSGN] sun 5/3 1am - Design Phase 19 audio I/O (ALLM.transcribe + ALLM.synthesize) per RELEASE_0_3_PHASING.md v0.4 candidate
+
+[MILE] sun 5/3 11am - Shipped Gemini provider (Phase 16.1-16.6) with live examples passing — added sanitize_schema, name lookup, thoughtSignature wiring, and StreamCollector metadata preservation
+
+[MILE] sun 5/3 1pm - Fixed 3 failing tests (README section rename, release_polish_test gemini drift) and cleaned up credo warnings/format
+
+[BUILD] sun 5/3 1pm - Build phases from PHASE_18_DESIGN.md steering doc
+
+[ASKS] sun 5/3 1pm - Review Phase 17 (steering/PHASE_17*) and verify all sub-phases are complete
+
+[MILE] wed 5/6 6pm - Shipped Phase 18 (per-tool manual mode) end-to-end across 5 sub-phases — Tool struct field, chat partition (non-streaming + streaming), Session projection, examples + spec + chat-equivalence
+
+[MILE] wed 5/6 8pm - Applied 18 retro lifts to CLAUDE.md + 3 AGENT_*_SPEC.md docs and tracked 3 previously-untracked steering docs (Phase 19/20 designs + release plan)
+
+[BUILD] wed 5/6 9pm - Build all phases from RELEASE_PLAN.md (Hex release tooling)
+
+[MILE] wed 5/6 9pm - Added scripts/release.exs for Hex publish flow and restructured CHANGELOG/HISTORY around the /changelog skill model
