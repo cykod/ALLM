@@ -1,3 +1,61 @@
+## [DOC] Phase 18.5: chat-equivalence property fixtures + spec §5.2/§10.5/§12.4/§17 amendments + examples 14 & 15 + line-cite refresh
+*Wednesday, May 6th at 7pm*
+Final Phase 18 sub-phase — the data + orchestration + projection from 18.1–18.4 
+is now reflected in the spec, exercised by the chat-equivalence property over 
+three new fixtures, and demonstrated by two live example scripts. Three 
+Unreleased rollup bullets:
+
+- [FEAT] `%ALLM.Tool{manual: boolean()}` field (Phase 18.1) — per-tool manual 
+  mode is first-class on the Tool struct; default `false` keeps existing callers 
+  unchanged.
+- [FEAT] `ALLM.chat/3` mixed-bucket partition (Phase 18.2 non-streaming + 18.3 
+  streaming) — auto tools execute eagerly, manual tools halt the loop with 
+  `:manual_tool_calls` and surface in `metadata.manual_tool_calls`. Streaming 
+  emits the additive `:manual_tool_calls` payload key on `:step_completed`. 
+  Session projection (Phase 18.4) routes the manual subset through 
+  `pending_tool_calls`; `submit_tool_result/3` flow works unchanged.
+- [DOC] spec §5.2 / §10.5 / §12.4 / §17 amendments — `:manual` field on Tool 
+  struct (§5.2), `:manual_tool_calls` halt-reason fires under whole-loop OR 
+  per-tool conditions (§10.5), new §12.4 "Per-tool manual" subsection with 
+  worked examples for chat/3 and Session, §17 ToolRunner clarification (auto 
+  bucket only — partition lives in `ALLM.Chat`).
+
+Three new chat-equivalence fixtures (`mixed_manual_first_turn`, 
+`pure_manual_first_turn`, `auto_only_no_manual_flags_set`) extend the property's 
+fixture matrix from 10 to 13; the relaxation budget is unchanged 
+(`metadata.manual_tool_calls` is non-relaxed — both arms must produce identical 
+lists in identical order, by-construction via shared 
+`Chat.build_chat_result/1`). Three explicit per-fixture tests pin 
+`metadata.manual_tool_calls` shape (presence + length + name) and the control's 
+absence-of-key invariant — catches a future regression that drops the key from 
+BOTH arms simultaneously.
+
+`examples/14_per_tool_manual.exs` (`chat/3`-side) and 
+`examples/15_per_tool_manual_session.exs` (Session-side) ship with 
+`# Provider: openai, anthropic` markers — `run_all.exs`'s glob picks them up 
+unchanged. Per-clean-run cost adds ~$0.004 to the dual-provider /review pass.
+
+Line-cite refresh batch (deferred from 18.2/18.3 fix steps): 12 cites updated 
+in PHASE_18_DESIGN.md against HEAD — `chat.ex:1029 → 1044` (do_step/4 entry, 
+6 occurrences), `chat.ex:1043 → 1058` (whole-loop mode write), 
+`chat.ex:938-948 → 939-950` (terminal_condition halt detector range), 
+`chat.ex:1391 → 1421` (streaming start_phase_b preflight), 
+`session.ex:646 → 660` (apply_chat_result call site, 2 occurrences), 
+`session.ex:668-669 → 688-695` (manual_tool_calls helper, 6 occurrences), 
+`session.ex:703 → 729` (classify_step + new per_tool_manual_step? predicate at :758), 
+`session.ex:730 → 783-788` (step_manual), 
+`tool.ex:41 → 60` (defstruct, 2 occurrences). The pre-refresh deferral marker 
+is removed from line 138 (Module Tree). Test-observable claims table refreshed 
+to call out post-vs-pre-Phase-18 line numbers explicitly.
+
+Full suite 288 doctests / 26 properties / 2255 tests / 0 failures; 
+`mix credo --strict` + `mix format --check-formatted` clean. Live BLOCKING 
+gate result recorded post-run in RUN_OUTPUT_OPENAI.md and RUN_OUTPUT_ANTHROPIC.md 
+per CLAUDE.md snapshot policy (regen in same commit as the live run, or not at 
+all).
+
+---
+
 ## [FEAT] Phase 18.4: Session projection lifts manual_tool_calls bucket (Layer D)
 *Wednesday, May 6th at 6pm*
 Wire ALLM.Session through to :awaiting_tools when ALLM.Chat halts with the 

@@ -125,6 +125,8 @@ captured stdouts are committed as `RUN_OUTPUT_OPENAI.md` and
 | `11_edit_image.exs` | tight | `ALLM.edit_image/4` against `gpt-image-1` with mask (inpaint) (OpenAI-only) |
 | `12_vision_input.exs` | loose | `ALLM.generate/3` with `[%TextPart{}, %ImagePart{}]` content (OpenAI + Anthropic) |
 | `13_image_variations.exs` | tight | `ALLM.image_variations/3` against `dall-e-2` 256×256 (OpenAI-only) |
+| `14_per_tool_manual.exs` | tight | per-tool manual mode via `chat/3`: auto tool runs eagerly, manual tool halts with `:manual_tool_calls`, caller appends `:tool` message and re-issues (OpenAI + Anthropic) |
+| `15_per_tool_manual_session.exs` | tight | per-tool manual mode via `Session.start → submit_tool_result → continue` (OpenAI + Anthropic) |
 
 ## Image generation
 
@@ -181,6 +183,23 @@ sends a 1×1 transparent PNG with a "describe this image" prompt, and
 asserts a non-empty `output_text` and `finish_reason: :stop`. **Runs on
 both providers** (`# Provider: openai, anthropic`). Per-clean-run cost:
 roughly **~$0.001 USD** on either arm.
+
+## Per-tool manual mode
+
+Phase 18 adds `14_per_tool_manual.exs` and `15_per_tool_manual_session.exs` —
+two scripts that exercise the per-tool manual partition (spec §12.4). One
+tool (`get_weather`) is auto; another (`confirm_action`) carries
+`manual: true`. Under `mode: :auto`, the chat orchestrator runs the auto
+bucket eagerly and halts with `halted_reason: :manual_tool_calls`,
+surfacing the manual subset in `metadata.manual_tool_calls` (script 14)
+or `Session.pending_tool_calls` (script 15). Both scripts assert the
+two-turn flow: halt-on-manual, caller appends/submits the manual tool
+result, second call/continue completes with `"sunny"` in the assistant
+text.
+
+Both scripts run on **OpenAI and Anthropic**
+(`# Provider: openai, anthropic`). Per-clean-run cost: roughly
+**~$0.001 USD per script per provider**, ~$0.004 combined.
 
 ## Cost notes (Phase 17.3, full `run_all.exs` pass)
 

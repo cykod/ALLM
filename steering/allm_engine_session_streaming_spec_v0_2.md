@@ -208,6 +208,7 @@ defmodule ALLM.Tool do
           description: String.t(),
           schema: schema(),
           handler: handler() | nil,
+          manual: boolean(),
           metadata: map()
         }
 
@@ -216,10 +217,24 @@ defmodule ALLM.Tool do
     :description,
     :schema,
     :handler,
+    manual: false,
     metadata: %{}
   ]
 end
 ```
+
+> **Phase 18 amendment (commits `2a7fa7c..f56cfa6`).** The `:manual` field
+> declares this tool is per-tool manual: when set to `true`, the chat
+> orchestrator partitions a turn's tool calls into auto + manual buckets and
+> halts the loop with `halted_reason: :manual_tool_calls` whenever any manual
+> tool is called. Auto tools execute eagerly; manual ones surface in
+> `metadata.manual_tool_calls` (or `pending_tool_calls` on a `%Session{}`)
+> for caller resolution. Default `false` preserves existing behavior. The
+> partition lives in `ALLM.Chat` (`lib/allm/chat.ex:1044` non-streaming
+> `do_step/4` and `lib/allm/chat.ex:1337` streaming `transition_a_to_b/1`),
+> NOT in `ALLM.ToolRunner`. Under `mode: :manual` (whole-loop) the per-tool
+> flag is silent — the existing whole-loop short-circuit fires before the
+> partition runs. See §12.4.
 
 #### Handler return values
 
@@ -868,6 +883,25 @@ One streamed assistant step.
 
 Full orchestration loop.
 
+> **Phase 18 amendment (commits `2a7fa7c..f56cfa6`).** The `:manual_tool_calls`
+> halt-reason fires under TWO conditions:
+>
+> 1. **Whole-loop manual** — the call site passes `mode: :manual` and the
+>    response surfaces tool calls. `metadata.mode == :manual` distinguishes
+>    this path; tool calls live on `final_response.tool_calls`.
+>    (`lib/allm/chat.ex:1058` writes `metadata: %{mode: :manual}` for this
+>    path; `lib/allm/chat.ex:945` is the loop halt detector.)
+> 2. **Per-tool manual under `mode: :auto`** — any called tool has
+>    `manual: true` (§5.2). Auto-bucket tools have already executed and
+>    their `:tool` messages are in `result.thread`; the manual bucket
+>    surfaces in `metadata.manual_tool_calls` as a `[%ToolCall{}]` list.
+>    (`lib/allm/chat.ex:944` is the loop halt detector;
+>    `lib/allm/chat.ex:961` writes the `manual_tool_calls` halt-metadata.)
+>
+> Consumers that only need "tool calls await caller resolution" don't have
+> to distinguish; consumers that need to (e.g. for telemetry) inspect
+> either `metadata.mode` or `metadata.manual_tool_calls`. See §12.4.
+
 ### 10.6 `ALLM.stream/3`
 
 ```elixir
@@ -989,6 +1023,110 @@ When the orchestrator sees this return value:
 None of these are enforced by the library; they're application-level hints.
 
 Resuming via `ALLM.Session.reply/4` clears `pending_question` and `pending_tool_call_id`, appends the answer as a `:user` message, and resumes orchestration using the session's current mode.
+
+### 12.4 Per-tool manual (Phase 18)
+
+> Added in Phase 18 (commits `2a7fa7c..f56cfa6`). The amendment is additive
+> — pre-Phase-18 callers who never set `manual: true` on a tool see zero
+> behaviour change.
+
+`%ALLM.Tool{manual: true}` (§5.2) opts a single tool out of auto-execution
+under `mode: :auto`. Without this flag, the only way to halt the loop on a
+specific tool was to flip the entire engine to `mode: :manual` (which
+suspends auto-execution for *every* tool). Per-tool manual makes the split
+first-class.
+
+**Partition.** When a response arrives under `mode: :auto` with
+`finish_reason: :tool_calls`, the chat orchestrator partitions the
+response's `tool_calls` against the engine's resolved tools list, splitting
+into two buckets:
+
+- **auto** — tools where `manual` is `false` (default).
+- **manual** — tools where `manual` is `true`.
+
+Auto tools execute eagerly via `ALLM.ToolRunner` (§17). The loop then halts
+with `halted_reason: :manual_tool_calls`, surfacing the manual bucket in
+`metadata.manual_tool_calls` as a `[%ToolCall{}]` list. The returned
+`%ChatResult.thread` includes the assistant message AND the auto bucket's
+`:tool` messages, but NOT placeholder `:tool` messages for the manual
+ones — the caller must append those before re-issuing `chat/3`.
+
+The partition runs in `ALLM.Chat`, not in `ALLM.ToolRunner` (§17 amendment).
+
+**Three cases per turn:**
+
+1. **Pure auto** — every called tool has `manual: false`. Identical to
+   pre-Phase-18 behaviour; no halt.
+2. **Pure manual** — every called tool has `manual: true`. No tools
+   execute; loop halts with `:manual_tool_calls` and
+   `metadata.manual_tool_calls` populated. Equivalent to whole-loop
+   `mode: :manual` for this turn (and distinguishable downstream — the
+   per-tool path leaves `metadata.mode` UNSET to `:manual`).
+3. **Mixed** — auto tools run eagerly; loop halts with
+   `:manual_tool_calls` and the manual bucket surfaces.
+
+**Worked example — `chat/3`:**
+
+```elixir
+weather = ALLM.tool(name: "weather", schema: %{}, handler: fn _ -> {:ok, %{forecast: "sunny"}} end)
+charge  = ALLM.tool(name: "charge_card", schema: %{}, handler: fn _ -> {:ok, "ok"} end, manual: true)
+
+engine = ALLM.Engine.new(adapter: ALLM.Providers.OpenAI, tools: [weather, charge])
+
+{:ok, result} = ALLM.chat(engine, [ALLM.user("Charge $20 if sunny in Boston.")])
+
+result.halted_reason
+# => :manual_tool_calls
+
+result.metadata.manual_tool_calls
+# => [%ALLM.ToolCall{id: "c1", name: "charge_card", ...}]
+
+# `weather` already ran; its result is in result.thread.
+Enum.count(result.thread.messages, &(&1.role == :tool))
+# => 1
+```
+
+**Worked example — `Session`:**
+
+```elixir
+{:ok, session, _} = ALLM.Session.start(engine, [ALLM.user("Charge $20 if sunny in Boston.")])
+
+session.status
+# => :awaiting_tools
+
+session.pending_tool_calls
+# => [%ALLM.ToolCall{name: "charge_card", ...}]   # NOT weather — auto already ran
+
+session = ALLM.Session.submit_tool_result(session, "c1", %{status: "approved"})
+{:ok, session, _} = ALLM.Session.continue(engine, session, nil)
+
+session.status
+# => :completed
+```
+
+**Streaming.** Stream consumers see `:tool_execution_started` /
+`:tool_execution_completed` events only for the auto bucket. The trailing
+`:step_completed` payload carries an additive `:manual_tool_calls` key
+(empty list when no manual tools were involved — additive payload key,
+non-breaking per CLAUDE.md "adding a key to an existing event's payload
+map is NOT breaking"). The `:chat_completed` event's
+`payload.result.halted_reason` is `:manual_tool_calls` and
+`payload.result.metadata.manual_tool_calls` mirrors the non-streaming
+result.
+
+**Interaction with `:mode`.** When `mode: :manual` is passed at the call
+site, the existing whole-loop short-circuit fires *before* the partition
+runs. The `:manual` flag on individual tools is irrelevant under
+`mode: :manual` — the whole loop suspends, no tools execute, every called
+tool is surfaced for resolution.
+
+**Re-issue contract.** Raw `chat/3` callers MUST append `:tool` messages
+for every id in `metadata.manual_tool_calls` before re-issuing. Naively
+calling `chat/3` again on `result.thread` without first appending tool
+results sends a malformed request to the provider (assistant tool_call
+ids without matching tool results), surfacing as
+`%ALLM.Error.AdapterError{reason: :invalid_request}`. The Session API
+enforces this via `pending_tool_calls` and `submit_tool_result/3`.
 
 ---
 
@@ -1156,6 +1294,18 @@ defmodule ALLM.ToolRunner do
   def run_tool_calls(tool_calls, tools, opts)
 end
 ```
+
+> **Phase 18 amendment (commits `2a7fa7c..f56cfa6`).** Under `mode: :auto`,
+> `run_tool_calls/3` and `stream_tool_calls/3` receive the **auto bucket
+> only** when any tool in the response has `manual: true` (§5.2). The
+> auto/manual partition is upstream in `ALLM.Chat` (`do_step/4` at
+> `lib/allm/chat.ex:1044`; streaming `transition_a_to_b/1` at
+> `lib/allm/chat.ex:1337`); the runner's contract — "execute these tool
+> calls" — is unchanged. The runner sees a partial subset and never
+> observes the manual ones. Chat-layer `preflight_unknown_tools/2` runs
+> BEFORE the partition, so the runner's internal preflight is
+> defence-in-depth (it never observes an unknown tool name in the
+> per-tool path).
 
 ```elixir
 defmodule ALLM.Chat do

@@ -10,13 +10,13 @@
 
 | Sub-phase | Description | Layer | Status |
 |-----------|-------------|-------|--------|
-| 18.1 | `%ALLM.Tool{manual: boolean()}` field + serialization round-trip + `ALLM.tool/1` pass-through | A | Not Started |
-| 18.2 | Non-streaming partition in `ALLM.Chat.do_step/4` (`lib/allm/chat.ex:1029`); `step/3` + `chat/3` halt-reason wiring | C | Not Started |
-| 18.3 | Streaming partition mirror in `ALLM.Chat.transition_a_to_b/1` (`lib/allm/chat.ex:1337`, streaming); `:step_completed` payload key | C | Not Started |
-| 18.4 | `ALLM.Session.manual_tool_calls/1` extension (`lib/allm/session.ex:668-669`) + status-projection table update | D | Not Started |
-| 18.5 | Cross-phase: chat-equivalence property updated; spec § amendments; `examples/14_*` + `examples/15_*`; CHANGELOG | C/D | Not Started |
+| 18.1 | `%ALLM.Tool{manual: boolean()}` field + serialization round-trip + `ALLM.tool/1` pass-through | A | Completed |
+| 18.2 | Non-streaming partition in `ALLM.Chat.do_step/4` (`lib/allm/chat.ex:1044`); `step/3` + `chat/3` halt-reason wiring | C | Completed |
+| 18.3 | Streaming partition mirror in `ALLM.Chat.transition_a_to_b/1` (`lib/allm/chat.ex:1337`, streaming); `:step_completed` payload key | C | Completed |
+| 18.4 | `ALLM.Session.manual_tool_calls/1` extension (`lib/allm/session.ex:688-695`) + status-projection table update | D | Completed |
+| 18.5 | Cross-phase: chat-equivalence property updated; spec § amendments; `examples/14_*` + `examples/15_*`; CHANGELOG | C/D | Completed |
 
-**Overall Progress:** 0/5 sub-phases complete
+**Overall Progress:** 5/5 sub-phases complete (Phase 18 complete)
 
 ## Overview
 
@@ -28,7 +28,7 @@ Phase 18 makes per-tool manual a first-class concept by adding a single boolean 
 2. **Pure manual bucket** — every called tool has `manual: true`. Equivalent to today's whole-loop `mode: :manual` for this turn: the assistant message is appended, no tools run, the step halts with `:manual_tool_calls`.
 3. **Mixed bucket** — auto tools run eagerly (via the existing `ToolRunner.run_tool_calls/3` / `stream_tool_calls/3` path on the auto subset only), then the step halts with `:manual_tool_calls` and the *manual* tool calls in `metadata.manual_tool_calls`. The thread on the returned `%StepResult{}` / `%ChatResult{}` already carries the auto bucket's `:tool` messages — only the manual ones are pending.
 
-The phase reuses the existing `:manual_tool_calls` halt reason rather than introducing a new atom. Today that atom fires only when `mode: :manual`; after Phase 18 it also fires when `mode: :auto` AND any called tool was per-tool-manual. Distinguishing the two cases is downstream-observable: the existing whole-loop path leaves `metadata.mode == :manual` (set in `lib/allm/chat.ex:1043`); the per-tool path leaves `metadata.manual_tool_calls` (a list) and does NOT set `metadata.mode` to `:manual`. Consumers that only need "tool calls await caller resolution" don't have to distinguish; consumers that need to distinguish (e.g., for telemetry) read either key.
+The phase reuses the existing `:manual_tool_calls` halt reason rather than introducing a new atom. Today that atom fires only when `mode: :manual`; after Phase 18 it also fires when `mode: :auto` AND any called tool was per-tool-manual. Distinguishing the two cases is downstream-observable: the existing whole-loop path leaves `metadata.mode == :manual` (set in `lib/allm/chat.ex:1058`); the per-tool path leaves `metadata.manual_tool_calls` (a list) and does NOT set `metadata.mode` to `:manual`. Consumers that only need "tool calls await caller resolution" don't have to distinguish; consumers that need to distinguish (e.g., for telemetry) read either key.
 
 ### Dispatch propagation chain (load-bearing)
 
@@ -36,12 +36,12 @@ The `:manual_tool_calls` halt has FOUR dispatch sites that must all recognize th
 
 | Site | File:line | Today's clause | Phase 18 addition |
 |------|-----------|----------------|-------------------|
-| 1. Loop halt detector | `lib/allm/chat.ex:943` `terminal_condition/5` | `sr.metadata[:mode] == :manual -> {:halt, :manual_tool_calls, %{manual_turn_index: idx}}` | New clause BEFORE the `:mode` clause: `is_list(sr.metadata[:manual_tool_calls]) and sr.metadata.manual_tool_calls != [] -> {:halt, :manual_tool_calls, %{manual_turn_index: idx, manual_tool_calls: sr.metadata.manual_tool_calls}}`. The halt-metadata's third tuple element flows to `ChatResult.metadata` via `build_chat_result/1`. |
+| 1. Loop halt detector | `lib/allm/chat.ex:945` `terminal_condition/5` | `sr.metadata[:mode] == :manual -> {:halt, :manual_tool_calls, %{manual_turn_index: idx}}` | New clause BEFORE the `:mode` clause (now at `chat.ex:944` via `per_tool_manual?/1`): `is_list(sr.metadata[:manual_tool_calls]) and sr.metadata.manual_tool_calls != [] -> {:halt, :manual_tool_calls, %{manual_turn_index: idx, manual_tool_calls: sr.metadata.manual_tool_calls}}`. The halt-metadata's third tuple element flows to `ChatResult.metadata` via `build_chat_result/1`. |
 | 2. ChatResult metadata propagation | `lib/allm/chat.ex:911` `build_chat_result/1` | `metadata: state.halt_metadata` (whatever `terminal_condition/5` returned) | UNCHANGED — site 1's halt-tuple change suffices. The `manual_tool_calls` key flows in via `state.halt_metadata` automatically. |
 | 3. StreamCollector fold | `lib/allm/stream_collector.ex` `apply_event/2` `:step_completed` clause | extracts `Map.get(payload, :mode, :auto)` onto `step_result.metadata` | Add: extract `Map.get(payload, :manual_tool_calls, [])` and merge onto `step_result.metadata` IFF non-empty — empty list MUST NOT overwrite the absence-of-key state, so chat-equivalence holds for pure-auto turns. |
-| 4. Session classify_step | `lib/allm/session.ex:703` `classify_step/1` | `meta[:mode] == :manual and response.finish_reason == :tool_calls -> :manual_tool_calls` | New clause BEFORE: `is_list(meta[:manual_tool_calls]) and meta.manual_tool_calls != [] -> :manual_tool_calls`. Routes per-tool path through `step_manual/2` (site 5). |
-| 5. Session step_manual | `lib/allm/session.ex:730` `step_manual/2` | `pending_tool_calls: response.tool_calls \|\| []` | Read `meta[:manual_tool_calls]` first, fall back to `response.tool_calls`. |
-| 6. Session apply_chat_result manual lifter | `lib/allm/session.ex:646` call site `manual_tool_calls(cr.final_response)` | helper inspects a `%Response{}`-shaped map | Change call site to `manual_tool_calls(cr)`; helper's first clause matches `%ChatResult{metadata: %{manual_tool_calls: tcs}}`, second matches `%ChatResult{final_response: %{tool_calls: tcs}}`. The helper now takes a `%ChatResult{}`, not a `%Response{}`. |
+| 4. Session classify_step | `lib/allm/session.ex:729` `classify_step/1` | `meta[:mode] == :manual and response.finish_reason == :tool_calls -> :manual_tool_calls` | New clause BEFORE (now at `session.ex:741` via `per_tool_manual_step?/1`): `is_list(meta[:manual_tool_calls]) and meta.manual_tool_calls != [] -> :manual_tool_calls`. Routes per-tool path through `step_manual/2` (site 5). |
+| 5. Session step_manual | `lib/allm/session.ex:783-788` `step_manual/2` | `pending_tool_calls: response.tool_calls \|\| []` | Read `meta[:manual_tool_calls]` first, fall back to `response.tool_calls`. |
+| 6. Session apply_chat_result manual lifter | `lib/allm/session.ex:660` call site `manual_tool_calls(cr.final_response)` | helper inspects a `%Response{}`-shaped map | Change call site to `manual_tool_calls(cr)`; helper's first clause matches `%ChatResult{metadata: %{manual_tool_calls: tcs}}`, second matches `%ChatResult{final_response: %{tool_calls: tcs}}`. The helper now takes a `%ChatResult{}`, not a `%Response{}`. (Helper now at `session.ex:688-695`.) |
 
 All six sites are listed in the Module Tree as `(MODIFY)` and enumerated as discrete bullets in the Implementation Checklist of their respective sub-phases. AGENT_DESIGN_SPEC checklist item 14 (Layer-C reducer-touch enumeration) is satisfied — every site that absorbs the new metadata key is named.
 
@@ -135,9 +135,9 @@ session.status
 - **Modified Layer A:**
   - `lib/allm/tool.ex` — add `manual: boolean()` field with default `false`. Update `@type t`, `defstruct`, `__from_tagged__/1`. No change to `new/1` (struct field with default is keyword pass-through). `@enforce_keys` stays at `[:name, :description, :schema]` — manual remains optional.
 - **Modified Layer C:**
-  - `lib/allm/chat.ex` — extend `do_step/4` (`chat.ex:1029`, non-streaming; deferred to Phase 18.5 cite-refresh — actual HEAD `chat.ex:1044`) and `transition_a_to_b/1` (`chat.ex:1337`, streaming) with the partition. Add private helpers `partition_tool_calls/2` and `manual_step_metadata/1`. The existing `mode: :manual` whole-loop path (`{:manual, :tool_calls}` in `do_step/4` non-streaming, `chat.ex:1347` in the streaming path) is unchanged — it short-circuits *before* the partition runs.
+  - `lib/allm/chat.ex` — extend `do_step/4` (`chat.ex:1044`, non-streaming) and `transition_a_to_b/1` (`chat.ex:1337`, streaming) with the partition. Add private helpers `partition_tool_calls/2` and `manual_step_metadata/1`. The existing `mode: :manual` whole-loop path (`{:manual, :tool_calls}` in `do_step/4` non-streaming at `chat.ex:1049`, `chat.ex:1347` in the streaming path) is unchanged — it short-circuits *before* the partition runs.
 - **Modified Layer D:**
-  - `lib/allm/session.ex` — extend `manual_tool_calls/1` (`session.ex:668-669`) to read `metadata.manual_tool_calls` first, falling back to `response.tool_calls` for backwards compatibility with the whole-loop path. Update `step_manual/2` (`session.ex:730`) similarly. No new public function.
+  - `lib/allm/session.ex` — extend `manual_tool_calls/1` (`session.ex:688-695`) to read `metadata.manual_tool_calls` first, falling back to `response.tool_calls` for backwards compatibility with the whole-loop path. Update `step_manual/2` (`session.ex:783-788`) similarly. No new public function.
 - **Modified facade:**
   - `lib/allm.ex` — `chat/3` `@doc` halt-reason table (currently at `lib/allm.ex:466`) updates the `:manual_tool_calls` row prose. No `@spec` change.
 - **New tests:**
@@ -191,21 +191,21 @@ session.status
 
 4. **Mixed-bucket thread shape: auto results merged in; manual ones pending.** The returned `result.thread.messages` includes the assistant message AND the auto bucket's `:tool` messages — but NOT placeholder messages for the manual ones. This means the thread is *intentionally not well-formed for an immediate next turn* (it has assistant tool_calls without matching `:tool` messages for the manual ids). The caller MUST submit `:tool` messages for the manual ones before re-issuing `chat/3` / `Session.continue/3`. The Session API enforces this via `pending_tool_calls`; raw `chat/3` callers see `metadata.manual_tool_calls` and append `:tool` messages by hand. **This is a footgun for raw `chat/3` callers** — naively re-issuing `chat/3` on `result.thread` without first appending tool-result messages for the manual ids will send a malformed request to the provider (assistant tool_call IDs without matching tool results), surfacing as a `%AdapterError{reason: :invalid_request}`. The `@doc` for `chat/3` MUST carry an explicit warning paragraph titled "Mixed-bucket re-issue" with a worked example showing the required tool-message append. The 18.2 test plan includes a "naive re-issue surfaces a clear validator error" test asserting the failure mode is detectable. *Docs target:* `@doc ALLM.chat/3`; spec §12.4 worked example.
 
-5. **`mode: :manual` (whole-loop) still wins when set.** When `mode: :manual` is passed at the call site, the existing whole-loop short-circuit fires *before* the partition runs (`do_step/4` `{:manual, :tool_calls}` clause at `chat.ex:1034`). The `:manual` flag on individual tools is irrelevant under `mode: :manual`. *Justification:* preserves existing behavior for callers using whole-loop manual; the per-tool flag is additive opt-in for `mode: :auto` callers. *Docs target:* `@doc ALLM.tool/1`; spec §12.4 ("interaction with `:mode`").
+5. **`mode: :manual` (whole-loop) still wins when set.** When `mode: :manual` is passed at the call site, the existing whole-loop short-circuit fires *before* the partition runs (`do_step/4` `{:manual, :tool_calls}` clause at `chat.ex:1049`). The `:manual` flag on individual tools is irrelevant under `mode: :manual`. *Justification:* preserves existing behavior for callers using whole-loop manual; the per-tool flag is additive opt-in for `mode: :auto` callers. *Docs target:* `@doc ALLM.tool/1`; spec §12.4 ("interaction with `:mode`").
 
 6. **Unknown-tool calls go to the auto bucket.** A `%ToolCall{}` whose name doesn't appear in `engine.tools` is routed via the existing `preflight_unknown_tools/2` (`lib/allm/tool_runner.ex:202`) error path. Sending it through the partition first would let `partition_tool_calls/2` inspect a nil tool and either crash or default to auto/manual — both wrong. The partition matches each `%ToolCall{}` against the resolved tools list and assigns unknown names to the auto bucket so `preflight_unknown_tools/2` fires the existing `%EngineError{reason: :unknown_tool}` exactly as today. *Docs target:* `@doc false` on `partition_tool_calls/2`.
 
 7. **`:step_completed` payload gets `:manual_tool_calls` as a NEW key, not as a constructor arg change.** Per CLAUDE.md "adding a key to an *existing* event's payload map is NOT breaking (pattern-matching on payload keys is non-exhaustive)." The constructor in `lib/allm/event.ex` `step_completed/2` and `step_completed/3` (existing arities) gain a fourth optional argument `manual_tool_calls \\ []`. Existing call sites that pass two or three args continue to compile and produce a payload with `manual_tool_calls: []`. *Docs target:* `@doc ALLM.Event.step_completed/4`; spec §8 "Event protocol" amendment.
 
-8. **Session: `manual_tool_calls/1` reads from `%ChatResult{}`, not `%Response{}`.** The existing helper at `lib/allm/session.ex:668-669` is called with `cr.final_response` (a `%Response{}`) at `session.ex:646`. The metadata key Phase 18 introduces lives on `cr.metadata`, NOT `cr.final_response.metadata` — so the existing call site routes to the wrong struct. *What the implementation does to maintain this:* (a) change the call site at `session.ex:646` from `manual_tool_calls(cr.final_response)` to `manual_tool_calls(cr)`; (b) helper becomes 3 clauses — `defp manual_tool_calls(%ChatResult{metadata: %{manual_tool_calls: tcs}}) when is_list(tcs) and tcs != [], do: tcs` first (matches the per-tool path), `defp manual_tool_calls(%ChatResult{final_response: %{tool_calls: tcs}}) when is_list(tcs), do: tcs` second (matches the whole-loop path verbatim), then catch-all returning `[]`. The empty-list guard on the metadata clause prevents the per-tool clause from masking a whole-loop result that happens to carry `manual_tool_calls: []` from a future code path. The 3-clause function is at `lib/allm/session.ex:668-669` (extended); `step_manual/2` at `session.ex:730` gets the analogous 2-clause shape (read `meta[:manual_tool_calls]` first, fall back to `response.tool_calls`).
+8. **Session: `manual_tool_calls/1` reads from `%ChatResult{}`, not `%Response{}`.** The existing helper at `lib/allm/session.ex:688-695` (post-18.4 implementation; pre-18.4 was `session.ex:668-669`) is called with `cr` at `session.ex:660` (post-18.4 call-site refresh; pre-18.4 was `session.ex:646` and passed `cr.final_response`, a `%Response{}`). The metadata key Phase 18 introduces lives on `cr.metadata`, NOT `cr.final_response.metadata` — so the pre-18.4 call site routed to the wrong struct. *What the implementation does to maintain this:* (a) change the call site at `session.ex:660` from `manual_tool_calls(cr.final_response)` to `manual_tool_calls(cr)`; (b) helper becomes 3 clauses — `defp manual_tool_calls(%ChatResult{metadata: %{manual_tool_calls: tcs}}) when is_list(tcs) and tcs != [], do: tcs` first (matches the per-tool path), `defp manual_tool_calls(%ChatResult{final_response: %{tool_calls: tcs}}) when is_list(tcs), do: tcs` second (matches the whole-loop path verbatim), then catch-all returning `[]`. The empty-list guard on the metadata clause prevents the per-tool clause from masking a whole-loop result that happens to carry `manual_tool_calls: []` from a future code path. The 3-clause function is at `lib/allm/session.ex:688-695` (extended); `step_manual/2` at `session.ex:783-788` gets the analogous 2-clause shape (read `meta[:manual_tool_calls]` first, fall back to `response.tool_calls`).
 
-11. **`terminal_condition/5` and `classify_step/1` get NEW clauses BEFORE the existing `:mode` clauses.** Today's halt detection at `chat.ex:943` and Session classification at `session.ex:703` only recognize `metadata[:mode] == :manual` as the per-call manual path. The per-tool path does NOT set `metadata.mode == :manual` (per Decision #1 — the two paths must be distinguishable). Without a new clause that recognizes `metadata[:manual_tool_calls]` as a halt trigger, the per-tool path's `%StepResult{}` flows through `terminal_condition/5` as `:continue`, the loop runs another adapter turn with a malformed thread (assistant tool_calls without matching `:tool` messages for the manual ids), and the provider rejects it. *What the implementation does to maintain this:* clause-ordering rule — the new `is_list(metadata[:manual_tool_calls]) and metadata.manual_tool_calls != []` clause is inserted BEFORE the existing `metadata[:mode] == :manual` clause at `chat.ex:943` AND at `session.ex:703`. Mutual exclusion is maintained because the partition path NEVER sets `metadata.mode == :manual` (verified: only `lib/allm/chat.ex:1043` writes `mode: :manual` to step metadata, and that line is in the unchanged whole-loop short-circuit).
+11. **`terminal_condition/5` and `classify_step/1` get NEW clauses BEFORE the existing `:mode` clauses.** Pre-Phase-18 halt detection at `chat.ex:945` (the `metadata[:mode] == :manual` clause; post-18.2 the new `per_tool_manual?/1` clause sits at `chat.ex:944` BEFORE it) and Session classification at `session.ex:729` (post-18.4 `per_tool_manual_step?/1` predicate at `session.ex:741`, BEFORE the `mode == :manual` clause) only recognized `metadata[:mode] == :manual` as the per-call manual path. The per-tool path does NOT set `metadata.mode == :manual` (per Decision #1 — the two paths must be distinguishable). Without a new clause that recognizes `metadata[:manual_tool_calls]` as a halt trigger, the per-tool path's `%StepResult{}` flows through `terminal_condition/5` as `:continue`, the loop runs another adapter turn with a malformed thread (assistant tool_calls without matching `:tool` messages for the manual ids), and the provider rejects it. *What the implementation does to maintain this:* clause-ordering rule — the new `is_list(metadata[:manual_tool_calls]) and metadata.manual_tool_calls != []` clause is inserted BEFORE the existing `metadata[:mode] == :manual` clause in both `chat.ex` AND `session.ex`. Mutual exclusion is maintained because the partition path NEVER sets `metadata.mode == :manual` (verified: only `lib/allm/chat.ex:1058` writes `mode: :manual` to step metadata, and that line is in the unchanged whole-loop short-circuit).
 
 12. **`StreamCollector.apply_event/2` MUST extract `payload.manual_tool_calls`.** Without this, the streaming arm produces a `%StepResult{}` with `metadata.manual_tool_calls` absent — the chat-equivalence property (`assertions.ex:90` `assert a.metadata == b.metadata`) breaks immediately. *What the implementation does to maintain this:* the `:step_completed` clause in `StreamCollector.apply_event/2` adds `Map.get(payload, :manual_tool_calls, [])` extraction; merges onto `step_result.metadata` as `manual_tool_calls: list` IFF the list is non-empty (empty list is the absence-of-key default — merging it would diverge from the non-streaming arm which only sets the key when the partition produces a non-empty bucket). Sub-phase 18.3 implementation checklist commits to this fold extension explicitly, not hedge-worded.
 
-13. **`mode: :manual` whole-loop wins; per-tool flag is silent under whole-loop.** *What the implementation does to maintain this:* `do_step/4` at `chat.ex:1029-1061` (non-streaming; deferred to 18.5 cite-refresh — actual HEAD `chat.ex:1044-1075`)'s top-level `case` matches `{:manual, :tool_calls}` BEFORE the `{:auto, :tool_calls}` arm. The partition is invoked only inside the `:auto` arm. Verified at `chat.ex:1034` (non-streaming whole-loop short-circuit position; deferred — actual HEAD `chat.ex:1049`) and `chat.ex:1337` (streaming counterpart `transition_a_to_b/1`, `cond` clause ordering with `mode == :manual` at `chat.ex:1347`).
+13. **`mode: :manual` whole-loop wins; per-tool flag is silent under whole-loop.** *What the implementation does to maintain this:* `do_step/4` at `chat.ex:1044-1075` (non-streaming)'s top-level `case` matches `{:manual, :tool_calls}` BEFORE the `{:auto, :tool_calls}` arm. The partition is invoked only inside the `:auto` arm. Verified at `chat.ex:1049` (non-streaming whole-loop short-circuit position) and `chat.ex:1337` (streaming counterpart `transition_a_to_b/1`, `cond` clause ordering with `mode == :manual` at `chat.ex:1347`).
 
-14. **`preflight_unknown_tools/2` runs BEFORE partition at the chat layer in BOTH paths.** The streaming path already does this at `chat.ex:1391` (`start_phase_b/3`'s `preflight_unknown(response.tool_calls, tools)` call; design originally cited `chat.ex:1231`). The non-streaming path delegates preflight to `ToolRunner.run_tool_calls/3` (`tool_runner.ex:202`) — Phase 18 ADDS an explicit chat-layer preflight in `do_step/4`'s `{:auto, :tool_calls}` arm BEFORE `partition_tool_calls/2`. *What the implementation does to maintain this:* sub-phase 18.2 implementation checklist adds a bullet: "in `do_step/4`'s `{:auto, :tool_calls}` arm, call `preflight_unknown_tools(response.tool_calls, tools)` BEFORE `partition_tool_calls/2`; on `{:error, _}` short-circuit with the engine error verbatim." The runner's internal preflight at `tool_runner.ex:202` becomes defense-in-depth (it sees only the auto subset, but never observes an unknown name because the chat-layer preflight short-circuited). Decision #6 ("unknown tools to auto bucket") is now redundant but kept as a safety net — the partition can run on a list that's already passed preflight, so it never sees an unknown name.
+14. **`preflight_unknown_tools/2` runs BEFORE partition at the chat layer in BOTH paths.** The streaming path already does this at `chat.ex:1421` (`start_phase_b/3`'s `preflight_unknown(response.tool_calls, tools)` call; pre-18.3 was `chat.ex:1391`, pre-18.0 design originally cited `chat.ex:1231`). The non-streaming path delegates preflight to `ToolRunner.run_tool_calls/3` (`tool_runner.ex:202`) — Phase 18 ADDS an explicit chat-layer preflight in `do_step/4`'s `{:auto, :tool_calls}` arm BEFORE `partition_tool_calls/2`. *What the implementation does to maintain this:* sub-phase 18.2 implementation checklist adds a bullet: "in `do_step/4`'s `{:auto, :tool_calls}` arm, call `preflight_unknown_tools(response.tool_calls, tools)` BEFORE `partition_tool_calls/2`; on `{:error, _}` short-circuit with the engine error verbatim." The runner's internal preflight at `tool_runner.ex:202` becomes defense-in-depth (it sees only the auto subset, but never observes an unknown name because the chat-layer preflight short-circuited). Decision #6 ("unknown tools to auto bucket") is now redundant but kept as a safety net — the partition can run on a list that's already passed preflight, so it never sees an unknown name.
 
 9. **Chat-equivalence property: relaxation budget unchanged.** The `chat ≡ stream |> to_chat_result` property must continue to hold across mixed-bucket inputs. Phase 7's `assert_equivalent_chat_result/2` already strips `metadata.mode` divergence; Phase 18 adds `metadata.manual_tool_calls` as a *non-relaxed* assertion (both arms must produce the same list in the same order). *What the implementation does to maintain this:* both arms compute the partition via the same `partition_tool_calls/2` helper called from the shared `Chat.build_chat_result/1` stage; the order is deterministic (input order from `response.tool_calls`). Relaxation table row is added in 18.5; type is `tolerable` (deterministic).
 
@@ -294,7 +294,7 @@ end
 
 ### `ALLM.Chat.do_step/4` extension (non-streaming)
 
-The existing function at `lib/allm/chat.ex:1029-1061` gains a new `case` arm:
+The existing function at `lib/allm/chat.ex:1044-1075` gains a new `case` arm:
 
 ```elixir
 defp do_step(%Engine{} = engine, thread, %Response{} = response, opts) do
@@ -303,7 +303,7 @@ defp do_step(%Engine{} = engine, thread, %Response{} = response, opts) do
 
   case {mode, response.finish_reason} do
     {:manual, :tool_calls} ->
-      # UNCHANGED — existing whole-loop short-circuit at chat.ex:1034.
+      # UNCHANGED — existing whole-loop short-circuit at chat.ex:1049.
       ...
 
     {:auto, :tool_calls} ->
@@ -311,7 +311,7 @@ defp do_step(%Engine{} = engine, thread, %Response{} = response, opts) do
 
       case partition_tool_calls(response.tool_calls, tools) do
         {_auto, []} ->
-          # Pure auto — UNCHANGED path at chat.ex:1046-1047.
+          # Pure auto — UNCHANGED path at chat.ex:1061-1062.
           run_tools_non_streaming(engine, thread, assistant_msg, response, opts)
 
         {[], manual_tcs} ->
@@ -324,7 +324,7 @@ defp do_step(%Engine{} = engine, thread, %Response{} = response, opts) do
       end
 
     {_mode, _other} ->
-      # UNCHANGED — terminal step at chat.ex:1049-1059.
+      # UNCHANGED — terminal step at chat.ex:1064-1074.
       ...
   end
 end
@@ -334,13 +334,13 @@ end
 
 - The `{:manual, :tool_calls}` clause runs FIRST and is unchanged — `mode: :manual` always wins per Decision #5.
 - `partition_tool_calls/2` runs only inside the `{:auto, :tool_calls}` arm.
-- The pure-auto sub-arm (`{_auto, []}`) is byte-identical to the existing path at `lib/allm/chat.ex:1046-1047` — zero behavior change for callers without per-tool manual flags.
+- The pure-auto sub-arm (`{_auto, []}`) is byte-identical to the existing path at `lib/allm/chat.ex:1061-1062` — zero behavior change for callers without per-tool manual flags.
 - The pure-manual sub-arm produces a `%StepResult{}` with `done?: false`, `metadata: %{manual_tool_calls: manual_tcs}`, and `tool_results: []`. The `:mode` key is NOT set (distinguishes from the whole-loop path per Decision #1).
 - The mixed sub-arm runs auto tools via the existing `run_tools_non_streaming/4` (same `Engine.resolve_tools/2`, same `build_runner_opts/3`, same `ToolRunner.run_tool_calls/3`) on the auto subset only, then merges the result with `metadata.manual_tool_calls: manual_tcs`.
 
 ### `ALLM.Chat.transition_a_to_b/1` extension (streaming)
 
-The streaming sibling at `lib/allm/chat.ex:1337-1379` (streaming `transition_a_to_b/1`) gains the same partition. The existing `cond` keeps the `mode == :manual` short-circuit verbatim and adds a partition step inside the `mode == :auto and response.finish_reason == :tool_calls and response.tool_calls != []` arm:
+The streaming sibling at `lib/allm/chat.ex:1337-1410` (streaming `transition_a_to_b/1`; post-18.3 spans through the new `dispatch_partitioned_stream/3` helper) gains the same partition. The existing `cond` keeps the `mode == :manual` short-circuit verbatim and adds a partition step inside the `mode == :auto and response.finish_reason == :tool_calls and response.tool_calls != []` arm:
 
 ```elixir
 defp transition_a_to_b(%{collector: collector, engine: engine, opts: opts} = data) do
@@ -405,20 +405,20 @@ end
 
 ### `ALLM.Session.manual_tool_calls/1` extension (Layer D, internal)
 
-The existing private function at `lib/allm/session.ex:668-669`:
+The existing private function at `lib/allm/session.ex:688-695` (post-18.4; pre-18.4 `session.ex:668-669`):
 
 ```elixir
 defp manual_tool_calls(%{tool_calls: tcs}) when is_list(tcs), do: tcs
 defp manual_tool_calls(_), do: []
 ```
 
-is invoked at `session.ex:646` as `manual_tool_calls(cr.final_response)` — passing a `%Response{}`, not a `%ChatResult{}`. Phase 18's metadata key lives on `cr.metadata`, NOT `cr.final_response.metadata`, so the call site MUST be updated alongside the helper:
+was invoked at `session.ex:646` as `manual_tool_calls(cr.final_response)` — passing a `%Response{}`, not a `%ChatResult{}`. Phase 18's metadata key lives on `cr.metadata`, NOT `cr.final_response.metadata`, so the call site MUST be updated alongside the helper (post-18.4: call site is at `session.ex:660`):
 
 ```elixir
-# session.ex:646 (call site change):
+# session.ex:660 (post-18.4; call site change):
 tool_calls = manual_tool_calls(cr)   # was: manual_tool_calls(cr.final_response)
 
-# session.ex:668-669 (helper extension — now takes %ChatResult{}):
+# session.ex:688-695 (post-18.4; helper extension — now takes %ChatResult{}):
 # Phase 18 — per-tool manual: prefer metadata.manual_tool_calls (the partition
 # path's bucket) over response.tool_calls (the whole-loop path's full list).
 defp manual_tool_calls(%ChatResult{metadata: %{manual_tool_calls: tcs}})
@@ -433,7 +433,7 @@ defp manual_tool_calls(_), do: []
 
 The empty-list guard (`tcs != []`) on the first clause prevents a future `metadata.manual_tool_calls: []` write (e.g., from a defensively-merged StreamCollector fold) from masking the whole-loop fallback. Without the guard, a whole-loop manual turn whose StreamCollector incorrectly wrote `manual_tool_calls: []` would short-circuit to `[]` instead of falling through to `final_response.tool_calls`.
 
-`step_manual/2` at `session.ex:730` gets the analogous 2-clause shape, reading `sr.metadata[:manual_tool_calls]` first when non-empty, falling back to `sr.response.tool_calls || []`.
+`step_manual/2` at `session.ex:783-788` (post-18.4; pre-18.4 was `session.ex:730`) gets the analogous 2-clause shape, reading `sr.metadata[:manual_tool_calls]` first when non-empty, falling back to `sr.response.tool_calls || []`.
 
 **Invariants:**
 
@@ -443,7 +443,7 @@ The empty-list guard (`tcs != []`) on the first clause prevents a future `metada
 
 ### `ALLM.Chat.terminal_condition/5` extension (Layer C, internal)
 
-Today's halt detector at `chat.ex:938-948`:
+Today's halt detector at `chat.ex:939-950` (post-18.2; pre-18.2 was `chat.ex:938-948`):
 
 ```elixir
 cond do
@@ -483,12 +483,12 @@ The halt-tuple's third element flows to `ChatResult.metadata` via `build_chat_re
 |-------|--------------|
 | `%ALLM.Tool{manual: false}` is the default when `:manual` is omitted from `new/1` | Verified against `lib/allm/tool.ex` after the field addition; doctest. |
 | `%ALLM.Tool{}` round-trips through `:erlang.term_to_binary/1` with `:manual` preserved | Verified by §31 Layer A property test extension. |
-| `lib/allm/chat.ex:1029` is the non-streaming dispatch ladder entry | Verified against committed source on date 2026-05-01 (commit `a7b934b`). |
+| `lib/allm/chat.ex:1044` is the non-streaming dispatch ladder entry (`do_step/4`) | Verified against HEAD 2026-05-06 (post-18.2 implementation; pre-18.0 design cited `chat.ex:1029` against an earlier revision). |
 | `lib/allm/chat.ex:1337` is the streaming partition site (streaming `transition_a_to_b/1`) | Re-verified against HEAD 2026-05-06; design originally cited `chat.ex:1187` against an earlier file revision. |
-| `lib/allm/session.ex:668-669` is the existing `manual_tool_calls/1` helper | Verified against committed source on date 2026-05-01. |
-| `lib/allm/tool.ex:41` is the `defstruct` for `%ALLM.Tool{}` | Verified against committed source on date 2026-05-01. |
-| `:manual_tool_calls` is the existing closed-enum halt-reason for whole-loop manual | Verified against `lib/allm/chat_result.ex:23-30` `@type halted_reason` (atom() tail; `:ask_user`, `:max_turns`, `:halt_when`, `:tool_error`, `:cancelled`, `:completed`, plus open `atom()`). `:manual_tool_calls` is documented in the halt-reason table at `lib/allm.ex:466` and surfaces from `lib/allm/chat.ex:943`. |
-| `metadata.manual_tool_calls: list(ToolCall.t())` is a NEW key not previously written by any code path | Verified by `git grep 'manual_tool_calls' lib/` (returns only the moduledoc reference at `lib/allm.ex:466` and the existing helper at `session.ex:668`). |
+| `lib/allm/session.ex:688-695` is the `manual_tool_calls/1` helper (post-18.4) | Verified against HEAD 2026-05-06; pre-18.4 was `session.ex:668-669`. |
+| `lib/allm/tool.ex:60` is the `defstruct` for `%ALLM.Tool{}` (post-18.1) | Verified against HEAD 2026-05-06; pre-18.1 was `tool.ex:41`. |
+| `:manual_tool_calls` is the existing closed-enum halt-reason for whole-loop manual | Verified against `lib/allm/chat_result.ex:23-30` `@type halted_reason` (atom() tail; `:ask_user`, `:max_turns`, `:halt_when`, `:tool_error`, `:cancelled`, `:completed`, plus open `atom()`). `:manual_tool_calls` is documented in the halt-reason table at `lib/allm.ex:466` and surfaces from `lib/allm/chat.ex:945` (post-18.2 — the `:mode == :manual` clause; the per-tool clause sits at `chat.ex:944`). |
+| `metadata.manual_tool_calls: list(ToolCall.t())` is a NEW key not previously written by any code path | Verified pre-Phase-18 via `git grep 'manual_tool_calls' lib/` (returned only the moduledoc reference at `lib/allm.ex:466` and the existing helper at `session.ex:668`). Post-Phase-18 it is written by `lib/allm/chat.ex:1162` (non-streaming pure-manual `manual_only_step_result/4`) and `chat.ex:1195` (mixed-bucket `run_tools_then_halt/7`). |
 | Adding a key to a `:step_completed` payload is non-breaking | Per CLAUDE.md line 19 "adding a key to an *existing* event's payload map is NOT breaking". |
 
 ## Module Tree
@@ -499,7 +499,7 @@ lib/allm/
 ├── chat.ex                              (MODIFY — 18.2/18.3, partition + do_step/4 + transition_a_to_b/1 + terminal_condition/5 clause + chat-layer preflight before partition)
 ├── event.ex                             (MODIFY — 18.3, step_completed/4 arity addition + @type t :step_completed payload extension)
 ├── stream_collector.ex                  (MODIFY — 18.3, apply_event/2 :step_completed clause lifts payload.manual_tool_calls onto step_result.metadata when non-empty)
-├── session.ex                           (MODIFY — 18.4, manual_tool_calls/1 takes %ChatResult{} + call site at :646 updated + classify_step/1 new clause + step_manual/2 extension)
+├── session.ex                           (MODIFY — 18.4, manual_tool_calls/1 takes %ChatResult{} + call site at :660 updated + classify_step/1 new clause + step_manual/2 extension)
 ├── allm.ex                              (MODIFY — 18.5, halt-reason table @doc update for chat/3)
 └── providers/
     └── anthropic.ex                     (MODIFY — 18.5, comment-only: synthetic structured-output tool stays manual: false)
@@ -554,8 +554,8 @@ CHANGELOG.md                             (MODIFY — 18.5, three bullets)
 
 #### 18.1.2 Implementation Checklist
 
-- [ ] Add `manual: false` to `defstruct` at `lib/allm/tool.ex:41`
-- [ ] Add `manual: boolean()` to `@type t` at `lib/allm/tool.ex:32-38`
+- [ ] Add `manual: false` to `defstruct` at `lib/allm/tool.ex:60` (pre-18.1 was `tool.ex:41`)
+- [ ] Add `manual: boolean()` to `@type t` at `lib/allm/tool.ex:50-58` (pre-18.1 was `tool.ex:32-38`)
 - [ ] Update `__from_tagged__/1` to read `data["manual"] || false`
 - [ ] Update `@moduledoc` to mention `manual: true` semantics ("declares this tool will not be auto-executed by `ALLM.chat/3`; the loop halts with `:manual_tool_calls` and the caller resolves the tool result via `submit_tool_result/3` or by appending a `:tool` message and re-issuing `chat/3`")
 - [ ] Verify `ALLM.tool/1` (`lib/allm.ex:128-129`) passes `:manual` through to `Tool.new/1` — no change required since it's keyword forwarding
@@ -601,11 +601,11 @@ Plus error-path tests:
 #### 18.2.2 Implementation Checklist
 
 - [ ] Add `partition_tool_calls/2` private helper to `lib/allm/chat.ex` (placed near `do_step/4`)
-- [ ] Add chat-layer `preflight_unknown_tools/2` invocation in `do_step/4`'s `{:auto, :tool_calls}` arm BEFORE `partition_tool_calls/2`; mirror the streaming path's existing preflight at `chat.ex:1231` (Decision #14)
+- [ ] Add chat-layer `preflight_unknown_tools/2` invocation in `do_step/4`'s `{:auto, :tool_calls}` arm BEFORE `partition_tool_calls/2`; mirror the streaming path's existing preflight at `chat.ex:1421` (post-18.3; pre-18.3 was `chat.ex:1231`/`1391`) (Decision #14)
 - [ ] Extend `do_step/4` with the partition arm under `{:auto, :tool_calls}` per the contract above
 - [ ] Add `manual_only_step_result/4` and `run_tools_then_halt/7` helpers
 - [ ] Wire `metadata.manual_tool_calls` onto the `%StepResult{}` for both pure-manual and mixed sub-arms
-- [ ] **Add new clause to `terminal_condition/5` at `chat.ex:943` BEFORE the `metadata[:mode] == :manual` clause**: `is_list(sr.metadata[:manual_tool_calls]) and sr.metadata.manual_tool_calls != [] -> {:halt, :manual_tool_calls, %{manual_turn_index: idx, manual_tool_calls: sr.metadata.manual_tool_calls}}`. The halt-tuple's third element flows to `ChatResult.metadata` via existing `build_chat_result/1` (no change needed there). Per Decision #11.
+- [ ] **Add new clause to `terminal_condition/5` at `chat.ex:944` BEFORE the `metadata[:mode] == :manual` clause at `chat.ex:945`** (post-18.2): `is_list(sr.metadata[:manual_tool_calls]) and sr.metadata.manual_tool_calls != [] -> {:halt, :manual_tool_calls, %{manual_turn_index: idx, manual_tool_calls: sr.metadata.manual_tool_calls}}`. The halt-tuple's third element flows to `ChatResult.metadata` via existing `build_chat_result/1` (no change needed there). Per Decision #11.
 - [ ] Update `lib/allm.ex` `chat/3` halt-reason table at line 466 — `:manual_tool_calls` row prose: "Fires when `mode: :manual` and step's `response.finish_reason == :tool_calls`, OR when any called tool has `manual: true` (Phase 18). `metadata` carries `manual_tool_calls: [%ToolCall{}, …]` (the manual bucket)."
 - [ ] Verify the existing `:manual_tool_calls` whole-loop tests still pass (no behavior change for that path) — clause ordering matters: per-tool clause is FIRST so it doesn't intercept whole-loop turns (whole-loop turns never set `metadata.manual_tool_calls`, so the new clause's guard is `false` and falls through).
 
@@ -698,10 +698,10 @@ Four cells; each maps to one test row in the new file.
 
 #### 18.4.2 Implementation Checklist
 
-- [ ] **Update call site at `session.ex:646`**: change `manual_tool_calls(cr.final_response)` to `manual_tool_calls(cr)` — the helper now takes a `%ChatResult{}`, not a `%Response{}`. Without this change, the new metadata-clause never matches because `cr.final_response.metadata` doesn't carry the key (it lives on `cr.metadata`).
-- [ ] Replace the 2-clause `manual_tool_calls/1` at `lib/allm/session.ex:668-669` with the 3-clause version per the contract above (Decision #8). First clause: `%ChatResult{metadata: %{manual_tool_calls: tcs}}` with `is_list(tcs) and tcs != []` guard. Second clause: `%ChatResult{final_response: %{tool_calls: tcs}}` for whole-loop fallback. Third clause: catch-all returning `[]`.
-- [ ] **Add new clause to `classify_step/1` at `session.ex:703` BEFORE the `meta[:mode] == :manual` clause**: `is_list(meta[:manual_tool_calls]) and meta.manual_tool_calls != [] -> :manual_tool_calls`. Per Decision #11 — without this, the per-tool path classifies as `:idle` and `step_manual/2` is never reached.
-- [ ] Update `step_manual/2` at `session.ex:730` to read `meta[:manual_tool_calls]` first when non-empty, fall back to `response.tool_calls || []`. The 2-clause shape mirrors the helper.
+- [ ] **Update call site at `session.ex:660`** (post-18.4; pre-18.4 was `session.ex:646`): change `manual_tool_calls(cr.final_response)` to `manual_tool_calls(cr)` — the helper now takes a `%ChatResult{}`, not a `%Response{}`. Without this change, the new metadata-clause never matches because `cr.final_response.metadata` doesn't carry the key (it lives on `cr.metadata`).
+- [ ] Replace the 2-clause `manual_tool_calls/1` at `lib/allm/session.ex:688-695` (post-18.4; pre-18.4 was `session.ex:668-669`) with the 3-clause version per the contract above (Decision #8). First clause: `%ChatResult{metadata: %{manual_tool_calls: tcs}}` with `is_list(tcs) and tcs != []` guard. Second clause: `%ChatResult{final_response: %{tool_calls: tcs}}` for whole-loop fallback. Third clause: catch-all returning `[]`.
+- [ ] **Add new clause to `classify_step/1` at `session.ex:729` BEFORE the `meta[:mode] == :manual` clause** (post-18.4; pre-18.4 was `session.ex:703`): `is_list(meta[:manual_tool_calls]) and meta.manual_tool_calls != [] -> :manual_tool_calls`. Per Decision #11 — without this, the per-tool path classifies as `:idle` and `step_manual/2` is never reached. (Implementation extracted to a `per_tool_manual_step?/1` predicate at `session.ex:758` to keep `classify_step/1` under Credo's cyclomatic-complexity threshold of 9.)
+- [ ] Update `step_manual/2` at `session.ex:783-788` (post-18.4; pre-18.4 was `session.ex:730`) to read `meta[:manual_tool_calls]` first when non-empty, fall back to `response.tool_calls || []`. The 2-clause shape mirrors the helper.
 - [ ] Add a doctest (or moduledoc note) on `ALLM.Session` documenting the per-tool manual semantics — "When `mode: :auto` and any called tool has `manual: true`, `:awaiting_tools` is entered with `pending_tool_calls` containing only the manual subset; auto tools have already executed and their `:tool` messages are in `session.thread`."
 - [ ] Verify Phase 8's existing `session_status_transition_test.exs` still passes — the change is a clause addition, not a clause replacement, for `manual_tool_calls/1`. The first new clause's `tcs != []` guard ensures whole-loop turns (which never write `metadata.manual_tool_calls`) fall through unchanged.
 - [ ] No new public function on `ALLM.Session`; `submit_tool_result/3` flow works unchanged
@@ -863,7 +863,7 @@ Adds ~$0.008 to the dual-provider `/review` pass; cumulative `/review` cost rise
 ## Cross-phase consistency check
 
 - Every new event payload key has a reducer case in `StreamCollector.apply_event/2` ✓ (18.3 implementation checklist)
-- Every spec § amendment cites a file:line in `lib/` ✓ (Decision text — `lib/allm/chat.ex:1029` non-streaming `do_step/4` (deferred to 18.5 cite-refresh — actual HEAD `chat.ex:1044`), `chat.ex:1337` streaming `transition_a_to_b/1` (was `chat.ex:1187` pre-refresh), `chat.ex:1347` streaming whole-loop `mode == :manual` short-circuit (was the ambiguous `chat.ex:1184` pre-refresh), `lib/allm/session.ex:668-669`, `lib/allm/tool.ex:41`, `lib/allm.ex:466`)
+- Every spec § amendment cites a file:line in `lib/` ✓ (Decision text — `lib/allm/chat.ex:1044` non-streaming `do_step/4` (refreshed in 18.5 from pre-refresh `chat.ex:1029`), `chat.ex:1337` streaming `transition_a_to_b/1` (was `chat.ex:1187` pre-refresh), `chat.ex:1347` streaming whole-loop `mode == :manual` short-circuit (was the ambiguous `chat.ex:1184` pre-refresh), `lib/allm/session.ex:688-695` (refreshed in 18.5 from pre-18.4 `session.ex:668-669`), `lib/allm/tool.ex:60` (refreshed in 18.5 from pre-18.1 `tool.ex:41`), `lib/allm.ex:466`)
 - `@spec` for `partition_tool_calls/2` matches the contract above (18.2 implementation)
 - Hedge-word audit on this design — none found (all "should X" claims carry citations or `(verified … 2026-05-01)` annotations; all atom claims cite committed source)
 - Test-observable claims table at end of "Behaviour & Type Contracts" verified against committed source on 2026-05-01 (commit `a7b934b`)

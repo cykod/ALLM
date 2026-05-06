@@ -41,9 +41,22 @@ defmodule ALLM.ChatEquivalenceTest do
     * Handler custom halt atom
     * `on_tool_error: fn _, _ -> {:continue, %{ok: 1}} end`
     * `on_tool_error: :halt` — `halted_reason: :tool_error`
+    * Vision multi-turn (Phase 17.1 — text+image content)
+    * Mixed manual first turn (Phase 18.5 — auto echo + manual confirm)
+    * Pure manual first turn (Phase 18.5 — single manual tool call)
+    * Auto-only no-manual-flags-set control (Phase 18.5 — byte-identical
+      pre/post-Phase-18; same Fake script as `:happy_multi_turn` but
+      asserts `metadata.manual_tool_calls` is absent on both arms)
 
   StreamData iterates a fixture-id and chat-opts variant; each (fixture,
   opts) tuple is a property iteration. Total: ≥100 iterations.
+
+  ## Phase 18.5 relaxation budget
+
+  | Field                          | Relaxation                      | Justification                                                                                | Risk      |
+  | ------------------------------ | ------------------------------- | -------------------------------------------------------------------------------------------- | --------- |
+  | `metadata.manual_tool_calls`   | none — both arms identical lists | partition is deterministic; same `partition_tool_calls/2` from shared `Chat.build_chat_result/1` | tolerable |
+  | `metadata.mode`                | already relaxed by Phase 7      | unchanged                                                                                    | unchanged |
   """
 
   use ExUnit.Case, async: true
@@ -93,6 +106,14 @@ defmodule ALLM.ChatEquivalenceTest do
       schema: %{},
       handler: fn _ -> {:ask_user, "which city?", choices: ["A", "B"]} end
     )
+  end
+
+  # Phase 18.5 — per-tool manual fixture helper. `manual: true` opts the
+  # tool out of auto-execution under `mode: :auto`; the orchestrator
+  # partitions and halts with `:manual_tool_calls`. No handler is needed
+  # because the manual subset never executes (per spec §12.4).
+  defp manual_tool(name) do
+    Tool.new(name: name, description: "", schema: %{}, manual: true)
   end
 
   defp user_thread, do: Thread.from_messages([ALLM.user("hi")])
@@ -201,6 +222,52 @@ defmodule ALLM.ChatEquivalenceTest do
      end, [thread: vision_thread()]}
   end
 
+  # Phase 18.5 — mixed bucket: turn 1 emits two tool calls, one auto
+  # (`echo`) and one manual (`confirm`). Auto runs eagerly, the loop
+  # halts with `:manual_tool_calls`, and `metadata.manual_tool_calls`
+  # carries the manual subset. Both `chat/3` and `stream/3` arms must
+  # produce byte-identical metadata (non-relaxed per the budget table).
+  defp fixture(:mixed_manual_first_turn) do
+    script = [
+      {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+      {:tool_call, id: "c1", name: "confirm", arguments: %{"action" => "delete"}},
+      {:finish, :tool_calls}
+    ]
+
+    {fn ->
+       FakeFixtures.engine(script, tools: [echo_tool(), manual_tool("confirm")])
+     end, []}
+  end
+
+  # Phase 18.5 — pure manual bucket: turn 1 emits one tool call against
+  # a `manual: true` tool. No auto tools execute; loop halts with
+  # `:manual_tool_calls` and `metadata.manual_tool_calls` is the
+  # singleton list.
+  defp fixture(:pure_manual_first_turn) do
+    script = [
+      {:tool_call, id: "c0", name: "confirm", arguments: %{"action" => "delete"}},
+      {:finish, :tool_calls}
+    ]
+
+    {fn -> FakeFixtures.engine(script, tools: [manual_tool("confirm")]) end, []}
+  end
+
+  # Phase 18.5 — control case: same script as `:happy_multi_turn` (auto
+  # tool, multi-turn → text), but explicitly assert via the property
+  # that no `manual_tool_calls` key leaks into metadata. Byte-identical
+  # to pre-Phase-18 behaviour.
+  defp fixture(:auto_only_no_manual_flags_set) do
+    scripts = [
+      [
+        {:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+        {:finish, :tool_calls}
+      ],
+      [{:text, "done"}, {:finish, :stop}]
+    ]
+
+    {fn -> FakeFixtures.engine_with_scripts(scripts, tools: [echo_tool()]) end, []}
+  end
+
   defp vision_thread do
     img = Image.from_url("https://example.com/cat.png")
 
@@ -272,7 +339,12 @@ defmodule ALLM.ChatEquivalenceTest do
     :custom_halt_atom,
     :on_tool_error_fun_continue,
     :on_tool_error_halt,
-    :vision_multi_turn
+    :vision_multi_turn,
+    # Phase 18.5 — per-tool manual fixtures (chat-equivalence property
+    # holds with `metadata.manual_tool_calls` non-relaxed).
+    :mixed_manual_first_turn,
+    :pure_manual_first_turn,
+    :auto_only_no_manual_flags_set
   ]
 
   property "Chat.run/3 ≡ Chat.stream/3 |> StreamCollector.to_chat_result/1 — every fixture × valid opts" do
@@ -285,5 +357,55 @@ defmodule ALLM.ChatEquivalenceTest do
 
       Assertions.assert_equivalent_chat_result(run_result, stream_result)
     end
+  end
+
+  # Phase 18.5 — explicit per-fixture assertions on `metadata.manual_tool_calls`
+  # shape. The property above asserts strict metadata-map equality between
+  # arms; these tests pin the absolute key presence/absence + list contents
+  # so a future regression that drops the key from BOTH arms simultaneously
+  # (which would still pass equivalence) is caught.
+
+  test "mixed_manual_first_turn — both arms surface metadata.manual_tool_calls with the manual subset only" do
+    {engine_builder, opts} = fixture(:mixed_manual_first_turn)
+
+    assert {:ok, %ChatResult{} = run_result} = run_chat(engine_builder, opts)
+    assert {:ok, %ChatResult{} = stream_result} = run_stream_chat(engine_builder, opts)
+
+    for cr <- [run_result, stream_result] do
+      assert cr.halted_reason == :manual_tool_calls
+      assert is_list(cr.metadata.manual_tool_calls)
+      assert length(cr.metadata.manual_tool_calls) == 1
+      assert hd(cr.metadata.manual_tool_calls).name == "confirm"
+    end
+
+    Assertions.assert_equivalent_chat_result(run_result, stream_result)
+  end
+
+  test "pure_manual_first_turn — both arms surface the singleton manual list" do
+    {engine_builder, opts} = fixture(:pure_manual_first_turn)
+
+    assert {:ok, %ChatResult{} = run_result} = run_chat(engine_builder, opts)
+    assert {:ok, %ChatResult{} = stream_result} = run_stream_chat(engine_builder, opts)
+
+    for cr <- [run_result, stream_result] do
+      assert cr.halted_reason == :manual_tool_calls
+      assert [%ALLM.ToolCall{name: "confirm"}] = cr.metadata.manual_tool_calls
+    end
+
+    Assertions.assert_equivalent_chat_result(run_result, stream_result)
+  end
+
+  test "auto_only_no_manual_flags_set — neither arm leaks a manual_tool_calls key into metadata" do
+    {engine_builder, opts} = fixture(:auto_only_no_manual_flags_set)
+
+    assert {:ok, %ChatResult{} = run_result} = run_chat(engine_builder, opts)
+    assert {:ok, %ChatResult{} = stream_result} = run_stream_chat(engine_builder, opts)
+
+    for cr <- [run_result, stream_result] do
+      assert cr.halted_reason == :completed
+      refute Map.has_key?(cr.metadata, :manual_tool_calls)
+    end
+
+    Assertions.assert_equivalent_chat_result(run_result, stream_result)
   end
 end
