@@ -713,7 +713,26 @@ defmodule ALLM.Release do
   # the maintainer so they can eyeball the local tag first.
   defp finalize_release!(new_version, tag) do
     run!("git", ["add", @mix_exs_path, @changelog_path])
-    run!("git", ["commit", "-m", "Release #{tag}"])
+
+    # If Phase A's bump (and any CHANGELOG regeneration) has already been
+    # committed in a prior commit, the working tree is clean and there is
+    # nothing for `git commit` to do. The release-commit invariant is
+    # "the tag points at a commit that contains the @version bump and
+    # the matching CHANGELOG entry" — that's already satisfied by HEAD.
+    # Tag HEAD directly. `git diff --cached --quiet` exits 0 when
+    # nothing is staged, 1 when there are staged changes.
+    case System.cmd("git", ["diff", "--cached", "--quiet"]) do
+      {_out, 0} ->
+        IO.puts("  no staged changes — release commit already exists at HEAD; tagging directly")
+
+      {_out, 1} ->
+        run!("git", ["commit", "-m", "Release #{tag}"])
+
+      {out, code} ->
+        IO.puts(:stderr, out)
+        abort("git diff --cached --quiet failed (exit #{code})")
+    end
+
     run!("git", ["tag", "-a", tag, "-m", "v#{new_version}"])
   end
 
