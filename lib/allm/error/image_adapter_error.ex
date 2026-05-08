@@ -3,10 +3,10 @@ defmodule ALLM.Error.ImageAdapterError do
   Errors returned by `ALLM.ImageAdapter` implementations.
 
   Layer A — serializable (no PIDs, refs, funs, or raw API keys). See spec
-  §35.3. Closed-enum exception struct mirroring `ALLM.Error.AdapterError`'s
+  Closed-enum exception struct mirroring `ALLM.Error.AdapterError`'s
   shape with one image-specific atom (`:unsupported_operation`).
 
-  See Phase 14.1 design Decision #4 for the closed reason enum and the
+  See design the documented contract for the closed reason enum and the
   per-reason recovery table.
 
   ## Error reasons
@@ -23,7 +23,7 @@ defmodule ALLM.Error.ImageAdapterError do
   | `:network_error` | — | TCP/TLS/DNS failure. |
   | `:malformed_response` | — | 200 with unparseable body. |
   | `:unsupported_feature` | — | Request combined features the adapter cannot express. |
-  | `:unsupported_operation` | — | `request.operation not in supported_operations()`; `metadata.operation` carries the rejected atom. |
+  | `:unsupported_operation` | — | `request.operation not in supported_operations`; `metadata.operation` carries the rejected atom. |
   | `:unknown` | any | Catch-all for shapes the adapter cannot classify; non-retryable. |
   """
 
@@ -72,10 +72,10 @@ defmodule ALLM.Error.ImageAdapterError do
 
   ## Examples
 
-      iex> :unsupported_operation in ALLM.Error.ImageAdapterError.legal_reasons()
+      iex> :unsupported_operation in ALLM.Error.ImageAdapterError.legal_reasons
       true
 
-      iex> length(ALLM.Error.ImageAdapterError.legal_reasons())
+      iex> length(ALLM.Error.ImageAdapterError.legal_reasons)
       12
   """
   @spec legal_reasons() :: [reason()]

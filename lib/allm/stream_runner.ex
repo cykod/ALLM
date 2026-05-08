@@ -1,19 +1,22 @@
 defmodule ALLM.StreamRunner do
   @moduledoc """
-  Internal — use `ALLM.stream_generate/3` instead. See spec §17.
+  > #### Internal {: .warning}
+  >
+  > This module is internal — it's documented for transparency, but
+  > call sites should use `ALLM.stream_generate/3` instead.
 
   Validates the request, resolves model/tools/params via `ALLM.Engine`,
-  dispatches to the engine adapter's `stream/2`, and applies per-§19
-  post-filters and the `:on_event` observer.
+  dispatches to the engine adapter's `stream/2`, and applies the
+  documented post-filters plus the `:on_event` observer.
 
   ## Orchestration opts are stripped
 
-  Orchestration opts (Phase 6 and Phase 7 consumers) — `:mode`,
-  `:max_turns`, `:halt_when` — are deny-listed here and NOT forwarded to
-  the adapter. `stream_generate/3` is single-request, so they would be
-  no-ops or (in the case of `:halt_when`) a `Protocol.UndefinedError`
-  trap at the Jason-encode boundary of real providers. `Logger.debug/1`
-  fires for each stripped key so power users can see the drop during
+  Orchestration opts — `:mode`, `:max_turns`, `:halt_when` — are
+  deny-listed here and NOT forwarded to the adapter.
+  `stream_generate/3` is single-request, so they would be no-ops or (in
+  the case of `:halt_when`) a `Protocol.UndefinedError` trap at the
+  Jason-encode boundary of real providers. `Logger.debug/1` fires for
+  each stripped key so power users can see the drop during
   development.
 
   ## No double-wrapped `Stream.resource/3`
@@ -21,8 +24,8 @@ defmodule ALLM.StreamRunner do
   The adapter owns the streaming resource and its cleanup hook; this
   module only composes `Stream.each/2` (for `:on_event`) and
   `Stream.filter/2` (for the three emit/include filters) on top. Both
-  operators propagate `{:halt, _}` upstream, which is what preserves the
-  halt-safety contract from Phase 4.
+  operators propagate `{:halt, _}` upstream, which preserves the
+  halt-safety contract.
 
   ## `:on_event` failure mode
 
@@ -38,19 +41,18 @@ defmodule ALLM.StreamRunner do
   alias ALLM.{Capability, Engine, Request, Telemetry, Validate}
   alias ALLM.Error.{AdapterError, EngineError, ValidationError}
 
-  # Orchestration opts (Phase 6 and Phase 7 consumers) — stripped before
-  # reaching the adapter. Phase 6 consumes `:mode` at the `ALLM.Chat` layer;
-  # StreamRunner's deny-list is the safety-net that catches any unstripped
-  # orchestration key before adapter dispatch (see Phase 6 design Non-obvious
-  # Decision #5).
+  # Orchestration opts — stripped before reaching the adapter.
+  # `ALLM.Chat` consumes `:mode` upstream; StreamRunner's deny-list is
+  # the safety-net that catches any unstripped orchestration key before
+  # adapter dispatch.
   @orchestration_opts [:mode, :max_turns, :halt_when]
 
-  # Phase 5 streaming-layer opts — read directly from opts by this module,
-  # not forwarded to the adapter as params.
-  # Phase 9.4 adds `:resolved_model` (the late-resolved model threaded
-  # downstream for `Capability.populate_costs/2`) and `:request_id` (the
+  # Streaming-layer opts — read directly from opts by this module, not
+  # forwarded to the adapter as params. `:resolved_model` is the
+  # late-resolved model threaded downstream for
+  # `Capability.populate_costs/2`; `:request_id` is the
   # telemetry-correlation id, threaded into adapter_opts via
-  # `maybe_put_request_id/2`).
+  # `maybe_put_request_id/2`.
   @phase_5_layer_opts [
     :emit_text_deltas,
     :emit_tool_deltas,
@@ -62,8 +64,7 @@ defmodule ALLM.StreamRunner do
 
   @doc """
   Dispatch a streaming request. Validates, resolves params, forwards to
-  `engine.adapter.stream/2`, and wires the per-§19 post-processing
-  pipeline.
+  `engine.adapter.stream/2`, and wires the post-processing pipeline.
 
   Returns `{:ok, stream}` on a successfully-opened stream (lazy — no
   event fires until the caller reduces) or `{:error, struct}` on a
@@ -72,9 +73,9 @@ defmodule ALLM.StreamRunner do
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
+      ...>)
       iex> req = ALLM.request([ALLM.user("say hi")])
       iex> {:ok, stream} = ALLM.StreamRunner.run(engine, req)
       iex> events = Enum.to_list(stream)

@@ -3,10 +3,10 @@ defmodule ALLM.Error.AdapterError do
   Errors returned by `ALLM.Adapter` / `ALLM.StreamAdapter` implementations.
 
   Layer A — serializable (no PIDs, refs, funs, or raw API keys). Refines spec
-  §20's atom taxonomy into a struct so provider adapters report failures with
+  's atom taxonomy into a struct so provider adapters report failures with
   uniform shape.
 
-  See Phase 1 design §Sub-phase 1.1 for the closed reason enum.
+  See design §Sub- for the closed reason enum.
 
   ## Error reasons
 
@@ -22,7 +22,7 @@ defmodule ALLM.Error.AdapterError do
   | `:network_error` | Transport-level failure (DNS, TCP, TLS). |
   | `:malformed_response` | Provider returned unparseable body. |
   | `:unsupported_feature` | Model or provider does not support a requested capability. |
-  | `:no_scripted_response` | Testing adapters (e.g., `ALLM.Providers.Fake`) exhausted their script. Never produced by production providers (spec §31, Phase 4 amendment). |
+  | `:no_scripted_response` | Testing adapters (e.g., `ALLM.Providers.Fake`) exhausted their script. Never produced by production providers. |
   | `:unknown` | Catch-all when no other reason fits; original term preserved in `:cause`. |
   """
 
@@ -72,10 +72,10 @@ defmodule ALLM.Error.AdapterError do
 
   ## Examples
 
-      iex> :no_scripted_response in ALLM.Error.AdapterError.legal_reasons()
+      iex> :no_scripted_response in ALLM.Error.AdapterError.legal_reasons
       true
 
-      iex> length(ALLM.Error.AdapterError.legal_reasons())
+      iex> length(ALLM.Error.AdapterError.legal_reasons)
       12
   """
   @spec legal_reasons() :: [reason()]

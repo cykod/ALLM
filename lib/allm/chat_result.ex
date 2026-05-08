@@ -1,16 +1,14 @@
 defmodule ALLM.ChatResult do
   @moduledoc """
-  The result of a full chat loop. See spec §5.9.
+  The result of a full chat loop — Layer A serializable data.
 
-  Layer A — pure serializable data. Carries the final `:thread`, the
-  `:final_response`, a list of per-turn `:steps`, and a `:halted_reason`
-  atom indicating why the loop stopped.
+  Carries the final `:thread`, the `:final_response`, a list of per-turn
+  `:steps`, and a `:halted_reason` atom indicating why the loop stopped.
 
   `halted_reason: :completed` means the loop terminated normally. Every
-  other atom represents a halt — including `:max_turns` (spec §20's
-  `:max_turns_exceeded`), `:halt_when`, `:ask_user`, `:tool_error`,
-  `:cancelled`, and any custom atom a tool returned via `{:halt, atom, _}`.
-  Use `halted?/1` to check.
+  other atom represents a halt — including `:max_turns`, `:halt_when`,
+  `:ask_user`, `:tool_error`, `:cancelled`, and any custom atom a tool
+  returned via `{:halt, atom, _}`. Use `halted?/1` to check.
   """
 
   alias ALLM.{Response, StepResult, Thread}

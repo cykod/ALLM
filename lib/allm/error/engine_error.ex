@@ -3,10 +3,10 @@ defmodule ALLM.Error.EngineError do
   Errors raised by engine-level operations before any adapter call.
 
   Layer A — serializable (no PIDs, refs, funs, or raw API keys). Refines spec
-  §20's atom taxonomy into a first-class struct so every Layer B/C/D public
+  's atom taxonomy into a first-class struct so every Layer B/C/D public
   function can return `{:error, %ALLM.Error.EngineError{}}` uniformly.
 
-  See Phase 1 design §Sub-phase 1.1 for the closed reason enum.
+  See design §Sub- for the closed reason enum.
   """
 
   @typedoc "Closed set of engine-level error reasons (spec §20, §35.4)."

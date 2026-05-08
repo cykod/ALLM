@@ -1,27 +1,28 @@
 defmodule ALLM.ImagePart do
   @moduledoc """
-  An image content part used in multimodal `ALLM.Message{:content}` lists.
-  See spec §35.6.
+  An image content part used in multimodal `ALLM.Message{:content}` lists
+  — Layer A serializable data.
 
-  Layer A — pure serializable data. `:image` (an `%ALLM.Image{}`) is the only
-  required field. `:detail` is a closed-set atom in `[:auto, :low, :high]`
-  matching OpenAI's vision-detail wire field; `:auto` is the default and
-  matches OpenAI's documented default. `:metadata` defaults to an empty map.
+  `:image` (an `%ALLM.Image{}`) is the only required field. `:detail` is
+  a closed-set atom in `[:auto, :low, :high]` matching OpenAI's
+  vision-detail wire field; `:auto` is the default and matches OpenAI's
+  documented default. `:metadata` defaults to an empty map.
 
   ## Validation
 
-  `ALLM.Validate.message/1` accepts any `%ImagePart{}` in a content list per
-  Decision #11 (Phase 14.4). Layer A does not enforce `:detail` membership —
-  callers passing an unknown atom (e.g. `:medium`) round-trip cleanly through
-  ETF but JSON decoding will surface
-  `{:_unknown, :atom_decode_failed}` per the Serializer rescue contract
-  (Phase 13).
+  `ALLM.Validate.message/1` accepts any `%ImagePart{}` in a content
+  list. Layer A does not enforce `:detail` membership — callers passing
+  an unknown atom (e.g. `:medium`) round-trip cleanly through ETF but
+  JSON decoding will surface `{:_unknown, :atom_decode_failed}` per the
+  Serializer rescue contract.
 
   ## Serializability
 
   ETF round-trip via `:erlang.term_to_binary/1` is total. JSON round-trip via
   `ALLM.Serializer` follows the standard `__type__`-tagged wire shape; the
   embedded `%ALLM.Image{}` round-trips through its own encoder.
+
+  See also `guides/vision.md`.
   """
 
   alias ALLM.Image

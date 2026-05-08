@@ -1,8 +1,8 @@
 defmodule ALLM.ImageResponse do
   @moduledoc """
-  An image generation/edit/variation response. See spec §35.2.3.
+  An image generation/edit/variation response — Layer A serializable data.
 
-  Layer A — pure serializable data. Carries the resolved `:images` list, an
+  Carries the resolved `:images` list, an
   `:usage` summary (`%ALLM.ImageUsage{}` — never `nil`), optional `:id` /
   `:request_id` / `:model` provider correlation fields, and an opaque
   `:raw` adapter-specific payload analogous to `ALLM.Response.raw`.

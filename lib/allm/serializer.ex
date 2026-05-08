@@ -10,10 +10,10 @@ defmodule ALLM.Serializer do
 
   so the decoder can re-hydrate nested values without the caller knowing
   their types at decode time. `ChatResult` containing a `Thread` containing
-  `Message`s decodes cleanly by recursing on the `"__type__"` tag. See the
-  Phase 1 design, Non-obvious decision #3 "Tagged JSON encoding", and
-  sub-phase 1.5 "Field-Error Vocabulary" for the atom set returned on decode
-  failure.
+  `Message`s decodes cleanly by recursing on the `"__type__"` tag. The
+  decoder's field-error vocabulary returns atoms like
+  `:invalid_type_tag`, `:atom_decode_failed`, `:module_not_loaded`, and
+  `:unknown_type_tag`.
 
   ## Encoding
 
@@ -26,7 +26,8 @@ defmodule ALLM.Serializer do
   Convenience wrappers `to_json!/1` and `to_iodata!/1` call `Jason.encode!/1`
   and `Jason.encode_to_iodata!/1` respectively. Encoding raises
   `Jason.EncodeError` on unencodable values (e.g. a PID or an anonymous
-  function in a `metadata` map); this is by design — see Phase 1 design §1.5.
+  function in a `metadata` map); this is by design — `metadata` is
+  caller-owned and the library does not deep-walk its contents.
 
   ## Decoding
 
@@ -144,8 +145,8 @@ defmodule ALLM.Serializer do
 
   Returns `{:ok, struct}` on success. On failure returns
   `{:error, %ALLM.Error.ValidationError{reason: :invalid_request, errors: [...]}}`
-  with field-error tuples drawn from the Field-Error Vocabulary in the
-  Phase 1 design (§1.5).
+  with field-error tuples drawn from the field-error vocabulary
+  documented on this module.
 
   ## Options
 

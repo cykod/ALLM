@@ -1,11 +1,27 @@
 defmodule ALLM.Adapter do
   @moduledoc """
-  Non-streaming provider adapter contract. See spec §7.1.
+  Non-streaming provider adapter contract.
 
   Implementations take an `ALLM.Request` plus a keyword opts list (resolved
   via `ALLM.Engine.resolve_params/2` and `ALLM.Engine.resolve_tools/2` at the
   call site) and return either `{:ok, %ALLM.Response{}}` or
   `{:error, %ALLM.Error.AdapterError{}}`.
+
+  ## Minimum impl skeleton
+
+      defmodule MyProvider do
+        @behaviour ALLM.Adapter
+
+        @impl true
+        def generate(%ALLM.Request{} = req, opts) do
+          # 1. Resolve API key: ALLM.Keys.fetch!(:my_provider, opts)
+          # 2. Translate request: build provider-specific HTTP body
+          # 3. Fire HTTP via Req: Req.post(url, json: body, headers: ...)
+          # 4. Translate response: return {:ok, %ALLM.Response{...}}
+          # 5. Translate errors: {:error, %ALLM.Error.AdapterError{...}}
+          {:ok, %ALLM.Response{}}
+        end
+      end
 
   ## HTTP transport guidance
 

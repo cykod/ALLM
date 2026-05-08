@@ -1,6 +1,6 @@
 defmodule ALLM.Providers.OpenAI do
   @moduledoc """
-  OpenAI provider adapter — Layer B. See spec §6.4, §7.1, §20, §32.1.
+  OpenAI provider adapter — Layer B.
 
   Implements both OpenAI HTTP endpoints:
 
@@ -10,14 +10,14 @@ defmodule ALLM.Providers.OpenAI do
     * `prepare_request/2` — returns an unfired `%Req.Request{}` with the API
       key already injected as `Authorization: Bearer <key>`.
     * `translate_options/2` — endpoint-aware `:max_tokens` rename per design
-      Decision #6 (`:max_completion_tokens` for `gpt-4o*`/`gpt-4.1*`/`gpt-5*`
+      the documented contract (`:max_completion_tokens` for `gpt-4o*`/`gpt-4.1*`/`gpt-5*`
       on Chat Completions, `:max_output_tokens` on Responses, passthrough for
-      older models). Also handles reasoning controls per Decision #5.
+      older models). Also handles reasoning controls per the documented contract.
     * `requires_structured_finalize?/1` — capability declaration consumed by
-      `ALLM.Capability.preflight/2` (Decision #14); returns `true` when a
+      `ALLM.Capability.preflight/2` returns `true` when a
       request combines tools and a `json_schema` response_format.
 
-  ## Endpoint dispatch (Decision #1)
+  ## Endpoint dispatch
 
   `dispatch_endpoint/2` selects between `:chat_completions` and `:responses`
   by (in order): explicit `opts[:endpoint]`, explicit
@@ -25,16 +25,16 @@ defmodule ALLM.Providers.OpenAI do
   table (`gpt-5*` and `o[1-9]*` → `:responses`; `gpt-4*`/`gpt-3.5*` →
   `:chat_completions`), and a default fallback of `:chat_completions`.
 
-  Phase 10.6 lifts the prior unsupported-feature guard for `:responses`;
+   lifts the prior unsupported-feature guard for `:responses`;
   `gpt-5*` and o-series models now route to the Responses API end-to-end.
 
-  ## Reasoning controls (Decision #5)
+  ## Reasoning controls
 
   `:reasoning_effort` (`:none | :low | :medium | :high | :xhigh`),
   `:reasoning_summary` (`:auto | :concise | :detailed`), and `:verbosity`
   (`:low | :medium | :high`) are routed by `translate_options/2`:
 
-    * On `:responses`: nested under `reasoning: %{effort: ..., summary: ...}`
+    * On `:responses`: nested under `reasoning: %{effort:..., summary:...}`
       (effort + summary share one sub-map); `verbosity:` passes through as a
       bare key.
     * On `:chat_completions` for `gpt-5*`: `:reasoning_effort` and
@@ -45,14 +45,14 @@ defmodule ALLM.Providers.OpenAI do
 
   Unknown effort/summary/verbosity atoms raise `ArgumentError`.
 
-  ## Status mapping for Responses API (Decision #19)
+  ## Status mapping for Responses API
 
   | Responses status | `incomplete_details.reason` | `Response.finish_reason` |
   |------------------|------------------------------|--------------------------|
-  | `"completed"`    | n/a                          | `:stop`                  |
-  | `"incomplete"`   | `"max_output_tokens"`        | `:length`                |
-  | `"incomplete"`   | `"content_filter"`           | `:content_filter`        |
-  | `"incomplete"`   | other                        | `:other`                 |
+  | `"completed"` | n/a | `:stop` |
+  | `"incomplete"` | `"max_output_tokens"` | `:length` |
+  | `"incomplete"` | `"content_filter"` | `:content_filter` |
+  | `"incomplete"` | other | `:other` |
 
   When status is `"incomplete"`, the raw reason is preserved on
   `Response.metadata.incomplete_details.reason`. `Response.metadata.reasoning`
@@ -61,8 +61,8 @@ defmodule ALLM.Providers.OpenAI do
   ## Key resolution
 
   Keys never appear on the engine. `prepare_request/2` and `generate/2` call
-  `ALLM.Keys.fetch!(:openai, opts)` at request-build time per spec §6.4.
-  Per design Decision #16, `prepare_request/2` raises
+  `ALLM.Keys.fetch!(:openai, opts)` at request-build time per the documented contract.
+  Per the documented contract, `prepare_request/2` raises
   `%ALLM.Error.EngineError{reason: :missing_key}` when no key resolver
   yields a value — a programmer error best surfaced loudly rather than
   threaded through every `with` chain.
@@ -73,29 +73,30 @@ defmodule ALLM.Providers.OpenAI do
   The closure parses `Retry-After` (both seconds and HTTP-date formats),
   returns `{:retry, delay_ms, error}` for 429/5xx/`:timeout`, `{:ok, response}`
   for 2xx, and `{:error, error}` for everything else (e.g. 4xx that aren't
-  rate-limit). Streaming does NOT retry per spec §6.1.
+  rate-limit). Streaming does NOT retry per the documented contract.
 
   ## Finch transport defaults
 
-  Streaming (Phase 10.3) uses `Finch.async_request/3` against the singleton
-  `ALLM.Finch` started by `ALLM.Application` with `protocol: :http1` per
-  spec §7.2. Engines that want a custom Finch ref inject via
+  Streaming uses `Finch.async_request/3` against the singleton
+  `ALLM.Finch` (started by the library's OTP application with
+  `protocol: :http1` per the documented contract). Engines that want a
+  custom Finch ref inject via
   `adapter_opts: [finch_name: MyApp.Finch]`.
 
   ## Capability declarations
 
   `requires_structured_finalize?/1` returns `true` when a request combines
-  `tools != []` AND `response_format = %{type: :json_schema, ...}` —
+  `tools != []` AND `response_format = %{type: :json_schema,...}`
   OpenAI's API does not support that combination natively, so
   `ALLM.Capability.preflight/2` rewrites the request with
   `structured_finalize: true` and `ALLM.Chat.run/3` runs a two-pass tool
-  loop + final-shape pass (Phase 10.4).
+  loop + final-shape pass.
 
   ## response_format translation
 
   `to_openai_response_format/2` (called from `to_openai_request_body/3`)
   translates the canonical `%Request{}.response_format` to OpenAI's wire
-  shape. Per design Decision #17, the encoding is endpoint-aware:
+  shape. Per the documented contract, the encoding is endpoint-aware:
 
   | ALLM canonical | `:chat_completions` wire | `:responses` wire |
   |----------------|--------------------------|-------------------|
@@ -107,7 +108,7 @@ defmodule ALLM.Providers.OpenAI do
   The function returns either `nil` (omit the field) OR a
   `{wire_key, wire_value}` 2-tuple where `wire_key` is the JSON body key
   the caller must merge into the request body (`:response_format` for
-  Chat Completions; `:text` for Responses). See spec §5.4.
+  Chat Completions; `:text` for Responses).
   """
 
   @behaviour ALLM.Adapter
@@ -173,7 +174,7 @@ defmodule ALLM.Providers.OpenAI do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Resolve the endpoint for a model + opts pair (Decision #1).
+  Resolve the endpoint for a model + opts pair.
 
   Resolution order:
 
@@ -228,11 +229,11 @@ defmodule ALLM.Providers.OpenAI do
 
   @doc """
   Capability declaration consumed by `ALLM.Capability.preflight/2`
-  (Decision #14).
+  .
 
   Returns `true` when a request combines tools and a json_schema response
   format — the only combination that requires the structured-finalize
-  two-pass dance (Phase 10.4).
+  two-pass dance.
 
   ## Examples
 
@@ -255,7 +256,7 @@ defmodule ALLM.Providers.OpenAI do
   @doc """
   Endpoint-aware translation of caller opts to OpenAI wire keys.
 
-  ## `:max_tokens` rename matrix (Decision #6)
+  ## `:max_tokens` rename matrix
 
   | Endpoint | Model regex | Output key |
   |----------|-------------|------------|
@@ -263,14 +264,14 @@ defmodule ALLM.Providers.OpenAI do
   | `:chat_completions` | `~r/^gpt-(4o\|4\\.1\|5)/` | `:max_completion_tokens` |
   | `:chat_completions` | anything else | `:max_tokens` (passthrough) |
 
-  ## Reasoning controls (Decision #5)
+  ## Reasoning controls
 
   `:reasoning_effort` (`#{inspect(~w(none low medium high xhigh)a)}`),
   `:reasoning_summary` (`#{inspect(~w(auto concise detailed)a)}`), and
   `:verbosity` (`#{inspect(~w(low medium high)a)}`) are routed by endpoint:
 
     * `:responses` — `:reasoning_effort` and `:reasoning_summary` merge into
-      a single `reasoning: %{effort: ..., summary: ...}` sub-map; `:verbosity`
+      a single `reasoning: %{effort:..., summary:...}` sub-map; `:verbosity`
       passes through as `verbosity: "<atom>"`.
     * `:chat_completions` for `gpt-5*` — `:reasoning_effort` and
       `:verbosity` pass through as bare `reasoning_effort: "<atom>"` and
@@ -394,9 +395,9 @@ defmodule ALLM.Providers.OpenAI do
   @impl ALLM.Adapter
   @doc """
   Build an unfired `%Req.Request{}` with the resolved API key injected as
-  `Authorization: Bearer <key>` (Decision #16).
+  `Authorization: Bearer <key>`.
 
-  Per design Decision #16: this function **raises**
+  Per the documented contract: this function **raises**
   `%ALLM.Error.EngineError{reason: :missing_key}` when no key resolver
   yields a value (via `ALLM.Keys.fetch!/2`). Returns
   `{:error, %AdapterError{}}` only for non-key failures (e.g. an o-series
@@ -475,14 +476,14 @@ defmodule ALLM.Providers.OpenAI do
   (`POST /v1/chat/completions`). Both endpoints return canonical
   `%Response{}` shapes so callers do not need to know which wire ran.
 
-  ## Vision input (Phase 17.1)
+  ## Vision input
 
   `[%ALLM.TextPart{}, %ALLM.ImagePart{}]` content lists translate to
   OpenAI's content-block wire shape automatically. URL-source images
   pass through verbatim; binary/base64/file sources resolve to a
   `data:<mime>;base64,...` URI via `ALLM.Image.to_data_uri/1`.
   `ImagePart.detail` (`:auto | :low | :high`) maps to the wire string
-  via `Atom.to_string/1` and is always emitted (Decision #7 Q2). System
+  via `Atom.to_string/1` and is always emitted. System
   messages remain text-only — an `%ImagePart{}` in a system role is
   hard-rejected as `%ValidationError{reason: :invalid_message}` before
   any HTTP call. Per-image MIME / 20 MB size validation runs in
@@ -493,14 +494,14 @@ defmodule ALLM.Providers.OpenAI do
       iex> ALLM.Keys.put(:openai, "sk-doctest-gen")
       iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "x"}], model: "gpt-4o-mini")
       iex> {:error, %ALLM.Error.AdapterError{reason: :authentication_failed}} =
-      ...>   ALLM.Providers.OpenAI.generate(req,
-      ...>     retry: false,
-      ...>     adapter_opts: [plug: fn conn ->
-      ...>       conn
-      ...>       |> Plug.Conn.put_resp_content_type("application/json")
-      ...>       |> Plug.Conn.resp(401, ~s({"error":{"message":"bad"}}))
-      ...>     end]
-      ...>   )
+      ...> ALLM.Providers.OpenAI.generate(req,
+      ...> retry: false,
+      ...> adapter_opts: [plug: fn conn ->
+      ...> conn
+      ...> |> Plug.Conn.put_resp_content_type("application/json")
+      ...> |> Plug.Conn.resp(401, ~s({"error":{"message":"bad"}}))
+      ...> end]
+      ...>)
       iex> ALLM.Keys.delete(:openai)
       :ok
 
@@ -509,7 +510,7 @@ defmodule ALLM.Providers.OpenAI do
       iex> sys = %ALLM.Message{role: :system, content: [%ALLM.ImagePart{image: img}]}
       iex> req = ALLM.Request.new([sys, %ALLM.Message{role: :user, content: "hi"}], model: "gpt-4o-mini")
       iex> {:error, %ALLM.Error.ValidationError{reason: :invalid_message}} =
-      ...>   ALLM.Providers.OpenAI.generate(req, api_key: "sk-x")
+      ...> ALLM.Providers.OpenAI.generate(req, api_key: "sk-x")
       iex> :ok
       :ok
   """
@@ -756,10 +757,10 @@ defmodule ALLM.Providers.OpenAI do
   `Finch.async_request/3` does NOT fire until the consumer reduces. Returns
   `{:error, %AdapterError{}}` synchronously when pre-flight fails (key
   missing, o-series model, invalid request, etc.). Streaming never wraps in
-  `ALLM.Retry.run/3` per spec §6.1 — partial output may already have been
+  `ALLM.Retry.run/3` per the documented contract — partial output may already have been
   delivered before any failure surfaces.
 
-  Per CLAUDE.md and spec §10.1, mid-stream failures emit a terminal
+  Per CLAUDE.md and the documented contract, mid-stream failures emit a terminal
   `{:error, _}` event into the enumerable; the consumer's reducer (typically
   `ALLM.StreamCollector`) folds it into `Response.finish_reason: :error`.
   The call-site tuple stays `{:ok, stream}`.
@@ -769,9 +770,9 @@ defmodule ALLM.Providers.OpenAI do
   Happy-path streams emit, in order:
 
       {:message_started, %{message: %ALLM.Message{role: :assistant, content: ""}}}
-      {:text_delta, %{id: id, delta: "..."}}      # one or more
-      {:tool_call_delta, %{...}}                  # zero or more (interleaved with text)
-      {:tool_call_completed, %{...}}              # one per tool call (synthesized at stream end)
+      {:text_delta, %{id: id, delta: "..."}} # one or more
+      {:tool_call_delta, %{...}} # zero or more (interleaved with text)
+      {:tool_call_completed, %{...}} # one per tool call (synthesized at stream end)
       {:message_completed, %{message: msg, finish_reason: reason}}
 
   The leading `:message_started` is a bookend — `ALLM.StreamCollector` folds
@@ -1854,7 +1855,7 @@ defmodule ALLM.Providers.OpenAI do
 
   @doc """
   Endpoint-aware translation of a canonical `response_format` shape to
-  OpenAI's wire format. See spec §5.4 and design Decision #17.
+  OpenAI's wire format.and design the documented contract.
 
   Returns either `nil` (omit the field on the wire) OR a
   `{wire_key, wire_value}` 2-tuple where `wire_key` is the JSON body key

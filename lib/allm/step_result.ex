@@ -1,15 +1,14 @@
 defmodule ALLM.StepResult do
   @moduledoc """
-  The result of a single chat step. See spec §5.8.
+  The result of a single chat step — Layer A serializable data.
 
-  Layer A — pure serializable data. Carries the updated `:thread`, the
-  `:response` from the adapter, any `:tool_results` appended during this
-  step, and a `:done?` flag indicating whether the chat loop should halt
-  after this step.
+  Carries the updated `:thread`, the `:response` from the adapter, any
+  `:tool_results` appended during this step, and a `:done?` flag
+  indicating whether the chat loop should halt after this step.
 
-  The `:done?` field uses a `?`-suffixed atom key per spec §5.8; this is
-  legal Elixir and round-trips through both `:erlang.term_to_binary/1` and
-  (in sub-phase 1.5) tagged JSON encoding.
+  The `:done?` field uses a `?`-suffixed atom key — legal Elixir, and
+  round-trips cleanly through `:erlang.term_to_binary/1` and tagged JSON
+  encoding via `ALLM.Serializer`.
   """
 
   alias ALLM.{Message, Response, Thread}

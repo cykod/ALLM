@@ -1,9 +1,9 @@
 defmodule ALLM.TextPart do
   @moduledoc """
-  A text content part used in multimodal `ALLM.Message{:content}` lists. See
-  spec §35.6.
+  A text content part used in multimodal `ALLM.Message{:content}` lists
+  — Layer A serializable data.
 
-  Layer A — pure serializable data. `:text` is the only required field;
+  `:text` is the only required field;
   `:metadata` defaults to an empty map. The struct is opaque from the
   validator's point of view (`ALLM.Validate.message/1` accepts any
   `%TextPart{}` regardless of `:text` content — empty strings included).
@@ -11,8 +11,8 @@ defmodule ALLM.TextPart do
   Multimodal callers build `%ALLM.Message{content: [...]}` by hand:
 
       iex> ALLM.Message.new(role: :user, content: [
-      ...>   %ALLM.TextPart{text: "What is in this image?"},
-      ...>   %ALLM.ImagePart{image: ALLM.Image.from_url("https://example.com/cat.png")}
+      ...> %ALLM.TextPart{text: "What is in this image?"},
+      ...> %ALLM.ImagePart{image: ALLM.Image.from_url("https://example.com/cat.png")}
       ...> ]).role
       :user
 
@@ -34,7 +34,7 @@ defmodule ALLM.TextPart do
   @doc """
   Build a `%TextPart{}` from a string and optional keyword opts.
 
-  Accepts an optional `:metadata` keyword (a map). Empty `text` is allowed —
+  Accepts an optional `:metadata` keyword (a map). Empty `text` is allowed
   the validator does not reject empty TextParts; that is an upstream concern.
 
   ## Examples

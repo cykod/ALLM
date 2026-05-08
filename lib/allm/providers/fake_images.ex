@@ -1,7 +1,7 @@
 defmodule ALLM.Providers.FakeImages do
   @moduledoc """
   Deterministic, scripted adapter for image-generation testing. Implements
-  `ALLM.ImageAdapter`. See spec §35.8.
+  `ALLM.ImageAdapter`.
 
   Layer B — runtime. FakeImages is the canonical testing image adapter; it
   ships in `lib/` (not `test/support/`) because users need it for their
@@ -93,7 +93,7 @@ defmodule ALLM.Providers.FakeImages do
 
   ## Examples
 
-      iex> ALLM.Providers.FakeImages.supported_operations()
+      iex> ALLM.Providers.FakeImages.supported_operations
       [:generate, :edit, :variation]
   """
   @impl ALLM.ImageAdapter
@@ -105,11 +105,11 @@ defmodule ALLM.Providers.FakeImages do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Execute a scripted image-generation request. See spec §35.3.
+  Execute a scripted image-generation request.
 
   Returns `{:error, %ImageAdapterError{reason: :unsupported_operation,
   metadata: %{operation: op}}}` BEFORE consulting the script when
-  `request.operation not in supported_operations()` (entry-point gate per
+  `request.operation not in supported_operations` (entry-point gate per
   the conformance contract).
 
   Otherwise reads the script from `opts[:adapter_opts][:image_script]`,
@@ -141,9 +141,9 @@ defmodule ALLM.Providers.FakeImages do
       iex> opts = [adapter_opts: [image_script: [{:ok, [img]}], capture_pid: self()]]
       iex> {:ok, _} = ALLM.Providers.FakeImages.generate(req, opts)
       iex> receive do
-      ...>   {ALLM.Providers.FakeImages, :call, %{request: ^req}} -> :ok
+      ...> {ALLM.Providers.FakeImages, :call, %{request: ^req}} -> :ok
       ...> after
-      ...>   0 -> :no_message
+      ...> 0 -> :no_message
       ...> end
       :ok
   """
@@ -175,9 +175,9 @@ defmodule ALLM.Providers.FakeImages do
 
   Each entry is one of:
 
-    * `{:ok, [%Image{}, ...]}` — return the listed images plus a default
+    * `{:ok, [%Image{},...]}` — return the listed images plus a default
       `%ImageUsage{images: length(images)}`.
-    * `{:ok, [%Image{}, ...], usage: %ImageUsage{}}` — return the listed
+    * `{:ok, [%Image{},...], usage: %ImageUsage{}}` — return the listed
       images plus the supplied usage.
     * `{:error, %ImageAdapterError{}}` — return the struct verbatim.
 
@@ -216,7 +216,7 @@ defmodule ALLM.Providers.FakeImages do
 
   ## Examples
 
-      iex> pid = ALLM.Providers.FakeImages.start_script_cursor()
+      iex> pid = ALLM.Providers.FakeImages.start_script_cursor
       iex> ALLM.Providers.FakeImages.cursor_index(pid)
       0
   """

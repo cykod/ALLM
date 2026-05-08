@@ -4,25 +4,25 @@ defmodule ALLM.Providers.Gemini.Images do
   against `generateContent` with `responseModalities: ["TEXT", "IMAGE"]`
   on the Gemini-native image preview models (`gemini-3.1-flash-image-preview`
   / "Nano Banana 2", `gemini-3-pro-image-preview` / "Nano Banana Pro").
-  See spec §35.3, §35.7 and `steering/GEMINI_DESIGN.md` Phase 16.5.
+  and ``.
 
   Layer B — runtime. Consumed through the `ALLM.generate_image/3` façade.
   Keys resolve via `ALLM.Keys.fetch!(:gemini, opts)` at request-build
-  time per spec §6.4 — no key ever lives on the engine.
+  time per the documented contract — no key ever lives on the engine.
 
-  ## Single translator (Decision #7)
+  ## Single translator
 
   Image generation is `generateContent` with `responseModalities`
   toggled to `["TEXT", "IMAGE"]`. The request body is built by
   `ALLM.Providers.Gemini.to_gemini_request_body/2` (the same translator
   the chat adapter uses). The image adapter then overrides
   `generationConfig.responseModalities` and adds
-  `generationConfig.imageConfig.aspectRatio` from the Decision #19
-  size-mapping table. The `:edit` operation reuses Phase 16.4's
+  `generationConfig.imageConfig.aspectRatio` from the the documented contract
+  size-mapping table. The `:edit` operation reuses 's
   `part_to_block/1` for source-image translation by synthesizing a
-  user-role message with `[%TextPart{}, %ImagePart{}, ...]` content.
+  user-role message with `[%TextPart{}, %ImagePart{},...]` content.
 
-  ## Aspect-ratio mapping (Decision #19)
+  ## Aspect-ratio mapping
 
   | ALLM `ImageRequest.size` | Gemini `imageConfig.aspectRatio` |
   |--------------------------|----------------------------------|
@@ -37,7 +37,7 @@ defmodule ALLM.Providers.Gemini.Images do
   Pixel sizing (`imageSize: "1K"|"2K"|"4K"`) is not exposed in v0.2's
   `ImageRequest.size` field; deferred. Aspect-ratio is the only knob.
 
-  ## Operation gate (Decision #6)
+  ## Operation gate
 
   `supported_operations/0` returns `[:generate, :edit]`. `:variation` is
   rejected with `:unsupported_operation` BEFORE any HTTP I/O per
@@ -48,7 +48,7 @@ defmodule ALLM.Providers.Gemini.Images do
   `opts[:adapter_opts][:image_script]`, when present, delegates to
   `ALLM.Providers.FakeImages.generate/2` BEFORE any pre-flight gate
   runs. Mirrors the OpenAI.Images precedent at
-  `lib/allm/providers/openai/images.ex:251` (Phase 14.3 Decision #20).
+  `lib/allm/providers/openai/images.ex:251`.
 
   ## Shared response decoder (Cross-function invariant)
 
@@ -57,7 +57,7 @@ defmodule ALLM.Providers.Gemini.Images do
   `lib/allm/providers/gemini.ex:991` post-Phase-16.5 refactor). The image
   adapter consumes the `image_parts` element of the returned tuple while
   the chat adapter consumes `text` + `tool_calls`; both walk the parts
-  list once. Per `steering/GEMINI_DESIGN.md` cross-function invariants
+  list once. Per `` cross-function invariants
   lines 217-219.
   """
 
@@ -91,12 +91,12 @@ defmodule ALLM.Providers.Gemini.Images do
   @doc """
   Return the closed list of operations Gemini's image adapter supports.
 
-  Per Decision #6 — `[:generate, :edit]`. `:variation` is not supported
+  Per the documented contract — `[:generate, :edit]`. `:variation` is not supported
   by the Gemini-native image models and is rejected pre-flight.
 
   ## Examples
 
-      iex> ALLM.Providers.Gemini.Images.supported_operations()
+      iex> ALLM.Providers.Gemini.Images.supported_operations
       [:generate, :edit]
   """
   @impl ALLM.ImageAdapter
@@ -113,7 +113,7 @@ defmodule ALLM.Providers.Gemini.Images do
     1. **Test-injection escape hatch.** When
        `opts[:adapter_opts][:image_script]` is non-nil, the call delegates
        to `ALLM.Providers.FakeImages.generate/2`.
-    2. **Operation gate.** `request.operation in supported_operations()`.
+    2. **Operation gate.** `request.operation in supported_operations`.
        Failure → `:unsupported_operation` with
        `metadata: %{operation: op}`.
     3. **Aspect-ratio gate.** `request.size`, when non-nil, must map to
@@ -230,7 +230,7 @@ defmodule ALLM.Providers.Gemini.Images do
 
   @doc """
   Map `ImageRequest.size` to Gemini's `imageConfig.aspectRatio` per
-  Decision #19. Returns the raw aspect-ratio string, `:omit` for `nil`,
+  the documented contract. Returns the raw aspect-ratio string, `:omit` for `nil`,
   or `{:error, :invalid_size}` for an unmappable size.
 
   Square sizes (`"NxN"` or `{n, n}`) collapse to `"1:1"`. Non-square
@@ -313,15 +313,15 @@ defmodule ALLM.Providers.Gemini.Images do
 
   Synthesizes a chat-equivalent `%Request{}` (single user message
   whose content is the prompt for `:generate`, or
-  `[%TextPart{}, %ImagePart{}, ...]` for `:edit`) and delegates to
-  `Gemini.to_gemini_request_body/2` per Decision #7. Then overrides
+  `[%TextPart{}, %ImagePart{},...]` for `:edit`) and delegates to
+  `Gemini.to_gemini_request_body/2` per the documented contract. Then overrides
   `generationConfig.responseModalities = ["TEXT", "IMAGE"]` and (when the
   size maps to a known aspect ratio) adds
   `generationConfig.imageConfig.aspectRatio`. `:n > 1` adds
   `generationConfig.candidateCount: n`.
 
   Returns `{:error, %ImageAdapterError{reason: :invalid_request}}` for
-  unmappable sizes per Decision #19's closed table.
+  unmappable sizes per the documented contract's closed table.
   """
   @doc since: "0.3.0"
   @spec to_image_request_body(ImageRequest.t(), keyword()) ::
@@ -405,7 +405,7 @@ defmodule ALLM.Providers.Gemini.Images do
 
   For Gemini, this helper exists for parity with the OpenAI image-adapter
   testing surface. The actual `:edit` request build delegates source
-  translation to `Gemini.part_to_block/1` (Phase 16.4) via the chat
+  translation to `Gemini.part_to_block/1` via the chat
   translator, which handles `:binary`, `:base64`, and `:file` sources;
   `:url` is rejected by `Gemini.reject_unsupported_image_sources/1`.
   """

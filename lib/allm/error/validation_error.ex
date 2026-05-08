@@ -4,18 +4,18 @@ defmodule ALLM.Error.ValidationError do
 
   Layer A — serializable. Carries a list of `t:field_error/0` tuples so
   callers can machine-read which fields failed validation and why. Refines
-  spec §16's "list of error terms" shape into a first-class struct.
+  the documented contract's "list of error terms" shape into a first-class struct.
 
-  See Phase 1 design §Sub-phase 1.1 for the closed reason enum. Phase 8
-  (sub-phase 8.2) extended the enum with `:invalid_session_input` for the
+  See design §Sub- for the closed reason enum.
+  (sub-) extended the enum with `:invalid_session_input` for the
   `ALLM.Session.start/3` / `stream_start/3` input-coercion failure.
 
-  > #### BREAKING — Phase 14.4 {: .warning}
+  > #### BREAKING — {:.warning}
   >
   > `:vision_not_in_v0_2` was removed from the closed reason enum in v0.3
-  > Phase 14.4. Vision input is now supported via `ALLM.ImagePart` (§35.6);
+  >. Vision input is now supported via `ALLM.ImagePart`
   > the validator no longer short-circuits on image content parts.
-  > `ValidationError.new(:vision_not_in_v0_2, ...)` raises `ArgumentError`.
+  > `ValidationError.new(:vision_not_in_v0_2,...)` raises `ArgumentError`.
   """
 
   @typedoc """

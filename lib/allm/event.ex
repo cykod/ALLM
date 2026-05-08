@@ -1,38 +1,37 @@
 defmodule ALLM.Event do
   @moduledoc """
-  Closed tagged-tuple union emitted by stream runners. See spec §8.
+  Closed tagged-tuple union emitted by stream runners — Layer A
+  serializable data.
 
-  Layer A — every event is `{tag, payload}` where `tag` is an atom from the
-  closed set returned by `tags/0`. For every tag except `:raw_chunk` and
-  `:error`, `payload` is a `map()` with documented keys; `:raw_chunk` and
-  `:error` carry opaque payloads per spec §8.
+  Every event is `{tag, payload}` where `tag` is an atom from the closed
+  set returned by `tags/0`. For every tag except `:raw_chunk` and
+  `:error`, `payload` is a `map` with documented keys; `:raw_chunk` and
+  `:error` carry opaque payloads.
 
-  Use `event?/1` to test whether a term is a well-shaped event. The variant
-  constructors (`text_delta/2`, `tool_call_completed/4`, …) are the
-  canonical way to build events from the stream runner; the spec leaves
-  `:raw_chunk` and `:error` un-constructed because their payloads are
-  opaque.
+  Use `event?/1` to test whether a term is a well-shaped event. The
+  variant constructors (`text_delta/2`, `tool_call_completed/4`, …) are
+  the canonical way to build events from the stream runner; `:raw_chunk`
+  and `:error` are not constructed by the library because their payloads
+  are opaque.
 
   ## Payload extensions
 
-  Phase 5 additively extends the `:message_completed` payload with an
-  optional `:finish_reason` key of type `t:ALLM.Response.finish_reason/0` or
-  `nil`. The tag set is unchanged — the union still has 16 tags. Existing
-  consumers that bind `{:message_completed, %{message: msg}}` continue to
-  match because Elixir map patterns are non-exhaustive; only consumers that
-  want to read `:finish_reason` opt in. The `message_completed/1`
-  constructor is preserved and now produces a payload with
-  `:finish_reason => nil`; `message_completed/2` threads the caller-supplied
-  reason into the payload.
+  Map patterns in Elixir are non-exhaustive, so adding a new optional key
+  to an existing event's payload is NOT a breaking change — consumers
+  binding only the keys they care about continue to match. Two extensions
+  to `:message_completed` are in flight today:
 
-  Phase 10.6 additively extends the `:message_completed` payload with an
-  optional `:metadata` map key. Adapters that surface terminal
-  provider-specific completion metadata (e.g., the OpenAI Responses-API
-  reasoning summary) populate this key; `ALLM.StreamCollector.apply_event/2`
-  merges it into `state.metadata`, so the value lands on
-  `Response.metadata` after collection. The key is OPTIONAL — adapters
-  and existing emitters that don't populate it omit the key entirely, and
-  the StreamCollector treats absence as a no-op merge.
+    * `:finish_reason` — optional `t:ALLM.Response.finish_reason/0` or
+      `nil`, threaded by `message_completed/2`. The 1-arity constructor
+      `message_completed/1` is preserved and produces a payload with
+      `:finish_reason => nil`.
+    * `:metadata` — optional map. Adapters that surface terminal
+      provider-specific completion metadata (e.g., OpenAI Responses-API
+      reasoning summaries) populate it; `ALLM.StreamCollector.apply_event/2`
+      merges it into `state.metadata`, so the value lands on
+      `Response.metadata` after collection. Absence is a no-op.
+
+  See also `guides/streaming.md`.
   """
 
   alias ALLM.{ChatResult, Message, Response, Thread, ToolCall}
@@ -95,7 +94,7 @@ defmodule ALLM.Event do
 
   Accepts any 2-tuple whose first element is an atom in `tags/0`. For every
   tag except `:raw_chunk` and `:error`, additionally requires the second
-  element to be a `map()` (the per-tag key contract is documented by each
+  element to be a `map` (the per-tag key contract is documented by each
   variant constructor, but not enforced here — adapter-emitted events are
   trusted).
 
@@ -246,7 +245,7 @@ defmodule ALLM.Event do
 
   @doc """
   Build an `:ask_user_requested` event signalling that the chat loop halted
-  pending a user answer (spec §12.3).
+  pending a user answer.
 
   ## Examples
 
@@ -282,8 +281,7 @@ defmodule ALLM.Event do
   Build a `:tool_halt` event with the pre-encoded tool-result `content`. The
   payload's `:content` key lets `ALLM.StreamCollector`'s `:tool_halt` fold
   populate `state.tool_results` with the sentinel `:tool`-role message
-  without re-running the encoder. See PHASE_7_DESIGN.md Non-obvious
-  Decision #6 + Phase 7.6 cleanup.
+  without re-running the encoder.
 
   ## Examples
 
@@ -315,7 +313,7 @@ defmodule ALLM.Event do
   specific finish reason. See "Payload extensions" in the module doc.
 
   The payload may also carry an optional `:metadata` map that
-  `ALLM.StreamCollector.apply_event/2` merges into `state.metadata` —
+  `ALLM.StreamCollector.apply_event/2` merges into `state.metadata`
   see `message_completed/3` and "Payload extensions" in the module doc.
   This 1-arity helper omits the key (no provider metadata to surface).
 
@@ -359,7 +357,7 @@ defmodule ALLM.Event do
   @doc """
   Build a `:message_completed` event with the finalized message, a
   finish-reason atom (or `nil`), and an optional `:metadata` map carrying
-  terminal provider-specific completion data (Phase 10.6).
+  terminal provider-specific completion data.
 
   When `metadata` is non-empty, `ALLM.StreamCollector.apply_event/2` merges
   it into `state.metadata` via `Map.merge/2`, so the values land on
@@ -401,10 +399,10 @@ defmodule ALLM.Event do
   `:mode` key carries the orchestration mode the step ran under so that
   reducers (`StreamCollector`'s `:step_completed` fold, multi-turn chat
   orchestrators) can produce StepResult metadata identical to the
-  non-streaming `Chat.step/3` path. See Phase 7 retro F1+F3.
+  non-streaming `ALLM.step/3` path.
 
-  The payload also carries `:manual_tool_calls` defaulting to `[]` (Phase
-  18.3 — per-tool manual partition). When per-tool manual is in effect, the
+  The payload also carries `:manual_tool_calls` defaulting to `[]` (the
+  per-tool manual partition). When per-tool manual is in effect, the
   list contains the manual-bucket tool calls; otherwise it is empty. See
   `step_completed/4`.
 
@@ -437,7 +435,7 @@ defmodule ALLM.Event do
 
   @doc """
   Build a `:step_completed` event with the response, the updated thread,
-  the orchestration mode, and the per-tool manual bucket (Phase 18.3).
+  the orchestration mode, and the per-tool manual bucket.
 
   When `mode: :auto` and any called tool has `manual: true`, the chat
   orchestrator partitions a turn's tool calls into auto + manual buckets;
@@ -445,11 +443,11 @@ defmodule ALLM.Event do
   `:tool_execution_*` events) and `manual_tool_calls` carries the manual
   subset for caller resolution. The list is empty for pure-auto turns and
   for `mode: :manual` turns (whole-loop manual surfaces calls via
-  `response.tool_calls` instead — see Decision #1 in PHASE_18_DESIGN.md).
+  `response.tool_calls` instead).
 
   `ALLM.StreamCollector.apply_event/2`'s `:step_completed` fold extracts
   the list and merges it onto `state.metadata.manual_tool_calls` IFF
-  non-empty (empty-list-is-absence per Decision #12).
+  non-empty (empty list represents absence).
 
   ## Examples
 
@@ -475,9 +473,9 @@ defmodule ALLM.Event do
   ## Examples
 
       iex> result = %ALLM.ChatResult{
-      ...>   thread: %ALLM.Thread{},
-      ...>   final_response: %ALLM.Response{},
-      ...>   halted_reason: :completed
+      ...> thread: %ALLM.Thread{},
+      ...> final_response: %ALLM.Response{},
+      ...> halted_reason: :completed
       ...> }
       iex> ALLM.Event.chat_completed(result)
       {:chat_completed, %{result: result}}

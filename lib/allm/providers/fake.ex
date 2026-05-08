@@ -1,11 +1,11 @@
 defmodule ALLM.Providers.Fake do
   @moduledoc """
   Deterministic, scripted adapter for testing. Implements both `ALLM.Adapter`
-  and `ALLM.StreamAdapter`. See spec §31, §7.1, §7.2, §8.
+  and `ALLM.StreamAdapter`.
 
   Layer B — runtime. Fake is the canonical testing adapter that every
   orchestration phase (5, 6, 7, 8) tests against. It carries serializable
-  plain data in `adapter_opts` and passes both the Phase 3 adapter- and
+  plain data in `adapter_opts` and passes both the adapter- and
   stream-adapter conformance harnesses.
 
   ## What Fake is (and isn't)
@@ -15,9 +15,9 @@ defmodule ALLM.Providers.Fake do
   `:temperature`, `:max_tokens`, or any other field. The scripted response is
   produced irrespective of the request. This is intentional: Fake is for
   testing orchestration, not provider-wire fidelity. Testing tool orchestration
-  happens at Phase 6 (ToolRunner) and Phase 7 (Chat) — Fake's scripts directly
+  happens at (ToolRunner) and (Chat) — Fake's scripts directly
   emit `{:tool_call, _}` entries to simulate what the model would return; the
-  caller sets up an engine with `tools: [...]` and a `{:tool_call, ...}`
+  caller sets up an engine with `tools: [...]` and a `{:tool_call,...}`
   script, and the orchestrator dispatches to the tool executor exactly as it
   would with a real provider.
 
@@ -26,7 +26,7 @@ defmodule ALLM.Providers.Fake do
   Fake accepts two disjoint script shapes on `adapter_opts`. See
   `ALLM.Providers.Fake.Script` for the full tag-to-shape table.
 
-  ### Spec §31 (user-facing)
+  ### Spec (user-facing)
 
       adapter_opts: [
         script: [
@@ -40,7 +40,7 @@ defmodule ALLM.Providers.Fake do
   `:raw_chunk`, `:finish`, `:error` (2-tuple), `:delay`, `:sleep`
   (deprecated alias of `:delay`).
 
-  ### Phase 3 harness
+  ### harness
 
       adapter_opts: [
         script: [{:ok, %{output_text: "hi"}}],
@@ -57,16 +57,16 @@ defmodule ALLM.Providers.Fake do
   | Entry point | Key precedence |
   |-------------|----------------|
   | `generate/2` | `:scripts` > `:script` (wrapped as `[script]`). `:stream_script` is not consulted; if only `:stream_script` is set, `generate/2` returns `:no_scripted_response`. |
-  | `stream/2`   | `:stream_script` > `:scripts` > `:script` (wrapped as `[script]`). |
+  | `stream/2` | `:stream_script` > `:scripts` > `:script` (wrapped as `[script]`). |
 
-  Multi-call scripting uses `:scripts` / `:stream_script` as a list of lists —
+  Multi-call scripting uses `:scripts` / `:stream_script` as a list of lists
   each call consumes one inner list and advances the cursor.
 
   ### Disambiguation
 
   For `generate/2`, both shapes share the `:script` key and are disambiguated
   by leading entry tag. The `:error` tag disambiguates by `tuple_size/1`
-  (2 → §31, 3 → harness). For `stream/2`, distinct keys disambiguate.
+  (2 →, 3 → harness). For `stream/2`, distinct keys disambiguate.
 
   ## Cursor behaviour
 
@@ -98,7 +98,7 @@ defmodule ALLM.Providers.Fake do
   single-multi-call tests whose script content is unique in the module; for
   everything else, the explicit cursor is load-bearing:
 
-      cursor = ALLM.Providers.Fake.start_script_cursor()
+      cursor = ALLM.Providers.Fake.start_script_cursor
       opts = [adapter_opts: [scripts: [...]] ++ [script_cursor: cursor]]
 
   Worked examples: `test/allm/providers/fake_test.exs:143` and
@@ -123,19 +123,19 @@ defmodule ALLM.Providers.Fake do
 
   **Brutal-kill caveat.** `Stream.resource/3`'s `after_fun` does NOT run when
   the consumer is killed with `Process.exit(pid, :kill)` — brutal exits skip
-  all cleanup by OTP design. Real provider adapters (Phase 10–11) address this
+  all cleanup by OTP design. Real provider adapters address this
   via Finch's own monitor-based connection cleanup; Fake has no HTTP ref to
   leak so the caveat is purely documentary. Tests assert cleanup on normal
   halts only; no test should simulate `:kill`.
 
   ## Adapter event vocabulary (streaming)
 
-  **Emitted** (spec §8 subset that belongs to an adapter):
+  **Emitted** :
   `:message_started`, `:text_delta`, `:text_completed`, `:tool_call_started`,
   `:tool_call_delta`, `:tool_call_completed`, `:message_completed`,
   `:raw_chunk`, `:error`.
 
-  **Not emitted** (orchestrator-owned — Phase 6/7):
+  **Not emitted** (orchestrator-owned — /7):
   `:tool_execution_started`, `:tool_execution_completed`, `:tool_result_encoded`,
   `:ask_user_requested`, `:tool_halt`, `:step_completed`, `:chat_completed`.
 
@@ -173,7 +173,7 @@ defmodule ALLM.Providers.Fake do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Execute a scripted non-streaming request. See spec §7.1.
+  Execute a scripted non-streaming request.
 
   Reads the script from `opts[:adapter_opts]`, validates via
   `ALLM.Providers.Fake.Script.validate!/1`, resolves the cursor, folds the
@@ -222,20 +222,20 @@ defmodule ALLM.Providers.Fake do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Open a scripted streaming request. See spec §7.2, §8.
+  Open a scripted streaming request.
 
   Reads the script from `opts[:adapter_opts]`, validates via
   `ALLM.Providers.Fake.Script.validate!/1`, resolves the cursor, and returns
-  a lazy `Enumerable.t()` of `ALLM.Event` values. No event fires until the
+  a lazy `Enumerable.t` of `ALLM.Event` values. No event fires until the
   consumer reduces.
 
   Key precedence: `:stream_script` > `:scripts` > `:script` (wrapped as
-  `[script]`). Empty opts return `{:error, script_exhausted_error()}` (no
+  `[script]`). Empty opts return `{:error, script_exhausted_error}` (no
   stream opened).
 
   When the first entry of the current call is a harness-shape
   `{:preflight_error, reason, opts}`, returns synchronously as
-  `{:error, %AdapterError{reason: ^reason, ...opts}}` — no stream is opened.
+  `{:error, %AdapterError{reason: ^reason,...opts}}` — no stream is opened.
 
   The returned stream emits `:message_started` on open, per-entry events via
   `ALLM.Providers.Fake.Script.interpret/1`, and closes with
@@ -312,12 +312,12 @@ defmodule ALLM.Providers.Fake do
   @doc """
   Return the canonical `%AdapterError{}` for a script-exhausted call.
 
-  Spec §31 phrases this as `{:error, :no_scripted_response}`; the atom is
-  preserved as the struct's `:reason` field via the Phase 1 enum amendment.
+  Spec phrases this as `{:error, :no_scripted_response}`; the atom is
+  preserved as the struct's `:reason` field via the enum amendment.
 
   ## Examples
 
-      iex> err = ALLM.Providers.Fake.script_exhausted_error()
+      iex> err = ALLM.Providers.Fake.script_exhausted_error
       iex> err.reason
       :no_scripted_response
       iex> err.message
@@ -338,7 +338,7 @@ defmodule ALLM.Providers.Fake do
 
   ## Examples
 
-      iex> pid = ALLM.Providers.Fake.start_script_cursor()
+      iex> pid = ALLM.Providers.Fake.start_script_cursor
       iex> ALLM.Providers.Fake.cursor_index(pid)
       0
   """

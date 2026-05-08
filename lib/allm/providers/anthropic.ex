@@ -1,33 +1,33 @@
 defmodule ALLM.Providers.Anthropic do
   @moduledoc """
-  Anthropic provider adapter — Layer B. See spec §6.4, §7.1, §20, §32.1.
+  Anthropic provider adapter — Layer B.
 
-  Phase 11.1 ships the non-streaming `ALLM.Adapter` callback set; Phase 11.2
-  adds the `ALLM.StreamAdapter` callbacks; Phase 11.3 adds structured-output
+   ships the non-streaming `ALLM.Adapter` callback set;
+  adds the `ALLM.StreamAdapter` callbacks; adds structured-output
   tool-forcing for both arms. This module implements:
 
     * `generate/2` — fires `POST https://api.anthropic.com/v1/messages` via
       `Req`, wrapped in `ALLM.Retry.run/3` with the Anthropic-specific
-      `529 Overloaded` retryable status (Decision #2).
+      `529 Overloaded` retryable status.
     * `prepare_request/2` — returns an unfired `%Req.Request{}` with the
       API key injected as `x-api-key` and the API version pinned via
-      `anthropic-version: 2023-06-01` (Decision #9).
-    * `translate_options/2` — identity (Decision #7). Anthropic accepts
+      `anthropic-version: 2023-06-01`.
+    * `translate_options/2` — identity. Anthropic accepts
       `:max_tokens` natively across all model generations.
     * `requires_structured_finalize?/1` — capability declaration consumed
       by `ALLM.Capability.preflight/2`. Always `false` because Anthropic
       uses tool-forcing (single-pass) for structured output rather than the
-      OpenAI-style two-pass dance (Decision #13).
+      OpenAI-style two-pass dance.
 
-  ## System-message extraction (Decision #1)
+  ## System-message extraction
 
-  Anthropic's Messages API rejects `{role: "system", ...}` items inside
+  Anthropic's Messages API rejects `{role: "system",...}` items inside
   `messages:`; the system prompt is a top-level `system:` parameter.
   `extract_system/1` partitions system-role messages out of the thread and
   concatenates their `content` strings with `\\n\\n`. The non-system
   messages flow through unchanged.
 
-  ## Tool-choice translation (Decision #3)
+  ## Tool-choice translation
 
   `to_anthropic_tool_choice/1` returns a sentinel-tagged result so the
   request-builder can decide whether to emit the field at all:
@@ -38,12 +38,12 @@ defmodule ALLM.Providers.Anthropic do
   | `:none` | `{:set, %{type: "none"}}` | `tool_choice: %{type: "none"}` |
   | `:required` | `{:set, %{type: "any"}}` | `tool_choice: %{type: "any"}` (Anthropic's wording) |
   | `"<name>"` | `{:set, %{type: "tool", name: "<name>"}}` | passthrough |
-  | `%{type: t, ...}` (`t in ~w(auto any none tool)`) | `{:set, m}` | passthrough verbatim |
+  | `%{type: t,...}` (`t in ~w(auto any none tool)`) | `{:set, m}` | passthrough verbatim |
 
   Note the rename `:required → "any"` — Anthropic uses different wording
   than OpenAI for the same semantic.
 
-  ## Stop-reason normalization (total per spec §5.5)
+  ## Stop-reason normalization (total per the documented contract)
 
   | Anthropic string | ALLM atom | Notes |
   |------------------|-----------|-------|
@@ -56,22 +56,22 @@ defmodule ALLM.Providers.Anthropic do
   | anything else | `:other` | `raw_finish_reason` carries the raw string. |
   | `nil` | `nil` | Mid-stream `message_delta` pre-finish. |
 
-  ## Retry contract (Decision #2)
+  ## Retry contract
 
   `generate/2` wraps the HTTP call in `ALLM.Retry.run(opts[:retry] || :default, …)`.
   The closure adds **`529 Overloaded`** (Anthropic-specific) to the retryable
-  set on top of the spec §6.1 default `[429, 500, 502, 503, 504, :timeout]`.
-  `Retry-After` honored when present. Streaming never retries (spec §6.1).
+  set on top of the the documented contract default `[429, 500, 502, 503, 504, :timeout]`.
+  `Retry-After` honored when present. Streaming never retries.
 
   ## Key resolution
 
   Keys never appear on the engine. `prepare_request/2` and `generate/2` call
-  `ALLM.Keys.fetch!(:anthropic, opts)` at request-build time per spec §6.4.
-  Per Decision #9, `prepare_request/2` raises
+  `ALLM.Keys.fetch!(:anthropic, opts)` at request-build time per the documented contract.
+  Per the documented contract, `prepare_request/2` raises
   `%ALLM.Error.EngineError{reason: :missing_key}` when no key resolver
   yields a value.
 
-  ## Structured output via tool-forcing (§5.4 + Decision #4)
+  ## Structured output via tool-forcing
 
   When `request.response_format == %{type: :json_schema, name: n, schema: s,
   strict: b}`, `to_anthropic_request_body/1` injects a synthetic tool
@@ -87,11 +87,11 @@ defmodule ALLM.Providers.Anthropic do
   true` for observability. The streaming arm (`stream/2`) wraps its inner
   enumerable in `Stream.transform/3` so the same `lift_structured_output/1`
   helper runs on the accumulated state at completion — both arms produce
-  byte-identical `%Response{}` shapes (Decision #5b, invariant 14).
+  byte-identical `%Response{}` shapes.
 
   ### Streamed structured output — event shape
 
-  When `response_format: %{type: :json_schema, ...}` is set, the streaming
+  When `response_format: %{type: :json_schema,...}` is set, the streaming
   wrapper emits `:text_delta` events for partial JSON and a final
   `:text_completed` event before the terminal `:message_completed`. The
   synthetic `tool_use` round-trip is hidden from the consumer; this matches
@@ -99,7 +99,7 @@ defmodule ALLM.Providers.Anthropic do
   provider-neutral structured-output streaming code (pattern-match
   `:text_delta` events to display JSON character-by-character).
 
-  Per Decision #5b: `:tool_call_*` events DO NOT fire on this path. The
+  Per the documented contractb: `:tool_call_*` events DO NOT fire on this path. The
   shared `lift_structured_output/1` ensures the collected `%Response{}` is
   byte-identical with the non-streaming arm: `output_text` carries the JSON,
   `finish_reason` is `:stop`, `tool_calls` is empty, and `metadata` carries
@@ -107,7 +107,7 @@ defmodule ALLM.Providers.Anthropic do
 
   `requires_structured_finalize?/1` is `false` because tool-forcing is
   single-pass — the OpenAI-style two-pass `structured_finalize` dance is
-  unnecessary (Decision #13).
+  unnecessary.
 
   ### Cross-provider byte-shape carve-out
 
@@ -127,7 +127,7 @@ defmodule ALLM.Providers.Anthropic do
   schema name embeds the namespace marker. A collision is only possible
   when the user names a tool exactly identical (e.g., a user-defined
   `respond_with_json_person` tool plus `response_format:
-  %{type: :json_schema, name: "person", ...}`). In that pathological case
+  %{type: :json_schema, name: "person",...}`). In that pathological case
   the body's `tools:` array contains both entries and the response
   decoder's `lift_structured_output/1` only fires when there is exactly
   one tool call whose name starts with the prefix; ambiguous multi-call
@@ -144,15 +144,15 @@ defmodule ALLM.Providers.Anthropic do
   matches the synthetic prefix; when found, the synthetic injection is
   SKIPPED so user-defined tools remain callable on subsequent turns.
 
-  ## Vision input (Phase 17.2)
+  ## Vision input
 
   `[%ALLM.TextPart{}, %ALLM.ImagePart{}]` content lists translate to
   Anthropic's Messages-API content-block shape automatically. URL-source
   images flow through `source: %{type: "url", url: u}`; binary, base64,
   and file sources resolve to `source: %{type: "base64", media_type:
-  mime, data: ...}`. `ImagePart.detail` is NOT supported by Anthropic and
+  mime, data:...}`. `ImagePart.detail` is NOT supported by Anthropic and
   is dropped silently with a one-time `Logger.debug/1` per process
-  (Decision #3). System messages remain text-only — an `%ImagePart{}` in
+  System messages remain text-only — an `%ImagePart{}` in
   a system role is hard-rejected as
   `%ValidationError{reason: :invalid_message}` before any HTTP call.
   Per-image MIME / 20 MB size validation runs in pre-flight via
@@ -201,7 +201,7 @@ defmodule ALLM.Providers.Anthropic do
   @impl ALLM.Adapter
   @doc """
   Identity translator — Anthropic accepts `:max_tokens` natively across all
-  model generations (Decision #7). Reshape of system messages, tool_choice,
+  model generations. Reshape of system messages, tool_choice,
   and tools happens in the request-build helpers, not here.
 
   ## Examples
@@ -215,9 +215,9 @@ defmodule ALLM.Providers.Anthropic do
 
   @doc """
   Capability declaration consumed by `ALLM.Capability.preflight/2`
-  (Decision #13).
+  .
 
-  Always returns `false`. Anthropic's tool-forcing pattern (Phase 11.3) is
+  Always returns `false`. Anthropic's tool-forcing pattern is
   single-pass — the OpenAI-style two-pass `structured_finalize` dance is
   unnecessary.
 
@@ -234,9 +234,9 @@ defmodule ALLM.Providers.Anthropic do
   @doc """
   Build an unfired `%Req.Request{}` with the resolved API key injected as
   `x-api-key: <key>` AND the API version pinned via
-  `anthropic-version: 2023-06-01` (Decision #9).
+  `anthropic-version: 2023-06-01`.
 
-  Per Decision #9: this function **raises**
+  Per the documented contract: this function **raises**
   `%ALLM.Error.EngineError{reason: :missing_key}` when no key resolver
   yields a value (via `ALLM.Keys.fetch!/2`).
 
@@ -297,24 +297,24 @@ defmodule ALLM.Providers.Anthropic do
   Execute a non-streaming Messages-API request synchronously.
 
   Wraps the HTTP call in `ALLM.Retry.run/3`. The closure adds
-  `529 Overloaded` (Anthropic-specific — Decision #2) to the spec §6.1
+  `529 Overloaded` (Anthropic-specific.1
   default retryable set `[429, 500, 502, 503, 504, :timeout]`. Returns
   `{:ok, %Response{}}` on 2xx success or `{:error, %AdapterError{}}` on
   every failure shape.
 
-  ## Vision input (Phase 17.2)
+  ## Vision input
 
   `[%ALLM.TextPart{}, %ALLM.ImagePart{}]` content lists translate to
   Anthropic's content-block wire shape automatically. URL-source images
   use `source: %{type: "url", url: u}`; base64/binary/file sources
-  resolve to `source: %{type: "base64", media_type: mime, data: ...}`.
+  resolve to `source: %{type: "base64", media_type: mime, data:...}`.
 
-  > #### Note: `ImagePart.detail` is dropped {: .info}
+  > #### Note: `ImagePart.detail` is dropped {:.info}
   >
   > Anthropic's Messages API has no `detail` field. The translator drops
   > the value silently and emits a single `Logger.debug/1` per process
   > the first time an `ImagePart` with `detail: :auto | :low | :high`
-  > flows through. The wire shape never carries detail (Decision #3).
+  > flows through. The wire shape never carries detail.
 
   System messages remain text-only — an `%ImagePart{}` in a system role
   is hard-rejected as `%ValidationError{reason: :invalid_message}`
@@ -326,14 +326,14 @@ defmodule ALLM.Providers.Anthropic do
       iex> ALLM.Keys.put(:anthropic, "sk-ant-doctest-gen")
       iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "x"}], model: "claude-sonnet-4-6")
       iex> {:error, %ALLM.Error.AdapterError{reason: :authentication_failed}} =
-      ...>   ALLM.Providers.Anthropic.generate(req,
-      ...>     retry: false,
-      ...>     adapter_opts: [plug: fn conn ->
-      ...>       conn
-      ...>       |> Plug.Conn.put_resp_content_type("application/json")
-      ...>       |> Plug.Conn.resp(401, ~s({"type":"error","error":{"type":"authentication_error","message":"bad"}}))
-      ...>     end]
-      ...>   )
+      ...> ALLM.Providers.Anthropic.generate(req,
+      ...> retry: false,
+      ...> adapter_opts: [plug: fn conn ->
+      ...> conn
+      ...> |> Plug.Conn.put_resp_content_type("application/json")
+      ...> |> Plug.Conn.resp(401, ~s({"type":"error","error":{"type":"authentication_error","message":"bad"}}))
+      ...> end]
+      ...>)
       iex> ALLM.Keys.delete(:anthropic)
       :ok
 
@@ -342,7 +342,7 @@ defmodule ALLM.Providers.Anthropic do
       iex> sys = %ALLM.Message{role: :system, content: [%ALLM.ImagePart{image: img}]}
       iex> req = ALLM.Request.new([sys, %ALLM.Message{role: :user, content: "hi"}], model: "claude-sonnet-4-6")
       iex> {:error, %ALLM.Error.ValidationError{reason: :invalid_message}} =
-      ...>   ALLM.Providers.Anthropic.generate(req, api_key: "sk-x")
+      ...> ALLM.Providers.Anthropic.generate(req, api_key: "sk-x")
       iex> :ok
       :ok
   """
@@ -562,17 +562,17 @@ defmodule ALLM.Providers.Anthropic do
   @doc """
   Compose the JSON request body from a canonical `%Request{}`.
 
-  Performs system-message extraction (Decision #1), message/tool/tool_choice
-  translation, and structured-output synthetic-tool injection (Decision #4 —
+  Performs system-message extraction, message/tool/tool_choice
+  translation, and structured-output synthetic-tool injection (the documented contract
   see `inject_structured_output_tool/2`).
 
   ## Examples
 
       iex> req = ALLM.Request.new(
-      ...>   [%ALLM.Message{role: :system, content: "Be concise."},
-      ...>    %ALLM.Message{role: :user, content: "Hi"}],
-      ...>   model: "claude-sonnet-4-6", max_tokens: 256
-      ...> )
+      ...> [%ALLM.Message{role: :system, content: "Be concise."},
+      ...> %ALLM.Message{role: :user, content: "Hi"}],
+      ...> model: "claude-sonnet-4-6", max_tokens: 256
+      ...>)
       iex> body = ALLM.Providers.Anthropic.to_anthropic_request_body(req)
       iex> {body["model"], body["system"], length(body["messages"])}
       {"claude-sonnet-4-6", "Be concise.", 1}
@@ -642,7 +642,7 @@ defmodule ALLM.Providers.Anthropic do
   Partition system-role messages out of `messages`. Returns
   `{system_text_or_nil, non_system_messages}` where `system_text` is the
   concatenation of all system-message contents joined with `"\\n\\n"`
-  (Decision #1).
+  .
 
   ## Examples
 
@@ -650,8 +650,8 @@ defmodule ALLM.Providers.Anthropic do
       {nil, [%ALLM.Message{role: :user, content: "hi"}]}
 
       iex> {sys, rest} = ALLM.Providers.Anthropic.extract_system([
-      ...>   %ALLM.Message{role: :system, content: "be brief"},
-      ...>   %ALLM.Message{role: :user, content: "hi"}
+      ...> %ALLM.Message{role: :system, content: "be brief"},
+      ...> %ALLM.Message{role: :user, content: "hi"}
       ...> ])
       iex> {sys, length(rest)}
       {"be brief", 1}
@@ -678,7 +678,7 @@ defmodule ALLM.Providers.Anthropic do
   ## Examples
 
       iex> ALLM.Providers.Anthropic.to_anthropic_messages([
-      ...>   %ALLM.Message{role: :user, content: "hi"}
+      ...> %ALLM.Message{role: :user, content: "hi"}
       ...> ])
       [%{"role" => "user", "content" => "hi"}]
   """
@@ -920,7 +920,7 @@ defmodule ALLM.Providers.Anthropic do
 
   @doc """
   Translate an ALLM canonical `tool_choice` to Anthropic's sentinel-tagged
-  wire shape per Decision #3.
+  wire shape per the documented contract.
 
   Returns `{:omit}` to skip the field entirely, or `{:set, map}` to inject it.
 
@@ -930,7 +930,7 @@ defmodule ALLM.Providers.Anthropic do
   | `:none` | `{:set, %{type: "none"}}` |
   | `:required` | `{:set, %{type: "any"}}` (Anthropic's wording) |
   | `"<name>"` (string) | `{:set, %{type: "tool", name: "<name>"}}` |
-  | `%{type: t, ...}` where `t in ~w(auto any none tool)` | `{:set, m}` (passthrough) |
+  | `%{type: t,...}` where `t in ~w(auto any none tool)` | `{:set, m}` (passthrough) |
 
   Raises `ArgumentError` on any other shape.
 
@@ -978,7 +978,7 @@ defmodule ALLM.Providers.Anthropic do
 
   @doc """
   Inject the synthetic structured-output tool when `request.response_format`
-  is `%{type: :json_schema, ...}` (Phase 11 design Decision #4).
+  is `%{type: :json_schema,...}`.
 
   Branches:
 
@@ -990,7 +990,7 @@ defmodule ALLM.Providers.Anthropic do
       (preserving any user tools — APPEND, not replace) AND sets
       `body["tool_choice"] = %{type: "tool", name:
       "respond_with_json_<n>"}` to force the model to call it.
-    * `%{type: :json_schema, ...}` BUT a prior assistant turn already
+    * `%{type: :json_schema,...}` BUT a prior assistant turn already
       produced the synthetic tool's output (the request's `messages`
       contains a `:tool` message whose `tool_call_id` starts with the
       synthetic prefix `"respond_with_json_"`) → returns `body`
@@ -1066,13 +1066,13 @@ defmodule ALLM.Providers.Anthropic do
 
   @doc """
   Lift a synthetic structured-output tool call back to `Response.output_text`
-  (Phase 11 design Decision #4).
+  .
 
   When the response's `tool_calls` list has exactly one entry whose `name`
   starts with `@structured_output_tool_prefix` ("respond_with_json_"):
 
     * `output_text` becomes `Jason.encode!(tool_call.arguments)` (the
-      parsed input map; per Decision #6, `arguments` already carries the
+      parsed input map; per the documented contract, `arguments` already carries the
       parsed map and `raw_arguments` carries the JSON string).
     * `finish_reason` is set to `:stop` (NOT `:tool_calls`).
     * `tool_calls` is cleared to `[]` — the synthetic call is consumed.
@@ -1090,9 +1090,9 @@ defmodule ALLM.Providers.Anthropic do
       "hi"
 
       iex> tc = %ALLM.ToolCall{id: "toolu_x", name: "respond_with_json_person",
-      ...>                     arguments: %{"name" => "Alice"}, raw_arguments: ~s({"name":"Alice"})}
+      ...> arguments: %{"name" => "Alice"}, raw_arguments: ~s({"name":"Alice"})}
       iex> resp = %ALLM.Response{tool_calls: [tc], finish_reason: :tool_calls,
-      ...>                       message: %ALLM.Message{role: :assistant, content: ""}}
+      ...> message: %ALLM.Message{role: :assistant, content: ""}}
       iex> lifted = ALLM.Providers.Anthropic.lift_structured_output(resp)
       iex> {Jason.decode!(lifted.output_text), lifted.finish_reason, lifted.tool_calls}
       {%{"name" => "Alice"}, :stop, []}
@@ -1145,18 +1145,18 @@ defmodule ALLM.Providers.Anthropic do
 
   Maps `stop_reason` per the table in the moduledoc; preserves the raw
   string on `Response.raw_finish_reason` for non-canonical values.
-  Decodes `tool_use` content blocks to `%ToolCall{}` per Decision #6 —
+  Decodes `tool_use` content blocks to `%ToolCall{}` per the documented contract
   the `input` map maps to `arguments`, and `raw_arguments` is computed via
   `Jason.encode!/1` for OpenAI parity.
 
   ## Examples
 
       iex> body = %{
-      ...>   "id" => "msg_test",
-      ...>   "model" => "claude-sonnet-4-6",
-      ...>   "content" => [%{"type" => "text", "text" => "hi"}],
-      ...>   "stop_reason" => "end_turn",
-      ...>   "usage" => %{"input_tokens" => 5, "output_tokens" => 1}
+      ...> "id" => "msg_test",
+      ...> "model" => "claude-sonnet-4-6",
+      ...> "content" => [%{"type" => "text", "text" => "hi"}],
+      ...> "stop_reason" => "end_turn",
+      ...> "usage" => %{"input_tokens" => 5, "output_tokens" => 1}
       ...> }
       iex> resp = ALLM.Providers.Anthropic.from_anthropic_response(body, [])
       iex> {resp.output_text, resp.finish_reason, resp.usage.input_tokens}
@@ -1285,14 +1285,14 @@ defmodule ALLM.Providers.Anthropic do
   invalid request shape, request-build raises) surface as `{:error,
   %AdapterError{}}` synchronously.
 
-  Per CLAUDE.md and spec §10.1, mid-stream failures (HTTP 4xx/5xx after
+  Per CLAUDE.md and the documented contract, mid-stream failures (HTTP 4xx/5xx after
   Finch successfully retrieves headers, transport drops, malformed events)
   emit a terminal `{:error, _}` event INSIDE the stream — the call-site
   tuple stays `{:ok, stream}` and `ALLM.StreamCollector` folds the error
   into `Response.finish_reason: :error`. Streaming never retries
-  (spec §6.1 + Phase 11 design Decision #14).
+  .
 
-  ## Anthropic SSE event mapping (Decision #14)
+  ## Anthropic SSE event mapping
 
   Anthropic uses NAMED SSE events (`event: message_start\\ndata: {...}`).
   The `ALLM.Providers.Support.SSE` decoder carries the `event:` field
@@ -1303,10 +1303,10 @@ defmodule ALLM.Providers.Anthropic do
   | `message_start` | `:message_started` |
   | `content_block_start` (text) | none — wait for `text_delta` |
   | `content_block_start` (tool_use) | `:tool_call_started` |
-  | `content_block_start` (thinking) | `{:raw_chunk, {:thinking_start, _}}` (Decision #8) |
+  | `content_block_start` (thinking) | `{:raw_chunk, {:thinking_start, _}}` |
   | `content_block_delta` (text_delta) | `:text_delta` |
   | `content_block_delta` (input_json_delta) | `:tool_call_delta` |
-  | `content_block_delta` (thinking_delta) | `{:raw_chunk, {:thinking_delta, _}}` (Decision #8) |
+  | `content_block_delta` (thinking_delta) | `{:raw_chunk, {:thinking_delta, _}}` |
   | `content_block_stop` (text) | `:text_completed` |
   | `content_block_stop` (tool_use) | `:tool_call_completed` (parsed args) |
   | `message_delta` | `{:raw_chunk, {:usage, _}}` if usage present; stores stop_reason |
@@ -1322,7 +1322,8 @@ defmodule ALLM.Providers.Anthropic do
     * `:finch_module` — overrides `Finch` (test seam — see
       `ALLM.Test.FinchStub`).
     * `:finch_name` — name of the Finch supervisor child (default
-      `ALLM.Finch`, started by `ALLM.Application` with `protocol: :http1`).
+      `ALLM.Finch`, started by the library's OTP application with
+      `protocol: :http1`).
 
   ## Examples
 

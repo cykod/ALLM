@@ -10,7 +10,7 @@ defmodule ALLM.ToolExecutor.Default do
   ## Handler-originated vs. executor-originated errors
 
   This distinction is load-bearing for the orchestrator's
-  `on_tool_error` policy (see spec §12.3 / §30). A handler that returns
+  `on_tool_error` policy. A handler that returns
   `{:error, :user_not_found}` has *reported* a failure — the
   orchestrator may surface that verbatim to the model. A handler that
   raises `RuntimeError` has *crashed* — the orchestrator wraps it in
@@ -39,8 +39,8 @@ defmodule ALLM.ToolExecutor.Default do
 
   ## Scope
 
-  Synchronous, no retries, no timeouts. Phase 6 adds parallel execution
-  (`ALLM.ToolRunner`) and per-tool timeouts.
+  Synchronous, no retries, no timeouts. `ALLM.ToolRunner` layers parallel
+  execution and per-tool timeouts on top.
   """
 
   @behaviour ALLM.ToolExecutor

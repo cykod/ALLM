@@ -1,9 +1,9 @@
 defmodule ALLM.Image do
   @moduledoc """
   A serializable image value used by image generation, editing, and vision
-  inputs. See spec §35.2.1.
+  inputs — Layer A serializable data.
 
-  Layer A — pure data. The `:source` is one of four tagged tuples and is the
+  The `:source` is one of four tagged tuples and is the
   only required field. All other fields are nilable to support both inputs
   (vision: only `:source`/`:mime_type`) and outputs (generated:
   `:prompt`/`:revised_prompt`/`:width`/`:height` populated by the adapter).
@@ -124,8 +124,8 @@ defmodule ALLM.Image do
 
   Pure data — does NOT inspect or fetch the URL. The `:mime_type` is `nil`;
   the adapter that consumes the image resolves the type at request-build
-  time. URL fetching is banned in Layer A (Decision #2 / phasing principle
-  #8).
+  time. URL fetching is banned in Layer A — adapters fetch at
+  request-build time.
 
   ## Examples
 
@@ -169,9 +169,9 @@ defmodule ALLM.Image do
   - `{:base64, s}` decodes via `Base.decode64/1`; invalid base64 returns
     `{:error, :invalid_base64}`.
   - `{:url, _}` returns `{:error, :remote_source}` — Layer A NEVER fetches
-    URLs (Decision #2). Adapters fetch at request-build time.
+    URLs. Adapters fetch at request-build time.
   - `{:file, path}` reads the file via `File.read/1` and returns its
-    `{:ok, _} | {:error, posix()}` shape directly (`:enoent` on missing,
+    `{:ok, _} | {:error, posix}` shape directly (`:enoent` on missing,
     etc.).
 
   ## Examples
@@ -207,9 +207,9 @@ defmodule ALLM.Image do
   - `{:base64, s}` with a `:mime_type` forwards `s` verbatim — fast path,
     no decode-then-re-encode.
   - `{:file, path}` with a `:mime_type` reads + Base64-encodes.
-  - `{:url, _}` returns `{:error, :remote_source}` (Decision #6) — a `data:`
-    URI and an `https:` URI are different addressing schemes; passing the
-    URL through verbatim would surprise.
+  - `{:url, _}` returns `{:error, :remote_source}` — a `data:` URI and an
+    `https:` URI are different addressing schemes; passing the URL
+    through verbatim would surprise.
   - Missing `:mime_type` returns `{:error, :missing_mime_type}` — there is
     no default like `application/octet-stream`.
 

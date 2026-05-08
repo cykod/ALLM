@@ -1,11 +1,27 @@
 defmodule ALLM.Thread do
   @moduledoc """
-  An ordered message log. See spec §5.6 and §14.
+  An ordered message log — Layer A serializable data.
 
-  Layer A — pure serializable data. A thread is the canonical container
-  for the message history threaded through a session or chat loop; it is
-  append-only at the API surface (helpers build new threads rather than
-  mutating an existing one).
+  A thread is the canonical container for the message history threaded
+  through a session or chat loop. It is append-only at the API surface
+  (helpers build new threads rather than mutating an existing one).
+
+  ## Fields
+
+  | Field | Type | Default | Notes |
+  |-------|------|---------|-------|
+  | `:messages` | `[%ALLM.Message{}]` | `[]` | Ordered conversation. |
+  | `:metadata` | `map` | `%{}` | Caller-owned. |
+
+  ## Round-trip
+
+      iex> t = ALLM.Thread.new() |> ALLM.Thread.add_user("hi")
+      iex> json = ALLM.Serializer.to_json!(t)
+      iex> {:ok, ^t} = ALLM.Serializer.from_json(json)
+      iex> length(t.messages)
+      1
+
+  See also `guides/sessions.md`.
   """
 
   alias ALLM.Message
@@ -62,8 +78,8 @@ defmodule ALLM.Thread do
   ## Examples
 
       iex> t = ALLM.Thread.new() |> ALLM.Thread.add_messages([
-      ...>   %ALLM.Message{role: :user, content: "a"},
-      ...>   %ALLM.Message{role: :assistant, content: "b"}
+      ...> %ALLM.Message{role: :user, content: "a"},
+      ...> %ALLM.Message{role: :assistant, content: "b"}
       ...> ])
       iex> Enum.map(t.messages, & &1.content)
       ["a", "b"]

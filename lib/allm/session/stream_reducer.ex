@@ -1,13 +1,11 @@
 defmodule ALLM.Session.StreamReducer do
   @moduledoc """
-  Folds an `ALLM.Chat.stream/3` (or `ALLM.Chat.stream_step/3`) event
-  stream into both an updated `%ALLM.Session{}` and a terminal
-  `%ALLM.ChatResult{}` (or `%ALLM.StepResult{}`) in one pass. See spec
-  §13.2 and `steering/PHASE_8_DESIGN.md` Decision #15.
+  Folds an `ALLM.stream/3` (or `ALLM.stream_step/3`) event stream into
+  both an updated `%ALLM.Session{}` and a terminal `%ALLM.ChatResult{}`
+  (or `%ALLM.StepResult{}`) in one pass.
 
-  Layer D — Phase 8 Batch 1 ships the reducer alongside the
-  non-streaming Session API; the streaming Session entry points
-  (`stream_start/3`, `stream_reply/4`, `stream_step/3`) land in Batch 2.
+  Layer D — companion to the streaming Session entry points
+  (`stream_start/3`, `stream_reply/4`, `stream_step/3`).
 
   ## Modes
 
@@ -63,7 +61,7 @@ defmodule ALLM.Session.StreamReducer do
   ## Options
 
     * `:mode` — `:chat` (default) or `:step`. Selects `finalize/1`'s
-      dispatch shape per Decision #15.
+      dispatch shape.
 
   ## Examples
 

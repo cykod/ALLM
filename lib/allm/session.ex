@@ -1,11 +1,16 @@
 defmodule ALLM.Session do
   @moduledoc """
-  A stateful, serializable chat session. See spec §5.7 and §11.
+  A stateful, serializable chat session — Layer A data + Layer D
+  continuation operations.
 
-  Layer A — pure serializable data; Layer D — stateful continuation
-  operations (`start/3`, `reply/4`, `continue/3`, `step/3`,
-  `submit_tool_result/3`, `submit_tool_results/2`) shipped in Phase 8 wrap
-  Phase 7's `ALLM.Chat.run/3` and `ALLM.Chat.step/3`.
+  The struct is plain serializable data; `start/3`, `reply/4`,
+  `continue/3`, `step/3`, `submit_tool_result/3`,
+  `submit_tool_results/2`, and the `stream_*` siblings are the stateful
+  continuation operations that wrap `ALLM.chat/3` and `ALLM.step/3`.
+
+  Use sessions when the conversation needs to outlive a single request
+  the struct round-trips through ETF and JSON, so persistence is
+  whatever your storage layer prefers.
 
   ## Status + `pending_*` fields
 
@@ -21,13 +26,12 @@ defmodule ALLM.Session do
     * `:error` — an unrecoverable adapter or tool error occurred. By
       convention `metadata[:error]` holds the underlying `%ALLM.Error.*{}`
       struct for post-mortem inspection. `ALLM.Validate.session/1`
-      (sub-phase 1.4) enforces this.
+      enforces this.
 
-  ## Status transitions (Phase 8)
+  ## Status transitions
 
-  Phase-8 operations form the closed state-machine arrows over the status
-  union. The full matrix lives in `steering/PHASE_8_DESIGN.md` §Overview;
-  the abridged shape:
+  The Layer-D operations form the closed state-machine arrows over the
+  status union:
 
   | From \\ Op | `start/3` | `reply/4` | `continue/3` | `step/3` | `submit_tool_result/3` |
   |-----------|-----------|-----------|--------------|----------|------------------------|
@@ -38,18 +42,18 @@ defmodule ALLM.Session do
   | `:error` | n/a | `{:error, %SessionError{}}` | `{:error, %SessionError{}}` | `{:error, %SessionError{}}` | `{:error, %SessionError{}}` |
 
   **Status-precondition violations RAISE `ArgumentError`** — they're
-  programmer errors (Decision #7). **Data mismatches return `{:error,
+  programmer errors. **Data mismatches return `{:error,
   %SessionError{}}`** — `unknown_tool_call_id` on `submit_tool_result/3` is
   the canonical case. `:error`-status sessions return
   `{:error, %SessionError{reason: :session_in_error_state}}` on every
-  Phase-8 operation; construct a fresh session to recover.
+  Layer-D operation; construct a fresh session to recover.
 
   > #### (\\*) `continue/3` on `:awaiting_user` {: .info}
   >
   > `continue/3` raises `ArgumentError` on `:awaiting_user` for the
   > common case (caller should use `reply/4`). The one exception is the
   > delegation path: `reply/4` is implemented as
-  > `continue(engine, session, ALLM.user(text), opts)` (Decision #4), so
+  > `continue(engine, session, ALLM.user(text), opts)`, so
   > `continue/3` accepts a `%Message{role: :user}` on `:awaiting_user`
   > as the legal `reply/4`-equivalent dispatch. Calling `continue/3`
   > directly with any other shape on `:awaiting_user` raises. Prefer
@@ -57,12 +61,12 @@ defmodule ALLM.Session do
 
   ## Mid-stream errors
 
-  When `ALLM.Chat.run/3` returns a `%ChatResult{halted_reason: :error}`
-  (mid-stream adapter error folded into the response per CLAUDE.md), the
-  resulting session has `status: :error` and `metadata.error` populated
-  with the underlying `%ALLM.Error.AdapterError{}` (or other Phase 1
-  error struct). The call-site tuple stays `{:ok, _}`; the failure is on
-  the session, not on the tuple.
+  When `ALLM.chat/3` returns a `%ChatResult{halted_reason: :error}`
+  (mid-stream adapter error folded into the response), the resulting
+  session has `status: :error` and `metadata.error` populated with the
+  underlying `%ALLM.Error.AdapterError{}` (or other error struct). The
+  call-site tuple stays `{:ok, _}`; the failure is on the session, not
+  on the tuple.
 
   ## Manual-mode tool cycle
 
@@ -75,7 +79,7 @@ defmodule ALLM.Session do
   pending call is submitted. The caller then invokes `continue/3` with a
   `nil` message to drive the next adapter turn.
 
-  ## Per-tool manual cycle (Phase 18)
+  ## Per-tool manual cycle
 
   When `mode: :auto` and any called tool has `manual: true`,
   `:awaiting_tools` is entered with `pending_tool_calls` containing
@@ -85,40 +89,40 @@ defmodule ALLM.Session do
   result for an AUTO-bucket id returns
   `{:error, %SessionError{reason: :unknown_tool_call_id}}` because that
   id already ran and is not in `pending_tool_calls`. `mode: :manual`
-  whole-loop wins over per-tool flags (Phase 18 Decision #5): under
-  `mode: :manual`, `pending_tool_calls` is the full
-  `response.tool_calls` list regardless of any tool's `manual` flag.
+  whole-loop wins over per-tool flags: under `mode: :manual`,
+  `pending_tool_calls` is the full `response.tool_calls` list regardless
+  of any tool's `manual` flag.
 
   ## `context` is caller-owned
 
-  The `:context` field is a free-form `map()` the library threads through
-  to arity-2 tool handlers (spec §5.2). The library does **not** walk or
-  validate its contents — a caller stuffing `DateTime`, `Decimal`, an
-  `Ecto.Repo` reference, or a callback module is legitimate.
+  The `:context` field is a free-form `map` the library threads through
+  to arity-2 tool handlers. The library does **not** walk or validate
+  its contents — a caller stuffing `DateTime`, `Decimal`, an `Ecto.Repo`
+  reference, or a callback module is legitimate.
 
   The Layer A serializability invariant is preserved **only for values the
   caller knows are serializable**. Stuffing a PID, ref, or anonymous
   function into `:context` will cause `:erlang.term_to_binary/1` to raise
   `ArgumentError` at persist time; this is the caller's responsibility,
-  not the library's. See the Phase 1 design (non-obvious decision #8) for
-  the rationale. A typed `serializable()` walk may land in v0.3.
+  not the library's.
 
-  ## `context` propagation (Phase 8 — Decision #10)
+  ## `context` propagation
 
-  Every Phase-8 operation sets `:context` on the opts forwarded to
-  `ALLM.Chat.run/3` / `ALLM.Chat.step/3` to `session.context` UNLESS the
+  Every Layer-D operation sets `:context` on the opts forwarded to
+  `ALLM.chat/3` / `ALLM.step/3` to `session.context` UNLESS the
   caller has already passed `context:` in the call opts (caller-wins).
   The resolution chain is `caller_opts > session.context >
-  engine.context`; this is enforced by `merge_session_opts/2`, the single
-  resolution point.
+  engine.context`.
 
-  ## `session_id` propagation (Phase 8 — Decision #9)
+  ## `session_id` propagation
 
-  Symmetric to `:context`: every Phase-8 operation sets `:session_id` on
-  the opts forwarded to `ALLM.Chat.run/3` / `ALLM.Chat.step/3` to
-  `session.id` UNLESS the caller has already passed `session_id:` in the
-  call opts. When `session.id` is `nil` (no id assigned), no opt is
-  added — the tool handler sees `nil`.
+  Symmetric to `:context`: every Layer-D operation sets `:session_id` on
+  the opts forwarded to `ALLM.chat/3` / `ALLM.step/3` to `session.id`
+  UNLESS the caller has already passed `session_id:` in the call opts.
+  When `session.id` is `nil` (no id assigned), no opt is added — the
+  tool handler sees `nil`.
+
+  See also `guides/sessions.md`.
   """
 
   alias ALLM.{Chat, ChatResult, Engine, Message, StepResult, Thread, ToolCall}
@@ -139,7 +143,7 @@ defmodule ALLM.Session do
 
   @typedoc """
   Options accepted by `start/3`, `reply/4`, `continue/3`, `step/3`. A
-  superset of `ALLM.Chat.chat_opts/0`; everything not listed below flows
+  superset of `t:ALLM.Chat.chat_opts/0`; everything not listed below flows
   verbatim to `ALLM.Chat.run/3` / `ALLM.Chat.step/3`.
 
     * `:mode` — `:auto` (default) or `:manual`. Per-call; not sticky.
@@ -215,9 +219,9 @@ defmodule ALLM.Session do
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
+      ...>)
       iex> {:ok, session, result} = ALLM.Session.start(engine, [ALLM.user("hello")])
       iex> session.status
       :completed
@@ -244,21 +248,21 @@ defmodule ALLM.Session do
   See `continue/3`.
 
   Legal on `:idle`, `:awaiting_user` (clears the pending fields), and
-  `:completed` (treated as `:idle` per Decision #5). Raises
-  `ArgumentError` on `:awaiting_tools`. Returns
-  `{:error, %SessionError{reason: :session_in_error_state}}` on `:error`.
+  `:completed` (treated as `:idle`). Raises `ArgumentError` on
+  `:awaiting_tools`. Returns `{:error, %SessionError{reason:
+  :session_in_error_state}}` on `:error`.
 
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [
-      ...>     scripts: [
-      ...>       [{:text, "ok"}, {:finish, :stop}],
-      ...>       [{:text, "again"}, {:finish, :stop}]
-      ...>     ]
-      ...>   ]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [
+      ...> scripts: [
+      ...> [{:text, "ok"}, {:finish, :stop}],
+      ...> [{:text, "again"}, {:finish, :stop}]
+      ...> ]
+      ...> ]
+      ...>)
       iex> {:ok, s, _} = ALLM.Session.start(engine, [ALLM.user("hi")])
       iex> {:ok, s2, _} = ALLM.Session.reply(engine, s, "again")
       iex> length(ALLM.Session.messages(s2)) > length(ALLM.Session.messages(s))
@@ -276,10 +280,9 @@ defmodule ALLM.Session do
   Drive the next adapter turn on a session.
 
   When `message` is a `%Message{}`, it is appended to `session.thread`
-  before the adapter call. When `message` is `nil`, no append happens —
+  before the adapter call. When `message` is `nil`, no append happens
   this form is used for manual-tool-cycle resumption after the caller
-  has populated tool-role messages via `submit_tool_result/3` (see
-  Decision #4).
+  has populated tool-role messages via `submit_tool_result/3`.
 
   Status preconditions:
 
@@ -300,14 +303,14 @@ defmodule ALLM.Session do
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [
-      ...>     scripts: [
-      ...>       [{:text, "first"}, {:finish, :stop}],
-      ...>       [{:text, "second"}, {:finish, :stop}]
-      ...>     ]
-      ...>   ]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [
+      ...> scripts: [
+      ...> [{:text, "first"}, {:finish, :stop}],
+      ...> [{:text, "second"}, {:finish, :stop}]
+      ...> ]
+      ...> ]
+      ...>)
       iex> {:ok, s, _} = ALLM.Session.start(engine, [ALLM.user("hi")])
       iex> {:ok, s2, _} = ALLM.Session.continue(engine, s, ALLM.user("more"))
       iex> s2.status
@@ -333,8 +336,8 @@ defmodule ALLM.Session do
 
   Unlike `continue/3`, `step/3` does not loop — it dispatches one
   adapter call and returns the resulting `%StepResult{}` projected onto
-  the session via `apply_step_result/2`. Status follows Phase 6's
-  semantics; see `steering/PHASE_8_DESIGN.md` Decision #6 for the table.
+  the session via `apply_step_result/2`. Status follows the same
+  step-level semantics as `ALLM.step/3`.
 
   Legal on `:idle` and `:completed` (treated as `:idle`). Raises
   `ArgumentError` on `:awaiting_user` and `:awaiting_tools`. Returns
@@ -349,9 +352,9 @@ defmodule ALLM.Session do
   `test/allm/session_test.exs`.
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
+      ...>)
       iex> {:ok, s, sr} = ALLM.Session.step(engine, ALLM.Session.new(thread: ALLM.Thread.from_messages([ALLM.user("hi")])))
       iex> sr.done?
       true
@@ -383,18 +386,18 @@ defmodule ALLM.Session do
   _}` SYNCHRONOUSLY before any stream is constructed. Mid-stream adapter
   errors fold into the terminal `:chat_completed` event's
   `result.halted_reason: :error`; the call-site tuple stays `{:ok,
-  stream}`. Mirrors Phase 7's `Chat.stream/3` synchronous-vs-lazy split.
+  stream}`. Mirrors `ALLM.stream/3`'s synchronous-vs-lazy split.
 
   The consumer drives `ALLM.Session.StreamReducer` themselves to recover
-  the post-call session and `%ChatResult{}` (see Decision #15). No
-  session-side state changes happen until `StreamReducer.finalize/1`.
+  the post-call session and `%ChatResult{}`. No session-side state
+  changes happen until `StreamReducer.finalize/1`.
 
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
+      ...>)
       iex> {:ok, stream} = ALLM.Session.stream_start(engine, [ALLM.user("hello")])
       iex> events = Enum.to_list(stream)
       iex> Enum.count(events, &match?({:chat_completed, _}, &1))
@@ -434,14 +437,14 @@ defmodule ALLM.Session do
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [
-      ...>     scripts: [
-      ...>       [{:text, "ok"}, {:finish, :stop}],
-      ...>       [{:text, "again"}, {:finish, :stop}]
-      ...>     ]
-      ...>   ]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [
+      ...> scripts: [
+      ...> [{:text, "ok"}, {:finish, :stop}],
+      ...> [{:text, "again"}, {:finish, :stop}]
+      ...> ]
+      ...> ]
+      ...>)
       iex> {:ok, s, _} = ALLM.Session.start(engine, [ALLM.user("hi")])
       iex> {:ok, stream} = ALLM.Session.stream_reply(engine, s, "again")
       iex> Enum.count(Enum.to_list(stream), &match?({:chat_completed, _}, &1))
@@ -465,9 +468,8 @@ defmodule ALLM.Session do
 
   @doc """
   Streaming counterpart to `step/3`. Returns `{:ok, stream}` whose
-  terminal event is `:step_completed` (NOT `:chat_completed` — per
-  Decision #11). Composes `ALLM.Chat.stream_step/3`; the stream
-  represents one adapter turn.
+  terminal event is `:step_completed` (NOT `:chat_completed`).
+  Composes `ALLM.stream_step/3`; the stream represents one adapter turn.
 
   Pre-flight errors (missing adapter, status precondition, `:error`
   state) surface synchronously. Consumers fold the stream through
@@ -482,9 +484,9 @@ defmodule ALLM.Session do
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
+      ...>)
       iex> session = ALLM.Session.new(thread: ALLM.Thread.from_messages([ALLM.user("hi")]))
       iex> {:ok, stream} = ALLM.Session.stream_step(engine, session)
       iex> events = Enum.to_list(stream)
@@ -504,7 +506,7 @@ defmodule ALLM.Session do
 
   @doc """
   Submit a tool-role result for one pending tool call. In-process state
-  mutation only; this does NOT call the adapter (Decision #3).
+  mutation only; this does NOT call the adapter.
 
   Appends a `:tool`-role message to `session.thread` with the supplied
   `tool_call_id` and `content`, removes the matching `%ToolCall{}` from
@@ -513,26 +515,24 @@ defmodule ALLM.Session do
 
   Returns the updated `%Session{}` on success or `{:error,
   %SessionError{reason: :unknown_tool_call_id, metadata: %{tool_call_id:
-  id}}}` when the id doesn't match any pending call (Decision #14 —
-  data-validation, not a programmer-flow error).
+  id}}}` when the id doesn't match any pending call (data-validation,
+  not a programmer-flow error).
 
-  Raises `ArgumentError` if `session.status != :awaiting_tools`
-  (Decision #7).
+  Raises `ArgumentError` if `session.status != :awaiting_tools`.
 
   > #### Doctest setup {: .info}
   >
-  > Per `steering/PHASE_8_DESIGN.md` §8.2.2, this doctest constructs an
-  > `:awaiting_tools` session by hand instead of driving through
-  > `start/3` to keep the example focused.
+  > This doctest constructs an `:awaiting_tools` session by hand instead
+  > of driving through `start/3` to keep the example focused.
 
   ## Examples
 
       iex> tc = %ALLM.ToolCall{id: "c0", name: "echo", arguments: %{}}
       iex> session = ALLM.Session.new(
-      ...>   status: :awaiting_tools,
-      ...>   pending_tool_calls: [tc],
-      ...>   thread: ALLM.Thread.from_messages([ALLM.user("hi")])
-      ...> )
+      ...> status: :awaiting_tools,
+      ...> pending_tool_calls: [tc],
+      ...> thread: ALLM.Thread.from_messages([ALLM.user("hi")])
+      ...>)
       iex> updated = ALLM.Session.submit_tool_result(session, "c0", %{ok: true})
       iex> updated.status
       :idle
@@ -596,10 +596,10 @@ defmodule ALLM.Session do
       iex> tc0 = %ALLM.ToolCall{id: "c0", name: "echo", arguments: %{}}
       iex> tc1 = %ALLM.ToolCall{id: "c1", name: "echo", arguments: %{}}
       iex> session = ALLM.Session.new(
-      ...>   status: :awaiting_tools,
-      ...>   pending_tool_calls: [tc0, tc1],
-      ...>   thread: ALLM.Thread.from_messages([ALLM.user("hi")])
-      ...> )
+      ...> status: :awaiting_tools,
+      ...> pending_tool_calls: [tc0, tc1],
+      ...> thread: ALLM.Thread.from_messages([ALLM.user("hi")])
+      ...>)
       iex> updated = ALLM.Session.submit_tool_results(session, [{"c0", "r0"}, {"c1", "r1"}])
       iex> updated.status
       :idle

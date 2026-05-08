@@ -1,11 +1,28 @@
 defmodule ALLM.StreamAdapter do
   @moduledoc """
-  Streaming provider adapter contract. See spec §7.2.
+  Streaming provider adapter contract.
 
-  `stream/2` returns an `Enumerable.t()` of `ALLM.Event` values. The
+  `stream/2` returns an `Enumerable.t` of `ALLM.Event` values. The
   enumerable is lazy — no HTTP call fires until the caller starts
   reducing over it — and must be resource-safe: if the consumer halts
   early (`Stream.take/2`), the underlying HTTP request must be cancelled.
+
+  ## Minimum impl skeleton
+
+      defmodule MyProvider.Streaming do
+        @behaviour ALLM.StreamAdapter
+
+        @impl true
+        def stream(%ALLM.Request{} = req, opts) do
+          # 1. Resolve API key (synchronous pre-flight may return
+          # {:error, %ALLM.Error.AdapterError{}}).
+          # 2. Build a Stream.resource/3 wrapping a Finch ref.
+          # 3. start_fun: open the Finch request.
+          # 4. next_fun: pull one SSE chunk, decode to {:cont, [event], state}.
+          # 5. after_fun: cancel the Finch ref (halt-safety).
+          {:ok, Stream.resource(fn -> :start end, fn s -> {:halt, s} end, fn _ -> :ok end)}
+        end
+      end
 
   ## HTTP transport guidance
 
@@ -15,7 +32,7 @@ defmodule ALLM.StreamAdapter do
   Engines may inject a custom Finch name via
   `adapter_opts: [finch_name: MyApp.Finch]`.
 
-  Implementations should use `Stream.resource/3` (not `Stream.unfold/2`) —
+  Implementations should use `Stream.resource/3` (not `Stream.unfold/2`)
   `resource/3` has an explicit `after_fun` which is the canonical place
   to cancel the `Finch` ref.
 
@@ -27,9 +44,9 @@ defmodule ALLM.StreamAdapter do
     2. The stream itself may terminate with either
        `{:error, %AdapterError{}}` (HTTP-shaped failure mid-response — the
        provider returned a 4xx/5xx after streaming started) or
-       `{:error, %ALLM.Error.StreamError{}}` (transport-shaped failure —
+       `{:error, %ALLM.Error.StreamError{}}` (transport-shaped failure
        stream cancelled, timed out, malformed event). Both variants are
-       emitted via the `ALLM.Event` `{:error, _}` tag per spec §8.
+       emitted via the `ALLM.Event` `{:error, _}` tag.
     3. The stream must be halt-safe: a consumer halt within 500 ms must
        cancel the `Finch` ref.
     4. `opts[:stream_timeout]` (time between consecutive events) is
@@ -47,7 +64,7 @@ defmodule ALLM.StreamAdapter do
   call has fired yet) or `{:error, %ALLM.Error.AdapterError{}}` on
   pre-flight failure.
 
-  ## Synchronous error reasons (same as `ALLM.Adapter.generate/2`)
+  ## Synchronous error reasons (same as `c:ALLM.Adapter.generate/2`)
 
   | Reason | HTTP status | Fires when |
   |--------|-------------|------------|

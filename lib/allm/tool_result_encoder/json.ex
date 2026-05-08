@@ -6,27 +6,27 @@ defmodule ALLM.ToolResultEncoder.JSON do
 
   ## Input-shape → output-shape
 
-  | Input                       | Output                                |
+  | Input | Output |
   |-----------------------------|---------------------------------------|
-  | `"already a string"`        | `"already a string"` (unchanged)      |
-  | `""`                        | `""` (unchanged)                      |
-  | `%{a: 1}`                   | `~s({"a":1})`                         |
-  | `[1, 2, 3]`                 | `"[1,2,3]"`                           |
-  | `{:ok, %{a: 1}}`            | `~s({"ok":{"a":1}})`                  |
-  | `{:ok, "inner"}`            | `~s({"ok":"inner"})`                  |
-  | `{:error, :not_found}`      | `~s({"error":":not_found"})`          |
-  | `{:error, "reason"}`        | `~s({"error":"reason"})` (verbatim)   |
-  | `{:error, %RuntimeError{}}` | `~s({"error":"%RuntimeError{…}"})`    |
-  | `nil`                       | `"null"`                              |
-  | `42`                        | `"42"`                                |
-  | `true` / `false`            | `"true"` / `"false"`                  |
+  | `"already a string"` | `"already a string"` (unchanged) |
+  | `""` | `""` (unchanged) |
+  | `%{a: 1}` | `~s({"a":1})` |
+  | `[1, 2, 3]` | `"[1,2,3]"` |
+  | `{:ok, %{a: 1}}` | `~s({"ok":{"a":1}})` |
+  | `{:ok, "inner"}` | `~s({"ok":"inner"})` |
+  | `{:error, :not_found}` | `~s({"error":":not_found"})` |
+  | `{:error, "reason"}` | `~s({"error":"reason"})` (verbatim) |
+  | `{:error, %RuntimeError{}}` | `~s({"error":"%RuntimeError{…}"})` |
+  | `nil` | `"null"` |
+  | `42` | `"42"` |
+  | `true` / `false` | `"true"` / `"false"` |
 
   Non-JSON-encodable values (PIDs, refs, bare tuples, funs) raise
   `Protocol.UndefinedError` — Jason dispatches through the
   `Jason.Encoder` protocol and a missing impl surfaces at dispatch time,
   not as a `Jason.EncodeError`. The orchestrator wraps the call in
   `try/rescue` and converts the raise to
-  `{:error, %ALLM.Error.ToolError{reason: :encoding_failed}}` (Phase 6).
+  `{:error, %ALLM.Error.ToolError{reason: :encoding_failed}}`.
 
   Used automatically when `engine.tool_result_encoder` is `nil`; the
   call site resolves to this module via

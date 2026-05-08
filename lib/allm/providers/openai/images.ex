@@ -2,13 +2,13 @@ defmodule ALLM.Providers.OpenAI.Images do
   @moduledoc """
   OpenAI Images provider adapter — implements `ALLM.ImageAdapter` against
   OpenAI's `/v1/images/generations`, `/v1/images/edits`, and
-  `/v1/images/variations` endpoints. See spec §35.7.
+  `/v1/images/variations` endpoints.
 
   Layer B — runtime. Constructed via
   `ALLM.Engine.new(image_adapter: ALLM.Providers.OpenAI.Images, model: "dall-e-2")`
   and consumed through the `ALLM.generate_image/3 · edit_image/4 ·
-  image_variations/3` façade (Phase 14.2). Keys resolve via
-  `ALLM.Keys.fetch!(:openai, opts)` at request-build time per spec §6.4 —
+  image_variations/3` façade. Keys resolve via
+  `ALLM.Keys.fetch!(:openai, opts)` at request-build time per the documented contract
   no key ever lives on the engine.
 
   ## Status
@@ -17,25 +17,25 @@ defmodule ALLM.Providers.OpenAI.Images do
   `gpt-image-1`. The gpt-image-1 path applies forced-base64 normalization
   (gpt-image-1 ignores `response_format` at the wire), token-based usage
   (`input_tokens` / `output_tokens`), and `output_format` → `:mime_type`
-  mapping per Decision #19. The multipart `:edit` HTTP path is wired for
+  mapping per the documented contract. The multipart `:edit` HTTP path is wired for
   `dall-e-2` and `gpt-image-1`, including URL-source eager-download per
-  Decision #8. The `:variation` path is wired for `dall-e-2` via the same
+  the documented contract. The `:variation` path is wired for `dall-e-2` via the same
   multipart machinery as `:edit` — variation drops `prompt` and `mask`
   fields and otherwise mirrors `:edit`'s wire shape.
 
   ## Model × Operation matrix
 
-  | Model         | `:generate` | `:edit` | `:variation` | Wire format       | Usage shape                              |
+  | Model | `:generate` | `:edit` | `:variation` | Wire format | Usage shape |
   |---------------|:-----------:|:-------:|:------------:|-------------------|------------------------------------------|
-  | `dall-e-2`    |     yes     |   yes   |     yes      | `url` or `b64_json` per caller | `images = length(data)`           |
-  | `dall-e-3`    |     yes     |   no    |     no       | `url` or `b64_json` per caller | `images = length(data)`           |
-  | `gpt-image-1` |     yes     |   yes   |     no       | `b64_json` ALWAYS (forced)     | `images` + `input_tokens` + `output_tokens` |
+  | `dall-e-2` | yes | yes | yes | `url` or `b64_json` per caller | `images = length(data)` |
+  | `dall-e-3` | yes | no | no | `url` or `b64_json` per caller | `images = length(data)` |
+  | `gpt-image-1` | yes | yes | no | `b64_json` ALWAYS (forced) | `images` + `input_tokens` + `output_tokens` |
 
   Cells marked "no" produce
   `{:error, %ImageAdapterError{reason: :unsupported_operation,
   metadata: %{operation: op, model: model}}}` BEFORE any HTTP I/O. Unknown
-  models (any string not in the matrix) fall through to the provider —
-  see Decision #3 of `steering/PHASE_15_image_layer_6.md`.
+  models (any string not in the matrix) fall through to the provider
+  of ` design docs`.
 
   ## gpt-image-1 specifics
 
@@ -52,7 +52,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   * **Response decode.** gpt-image-1 always returns `b64_json` per image.
     For `:binary` callers the adapter Base64-decodes server-side; for
     `:base64` callers the b64 is forwarded verbatim. `:url` callers are
-    rejected pre-flight (Decision #6).
+    rejected pre-flight.
   * **Response `:mime_type`.** Driven by `request.options[:output_format]`
     via `mime_type_for_output_format/1`: `"png"|:png` → `"image/png"`,
     `"jpeg"|:jpeg|:jpg` → `"image/jpeg"`, `"webp"|:webp` → `"image/webp"`,
@@ -62,21 +62,21 @@ defmodule ALLM.Providers.OpenAI.Images do
     `body.usage.input_tokens_details` (when present) lands on
     `response.metadata[:usage_details]` without overwriting caller keys.
 
-  ## Multipart vs JSON dispatch (Decision #7)
+  ## Multipart vs JSON dispatch
 
   The `:generate` operation uses an `application/json` body via
-  `Req.new(json: ...)` and `OpenAIHeaders.json_headers/2`. The `:edit`
+  `Req.new(json:...)` and `OpenAIHeaders.json_headers/2`. The `:edit`
   and `:variation` operations require an actual image upload, so they
-  use `multipart/form-data` via `Req.new(form_multipart: ...)` and
+  use `multipart/form-data` via `Req.new(form_multipart:...)` and
   `OpenAIHeaders.multipart_headers/2` (which elides `content-type` so
   Req's `:form_multipart` step stamps it with the boundary).
 
   Both paths flow through the same `Retry.run/3` integration and share
-  the same `decode_response/4` and `to_image_adapter_error/4` helpers —
+  the same `decode_response/4` and `to_image_adapter_error/4` helpers
   the response shape is identical to `:generate` (a `data: [...]` array
   of url/b64_json items, optional `usage` on gpt-image-1).
 
-  ## URL-source resolution (Decision #8)
+  ## URL-source resolution
 
   `:edit` / `:variation` requests carrying `Image.from_url/1` images are
   eagerly fetched at request-build time. The `Req.get/2` call honors a 30 s
@@ -102,7 +102,7 @@ defmodule ALLM.Providers.OpenAI.Images do
 
   ## Test-injection escape hatch
 
-  Per Decision #20, `generate/2` honors
+  Per the documented contract, `generate/2` honors
   `opts[:adapter_opts][:image_script]` as a documented test-only short-
   circuit: when present, the call delegates to
   `ALLM.Providers.FakeImages.generate/2` BEFORE any pre-flight gate runs
@@ -114,13 +114,13 @@ defmodule ALLM.Providers.OpenAI.Images do
 
   HTTP error closures return `{:retry, delay_ms, error}` for 429 +
   `Retry-After`, 5xx, and timeouts; `ALLM.Retry.run/3` is wired against
-  the engine's policy. Phase 14.3 augmented the retry vocabulary with the
+  the engine's policy. augmented the retry vocabulary with the
   four image-error atoms (`:rate_limited`, `:provider_unavailable`,
   `:timeout`, `:network_error`) at the façade call site.
 
   ## URL-mode expiry warning
 
-  Per Decision #5, OpenAI documents that image URLs returned via
+  Per the documented contract, OpenAI documents that image URLs returned via
   `response_format: :url` expire ~60 minutes after creation. Callers
   persisting `Image{source: {:url, _}}` beyond that window should
   download the bytes themselves before persisting, or request `:base64` /
@@ -131,8 +131,8 @@ defmodule ALLM.Providers.OpenAI.Images do
 
   `:context_length_exceeded` is reserved in `ImageAdapterError`'s closed
   enum but is NOT actively mapped — long-prompt rejections from OpenAI
-  surface as `:invalid_request` per Decision #21.
-  `:unsupported_feature` is not produced by this adapter (Decision #22).
+  surface as `:invalid_request` per the documented contract.
+  `:unsupported_feature` is not produced by this adapter.
   """
 
   @behaviour ALLM.ImageAdapter
@@ -157,12 +157,12 @@ defmodule ALLM.Providers.OpenAI.Images do
   @doc """
   Return the per-module union of operations the adapter can ever perform.
 
-  Per Phase 14.1 Decision #3, this is a per-MODULE list, not a per-call
+  Per the documented contract, this is a per-MODULE list, not a per-call
   function of `model`. Per-model gating lives in `gate_model_op/2`.
 
   ## Examples
 
-      iex> ALLM.Providers.OpenAI.Images.supported_operations()
+      iex> ALLM.Providers.OpenAI.Images.supported_operations
       [:generate, :edit, :variation]
   """
   @impl ALLM.ImageAdapter
@@ -177,7 +177,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   Before any HTTP I/O, `generate/2` checks four gates in order (per
   Invariant 1 of the design):
 
-    1. **Operation gate.** `request.operation in supported_operations()`.
+    1. **Operation gate.** `request.operation in supported_operations`.
        Failure → `:unsupported_operation`.
     2. **Model gate.** When `request.model` is in the known matrix
        (`dall-e-2`, `dall-e-3`, `gpt-image-1`), the operation must be
@@ -187,7 +187,7 @@ defmodule ALLM.Providers.OpenAI.Images do
     3. **gpt-image-1 + `:url` rejection.** When `request.model ==
        "gpt-image-1"` and `request.response_format == :url`, the request
        is rejected with `:invalid_request` because gpt-image-1 only
-       returns base64 (Decision #6).
+       returns base64.
     4. **URL-source resolution** — `:edit` / `:variation` requests with
        `{:url, _}` source images are eagerly fetched. Not implemented yet
        (lands with the multipart body builder).
@@ -204,7 +204,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   Per the wire-field map row, `nil → omit`. Other size shapes encode as:
   `{w, h}` → `"<w>x<h>"`; `:auto` → `"auto"`; binary → passthrough.
 
-  ## Test-injection short-circuit (Decision #20 / Invariant 0)
+  ## Test-injection short-circuit
 
   When `opts[:adapter_opts][:image_script]` is non-nil, `generate/2`
   delegates to `ALLM.Providers.FakeImages.generate/2` with the same opts
@@ -212,7 +212,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   escape hatch the conformance suite uses; production callers do not
   populate this key.
 
-  ## Response-format normalization (Decision #5)
+  ## Response-format normalization
 
   The provider response carries either `url:` or `b64_json:` per image.
   The adapter materializes the caller's requested form:
@@ -224,22 +224,22 @@ defmodule ALLM.Providers.OpenAI.Images do
 
   For `dall-e-2` / `dall-e-3` the response `:mime_type` defaults to
   `"image/png"`. For `gpt-image-1` the MIME type is driven by
-  `request.options[:output_format]` per Decision #19:
+  `request.options[:output_format]` per the documented contract:
   `"png"|:png` → `"image/png"`, `"jpeg"|:jpeg|:jpg` → `"image/jpeg"`,
   `"webp"|:webp` → `"image/webp"`. When `:output_format` is absent the
   default is `"image/png"` (matching OpenAI's server-side default). The
   adapter OMITS the `output_format` field from the wire body when
   `:output_format` is absent and lets the provider default apply.
 
-  ## Request-id preservation (Invariant 3)
+  ## Request-id preservation
 
   `opts[:request_id]` is reflected onto `response.request_id`
   unchanged. The OpenAI response's `x-request-id` header is preserved
-  separately on `response.metadata[:openai_request_id]` (Decision #18).
+  separately on `response.metadata[:openai_request_id]`.
 
   ## Retry contract
 
-  Wraps the HTTP call in `ALLM.Retry.run(opts[:retry] || :default, ...)`.
+  Wraps the HTTP call in `ALLM.Retry.run(opts[:retry] || :default,...)`.
   The closure parses `Retry-After` (seconds form), returns
   `{:retry, delay_ms, error}` for 429/5xx/`:timeout`/`:network_error`,
   `{:ok, response}` for 2xx, and `{:error, error}` for everything else.
@@ -264,7 +264,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   multipart machinery with `:edit` (variation drops `prompt` / `mask`).
 
   When `opts[:adapter_opts][:image_script]` is set, `prepare_request/2`
-  returns the same stub error rather than delegating to `FakeImages` —
+  returns the same stub error rather than delegating to `FakeImages`
   the script path has no `Req.Request` analogue, so `prepare_request/2`
   intentionally diverges from `generate/2` (which DOES delegate to
   `FakeImages.generate/2` under the script key per Invariant 0).
@@ -722,7 +722,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   @doc """
   Build a multipart/form-data field list for `:edit` / `:variation`.
 
-  Returns `{:ok, [{name, content}, ...]}` ready to hand to `Req.new(...,
+  Returns `{:ok, [{name, content},...]}` ready to hand to `Req.new(...,
   form_multipart: form)`. Plain fields are `{name, value}` 2-tuples;
   file fields (`:image`, `:mask`) use Req's `{body, opts}` shape:
   `{name, {bytes, filename: "image.png", content_type: <mime>}}`. See
@@ -732,7 +732,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   the wire); integer / atom values are stringified.
 
   URL-source images on `:edit` / `:variation` are eagerly fetched per
-  Decision #8. Failure modes (closed): non-2xx, non-image content-type,
+  the documented contract. Failure modes (closed): non-2xx, non-image content-type,
   body > 25 MB, > 5 redirects, timeout / network error. Each maps to a
   typed `%ImageAdapterError{}` with metadata describing the URL and the
   failure detail. The `Req.get/2` call honors `opts[:adapter_opts][:plug]`

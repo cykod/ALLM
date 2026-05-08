@@ -1,18 +1,17 @@
 defmodule ALLM.Capability do
   @moduledoc """
-  Layer B — optional model-catalog integration via the `LLMDB` Hex package.
+  Layer-B optional model-catalog integration via the `LLMDB` Hex package.
 
-  Phase 9.4 ships three helpers, all gated on `Code.ensure_loaded?(LLMDB)`:
+  Four helpers, all gated on `Code.ensure_loaded?(LLMDB)`:
 
-    * `preflight/2` — pre-flights tool / `response_format` capability against
-      the catalog's `%ALLM.ModelRef{}` and surfaces a
-      `%ALLM.Error.ValidationError{reason: :unsupported_capability}` before
-      the adapter sees a request it can't satisfy.
-    * `preflight_image/2` (Phase 14.3) — sister of `preflight/3` for
+    * `preflight/2` (and `/3`) — pre-flights tool / `response_format`
+      capability against the catalog's `%ALLM.ModelRef{}` and surfaces a
+      `%ALLM.Error.ValidationError{reason: :unsupported_capability}`
+      before the adapter sees a request it can't satisfy.
+    * `preflight_image/2` — sister of `preflight/3` for
       `ALLM.ImageRequest`: rejects requests against models with
       `images_enabled: false` or whose `supported_image_operations` does
-      not include the requested op. 2-arity, two-shape return
-      (`:ok | {:error, _}` — no rewrite branch).
+      not include the requested op.
     * `populate_costs/2` — fills `Usage.{input_cost, output_cost,
       total_cost}` from the catalog's per-million-token pricing after the
       adapter has reported token counts.
@@ -21,14 +20,12 @@ defmodule ALLM.Capability do
 
   ## Why this is integration-by-detection, not a Hex dep
 
-  `mix.exs` does NOT list `:llm_db` as a dep — see the Phase 9 design's
-  Non-obvious Decision #6. ALLM detects the catalog at runtime via
-  `Code.ensure_loaded?(Module.concat(["LLMDB"]))`. Application users who
-  want capability pre-flight and cost population add `:llm_db` to their
-  own `mix.exs`; ALLM picks it up automatically. Tests use the
-  `test/support/llm_db.ex` fake (compiled only in `:test` via
-  `elixirc_paths(:test)`) which mimics the published-package surface
-  verbatim (no `ALLM.` prefix).
+  `mix.exs` does NOT list `:llm_db` as a dep. ALLM detects the catalog
+  at runtime via `Code.ensure_loaded?(Module.concat(["LLMDB"]))`.
+  Application users who want capability pre-flight and cost population
+  add `:llm_db` to their own `mix.exs`; ALLM picks it up automatically.
+  Tests use a fake compiled only in `:test` that mimics the
+  published-package surface verbatim.
 
   ## What pre-flight rejects
 
@@ -54,7 +51,7 @@ defmodule ALLM.Capability do
   `:pricing`, `:metadata`) are documented as Layer-A-asymmetric: ETF
   round-trip is byte-identical, but JSON round-trip preserves only the
   outer struct shape — nested map keys come back as STRINGS (matching
-  the Phase 1 `Engine.metadata` carve-out). Rather than restoring atoms
+  `ALLM.Engine`'s `:metadata` carve-out). Rather than restoring atoms
   in `ModelRef.__from_tagged__/1` (which would require a closed
   capability-key allowlist and tighten the surface), the consumer is
   made tolerant: `check_tools/3` and `check_json_native/3` pattern-match
@@ -68,13 +65,13 @@ defmodule ALLM.Capability do
   `ALLM.Validate.request/1` and after `Engine.resolve_model/2` (the
   resolved model is passed to `preflight/2`). `Runner.run/3` delegates to
   `StreamRunner.run/3`, so the wire-up appears once. For multi-turn
-  `ALLM.Chat` paths, pre-flight runs once at the first adapter call —
+  `ALLM.Chat` paths, pre-flight runs once at the first adapter call
   the model doesn't change mid-conversation.
 
   ## Cost units
 
-  Pricing is per-million-tokens (the `llm_db` convention; spec §6.3 leaves
-  units unspecified). Math: `input_cost = pricing.input * input_tokens /
+  Pricing is per-million-tokens (the `llm_db` convention). Math:
+  `input_cost = pricing.input * input_tokens /
   1_000_000`. `total_cost` is computed only when both `input_cost` and
   `output_cost` are populated. `populate_costs/2` NEVER overwrites a
   non-nil cost field; it only fills `nil`.
@@ -89,7 +86,7 @@ defmodule ALLM.Capability do
   alias ALLM.Usage
 
   @typedoc """
-  Result of a pre-flight capability check. Three shapes (Phase 10.4 widened):
+  Result of a pre-flight capability check. Three shapes:
 
     * `:ok` — no rewrite needed, no rejection. The caller dispatches the
       original request unchanged.
@@ -109,13 +106,13 @@ defmodule ALLM.Capability do
   BEAM AND the test override (`Application.put_env(:allm,
   :force_capability_absent, true)`) is NOT set.
 
-  The override seam exists for the dep-free smoke test — see Phase 9.4
-  Non-obvious Decision #5. `:code.delete/1` + `:code.purge/1` does NOT
-  work because `test/support/llm_db.ex` re-loads from `_build` on the
-  next `Code.ensure_loaded?/1`; the application-env override is the
-  reliable simulator.
+  The override seam exists for the dep-free smoke test:
+  `:code.delete/1` + `:code.purge/1` does NOT work because
+  `test/support/llm_db.ex` re-loads from `_build` on the next
+  `Code.ensure_loaded?/1`; the application-env override is the reliable
+  simulator.
 
-  Use the `Module.concat(["LLMDB"])` idiom to keep the dep optional —
+  Use the `Module.concat(["LLMDB"])` idiom to keep the dep optional
   the literal-string-list argument produces a single atom at runtime
   with no compile-time reference (the same pattern as
   `ALLM.Engine.resolve_model/2` at `lib/allm/engine.ex:301-304`).
@@ -137,13 +134,13 @@ defmodule ALLM.Capability do
   @doc """
   Pre-flight a request against the catalog's view of a model.
 
-  ## Three return shapes (Phase 10.4)
+  ## Three return shapes
 
     * `:ok` — no rewrite needed, no rejection. Caller dispatches the
       original request unchanged. Returned when the catalog is absent,
       when the model is a bare string/tuple/`nil` (no capability info),
       or when no rejection rule fires AND no rewrite predicate matches.
-    * `{:ok, %Request{}}` — pre-flight rewrote the request. v0.2's only
+    * `{:ok, %Request{}}` — pre-flight rewrote the request. The current
       rewrite is `structured_finalize: true` (auto-set when the adapter's
       `requires_structured_finalize?/1` returns `true` for a request that
       combines tools and a `json_schema` response_format). Caller MUST
@@ -152,15 +149,15 @@ defmodule ALLM.Capability do
       — pre-flight rejected the request. Both rejection rules accumulate
       in `:errors` when both fire.
 
-  ## Adapter argument (Phase 10.4 — optional)
+  ## Adapter argument (optional)
 
   The third argument carries the adapter module so pre-flight can call
   `function_exported?(adapter, :requires_structured_finalize?, 1)` to
   decide the rewrite. Defaults to `nil` (no rewrite) so existing 2-arg
   callers continue to work — the rewrite branch only fires when the
-  caller threads the adapter through. Per design Decision #14,
-  `requires_structured_finalize?/1` is a regular module function, NOT a
-  `@callback`, so most adapters do not export it.
+  caller threads the adapter through. `requires_structured_finalize?/1`
+  is a regular module function, NOT a `@callback`, so most adapters do
+  not export it.
 
   ## Examples
 
@@ -168,9 +165,9 @@ defmodule ALLM.Capability do
       :ok
 
       iex> ref = ALLM.ModelRef.new(
-      ...>   provider: :local, id: "no-tools",
-      ...>   capabilities: %{tools: %{enabled: false}, json_native: true}
-      ...> )
+      ...> provider: :local, id: "no-tools",
+      ...> capabilities: %{tools: %{enabled: false}, json_native: true}
+      ...>)
       iex> tool = ALLM.Tool.new(name: "echo", description: "x", schema: %{})
       iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "hi"}], tools: [tool])
       iex> {:error, err} = ALLM.Capability.preflight(ref, req)
@@ -226,10 +223,8 @@ defmodule ALLM.Capability do
   model — sister of `preflight/3`, narrower contract.
 
   Returns `:ok | {:error, %ValidationError{reason: :unsupported_capability}}`
-  only — there is no `{:ok, %ImageRequest{}}` rewrite branch (image
-  requests have no analogous rewrite need in v0.3, per Phase 14.3
-  design Decision #10). 2-arity by design — symmetric with
-  `populate_costs/2`, NOT with `preflight/3`.
+  only — there is no `{:ok, %ImageRequest{}}` rewrite branch. 2-arity by
+  design — symmetric with `populate_costs/2`, NOT with `preflight/3`.
 
   ## Rejection rules (both accumulate when both fire)
 
@@ -253,9 +248,9 @@ defmodule ALLM.Capability do
       :ok
 
       iex> ref = ALLM.ModelRef.new(
-      ...>   provider: :local, id: "no-images",
-      ...>   capabilities: %{images_enabled: false, supported_image_operations: []}
-      ...> )
+      ...> provider: :local, id: "no-images",
+      ...> capabilities: %{images_enabled: false, supported_image_operations: []}
+      ...>)
       iex> req = ALLM.ImageRequest.new(prompt: "a kestrel")
       iex> {:error, err} = ALLM.Capability.preflight_image(ref, req)
       iex> err.reason
@@ -287,7 +282,7 @@ defmodule ALLM.Capability do
   `:input_cost` stays `nil`; `:output_cost` can still populate from
   `:output_tokens`. `:total_cost` is populated only when both partial
   costs are present. NEVER overwrites a non-nil cost field — only fills
-  `nil` (Phase 9 design Invariant 8).
+  `nil`.
 
   ## Examples
 
@@ -321,8 +316,8 @@ defmodule ALLM.Capability do
   ## Examples
 
       iex> match?({:error, :catalog_not_loaded}, ALLM.Capability.select(require: [:tools])) or
-      ...>   match?({:ok, _}, ALLM.Capability.select(require: [:tools])) or
-      ...>   match?({:error, _}, ALLM.Capability.select(require: [:tools]))
+      ...> match?({:ok, _}, ALLM.Capability.select(require: [:tools])) or
+      ...> match?({:error, _}, ALLM.Capability.select(require: [:tools]))
       true
   """
   @spec select(keyword()) ::

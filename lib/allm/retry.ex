@@ -1,59 +1,47 @@
 defmodule ALLM.Retry do
   @moduledoc """
-  Internal — Layer B retry helper consumed by adapters.
+  Layer-B retry helper consumed by non-streaming adapters and by the
+  image façade.
 
   Wraps a non-streaming adapter call in a bounded retry loop with
-  exponential backoff and additive jitter, per spec §6.1. Adapters
-  call `run/3` with their own per-attempt closure; the closure returns
-  one of `{:ok, term}`, `{:retry, delay_ms, error}`, or `{:error, term}`
-  (Phase 9 design Non-obvious Decision #4) — the helper handles the
-  loop, the sleep, and the per-attempt `[:allm, :adapter, :retry]`
-  telemetry emission (Decision #16).
+  exponential backoff and additive jitter. Adapters call `run/3` with
+  their own per-attempt closure; the closure returns one of
+  `{:ok, term}`, `{:retry, delay_ms, error}`, or `{:error, term}`. The
+  helper handles the loop, the sleep, and the per-attempt
+  `[:allm, :adapter, :retry]` telemetry emission.
 
-  Streaming adapters do **not** call `run/3`: spec §6.1 is explicit
-  that "Streaming calls are not retried automatically (partial output
-  has already been delivered to the consumer)." The
-  `ALLM.StreamAdapter` behaviour-doc surfaces this contract;
-  enforcement is by code review, not by the helper.
+  Streaming adapters do **not** call `run/3`: streaming calls are not
+  retried automatically because partial output has already been
+  delivered to the consumer. The `ALLM.StreamAdapter` behaviour-doc
+  surfaces this contract; enforcement is by code review, not by the
+  helper.
 
-  Tested end-to-end via `ALLM.Providers.Fake`'s
-  `adapter_opts: [retry_until_call: n]` plumbing; the same helper is
-  consumed by real-provider adapters in Phase 10/11.
+  ## Image-side caller class
 
-  Phase 14.3 added a second caller class: the image-side façade
-  (`ALLM.generate_image/3 · edit_image/4 · image_variations/3`) wraps
-  the adapter dispatch in `Retry.run/3`. Backoff timing reuses the
-  chat-side `default_policy/0` unchanged AT ITS SOURCE; the image
-  façade augments `retry_on` AT THE CALL SITE via
-  `ALLM.augment_image_retry_policy/1` to add the four image-error
-  atoms (`:rate_limited`, `:provider_unavailable`, `:timeout`,
-  `:network_error`) — chat-side `default_policy/0.retry_on` is
-  HTTP-status-coded (`[429, 500, 502, 503, 504, :timeout]`) and the
-  image side surfaces closed-enum atoms only, so without the
-  augmentation only `:timeout` would coincidentally retry. See PHASE 14
-  Decision #9 for the full design rationale. Image-side closures emit
+  The image façade (`ALLM.generate_image/3`, `edit_image/4`,
+  `image_variations/3`) wraps the adapter dispatch in `run/3`. Backoff
+  timing reuses the chat-side `default_policy/0` unchanged at its
+  source; the image façade augments `retry_on` at the call site to
+  add the four image-error atoms (`:rate_limited`,
+  `:provider_unavailable`, `:timeout`, `:network_error`). The
+  chat-side default `retry_on` is HTTP-status-coded
+  (`[429, 500, 502, 503, 504, :timeout]`) and the image side surfaces
+  closed-enum atoms only, so without the augmentation only `:timeout`
+  would coincidentally retry. Image-side closures emit
   `{:retry, delay_ms, %ALLM.Error.ImageAdapterError{}}` for the four
   retry-engaging reasons; other reasons surface verbatim with no retry
   attempt.
 
-  ## v0.2 surface caveat — public-API retry visibility
+  ## Where retry telemetry fires
 
-  In v0.2 the public Layer-C entry points (`ALLM.generate/3`,
+  Today the public Layer-C entry points (`ALLM.generate/3`,
   `ALLM.step/3`, `ALLM.chat/3`) all route through `ALLM.StreamRunner`,
   which calls the adapter's `c:ALLM.StreamAdapter.stream/2` — the
-  streaming path. Per spec §6.1, **streaming calls are not retried**,
-  so `[:allm, :adapter, :retry]` events do NOT fire from any public
-  Layer-C call in v0.2. The retry round-trip is exercised in v0.2 only
-  by direct adapter calls
-  (`ALLM.Providers.Fake.generate(req, adapter_opts: [retry_until_call:
-  n])`, mirroring how real-provider adapters call `Retry.run/3` from
-  their non-streaming `c:ALLM.Adapter.generate/3` callbacks). Per the
-  Phase 9 design's Decision #14, real-provider Phase 10/11 adapters'
-  non-streaming `generate/2` callbacks reuse this same helper; until a
-  non-streaming Layer-C path lands (or a real-provider integration
-  ships and is invoked through one), retry telemetry observed via the
-  public façade requires the adapter to be reachable through a path
-  that exercises `c:ALLM.Adapter.generate/3`.
+  streaming path. Streaming calls are not retried, so
+  `[:allm, :adapter, :retry]` events do NOT fire from any chat-side
+  public call. The retry round-trip is exercised by direct adapter
+  calls (e.g., `ALLM.Providers.Fake.generate(req, adapter_opts:
+  [retry_until_call: n])`) and by the image façade.
 
   ## `:request_id` on retry events
 
@@ -61,15 +49,13 @@ defmodule ALLM.Retry do
   when the adapter call's `opts` carry a `:request_id` (typically
   threaded from a wrapping `Runner` / `StreamRunner` span). Direct
   adapter calls (e.g., the Fake retry round-trip) emit retry events
-  without `:request_id` because no wrapping span generated one. This
-  is a soft-promise rather than a hard invariant — see review Finding
-  #3 for the v0.2 surface notes.
+  without `:request_id` because no wrapping span generated one.
 
   ## Default policy
 
-  See `default_policy/0` for the spec §6.1 closed map. Materialised
+  See `default_policy/0` for the closed map. Materialised
   via `materialize/1` from the engine's `:retry` field
-  (`:default | false | keyword()`).
+  (`:default | false | keyword`).
 
   ## Closure contract
 
@@ -86,13 +72,12 @@ defmodule ALLM.Retry do
       `{:error, error}` immediately, no telemetry, no sleep.
 
   Closure-raised exceptions propagate to the caller of `run/3`
-  unchanged (no rescue, no telemetry — spec §6.1's "exception is not
-  retryable" rule).
+  unchanged (no rescue, no telemetry — exceptions are not retryable).
 
   ## Telemetry
 
   `[:allm, :adapter, :retry]` is emitted per retry attempt, **before**
-  sleeping, with measurements `%{system_time: System.system_time()}`
+  sleeping, with measurements `%{system_time: System.system_time}`
   and metadata `Map.merge(telemetry_metadata, %{attempt: attempt,
   delay_ms: actual_delay, reason: error})`. The final attempt (when
   `attempt == max_attempts`) emits no retry event — the surrounding
@@ -130,13 +115,16 @@ defmodule ALLM.Retry do
   ]
 
   @doc """
-  Return the spec §6.1 default retry policy.
+  Return the default retry policy.
 
-  Field-by-field cited against
-  `steering/allm_engine_session_streaming_spec_v0_2.md` §6.1
-  (`max_attempts: 3`, `base_delay_ms: 500`, `max_delay_ms: 30_000`,
-  `retry_on: [429, 500, 502, 503, 504, :timeout]`, `jitter_ms: 250`,
-  `respect_retry_after: true`).
+  Fields:
+
+    * `:max_attempts` — `3`
+    * `:base_delay_ms` — `500`
+    * `:max_delay_ms` — `30_000`
+    * `:retry_on` — `[429, 500, 502, 503, 504, :timeout]`
+    * `:jitter_ms` — `250`
+    * `:respect_retry_after` — `true`
 
   ## Examples
 
@@ -159,12 +147,12 @@ defmodule ALLM.Retry do
   end
 
   @doc """
-  Materialise an engine `:retry` field into a `policy()` or `:no_retry`.
+  Materialise an engine `:retry` field into a `policy` or `:no_retry`.
 
     * `false` → `:no_retry`.
-    * `:default` → `default_policy()`.
-    * `[]` → `default_policy()`.
-    * `keyword()` → `Map.merge(default_policy(), Map.new(kw))`.
+    * `:default` → `default_policy`.
+    * `[]` → `default_policy`.
+    * `keyword` → `Map.merge(default_policy, Map.new(kw))`.
     * `[max_attempts: 0]` → `:no_retry` (zero attempts is indistinguishable
       from "no retry").
     * Unknown keys raise `ArgumentError` (a typo like `max_atempts:` fails
@@ -211,8 +199,8 @@ defmodule ALLM.Retry do
   @doc """
   Run `fun` under the given retry policy.
 
-  Accepts a materialised `policy()`, `:no_retry`, or any of the engine
-  shapes (`:default | false | keyword()`); the engine shape is
+  Accepts a materialised `policy`, `:no_retry`, or any of the engine
+  shapes (`:default | false | keyword`); the engine shape is
   materialised internally via `materialize/1`.
 
   Behaviour:
@@ -222,7 +210,7 @@ defmodule ALLM.Retry do
       `{:error, error}` so the caller doesn't have to handle the third
       shape.
 
-    * `policy()` — `fun` is invoked up to `policy.max_attempts` times.
+    * `policy` — `fun` is invoked up to `policy.max_attempts` times.
       `telemetry_metadata` is shallow-merged with `%{attempt: attempt,
       delay_ms: actual_delay, reason: error}` per attempt and emitted
       under `[:allm, :adapter, :retry]` **before** sleeping. The final
@@ -238,16 +226,13 @@ defmodule ALLM.Retry do
       `Retry-After` value wins).
 
   Jitter bounds: jitter is **additive** in `[0, jitter_ms]`
-  inclusive, never subtractive — the spec §6.1 `+ jitter(0..250ms)`
-  notation is load-bearing. Implementation:
-  `:rand.uniform(jitter_ms + 1) - 1`. Verified on OTP 27 in IEx
-  2026-04-25: `:rand.uniform/1` returns `1..N` inclusive, and
-  `:rand.uniform(1) - 1 == 0` when `jitter_ms == 0` (no jitter,
-  deterministic delay).
+  inclusive, never subtractive. Implementation:
+  `:rand.uniform(jitter_ms + 1) - 1`. `:rand.uniform/1` returns
+  `1..N` inclusive on OTP 27, and `:rand.uniform(1) - 1 == 0` when
+  `jitter_ms == 0` (no jitter, deterministic delay).
 
   Closure-raised exceptions propagate to the caller unchanged — no
-  rescue, no telemetry, no retry (spec §6.1 "exception is not
-  retryable").
+  rescue, no telemetry, no retry. Exceptions are not retryable.
 
   ## Examples
 
@@ -260,14 +245,14 @@ defmodule ALLM.Retry do
 
       iex> {:ok, _pid} = Agent.start(fn -> 0 end, name: :doctest_retry_counter)
       iex> {:ok, v} =
-      ...>   ALLM.Retry.run(
-      ...>     [base_delay_ms: 1, jitter_ms: 0],
-      ...>     %{},
-      ...>     fn ->
-      ...>       n = Agent.get_and_update(:doctest_retry_counter, &{&1 + 1, &1 + 1})
-      ...>       if n < 2, do: {:retry, 0, 429}, else: {:ok, n}
-      ...>     end
-      ...>   )
+      ...> ALLM.Retry.run(
+      ...> [base_delay_ms: 1, jitter_ms: 0],
+      ...> %{},
+      ...> fn ->
+      ...> n = Agent.get_and_update(:doctest_retry_counter, &{&1 + 1, &1 + 1})
+      ...> if n < 2, do: {:retry, 0, 429}, else: {:ok, n}
+      ...> end
+      ...>)
       iex> Agent.stop(:doctest_retry_counter)
       iex> v
       2

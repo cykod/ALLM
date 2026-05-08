@@ -1,10 +1,17 @@
+## [DOC] User-facing documentation rebuild
+
+Rewrite user-facing documentation — drop internal phase/spec
+references, expand examples, add `guides/` ExDoc extras (Getting
+Started, Streaming, Tools, Sessions, Vision, Image Generation, Errors
+& Retries, Multi-Tenant Keys). The README now opens with a 5-minute
+on-ramp and cross-links the guides instead of duplicating their
+content.
+
 ## [REL] v0.3.0 — Initial public release
 
 First public release of ALLM — a provider-neutral, streaming-first LLM
-execution library for Elixir built against the
-`allm_engine_session_streaming_spec_v0_2` design. The package is alpha:
-public APIs and on-disk session shapes may shift between releases as the
-spec settles.
+execution library for Elixir. The package is alpha: public APIs and
+on-disk session shapes may shift between releases until v1.0.
 
 Other changes:
 - Layer A serializable data: `Message`, `Thread`, `ToolCall`, `Request`,

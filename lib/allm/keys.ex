@@ -1,37 +1,46 @@
 defmodule ALLM.Keys do
   @moduledoc """
-  API key resolution per spec §6.4. Keys never appear on the engine.
+  API key resolution. Keys never appear on the engine — they resolve at
+  adapter-call time, so a serialized engine is safe to persist.
 
-  Five-level resolution chain — the first level that yields a non-empty
-  string wins:
+  ## Resolution chain
+
+  Five levels — the first level that yields a non-empty string wins:
 
     1. `opts[:api_key]` — explicit per-call override
-    2. `ALLM.Keys.Store` — in-process Agent set via `put/2`
+    2. The runtime store — an in-process Agent set via `put/2`
     3. `Application.get_env(:allm, :keys, %{})[provider]`
     4. `System.get_env(env_var_for(provider))`
-    5. `.env` file at `config :allm, :dotenv_path` (default: `File.cwd!() <> "/.env"`) — **only** consulted when `config :allm, load_dotenv: true`.
+    5. `.env` file at `config :allm, :dotenv_path` (default:
+       `File.cwd! <> "/.env"`) — **only** consulted when
+       `config :allm, load_dotenv: true`.
 
-  Empty-string values at every level are treated as missing (defensive —
+  Empty-string values at every level are treated as missing (defensive
   an unset-looking env var like `OPENAI_API_KEY=` must not satisfy
   resolution).
 
+  ## Return shapes
+
   `get/1` and `get/2` return `{:ok, key, source}` on hit or
-  `{:error, :missing}` on miss (spec §6.4 — Non-obvious decision #9
-  preserves this shape despite the project's "no atom-tuple errors" rule).
-  `fetch!/2` raises `%ALLM.Error.EngineError{reason: :missing_key}` on
-  miss (Non-obvious decision #8 — the only function in the library that
-  raises).
+  `{:error, :missing}` on miss. `fetch!/2` raises
+  `%ALLM.Error.EngineError{reason: :missing_key}` on miss — it's the only
+  function in the library that raises rather than returning an
+  `{:error, _}` tuple, justified because adapters look up keys at call
+  time deep inside their implementation and bubbling `{:error, _}`
+  through every `with` chain is untenable.
 
   ## `.env` parser limitations
 
-  ALLM ships a built-in `.env` parser (Non-obvious decision #2) to avoid
-  a `dotenvy` dependency for a level-5 fallback most users won't even
-  enable. The supported subset is strict: `KEY=VALUE` lines, `# comment`
-  lines, blank lines, `export KEY=VALUE` (the leading `export` is
-  stripped), and surrounding double-quote stripping. **No variable
-  interpolation, no multi-line values, no escape sequences, no single-
-  quote stripping.** Users with complex `.env` files should either
+  ALLM ships a built-in `.env` parser to avoid pulling in a `dotenvy`
+  dependency for a level-5 fallback most users won't even enable. The
+  supported subset is strict: `KEY=VALUE` lines, `# comment` lines,
+  blank lines, `export KEY=VALUE` (the leading `export` is stripped),
+  and surrounding double-quote stripping. **No variable interpolation,
+  no multi-line values, no escape sequences, no single-quote
+  stripping.** Users with complex `.env` files should either
   `System.put_env/2` at boot or depend on `dotenvy` themselves.
+
+  See also `guides/multi_tenant_keys.md`.
   """
 
   alias ALLM.Error.EngineError
@@ -55,8 +64,8 @@ defmodule ALLM.Keys do
   @doc """
   Install `key` for `provider` in the in-process runtime store.
 
-  Cleared by `ALLM.Keys.delete/1` or `ALLM.Keys.Store.clear/0`. Persists
-  for the lifetime of the `ALLM.Keys.Store` Agent.
+  Cleared by `ALLM.Keys.delete/1` or by clearing the runtime store
+  directly. Persists for the lifetime of the in-process Agent.
 
   ## Examples
 
@@ -117,9 +126,9 @@ defmodule ALLM.Keys do
 
   This is the ONLY function in the library that raises
   `ALLM.Error.EngineError` rather than returning it in an `{:error, _}`
-  tuple (Non-obvious decision #8). Justified because adapters look up
-  keys at call time deep inside their implementation, and bubbling
-  `{:error, _}` through every `with` chain is untenable.
+  tuple. Justified because adapters look up keys at call time deep
+  inside their implementation, and bubbling `{:error, _}` through every
+  `with` chain is untenable.
 
   The raised error's `:metadata` carries `:checked_sources` — a list of
   the source atoms that were actually consulted (`:dotenv` is included
@@ -139,9 +148,9 @@ defmodule ALLM.Keys do
       "sk-doctest"
       iex> ALLM.Keys.Store.clear()
       iex> try do
-      ...>   ALLM.Keys.fetch!(:my_test_provider)
+      ...> ALLM.Keys.fetch!(:my_test_provider)
       ...> rescue
-      ...>   e in ALLM.Error.EngineError -> e.reason
+      ...> e in ALLM.Error.EngineError -> e.reason
       ...> end
       :missing_key
   """
@@ -165,11 +174,13 @@ defmodule ALLM.Keys do
   @doc """
   Translate a provider atom to its env-var name.
 
-  Known providers use the spec §6.4 table (`:openai → "OPENAI_API_KEY"`,
-  etc.). Unknown providers fall back to
+  Known providers use a fixed table (`:openai → "OPENAI_API_KEY"`,
+  `:anthropic → "ANTHROPIC_API_KEY"`, `:google → "GOOGLE_API_KEY"`,
+  `:cohere → "COHERE_API_KEY"`, `:mistral → "MISTRAL_API_KEY"`,
+  `:fake → "FAKE_API_KEY"`). Unknown providers fall back to
   `String.upcase("\#{provider}") <> "_API_KEY"`.
 
-  Public because `ALLM.Keys.Dotenv.lookup/1` delegates through it for
+  Public because the dotenv-loader delegates through it for
   consistent provider→env-var translation: the `.env` source looks up the
   same env-var name the `System.get_env` source does, so configuring one
   (`OPENAI_API_KEY=…` in the shell) and the other (`OPENAI_API_KEY=…` in

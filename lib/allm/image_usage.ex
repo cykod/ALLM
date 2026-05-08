@@ -1,27 +1,18 @@
 defmodule ALLM.ImageUsage do
   @moduledoc """
-  Image-side usage and cost summary. See spec §35.2.4.
+  Image-side usage and cost summary — Layer A serializable data.
 
-  Layer A — pure serializable data. `:images` defaults to `0` so a
-  freshly-constructed `%ImageUsage{}` reads as "no work done yet"; the
-  `%ALLM.ImageResponse{}` struct's default `:usage` carries one of these
-  rather than `nil`.
+  `:images` defaults to `0` so a freshly-constructed `%ImageUsage{}` reads
+  as "no work done yet"; the `%ALLM.ImageResponse{}` struct's default
+  `:usage` carries one of these rather than `nil`.
 
-  ## Cost types — refinement of spec §35.2.4
+  ## Cost types
 
-  Cost fields are typed `float() | nil`, NOT `Decimal.t() | nil` as spec
-  §35.2.4 reads (Phase 13 design Decision #1). Rationale:
-
-  - `ALLM.Usage.cost` is already `float()` (`lib/allm/usage.ex:11`); diverging
-    `ImageUsage` to `Decimal` would split the cost type across two structs
-    for no semantic gain.
-  - `:decimal` is not a project dep and adopting it solely for typed
-    nil-or-number adds runtime weight.
-  - Float-summation drift on `total_cost = input_cost + output_cost` is
-    bounded at ≤1 ULP, well below provider cent-level pricing precision.
-
-  A spec PR against `steering/allm_engine_session_streaming_spec_v0_2.md`
-  §35.2.4 will land alongside the v0.3.0 release recording this refinement.
+  Cost fields are typed `float | nil`. `ALLM.Usage.cost` is already
+  `float`, so the chat and image cost types align; adopting `Decimal`
+  solely for typed nil-or-number adds runtime weight without semantic
+  gain. Float-summation drift on `total_cost = input_cost + output_cost`
+  is bounded at ≤1 ULP, well below provider cent-level pricing precision.
 
   Providers that charge by image-count alone (dall-e-2, dall-e-3) populate
   `:images`, `:size`, `:quality`, and `:total_cost`. Providers that charge by

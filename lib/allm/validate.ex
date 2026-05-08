@@ -1,7 +1,6 @@
 defmodule ALLM.Validate do
   @moduledoc """
-  Pure validators for Layer A input shapes. See spec §16 and Phase 1 design
-  sub-phase 1.4.
+  Pure validators for Layer A input shapes.
 
   Every validator returns `:ok` or `{:error, %ALLM.Error.ValidationError{}}`
   with a machine-readable `:errors` list of `{field, reason}` tuples. The
@@ -9,18 +8,14 @@ defmodule ALLM.Validate do
   (e.g. `[:messages, 2, :role]`) when the failure is nested.
 
   Multimodal content parts use the `%ALLM.TextPart{}` and `%ALLM.ImagePart{}`
-  Layer A structs (spec §35.6, Phase 14.4). A content list whose elements are
-  not one of those two structs is rejected with
-  `{:content, :invalid_part_type}` — raw maps in content lists are no longer
-  accepted (Phase 14.4 Decision #11; previously the v0.2 validator accepted
-  any list of maps and short-circuited image-typed maps with the now-removed
-  `:vision_not_in_v0_2` reason).
+  Layer-A structs. A content list whose elements are not one of those two
+  structs is rejected with `{:content, :invalid_part_type}` — raw maps in
+  content lists are not accepted.
 
   Validators are opt-in: constructors like `ALLM.Request.new/2` do not call
-  these functions (see Phase 1 design non-obvious decision #7). Users invoke
-  `request/1`, `message/1`, `tool/1`, `thread/1`, `session/1`, or
-  `image_request/1` (Phase 13.3, spec §35.2.2) explicitly when they need a
-  check before dispatch.
+  these functions. Users invoke `request/1`, `message/1`, `tool/1`,
+  `thread/1`, `session/1`, or `image_request/1` explicitly when they need
+  a check before dispatch.
   """
 
   alias ALLM.Error.ValidationError
@@ -83,8 +78,8 @@ defmodule ALLM.Validate do
 
   Returns `:ok` or `{:error, %ALLM.Error.ValidationError{}}`. A content list
   whose elements are not `%ALLM.TextPart{}` or `%ALLM.ImagePart{}` is
-  rejected with `{:content, :invalid_part_type}` (Phase 14.4 Decision #11);
-  raw maps are no longer accepted in content lists.
+  rejected with `{:content, :invalid_part_type}` — raw maps are not
+  accepted in content lists.
 
   ## Examples
 
@@ -180,7 +175,7 @@ defmodule ALLM.Validate do
   @doc """
   Validate an `%ALLM.Session{}`.
 
-  Enforces status/`pending_*` invariants (spec §5.7) and recursively validates
+  Enforces status/`pending_*` invariants and recursively validates
   the embedded thread. Thread errors carry a `[:thread, :messages, idx, :field]`
   path prefix.
 
@@ -213,7 +208,7 @@ defmodule ALLM.Validate do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Validate an `%ALLM.ImageRequest{}` (spec §35.2.2).
+  Validate an `%ALLM.ImageRequest{}`.
 
   Returns `:ok` when every rule passes, or
   `{:error, %ALLM.Error.ValidationError{reason: :invalid_image_request, errors: [...]}}`
@@ -227,7 +222,7 @@ defmodule ALLM.Validate do
     * `:variation` requires `:prompt in [nil, ""]` AND `length(:input_images) == 1`.
 
   Field rules: `:n` integer ≥ 1; `:response_format in [:binary, :base64, :url]`;
-  `:size in {pos_integer, pos_integer} | String.t() | :auto | nil`;
+  `:size in {pos_integer, pos_integer} | String.t | :auto | nil`;
   `:input_images` a list of `%ALLM.Image{}`; `:mask` `%ALLM.Image{}` or `nil`.
 
   ## Examples

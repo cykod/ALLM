@@ -3,7 +3,7 @@ defmodule ALLM.Providers.Support.SSE do
   Stateless line-buffered Server-Sent Events (SSE) decoder.
 
   Reused by all SSE-streaming providers (currently `ALLM.Providers.OpenAI`;
-  Phase 11's `ALLM.Providers.Anthropic` consumes it unchanged). Provider-specific
+  's `ALLM.Providers.Anthropic` consumes it unchanged). Provider-specific
   interpretation of `data:` payloads happens in each adapter's chunk-to-event
   mapper; this module only parses the SSE wire format per the
   [WHATWG Server-Sent Events spec](https://html.spec.whatwg.org/multipage/server-sent-events.html).
@@ -13,7 +13,7 @@ defmodule ALLM.Providers.Support.SSE do
   OpenAI's Chat Completions streaming terminates with a `data: [DONE]\\n\\n`
   marker that has no native SSE meaning. To keep adapter chunk-mappers simple,
   this decoder returns `:done` as an in-band sentinel inside the message list
-  whenever it parses a `data: [DONE]` event. Anthropic (Phase 11) signals
+  whenever it parses a `data: [DONE]` event. Anthropic signals
   termination with a regular `event: message_stop` SSE event — Anthropic-side
   reviewers must NOT blanket-pattern-match on `:done` and should instead
   consume it as one possible element of the message list.
@@ -23,12 +23,12 @@ defmodule ALLM.Providers.Support.SSE do
   The accumulator is a plain map (no PIDs / refs / funs) and round-trips
   cleanly through `:erlang.term_to_binary/1`. This matters for
   `Stream.resource/3` callers that thread the accumulator through
-  `start_fun → next_fun` state — see spec §7.2 and Invariant 8 in the
-  Phase 10 design doc's SSE Behaviour & Type Contracts.
+  `start_fun → next_fun` state — see the documented contract and Invariant 8 in the
+   design doc's SSE Behaviour & Type Contracts.
 
   ## Spec sections
 
-  Spec §7.2 (HTTP/1 streaming guidance).
+  Spec (HTTP/1 streaming guidance).
   """
 
   @typedoc "Parsed SSE message per https://html.spec.whatwg.org/multipage/server-sent-events.html."
@@ -60,7 +60,7 @@ defmodule ALLM.Providers.Support.SSE do
 
   ## Examples
 
-      iex> ALLM.Providers.Support.SSE.new()
+      iex> ALLM.Providers.Support.SSE.new
       %{buffer: "", partial: %{event: nil, data: [], id: nil, retry: nil}}
   """
   @spec new() :: accumulator()
@@ -69,7 +69,7 @@ defmodule ALLM.Providers.Support.SSE do
   @doc """
   Decodes one chunk of SSE bytes against the running accumulator.
 
-  Total over `binary() × accumulator()` — never raises on malformed input.
+  Total over `binary × accumulator` — never raises on malformed input.
   Malformed lines (no `:` separator) are silently dropped per the SSE spec's
   "ignore unrecognized fields" rule. Comment lines (starting with `:`) are
   also dropped.
@@ -83,8 +83,8 @@ defmodule ALLM.Providers.Support.SSE do
   ## Examples
 
       iex> {messages, _acc} =
-      ...>   ALLM.Providers.Support.SSE.new()
-      ...>   |> ALLM.Providers.Support.SSE.decode_chunk("data: hello\\n\\n")
+      ...> ALLM.Providers.Support.SSE.new
+      ...> |> ALLM.Providers.Support.SSE.decode_chunk("data: hello\\n\\n")
       iex> messages
       [%{event: nil, data: "hello", id: nil, retry: nil}]
   """

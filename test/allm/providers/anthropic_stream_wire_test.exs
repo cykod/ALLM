@@ -28,11 +28,11 @@ defmodule ALLM.Providers.AnthropicStreamWireTest do
   alias ALLM.StreamCollector
   alias ALLM.Test.FinchStub
 
-  setup do
-    ALLM.Keys.put(:anthropic, "sk-ant-stream-test")
-    on_exit(fn -> ALLM.Keys.delete(:anthropic) end)
-    :ok
-  end
+  # Pass `:api_key` per-call rather than `ALLM.Keys.put/2` — the Keys.Store
+  # is a globally-named Agent, so module-level put/delete races against
+  # any other `async: true` test (e.g. engine_roundtrip_test.exs) that
+  # touches `:anthropic`. Per-call `:api_key` is process-isolated.
+  @stub_api_key "sk-ant-stream-test"
 
   defp req(opts \\ []) do
     Request.new(
@@ -49,7 +49,11 @@ defmodule ALLM.Providers.AnthropicStreamWireTest do
     Anthropic.stream(
       request,
       Keyword.merge(
-        [finch_module: FinchStub, finch_stub_ref: stub_ref],
+        [
+          api_key: @stub_api_key,
+          finch_module: FinchStub,
+          finch_stub_ref: stub_ref
+        ],
         extra_opts
       )
     )

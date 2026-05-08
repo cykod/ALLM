@@ -1,6 +1,21 @@
 defmodule ALLM.ToolExecutor do
   @moduledoc """
-  Tool-handler invocation contract. See spec §7.3 and §5.2.
+  Tool-handler invocation contract.
+
+  ## Minimum impl skeleton
+
+      defmodule MyExecutor do
+        @behaviour ALLM.ToolExecutor
+
+        @impl true
+        def execute(%ALLM.Tool{handler: handler}, arguments, opts) do
+          # arity-1: handler.(arguments)
+          # arity-2: handler.(arguments, opts)
+          # Convert raises / exits / bad returns to
+          # {:error, %ALLM.Error.ToolError{}}.
+          handler.(arguments)
+        end
+      end
 
   `execute/3` takes a `%ALLM.Tool{}`, the parsed arguments map, and a
   keyword opts list carrying call context (`:context`, `:session_id`,
@@ -15,14 +30,14 @@ defmodule ALLM.ToolExecutor do
        :encoding_failed | :not_found`.
 
     2. A `nil` handler (the `%Tool{}` was declared for manual-mode use)
-       is converted to `{:error, %ALLM.Error.ToolError{reason: :not_found}}` —
+       is converted to `{:error, %ALLM.Error.ToolError{reason: :not_found}}`
        the executor cannot invoke a tool with no handler.
 
   Handler-returned `{:error, _}` values are **NOT** converted; they pass
   through unchanged so the orchestrator can pattern-match on them
-  (`on_tool_error` policy, spec §12.3 / §30). The distinction is "did the
-  handler crash, or did it report a failure?" — both are failures, but
-  the orchestrator handles them differently.
+  via the `on_tool_error` policy. The distinction is "did the handler
+  crash, or did it report a failure?" — both are failures, but the
+  orchestrator handles them differently.
 
   ## Invariants
 
@@ -41,14 +56,14 @@ defmodule ALLM.ToolExecutor do
 
   ## Handler result shapes
 
-  The five legal handler-returned shapes (spec §5.2):
+  The five legal handler-returned shapes:
 
     * `{:ok, value}` — success; `value` is handed to the
       `ALLM.ToolResultEncoder`.
     * `{:error, reason}` — handler-originated failure; passes through
       unchanged for `on_tool_error` dispatch.
     * `{:ask_user, question}` — suspend the loop and surface a question
-      to the user (spec §12.3).
+      to the user.
     * `{:ask_user, question, opts}` — same, with caller-supplied options.
     * `{:halt, reason, result}` — halt the loop with a handler-declared
       terminal result.
@@ -67,8 +82,8 @@ defmodule ALLM.ToolExecutor do
   |--------|------------|
   | `:handler_raised` | Handler raised an exception; `:cause` carries the exception struct. Throws are also normalized here with `cause: {:throw, value}`. |
   | `:handler_exit` | Handler called `exit/1` or the handling process died; `:cause` carries the exit reason term. |
-  | `:timeout` | Emitted by Phase 6's `ALLM.ToolRunner` under `tool_timeout`. The Phase 3 default executor does not produce this directly — conformance tests that need it use a handler that returns the struct. |
-  | `:invalid_return` | Handler returned a value that is not one of the five `handler_result()` variants; `:cause` carries the offending term. |
+  | `:timeout` | Emitted by `ALLM.ToolRunner` when a handler exceeds `tool_timeout`. The default in-process executor does not produce this directly — tests that need it use a handler that returns the struct. |
+  | `:invalid_return` | Handler returned a value that is not one of the five `handler_result` variants; `:cause` carries the offending term. |
   | `:not_found` | The `%Tool{}` has `handler: nil` — the tool is not executable by this executor (typically declared for manual-mode use). |
   | `:encoding_failed` | Reserved for encoders; executors do not produce this reason. |
   """

@@ -9,6 +9,11 @@ and exits `0` is the green signal; any non-zero exit is a real failure.
 These scripts ship under `examples/` and are **not** part of the published
 `hex` package (see `mix.exs :files`).
 
+The scripts are organized as a learning path: start with the quickest
+round-trip, then branch into streaming/tools, multi-turn chat, sessions,
+vision, and per-tool manual control. Each script is independently
+runnable; the order below is for reading, not for execution dependencies.
+
 ## How provider switching works
 
 `examples/_helpers.exs` defines a tiny `ExamplesHelpers` module with a
@@ -88,6 +93,96 @@ The `:env_loader` dep is declared `only: [:dev]` in `mix.exs`, so it does
 NOT ship in the published Hex package (the `examples/` directory itself is
 also excluded from the package per `mix.exs :files`).
 
+## Quick start
+
+The fastest path to a green light: run `01_plain_text.exs`. It exercises
+`ALLM.generate/3` end-to-end against the active provider with a one-line
+prompt and a one-line assertion.
+
+```bash
+OPENAI_API_KEY=sk-... mix run examples/01_plain_text.exs
+```
+
+Other providers:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... ALLM_PROVIDER=anthropic mix run examples/01_plain_text.exs
+GEMINI_API_KEY=...           ALLM_PROVIDER=gemini    mix run examples/01_plain_text.exs
+```
+
+Once `01_plain_text.exs` is green, the rest of the suite is incremental
+on top of the same engine + provider switch.
+
+## Streaming and tools (02–04)
+
+These three scripts cover the streaming primitive and tool calling — the
+two features that account for most production traffic.
+
+- `02_streaming_text.exs` walks `ALLM.stream_generate/3` end-to-end.
+  Demonstrates SSE chunk consumption and `Stream.run/1` cleanup.
+- `03_single_tool_call.exs` runs a single `ALLM.chat/3` round with one
+  tool, asserting the auto-loop terminates with the assistant text after
+  one tool round-trip.
+- `04_parallel_tool_calls.exs` issues two tools within a single chat
+  loop — useful when the model decides to call multiple tools in
+  parallel.
+
+## Multi-turn chat (05–07)
+
+- `05_multi_turn_chat.exs` accumulates a thread across two `chat/3`
+  calls, demonstrating how the caller stitches together a conversation
+  without using `Session`.
+- `06_structured_output.exs` exercises
+  `response_format: ALLM.json_schema(...)` with native enforcement on
+  OpenAI/Gemini and the tool-forcing pattern on Anthropic (described
+  below).
+- `07_manual_tool_round_trip.exs` shows the engine-wide
+  `mode: :manual` halt path — the chat loop returns the assistant's
+  tool calls without invoking them, the caller fabricates a tool result,
+  and a second call closes the loop.
+
+## Sessions (08–09, 15)
+
+Sessions wrap the chat loop with persistent state and a richer status
+union (`:idle`, `:halted_for_tools`, `:halted_for_user`).
+
+- `08_session_round_trip.exs` builds a `Session`, drives one turn, and
+  asserts the session value survives a `:erlang.term_to_binary/1` /
+  `binary_to_term/1` round-trip.
+- `09_ask_user.exs` exercises `{:ask_user, _, _}` halt — a tool returns
+  an "ask the user" tuple, the session halts with
+  `status: :halted_for_user`, and a follow-up `Session.reply/4` resumes
+  the loop.
+- `15_per_tool_manual_session.exs` (also listed under per-tool manual
+  mode below) drives the partition entirely through `Session.start/3`,
+  `Session.submit_tool_result/3`, and `Session.continue/3`.
+
+## Vision and images (10–13)
+
+- `10_generate_image.exs` — `ALLM.generate_image/3` against the active
+  provider's image adapter.
+- `11_edit_image.exs` — `ALLM.edit_image/4` with a base image + mask
+  (inpainting).
+- `12_vision_input.exs` — `ALLM.generate/3` with a multimodal user
+  message (`[%TextPart{}, %ImagePart{}]` content).
+- `13_image_variations.exs` — `ALLM.image_variations/3` against
+  `dall-e-2` 256×256 (OpenAI-only).
+
+Per-script details on each are in the dedicated sections further down.
+
+## Per-tool manual mode (14–15)
+
+`14_per_tool_manual.exs` and `15_per_tool_manual_session.exs` exercise
+the per-tool manual partition. One tool (`get_weather`) is auto;
+another (`confirm_action`) carries `manual: true`. Under
+`mode: :auto`, the chat orchestrator runs the auto bucket eagerly and
+halts with `halted_reason: :manual_tool_calls`, surfacing the manual
+subset in `metadata.manual_tool_calls` (script 14) or
+`Session.pending_tool_calls` (script 15). Both scripts assert the
+two-turn flow: halt-on-manual, caller appends/submits the manual tool
+result, second call/continue completes with `"sunny"` in the assistant
+text.
+
 ## Running
 
 Single script (default — OpenAI):
@@ -119,25 +214,28 @@ most-recent captured stdouts are committed as `RUN_OUTPUT_OPENAI.md`,
 
 Scripts use a `# Provider: <names>` header marker to declare which provider
 arms they support; the **Providers** column reflects that marker (absent
-marker → all providers).
+marker → all providers). The **Layer** column maps each script to the
+public API surface it exercises — Layer C is the stateless execution
+facade (`generate/3`, `stream/3`, `chat/3`, `step/3`, `generate_image/3`,
+…); Layer D is the stateful continuation surface (`Session.*`).
 
-| Script | Strategy | Providers | What it covers |
-|--------|----------|-----------|----------------|
-| `01_plain_text.exs` | tight | all | `ALLM.generate/3` non-streaming round-trip |
-| `02_streaming_text.exs` | tight | all | `ALLM.stream_generate/3` SSE consumption |
-| `03_single_tool_call.exs` | tight | all | `ALLM.chat/3` with one tool, two turns |
-| `04_parallel_tool_calls.exs` | tight | all | two tools called within one chat loop |
-| `05_multi_turn_chat.exs` | loose | all | thread accumulation across two `chat/3` calls |
-| `06_structured_output.exs` | tight | all | `response_format: ALLM.json_schema(...)` |
-| `07_manual_tool_round_trip.exs` | tight | all | `mode: :manual` halt + caller-supplied tool result |
-| `08_session_round_trip.exs` | tight | all | `Session` survives `:erlang.term_to_binary/1` round-trip |
-| `09_ask_user.exs` | loose | all | `{:ask_user, _, _}` halt and follow-up turn |
-| `10_generate_image.exs` | tight | openai, gemini | `ALLM.generate_image/3` |
-| `11_edit_image.exs` | tight | openai, gemini | `ALLM.edit_image/4` with mask (inpaint) |
-| `12_vision_input.exs` | loose | all | `ALLM.generate/3` with `[%TextPart{}, %ImagePart{}]` content |
-| `13_image_variations.exs` | tight | openai | `ALLM.image_variations/3` against `dall-e-2` 256×256 |
-| `14_per_tool_manual.exs` | tight | openai, anthropic | per-tool manual mode via `chat/3`: auto tool runs eagerly, manual tool halts with `:manual_tool_calls`, caller appends `:tool` message and re-issues |
-| `15_per_tool_manual_session.exs` | tight | openai, anthropic | per-tool manual mode via `Session.start → submit_tool_result → continue` |
+| Script | Strategy | Layer | Providers | What it covers |
+|--------|----------|-------|-----------|----------------|
+| `01_plain_text.exs` | tight | C | all | `ALLM.generate/3` non-streaming round-trip |
+| `02_streaming_text.exs` | tight | C | all | `ALLM.stream_generate/3` SSE consumption |
+| `03_single_tool_call.exs` | tight | C | all | `ALLM.chat/3` with one tool, two turns |
+| `04_parallel_tool_calls.exs` | tight | C | all | two tools called within one chat loop |
+| `05_multi_turn_chat.exs` | loose | C | all | thread accumulation across two `chat/3` calls |
+| `06_structured_output.exs` | tight | C | all | `response_format: ALLM.json_schema(...)` |
+| `07_manual_tool_round_trip.exs` | tight | C | all | `mode: :manual` halt + caller-supplied tool result |
+| `08_session_round_trip.exs` | tight | D | all | `Session` survives `:erlang.term_to_binary/1` round-trip |
+| `09_ask_user.exs` | loose | D | all | `{:ask_user, _, _}` halt and follow-up turn |
+| `10_generate_image.exs` | tight | C | openai, gemini | `ALLM.generate_image/3` |
+| `11_edit_image.exs` | tight | C | openai, gemini | `ALLM.edit_image/4` with mask (inpaint) |
+| `12_vision_input.exs` | loose | C | all | `ALLM.generate/3` with `[%TextPart{}, %ImagePart{}]` content |
+| `13_image_variations.exs` | tight | C | openai | `ALLM.image_variations/3` against `dall-e-2` 256×256 |
+| `14_per_tool_manual.exs` | tight | C | openai, anthropic | per-tool manual mode via `chat/3`: auto tool runs eagerly, manual tool halts with `:manual_tool_calls`, caller appends `:tool` message and re-issues |
+| `15_per_tool_manual_session.exs` | tight | D | openai, anthropic | per-tool manual mode via `Session.start → submit_tool_result → continue` |
 
 ## Image generation
 
@@ -187,19 +285,6 @@ prompt, and asserts a non-empty `output_text` and
 `finish_reason: :stop`. **Runs on all three providers**
 (`# Provider: openai, anthropic, gemini`).
 
-## Per-tool manual mode
-
-`14_per_tool_manual.exs` and `15_per_tool_manual_session.exs` exercise
-the per-tool manual partition (spec §12.4). One tool (`get_weather`) is
-auto; another (`confirm_action`) carries `manual: true`. Under
-`mode: :auto`, the chat orchestrator runs the auto bucket eagerly and
-halts with `halted_reason: :manual_tool_calls`, surfacing the manual
-subset in `metadata.manual_tool_calls` (script 14) or
-`Session.pending_tool_calls` (script 15). Both scripts assert the
-two-turn flow: halt-on-manual, caller appends/submits the manual tool
-result, second call/continue completes with `"sunny"` in the assistant
-text.
-
 ## Cost notes
 
 Approximate per-clean-run costs for the full `run_all.exs` pass on each
@@ -220,7 +305,7 @@ budget is 180 s, enforced by `run_all.exs`'s `Task.yield/2`.
 
 The engine itself never carries an API key — engines round-trip through
 `:erlang.term_to_binary/1` and JSON, so keys must not be persisted on
-them (spec §6.4). For multi-tenant SaaS, pass the tenant's key per-call:
+them. For multi-tenant SaaS, pass the tenant's key per-call:
 
     engine = ALLM.Engine.new(adapter: ALLM.Providers.OpenAI, model: "gpt-5.4-nano")
     {:ok, response} = ALLM.generate(engine, request, api_key: tenant.openai_key)
@@ -238,8 +323,8 @@ Agent, so concurrent requests from different tenants would race.
 - **OpenAI default:** `gpt-5.4-nano` (a `gpt-5*`-family reasoning model
   that routes to OpenAI's Responses API; chosen for its low cost while
   still exercising the Responses-API code path).
-- **Anthropic default:** `claude-sonnet-4-6` (the canonical Sonnet model
-  named in the spec).
+- **Anthropic default:** `claude-sonnet-4-6` (the canonical Sonnet
+  model).
 - **Gemini default:** `gemini-3-flash-preview` (the cost-optimized
   flash-tier model on Google's Generative Language API).
 
@@ -293,9 +378,9 @@ OpenAI's `:json_schema` response format uses native enforcement with
 `strict: true`; the model's literal output bytes are returned in
 `Response.output_text`.
 
-Anthropic's structured-output path uses the **tool-forcing pattern** per
-spec §5.4: a synthetic `respond_with_json_<name>` tool is injected,
-`tool_choice` forces it, and the tool-call's `input` map is lifted to
+Anthropic's structured-output path uses the **tool-forcing pattern**: a
+synthetic `respond_with_json_<name>` tool is injected, `tool_choice`
+forces it, and the tool-call's `input` map is lifted to
 `Response.output_text` via `Jason.encode!/1` with
 `finish_reason: :stop` and `metadata.structured_output_tool: true`. The
 script asserts on the latter marker only when
@@ -319,8 +404,8 @@ differ (whitespace, key order, number formatting) — see the
 - **Adapter module not loaded.** `Code.ensure_loaded?(adapter)` in the
   helper returns false; the helper exits with a clear message.
 - **HTTP 5xx, `:rate_limited`, OR `529 Overloaded` (Anthropic).**
-  `ALLM.Retry` retries up to 3 attempts per spec §6.1. After exhaustion
-  the script halts. Re-run once.
+  `ALLM.Retry` retries up to 3 attempts with exponential backoff and
+  jitter. After exhaustion the script halts. Re-run once.
 - **Model unavailable.** If the configured model is decommissioned, the
   `:invalid_request` reason fires. Override via
   `ALLM_MODEL=<current-model> mix run …`.

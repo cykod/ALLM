@@ -1,21 +1,20 @@
 defmodule ALLM.StreamCollector do
   @moduledoc """
   Reduce a stream of `ALLM.Event` values into a collected `%ALLM.Response{}`,
-  `%ALLM.StepResult{}`, or `%ALLM.ChatResult{}`. See spec §13.1.
+  `%ALLM.StepResult{}`, or `%ALLM.ChatResult{}`.
 
-  Layer C — stateless fold state. `StreamCollector` is the shared reducer
-  that every non-streaming wrapper (`ALLM.generate/3` in Phase 5, future
-  `step/3` and `chat/3`) builds on. Callers fold a stream with the stdlib
-  idiom:
+  `StreamCollector` is the shared reducer that every non-streaming
+  wrapper (`ALLM.generate/3`, `ALLM.step/3`, `ALLM.chat/3`) builds on.
+  Callers fold a stream with the stdlib idiom:
 
-      Enum.reduce(stream, ALLM.StreamCollector.new(), fn e, s ->
+      Enum.reduce(stream, ALLM.StreamCollector.new, fn e, s ->
         ALLM.StreamCollector.apply_event(s, e)
       end)
 
   then extract the result with `to_response/1` (thread-less) or
   `to_step_result/1` / `to_chat_result/1` (thread-backed).
 
-  ## Phase 5 extensions to spec §13.1
+  ## Constructors
 
     * `new/0` builds a thread-less collector used by `ALLM.stream_generate/3`.
     * `new/1` additionally accepts `nil` (thread-less) alongside a
@@ -23,23 +22,16 @@ defmodule ALLM.StreamCollector do
     * `to_response/1` returns the accumulated `%Response{}` and is the
       canonical output for thread-less collection.
 
-  Both fit alongside the spec §13.1 signatures (`new/1`, `apply_event/2`,
-  `to_step_result/1`, `to_chat_result/1`) without replacing them.
-
-  Phase 6 adds two new fields, `:tool_results` and `:halt`, populated by
-  fold clauses for orchestration tags. Phase 7 adds `:chat_result` and
-  populates `:steps` via the `:step_completed` fold clause.
-
-  ## Phase 7 extension
+  ## Per-step + per-chat reset
 
   The `:step_completed` fold appends a `%StepResult{}` (built from the
-  PRE-RESET collector state — see Phase 7 Non-obvious Decision #6) to
-  `:steps` and resets the per-step sub-state (`:current_text`,
-  `:current_tool_calls`, `:tool_call_order`, `:tool_results`, `:halt`,
-  `:finish_reason`, `:raw_finish_reason`, `:last_message`). `:error`
-  and `:metadata` are NOT reset — adapter mid-stream errors and
-  accumulated metadata persist across step boundaries so that
-  `to_chat_result/1`'s fallback path can preserve them.
+  PRE-RESET collector state) to `:steps` and resets the per-step sub-state
+  (`:current_text`, `:current_tool_calls`, `:tool_call_order`,
+  `:tool_results`, `:halt`, `:finish_reason`, `:raw_finish_reason`,
+  `:last_message`). `:error` and `:metadata` are NOT reset — adapter
+  mid-stream errors and accumulated metadata persist across step
+  boundaries so that `to_chat_result/1`'s fallback path can preserve
+  them.
 
   The `:chat_completed` fold stores the event's `:result` verbatim in
   `:chat_result` and sets `:done? = true`. `to_chat_result/1` short-
@@ -47,25 +39,24 @@ defmodule ALLM.StreamCollector do
   to a computed `%ChatResult{}` whose `halted_reason` is `:cancelled`
   (consumer halted early) or `:error` (mid-stream adapter error).
 
-  ## Fold semantics — Phase 5 subset plus Phase 6 + Phase 7 extensions
+  ## Fold semantics
 
-  `apply_event/2` ships explicit clauses for the nine Phase-5 adapter-emitted
+  `apply_event/2` ships explicit clauses for the nine adapter-emitted
   tags (`:message_started`, `:text_delta`, `:text_completed`,
   `:tool_call_started`, `:tool_call_delta`, `:tool_call_completed`,
-  `:message_completed`, `:raw_chunk`, `:error`), three Phase-6
-  orchestration tags (`:tool_result_encoded`, `:tool_halt`,
-  `:ask_user_requested`), and two Phase-7 orchestration tags
-  (`:step_completed`, `:chat_completed`). Every other tag —
-  `:tool_execution_started`, `:tool_execution_completed`, plus any
-  malformed event — falls through a single catch-all
+  `:message_completed`, `:raw_chunk`, `:error`), three orchestration
+  tags (`:tool_result_encoded`, `:tool_halt`, `:ask_user_requested`),
+  and two chat-loop tags (`:step_completed`, `:chat_completed`). Every
+  other tag — `:tool_execution_started`, `:tool_execution_completed`,
+  plus any malformed event — falls through a single catch-all
   `apply_event(state, _), do: state`.
 
   | Tag | Fold | Rationale |
   |-----|------|-----------|
-  | `:tool_result_encoded` | append `%Message{role: :tool, tool_call_id: id, content: content}` to `state.tool_results`. | `to_step_result/1` reads `:tool_results` from the struct, enabling `step ≡ stream_step \\|> collect_step`. |
-  | `:tool_halt` | when `state.halt == nil`, set `state.halt = {:halt, reason, id, result}` AND append the encoded sentinel `%Message{role: :tool, ...}` (from payload `:content`) to `state.tool_results`. Subsequent halts are no-ops (first-halt-wins). | Halt metadata lives separately from `:finish_reason` so `done?/1` can combine both signals. The sentinel append (Phase 7.6 cleanup B1) keeps `tool_results` aligned with the non-streaming `Chat.do_step/4` path. |
-  | `:ask_user_requested` | when `state.halt == nil`, set `state.halt = {:ask_user, :ask_user, id, q, o}` AND append a `<awaiting user response>` sentinel message to `state.tool_results`. First-halt-wins. | Same channel as `:tool_halt`; the sentinel append (Phase 7.6 cleanup B1) mirrors spec §12.3 step 1. |
-  | `:step_completed` | append `%StepResult{}` (PRE-RESET state) to `state.steps`; set `state.thread = thread`; reset per-step sub-state. | Multi-step `Chat.stream/3` reductions need a clean per-step boundary. `:error` / `:metadata` deliberately persist. |
+  | `:tool_result_encoded` | append `%Message{role: :tool, tool_call_id: id, content: content}` to `state.tool_results`. | `to_step_result/1` reads `:tool_results` from the struct. |
+  | `:tool_halt` | when `state.halt == nil`, set `state.halt = {:halt, reason, id, result}` AND append the encoded sentinel `%Message{role: :tool, ...}` (from payload `:content`) to `state.tool_results`. Subsequent halts are no-ops (first-halt-wins). | Halt metadata lives separately from `:finish_reason` so `done?/1` can combine both signals. |
+  | `:ask_user_requested` | when `state.halt == nil`, set `state.halt = {:ask_user, :ask_user, id, q, o}` AND append a `<awaiting user response>` sentinel message to `state.tool_results`. First-halt-wins. | Same channel as `:tool_halt`. |
+  | `:step_completed` | append `%StepResult{}` (PRE-RESET state) to `state.steps`; set `state.thread = thread`; reset per-step sub-state. | Multi-step `ALLM.stream/3` reductions need a clean per-step boundary. `:error` / `:metadata` deliberately persist. |
   | `:chat_completed` | set `state.chat_result = result`; set `state.done? = true`. | The chat-layer terminal event; `to_chat_result/1` short-circuits to the stored value when present. |
 
   ## Totality guarantee
@@ -197,8 +188,8 @@ defmodule ALLM.StreamCollector do
   closed union; unknown tags or malformed payloads are no-ops (state
   unchanged).
 
-  See the module doc's "Fold semantics — Phase 5 subset" section for the
-  per-tag state transitions.
+  See the module doc's "Fold semantics" section for the per-tag state
+  transitions.
 
   ## Examples
 
@@ -481,11 +472,9 @@ defmodule ALLM.StreamCollector do
   `false` otherwise (for `:tool_calls` or `nil` with no halt).
 
   `:tool_results` is populated from the `:tool_result_encoded` fold clause
-  AND from the `:tool_halt` / `:ask_user_requested` sentinel appends
-  (Phase 7.6 cleanup B1).
+  AND from the `:tool_halt` / `:ask_user_requested` sentinel appends.
 
-  `:metadata` merges halt metadata when `state.halt != nil` (see Phase 6
-  design §StreamCollector extension):
+  `:metadata` merges halt metadata when `state.halt != nil`:
     * `{:halt, reason, id, result}` → `%{halted_reason: reason,
       halt_tool_call_id: id, halt_result: result}`.
     * `{:ask_user, :ask_user, id, q, o}` → `%{halted_reason: :ask_user,
@@ -512,7 +501,7 @@ defmodule ALLM.StreamCollector do
   @doc """
   Build a `%ALLM.ChatResult{}` from the collector state.
 
-  Two branches (Phase 7 Non-obvious Decision #7):
+  Two branches:
 
     * **Stored.** When `state.chat_result` is set (from a `:chat_completed`
       fold), return it verbatim — even when `state.thread` is `nil`. The

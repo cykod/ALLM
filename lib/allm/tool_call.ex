@@ -1,12 +1,12 @@
 defmodule ALLM.ToolCall do
   @moduledoc """
-  A provider-emitted tool call. See spec §5.3.
+  A provider-emitted tool call — Layer A serializable data.
 
-  Layer A — pure serializable data. Carries the provider-assigned `:id` the
-  model uses to match the eventual tool-role message back to this call, the
-  `:name` of the tool to invoke, and the parsed `:arguments` map. The original
-  provider JSON is preserved on `:raw_arguments` so adapters that need the
-  exact wire string (streaming reassembly, audit logs) can recover it.
+  Carries the provider-assigned `:id` the model uses to match the
+  eventual tool-role message back to this call, the `:name` of the tool
+  to invoke, and the parsed `:arguments` map. The original provider JSON
+  is preserved on `:raw_arguments` so adapters that need the exact wire
+  string (streaming reassembly, audit logs) can recover it.
   """
 
   @type t :: %__MODULE__{

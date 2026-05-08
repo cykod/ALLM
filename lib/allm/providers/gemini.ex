@@ -1,45 +1,45 @@
 defmodule ALLM.Providers.Gemini do
   @moduledoc """
-  Google Gemini provider adapter — Layer B. See spec §6.4, §7.1, §20,
-  §32.1 (bundled adapters).
+  Google Gemini provider adapter — Layer B.
+   (bundled adapters).
 
-  Phase 16.1 ships the non-streaming `ALLM.Adapter` callback set against
+   ships the non-streaming `ALLM.Adapter` callback set against
   the Generative Language API at
   `https://generativelanguage.googleapis.com/v1beta`. Streaming
-  (`ALLM.StreamAdapter`) lands in Phase 16.2; tools / vision / image-out
+  (`ALLM.StreamAdapter`) lands in tools / vision / image-out
   in Phases 16.3/16.4/16.5.
 
   This module implements:
 
     * `generate/2` — fires `POST /v1beta/models/{model}:generateContent`
       via `Req`, wrapped in `ALLM.Retry.run/3` with the **default** retry
-      policy (Decision #16 — Gemini's 429 / 500 / 503 / 504 are already
-      covered by spec §6.1's default retryable set; no Gemini-specific
+      policy (the documented contract — Gemini's 429 / 500 / 503 / 504 are already
+      covered by the documented contract's default retryable set; no Gemini-specific
       wrapper is needed).
     * `prepare_request/2` — returns an unfired `%Req.Request{}` with the
-      API key injected as `x-goog-api-key` (Decision #2).
-    * `translate_options/2` — identity (Decision #18). Gemini's
+      API key injected as `x-goog-api-key`.
+    * `translate_options/2` — identity. Gemini's
       camelCase rename and `generationConfig` nesting happens inside
       `to_generation_config/1` at request-build time.
 
-  ## Single translator (Decision #1)
+  ## Single translator
 
   Gemini exposes one chat endpoint, `generateContent`, that covers both
   text and image generation — image generation is selected by toggling
   `generationConfig.responseModalities`. The request-builder
   (`to_gemini_request_body/2`) is therefore a single function shared
-  across the chat adapter and (in Phase 16.5) the image adapter. This
+  across the chat adapter and (in) the image adapter. This
   amortizes the PHASE_10 dual-translator drift class to zero.
 
-  ## Auth header (Decision #2/#3)
+  ## Auth header
 
   The API key flows on the `x-goog-api-key` request header, not the
   documented `?key=...` query parameter. Both forms are equivalent
   server-side; the header form keeps the API key out of HTTP access
   logs and metrics. The same header is reused for the streaming
-  endpoint (Decision #3).
+  endpoint.
 
-  ## Wire field map (per spec §35.7 + GEMINI_DESIGN.md)
+  ## Wire field map
 
   | Concern | Gemini wire field |
   |---------|------------------|
@@ -54,7 +54,7 @@ defmodule ALLM.Providers.Gemini do
   | Usage location | `usageMetadata.{promptTokenCount, candidatesTokenCount, totalTokenCount}` |
   | Error envelope | `{"error": {"code", "status", "message"}}` |
 
-  ## Finish-reason mapping (Decision #14)
+  ## Finish-reason mapping
 
   Gemini's enum has 19 documented values. ALLM's
   `Response.finish_reason` is a closed 6-atom union; the raw string is
@@ -91,7 +91,7 @@ defmodule ALLM.Providers.Gemini do
     * empty candidates with no `promptFeedback.blockReason` →
       `{:error, %AdapterError{reason: :malformed_response}}`.
 
-  ## Usage decoding (Decision #11)
+  ## Usage decoding
 
   `usageMetadata.candidatesTokenCount` is canonical;
   `usageMetadata.responseTokenCount` is read as a defensive fallback
@@ -99,10 +99,10 @@ defmodule ALLM.Providers.Gemini do
   `Usage.output_tokens` is left at `nil` and a one-time
   `Logger.warning/1` fires per call.
 
-  ## Error envelope mapping (Decision #15)
+  ## Error envelope mapping
 
   Maps Google's `{error: {code, status, message}}` envelope onto
-  `%AdapterError{reason: ...}`:
+  `%AdapterError{reason:...}`:
 
   | HTTP | Google `status` | `AdapterError.reason` |
   |------|-----------------|----------------------|
@@ -116,12 +116,12 @@ defmodule ALLM.Providers.Gemini do
   | 503 | `UNAVAILABLE` | `:provider_unavailable` |
   | 504 | `DEADLINE_EXCEEDED` | `:provider_unavailable` |
 
-  ## Retry policy (Decision #16)
+  ## Retry policy
 
   No Gemini-specific retry-policy wrapper. The default policy at
   `lib/allm/retry.ex` already retries HTTP 429, 500, 502, 503, 504,
   and `:timeout` / `:network_error`. Streaming never retries
-  (spec §6.1).
+  .
 
   ## Key resolution
 
@@ -164,7 +164,7 @@ defmodule ALLM.Providers.Gemini do
 
   @impl ALLM.Adapter
   @doc """
-  Identity translator (Decision #18). Gemini accepts ALLM's canonical
+  Identity translator. Gemini accepts ALLM's canonical
   `:max_tokens`, `:temperature`, `:top_p`, etc. — the camelCase rename
   and `generationConfig` nesting happens in `to_generation_config/1` at
   request-build time, not here.
@@ -181,7 +181,7 @@ defmodule ALLM.Providers.Gemini do
   @impl ALLM.Adapter
   @doc """
   Build an unfired `%Req.Request{}` with the resolved API key injected
-  as `x-goog-api-key: <key>` (Decision #2).
+  as `x-goog-api-key: <key>`.
 
   Per `ALLM.Keys.fetch!/2`, this function **raises**
   `%ALLM.Error.EngineError{reason: :missing_key}` when no key resolver
@@ -246,8 +246,8 @@ defmodule ALLM.Providers.Gemini do
   @doc """
   Execute a non-streaming `generateContent` request synchronously.
 
-  Wraps the HTTP call in `ALLM.Retry.run/3` with the spec §6.1 default
-  policy (Decision #16). Returns `{:ok, %Response{}}` on 2xx success or
+  Wraps the HTTP call in `ALLM.Retry.run/3` with the the documented contract default
+  policy. Returns `{:ok, %Response{}}` on 2xx success or
   `{:error, %AdapterError{}}` on every failure shape.
 
   ## Empty-candidates handling (Decisions #9 + #10)
@@ -259,7 +259,7 @@ defmodule ALLM.Providers.Gemini do
     * Empty candidates with no `promptFeedback.blockReason` →
       `{:error, %AdapterError{reason: :malformed_response}}`.
 
-  ## Error reasons (Decision #15)
+  ## Error reasons
 
   | HTTP | `AdapterError.reason` |
   |------|----------------------|
@@ -277,14 +277,14 @@ defmodule ALLM.Providers.Gemini do
       iex> ALLM.Keys.put(:gemini, "AIza-doctest-gen")
       iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "x"}], model: "gemini-2.5-flash")
       iex> {:error, %ALLM.Error.AdapterError{reason: :authentication_failed}} =
-      ...>   ALLM.Providers.Gemini.generate(req,
-      ...>     retry: false,
-      ...>     adapter_opts: [plug: fn conn ->
-      ...>       conn
-      ...>       |> Plug.Conn.put_resp_content_type("application/json")
-      ...>       |> Plug.Conn.resp(401, ~s({"error":{"code":401,"status":"UNAUTHENTICATED","message":"bad"}}))
-      ...>     end]
-      ...>   )
+      ...> ALLM.Providers.Gemini.generate(req,
+      ...> retry: false,
+      ...> adapter_opts: [plug: fn conn ->
+      ...> conn
+      ...> |> Plug.Conn.put_resp_content_type("application/json")
+      ...> |> Plug.Conn.resp(401, ~s({"error":{"code":401,"status":"UNAUTHENTICATED","message":"bad"}}))
+      ...> end]
+      ...>)
       iex> ALLM.Keys.delete(:gemini)
       :ok
   """
@@ -501,16 +501,16 @@ defmodule ALLM.Providers.Gemini do
   `systemInstruction`), role mapping (`:assistant → "model"`), and
   `generationConfig` composition.
 
-  Phase 16.1 surface only — tools (16.3) and image-out (16.5) extend
+   surface only — tools (16.3) and image-out (16.5) extend
   this builder via `opts` flags without changing the text-only path.
 
   ## Examples
 
       iex> req = ALLM.Request.new(
-      ...>   [%ALLM.Message{role: :system, content: "Be concise."},
-      ...>    %ALLM.Message{role: :user, content: "Hi"}],
-      ...>   model: "gemini-2.5-flash", max_tokens: 256
-      ...> )
+      ...> [%ALLM.Message{role: :system, content: "Be concise."},
+      ...> %ALLM.Message{role: :user, content: "Hi"}],
+      ...> model: "gemini-2.5-flash", max_tokens: 256
+      ...>)
       iex> body = ALLM.Providers.Gemini.to_gemini_request_body(req, [])
       iex> {body["systemInstruction"], length(body["contents"]), body["generationConfig"]["maxOutputTokens"]}
       {%{"parts" => [%{"text" => "Be concise."}]}, 1, 256}
@@ -1145,7 +1145,7 @@ defmodule ALLM.Providers.Gemini do
   @doc """
   Map a Gemini `finishReason` string to ALLM's closed
   `Response.finish_reason` enum, returning `{atom, raw_string_or_nil}`
-  per Decision #14.
+  per the documented contract.
 
   `STOP` collapses to `{:stop, nil}` (the canonical "natural completion"
   row); every other row preserves the raw string at index 1 so callers
@@ -1273,15 +1273,15 @@ defmodule ALLM.Providers.Gemini do
 
   ## Decision references
 
-    * **Decision #1** — request body byte-equal to `generate/2`'s. Only
+    * **the documented contract** — request body byte-equal to `generate/2`'s. Only
       the URL path differs (`:streamGenerateContent?alt=sse` vs
       `:generateContent`).
-    * **Decision #3** — `?alt=sse` is the ONLY required query parameter;
+    * **the documented contract** — `?alt=sse` is the ONLY required query parameter;
       auth still flows via `x-goog-api-key`.
-    * **Decision #12** — `usageMetadata` may appear on intermediate
+    * **the documented contract** — `usageMetadata` may appear on intermediate
       chunks; the chunk-mapper emits `{:raw_chunk, {:usage, _}}` on
       every appearance and `StreamCollector.apply_event/2` overwrites.
-    * **Decision #13** — stream terminates on Finch's `:done` payload,
+    * **the documented contract** — stream terminates on Finch's `:done` payload,
       not a `data: [DONE]` lookahead. The synthetic `:message_completed`
       event is built from accumulated state.
 

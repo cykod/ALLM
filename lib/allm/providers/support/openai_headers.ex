@@ -1,7 +1,7 @@
 defmodule ALLM.Providers.Support.OpenAIHeaders do
   @moduledoc """
-  Shared HTTP-header builder for OpenAI provider adapters. See spec §35.7
-  Decision #11.
+  Shared HTTP-header builder for OpenAI provider adapters.
+  the documented contract.
 
   Layer B helper. Both the chat adapter (`ALLM.Providers.OpenAI`) and the
   image adapter (`ALLM.Providers.OpenAI.Images`) inject the same
@@ -11,7 +11,7 @@ defmodule ALLM.Providers.Support.OpenAIHeaders do
   the multipart boundary itself (`multipart_headers/2`).
 
   Both functions honor `opts[:adapter_opts][:organization]` per the
-  chat-adapter precedent at `lib/allm/providers/openai.ex:443-446` —
+  chat-adapter precedent at `lib/allm/providers/openai.ex:443-446`
   callers wishing to scope a request to an OpenAI org pass
   `adapter_opts: [organization: "org-..."]` in their `opts` keyword list.
 
@@ -38,7 +38,7 @@ defmodule ALLM.Providers.Support.OpenAIHeaders do
 
   @doc """
   Build headers for a JSON-bodied request. Returns
-  `[{"authorization", "Bearer <api_key>"}, {"content-type", "application/json"}, ...]`
+  `[{"authorization", "Bearer <api_key>"}, {"content-type", "application/json"},...]`
   optionally prefixed with `{"openai-organization", org}` when
   `opts[:adapter_opts][:organization]` is a binary.
   """

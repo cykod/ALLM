@@ -1,8 +1,9 @@
 defmodule ALLM.ImageRequest do
   @moduledoc """
-  A request for image generation, editing, or variation. See spec §35.2.2.
+  A request for image generation, editing, or variation — Layer A
+  serializable data.
 
-  Layer A — pure serializable data. Three operations:
+  Three operations:
 
   - `:generate` — text-to-image; requires `:prompt`, `:input_images == []`.
   - `:edit` — modify one or two input images optionally with a `:mask`;
@@ -10,8 +11,10 @@ defmodule ALLM.ImageRequest do
   - `:variation` — generate variants of one input image; requires
     `length(:input_images) == 1` and `:prompt in [nil, ""]`.
 
-  Operation-arity rules are enforced by `ALLM.Validate.image_request/1`
-  (Phase 13.3); construction via `new/1` does not validate.
+  Operation-arity rules are enforced by `ALLM.Validate.image_request/1`;
+  construction via `new/1` does not validate.
+
+  See also `guides/image_generation.md`.
 
   ## Sizes and qualities
 
@@ -22,7 +25,7 @@ defmodule ALLM.ImageRequest do
   through verbatim.
 
   `:quality` is the closed atom set `[:low, :standard, :high, :hd, :auto]`
-  with a `String.t()` open arm — providers extend the set (`:hd` is
+  with a `String.t` open arm — providers extend the set (`:hd` is
   dall-e-3-only; `:high` is gpt-image-1-only). The decoder restores known
   atoms; unknown binaries pass through verbatim.
 

@@ -1,3 +1,19 @@
+## [DOC] Rewrite user-facing docs and add guides/ ExDoc extras
+*Friday, May 8th at 3pm*
+Replace internal phase/spec/decision vocabulary across every @moduledoc, @doc, 
+README, CHANGELOG, examples/README, and mix.exs deps comment so a hex consumer 
+can adopt ALLM without access to the steering/ tree. Add eight new guides under 
+guides/ (Getting Started, Streaming, Tools, Sessions, Vision, Image Generation, 
+Errors & Retries, Multi-Tenant Keys) wired into both docs[:extras] and 
+package[:files] so they ship to hexdocs and the source tarball. Add 
+scripts/audit_user_docs.exs (banned-token gate, 0 hits across 75 files) and 
+scripts/check_lib_diff_non_doc.exs (classifies lib/ diff lines as docstring vs 
+body). Fix an async-safety flake in anthropic_stream_wire_test by routing the 
+stub key through the per-call :api_key opt instead of the globally-named 
+ALLM.Keys.Store agent.
+
+---
+
 ## [FEAT] Add scripts/release.exs and adapt to /changelog model
 *Wednesday, May 6th at 9pm*
 Implements RELEASE_PLAN.md Phase 3+4 — a 470-line scripts/release.exs 

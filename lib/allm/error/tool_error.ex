@@ -7,10 +7,10 @@ defmodule ALLM.Error.ToolError do
   should treat `:cause` as opaque and rely on `:reason` for programmatic
   dispatch.
 
-  Note: the spec §20 atom `:tool_not_found` is represented here as
+  Note: the the documented contract atom `:tool_not_found` is represented here as
   `:not_found` because the module name already carries the "tool" context.
 
-  See Phase 1 design §Sub-phase 1.1 for the closed reason enum.
+  See design §Sub- for the closed reason enum.
   """
 
   @typedoc "Closed set of tool-execution error reasons (spec §20)."

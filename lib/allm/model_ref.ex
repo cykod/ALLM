@@ -1,18 +1,19 @@
 defmodule ALLM.ModelRef do
   @moduledoc """
-  Layer A — model reference returned by the optional `LLMDB` catalog.
+  A model reference returned by an optional model-catalog integration
+  Layer A serializable data.
 
-  See spec §6.3 (lines 637-648). Carries the catalog's view of a single model:
-  provider, id, capability flags (tools, json_native, vision), context/output
-  limits, per-million-token pricing, and an opaque `:metadata` bag.
+  Carries the catalog's view of a single model: provider, id, capability
+  flags (tools, json_native, vision), context/output limits,
+  per-million-token pricing, and an opaque `:metadata` bag.
 
   A `%ModelRef{}` is plain serializable data — no PIDs, refs, funs, or API
   keys. It round-trips through `:erlang.term_to_binary/1` and JSON
   (`ALLM.Serializer.to_json!/1`) just like every other Layer A struct.
 
   Construction is via `new/1`. Hydration from a JSON-decoded map is via
-  `__from_tagged__/1` (called by `ALLM.Serializer.hydrate/1`); the module is
-  registered in `ALLM.Serializer.@known_modules` so tagged JSON
+  `__from_tagged__/1` (called by the serializer's hydrator); the module
+  is registered with the serializer's known-modules list so tagged JSON
   (`%{"__type__" => "ALLM.ModelRef", "data" => ...}`) decodes automatically.
 
   ## Layer A nested-map JSON asymmetry (carve-out)
@@ -23,15 +24,15 @@ defmodule ALLM.ModelRef do
   `Serializer.from_json/1` produces:
 
       iex> ref = ALLM.ModelRef.new(
-      ...>   provider: :openai, id: "x",
-      ...>   capabilities: %{tools: %{enabled: false}}
-      ...> )
+      ...> provider: :openai, id: "x",
+      ...> capabilities: %{tools: %{enabled: false}}
+      ...>)
       iex> {:ok, hydrated} = ALLM.Serializer.from_json(ALLM.Serializer.to_json!(ref))
       iex> hydrated.capabilities
       %{"tools" => %{"enabled" => false}}
 
-  This matches the Phase 1 `Engine.metadata` precedent — opaque
-  caller-owned maps don't get atom-key restoration because the closed-set
+  This matches `ALLM.Engine`'s `:metadata` precedent — opaque
+  caller-owned maps don't get atom-key restoration because the closed set
   of valid keys can't be bounded at hydration time. **Consumers handle
   this asymmetry directly:** `ALLM.Capability.preflight/2` and
   `ALLM.Capability.populate_costs/2` pattern-match on both atom-keyed
@@ -80,16 +81,16 @@ defmodule ALLM.ModelRef do
   Build a `%ALLM.ModelRef{}` from keyword opts.
 
   Accepts any subset of the documented struct fields; unknown keys raise
-  `KeyError` via `struct!/2` (Phase 1 convention).
+  `KeyError` via `struct!/2`.
 
   ## Examples
 
       iex> ref = ALLM.ModelRef.new(
-      ...>   provider: :openai,
-      ...>   id: "gpt-4.1-mini",
-      ...>   capabilities: %{tools: %{enabled: true}, json_native: true},
-      ...>   pricing: %{input: 0.15, output: 0.6}
-      ...> )
+      ...> provider: :openai,
+      ...> id: "gpt-4.1-mini",
+      ...> capabilities: %{tools: %{enabled: true}, json_native: true},
+      ...> pricing: %{input: 0.15, output: 0.6}
+      ...>)
       iex> ref.pricing
       %{input: 0.15, output: 0.6}
   """

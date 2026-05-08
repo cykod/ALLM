@@ -1,43 +1,43 @@
 defmodule ALLM.Runner do
   @moduledoc """
-  Internal — use `ALLM.generate/3` instead. See spec §17.
+  > #### Internal {: .warning}
+  >
+  > This module is internal — it's documented for transparency, but
+  > call sites should use `ALLM.generate/3` instead.
 
-  Layer C — stateless non-streaming entry point. `run/3` delegates to
+  Layer-C non-streaming entry point. `run/3` delegates to
   `ALLM.StreamRunner.run/3`, folds the returned stream through
   `ALLM.StreamCollector`, and wraps the final `%Response{}` in
   `{:ok, _}`.
 
-  ## v0.2 — `generate/3` always streams under the hood
+  ## Generate is stream-collected under the hood
 
-  In v0.2 every public Layer-C entry point (`ALLM.generate/3`,
-  `ALLM.step/3`, `ALLM.chat/3`) routes through this module which then
-  delegates to `ALLM.StreamRunner.run/3`. The non-streaming public API
-  is therefore a stream-collector reduction of the streaming path; the
-  adapter's `c:ALLM.Adapter.generate/3` callback is **never invoked
-  from the public façade in v0.2**. Consequence: `ALLM.Retry`'s
-  `[:allm, :adapter, :retry]` telemetry — which spec §6.1 prohibits on
-  streaming calls — does not fire from `ALLM.generate/3`. The retry
-  surface is exercised in v0.2 by direct adapter calls
-  (`ALLM.Providers.Fake.generate/2`); real-provider Phase 10/11
-  adapters reuse `ALLM.Retry.run/3` from their `generate/2`
-  callbacks. See `ALLM.Retry` `@moduledoc` for the full caveat and
-  review Finding #3.
+  Every public Layer-C entry point (`ALLM.generate/3`, `ALLM.step/3`,
+  `ALLM.chat/3`) routes through this module which then delegates to
+  `ALLM.StreamRunner.run/3`. The non-streaming public API is therefore
+  a stream-collector reduction of the streaming path; the adapter's
+  `c:ALLM.Adapter.generate/2` callback is **never invoked from the
+  public façade**. Consequence: `[:allm, :adapter, :retry]` telemetry
+  (which is forbidden on streaming calls because partial output has
+  already been delivered) does not fire from `ALLM.generate/3`. The
+  retry surface is exercised by direct adapter calls and by the image
+  façade — see `ALLM.Retry`.
 
-  ## Stream-first (spec §3)
+  ## Stream-first
 
   Non-streaming generation is a *reducer* over the streaming path:
 
       {:ok, stream} = ALLM.StreamRunner.run(engine, request, opts)
       stream
-      |> Enum.reduce(ALLM.StreamCollector.new(), &ALLM.StreamCollector.apply_event(&2, &1))
-      |> ALLM.StreamCollector.to_response()
+      |> Enum.reduce(ALLM.StreamCollector.new, &ALLM.StreamCollector.apply_event(&2, &1))
+      |> ALLM.StreamCollector.to_response
 
   This is the same algorithm consumers can run manually against
   `ALLM.stream_generate/3`; it exists here so `generate/3` has one
-  canonical code path and stream-equivalence (spec §3's first consequence)
-  is preserved by construction.
+  canonical code path and stream-equivalence is preserved by
+  construction.
 
-  ## Pre-flight vs. mid-stream errors (Non-obvious Decision #4)
+  ## Pre-flight vs. mid-stream errors
 
     * **Pre-flight** — `StreamRunner.run/3` returns `{:error, struct}`
       synchronously (no stream opened). `run/3` bubbles the error up
@@ -52,8 +52,8 @@ defmodule ALLM.Runner do
 
   `StreamRunner.run/3`'s `include_raw_chunks: false` filter preserves
   `{:raw_chunk, {:usage, _}}` events regardless of the caller's filter
-  preference (Non-obvious Decision #9), so the collector always sees
-  usage and populates `response.usage` — no Runner-side override needed.
+  preference, so the collector always sees usage and populates
+  `response.usage` — no Runner-side override needed.
   """
 
   alias ALLM.{Capability, Engine, Request, Response, StreamCollector, StreamRunner, Telemetry}
@@ -71,9 +71,9 @@ defmodule ALLM.Runner do
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
+      ...>)
       iex> req = ALLM.request([ALLM.user("say hi")])
       iex> {:ok, response} = ALLM.Runner.run(engine, req)
       iex> {response.output_text, response.finish_reason}

@@ -1,22 +1,35 @@
 defmodule ALLM.Telemetry do
   @moduledoc """
-  Internal — Layer B helper that wraps `:telemetry.span/3` with
-  ALLM-specific metadata defaults.
+  Layer-B helper that wraps `:telemetry.span/3` with ALLM-specific
+  metadata defaults.
 
-  Phase 9.1 wires this around every public Layer-C entry point
-  (`generate`, `stream_generate`, `step`, `stream_step`, `chat`, `stream`)
-  so callers can attach `:telemetry.attach_many/4` handlers to
-  `[:allm, :generate | :stream | :step | :chat | :tool | :image, :start | :stop | :exception]`
-  and observe every execution with `:duration` plus `:request_id`,
-  `:engine`, `:model` metadata. See spec §29.
+  Every public Layer-C entry point (`ALLM.generate/3`,
+  `ALLM.stream_generate/3`, `ALLM.step/3`, `ALLM.stream_step/3`,
+  `ALLM.chat/3`, `ALLM.stream/3`, `ALLM.generate_image/3` &
+  siblings) is wrapped in a span. Attach `:telemetry.attach_many/4`
+  handlers to observe every execution.
 
-  Phase 14.3 added the `:image` span name for the
-  `ALLM.generate_image/3 · edit_image/4 · image_variations/3` Layer-C
-  façade. The `:image` span's `:stop` measurements include `:image_count`
-  (count of images in the response, `0` on error per design Decision #8);
-  metadata extends with `:operation` (`:generate | :edit | :variation`),
-  `:n` (requested count), `:usage`, `:response`, and `:error`. See spec
-  §35.9.
+  ## Emitted events
+
+  | Event name | When | Measurements | Metadata |
+  |------------|------|--------------|----------|
+  | `[:allm, :generate, :start]` | non-streaming generate enters | `system_time`, `monotonic_time` | `request_id`, `engine`, `model` |
+  | `[:allm, :generate, :stop]` | non-streaming generate exits | `duration`, `monotonic_time` | start metadata + `response` |
+  | `[:allm, :generate, :exception]` | closure raised | `duration`, `monotonic_time` | start metadata + `kind`, `reason`, `stacktrace` |
+  | `[:allm, :stream, :start \\| :stop \\| :exception]` | streaming generate | as above; `:stop` `response` is `nil` (lazy) | start metadata + `response: nil` |
+  | `[:allm, :step, :start \\| :stop \\| :exception]` | single chat step | as above | start metadata + `step_result` |
+  | `[:allm, :chat, :start \\| :stop \\| :exception]` | multi-turn chat loop | as above | start metadata + `chat_result` |
+  | `[:allm, :tool, :start \\| :stop \\| :exception]` | per-tool execution | as above | start metadata + `tool_call_id`, `tool_name`, `result` |
+  | `[:allm, :image, :start \\| :stop \\| :exception]` | image generation | `duration`, plus `image_count` on `:stop` | `request_id`, `engine`, `model`, `operation`, `n`, plus `usage`, `response`, `error` on `:stop` |
+  | `[:allm, :adapter, :retry]` | per-attempt retry (non-streaming) | `system_time` | `attempt`, `delay_ms`, `reason`, `request_id` |
+
+  ## Common metadata
+
+  Every span carries `:request_id`, `:engine`, and `:model` on `:start`,
+  and the same on `:stop` (plus the per-span `*_result` / `response` /
+  `error` extras). `:request_id` is generated at the outermost public
+  call and threaded into nested calls via `opts[:request_id]`, so
+  per-tool spans inside a `chat/3` loop share the parent chat's id.
 
   ## Why request_id is metadata-only
 
@@ -24,29 +37,26 @@ defmodule ALLM.Telemetry do
   `Response.request_id` post-collection — it does NOT extend the
   `ALLM.Event` closed tagged-tuple union. A consumer who folds events
   by hand (without `ALLM.StreamCollector`) reads `:request_id` from the
-  surrounding span context, not from individual event payloads. See
-  Phase 9 design Non-obvious Decision #1 for the full rationale.
+  surrounding span context, not from individual event payloads.
 
   ## Span nesting
 
   Per-tool spans (`[:allm, :tool, ...]`) execute inside their parent
   step span (`[:allm, :step, ...]`); the parent step span itself nests
   inside its parent chat span when invoked from `chat/3` / `stream/3`.
-  Inheritance: `request_id` is generated at the outermost call and
-  threaded into inner calls via `opts[:request_id]`.
 
   ## Exception handling
 
-  `span/3` delegates exception trapping to `:telemetry.span/3` (telemetry
-  1.2+) which automatically catches raises in the closure, emits
-  `[:allm, name, :exception]` with `%{kind, reason, stacktrace}` metadata,
-  and re-raises the exception to the caller — preserving the existing
-  bubble-up semantics of every wrapped function.
+  `span/3` delegates exception trapping to `:telemetry.span/3` which
+  automatically catches raises in the closure, emits
+  `[:allm, name, :exception]` with `%{kind, reason, stacktrace}`
+  metadata, and re-raises the exception to the caller — preserving the
+  existing bubble-up semantics of every wrapped function.
   """
 
   @event_prefix [:allm]
 
-  @typedoc "Common metadata attached to every Layer-C span (spec §29)."
+  @typedoc "Common metadata attached to every Layer-C span."
   @type common_metadata :: %{
           optional(:request_id) => String.t(),
           optional(:engine) => term(),
@@ -54,7 +64,7 @@ defmodule ALLM.Telemetry do
           optional(atom()) => term()
         }
 
-  @typedoc "Span suffix per spec §29 (chat) and §35.9 (image); the prefix [:allm] is fixed."
+  @typedoc "Span suffix; the prefix [:allm] is fixed."
   @type span_name :: :generate | :stream | :step | :chat | :tool | :image
 
   @valid_span_names [:generate, :stream, :step, :chat, :tool, :image]
@@ -76,7 +86,7 @@ defmodule ALLM.Telemetry do
   Sourced from 16 cryptographic random bytes. Used to correlate the
   start, stop, and any exception events of a single Layer-C call. The
   outermost public function generates the id; inner functions inherit
-  via `opts[:request_id]` (see Phase 9 Non-obvious Decision #7).
+  via `opts[:request_id]`.
 
   ## Examples
 
@@ -105,10 +115,10 @@ defmodule ALLM.Telemetry do
       alongside the common keys.
     * `{result, extra_measurements, stop_metadata_extras}` — the
       3-tuple form, for spans that inject custom `:stop` measurements
-      beyond `:duration` and `:monotonic_time`. Phase 14.3 added this
-      for `:image` spans which carry `:image_count` as a measurement
-      per design Decision #8 (telemetry-stdlib idiom: numeric metrics
-      → measurements; structured context → metadata).
+      beyond `:duration` and `:monotonic_time`. `:image` spans use
+      this form to carry `:image_count` as a measurement
+      (numeric metrics → measurements; structured context →
+      metadata).
 
   Caller-supplied `start_metadata` is forwarded to the `:start` event
   unchanged and used as the base for the `:stop` event's metadata.
@@ -125,27 +135,27 @@ defmodule ALLM.Telemetry do
   Consumers needing the canonical response should either fold the
   returned stream themselves (`ALLM.StreamCollector.to_response/1`) or
   call `ALLM.generate/3`, whose `:generate :stop` DOES carry the
-  reduced `%Response{}`. See review Finding #2.
+  reduced `%Response{}`.
 
   ## Examples
 
       iex> :telemetry.attach(
-      ...>   "doctest-handler",
-      ...>   [:allm, :generate, :stop],
-      ...>   fn _name, _measurements, %{result: r}, %{owner: pid} ->
-      ...>     send(pid, {:doctest_event, r})
-      ...>   end,
-      ...>   %{owner: self()}
-      ...> )
+      ...> "doctest-handler",
+      ...> [:allm, :generate, :stop],
+      ...> fn _name, _measurements, %{result: r}, %{owner: pid} ->
+      ...> send(pid, {:doctest_event, r})
+      ...> end,
+      ...> %{owner: self()}
+      ...>)
       iex> ALLM.Telemetry.span(:generate, %{request_id: "x"}, fn ->
-      ...>   {:done, %{result: :ok}}
+      ...> {:done, %{result: :ok}}
       ...> end)
       :done
       iex> :telemetry.detach("doctest-handler")
       iex> receive do
-      ...>   {:doctest_event, payload} -> payload
+      ...> {:doctest_event, payload} -> payload
       ...> after
-      ...>   100 -> :no_event
+      ...> 100 -> :no_event
       ...> end
       :ok
   """
@@ -187,18 +197,18 @@ defmodule ALLM.Telemetry do
   ## Examples
 
       iex> :telemetry.attach(
-      ...>   "doctest-execute",
-      ...>   [:allm, :doctest, :ping],
-      ...>   fn _n, _m, _md, %{owner: pid} -> send(pid, :got_event) end,
-      ...>   %{owner: self()}
-      ...> )
+      ...> "doctest-execute",
+      ...> [:allm, :doctest, :ping],
+      ...> fn _n, _m, _md, %{owner: pid} -> send(pid, :got_event) end,
+      ...> %{owner: self()}
+      ...>)
       iex> ALLM.Telemetry.execute([:doctest, :ping], %{count: 1}, %{tag: :doc})
       :ok
       iex> :telemetry.detach("doctest-execute")
       iex> receive do
-      ...>   :got_event -> :ok
+      ...> :got_event -> :ok
       ...> after
-      ...>   100 -> :no_event
+      ...> 100 -> :no_event
       ...> end
       :ok
   """

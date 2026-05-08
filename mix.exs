@@ -36,27 +36,16 @@ defmodule ALLM.MixProject do
       {:finch, "~> 0.19"},
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.2"},
-      # :llm_db re-added in Phase 9 (capability pre-flight / cost population, spec §6.3)
+      # llm_db: capability pre-flight + cost. Deferred to a future release; will be re-added as an optional dep.
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:stream_data, "~> 1.1", only: [:test]},
-      # Required by `Req.Test.stub/2` for the OpenAI wire-test Plug shape
-      # (Phase 10.2). Test-only; not in published Hex package.
+      # Test-only — Req.Test.stub/2 expects a Plug shape; not in the published Hex package.
       {:plug, "~> 1.16", only: [:test]},
-      # Test-only path dep: certifies the two defaults
-      # (ALLM.ToolExecutor.Default, ALLM.ToolResultEncoder.JSON) against
-      # the shipped conformance harness. See conformance/README.md for
-      # context. No publish-time rewrite needed: `mix hex.build` strips
-      # all `only: :dev | :test` deps from `metadata.config` automatically
-      # (verified by the Phase 0 tarball audit — `requirements` contains
-      # only `req`, `finch`, `jason`, `telemetry`).
+      # Test-only path dep — certifies the bundled defaults against the conformance harness. mix hex.build automatically strips test-only deps from the published metadata.
       {:allm_conformance, path: "conformance", only: :test},
-      # Dev-only: example scripts under `examples/openai/*.exs` use this
-      # to load `OPENAI_API_KEY` from a project-root `.env` file. NOT
-      # shipped in the published package — `examples/` is excluded via
-      # `package.files` and `only: [:dev]` keeps the dep out of the
-      # published `mix.exs` deps list.
+      # Dev-only — the example scripts under examples/ load API keys from a project-root .env via this. examples/ is excluded from the published package.
       {:env_loader, "~> 0.1", only: [:dev]}
     ]
   end
@@ -69,15 +58,27 @@ defmodule ALLM.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib mix.exs README.md CHANGELOG.md LICENSE .formatter.exs)
+      files: ~w(lib mix.exs README.md CHANGELOG.md LICENSE .formatter.exs guides)
     ]
   end
+
+  @guides ~w(
+    guides/getting_started.md
+    guides/streaming.md
+    guides/tools.md
+    guides/sessions.md
+    guides/vision.md
+    guides/image_generation.md
+    guides/errors_and_retries.md
+    guides/multi_tenant_keys.md
+  )
 
   defp docs do
     [
       main: "ALLM",
       source_ref: "v#{@version}",
-      extras: ["README.md", "CHANGELOG.md"],
+      extras: ["README.md", "CHANGELOG.md"] ++ @guides,
+      groups_for_extras: [{"Guides", @guides}],
       groups_for_modules: [
         Facade: [ALLM],
         Sessions: [ALLM.Session, ALLM.Session.StreamReducer],

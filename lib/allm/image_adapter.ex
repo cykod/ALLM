@@ -1,17 +1,36 @@
 defmodule ALLM.ImageAdapter do
   @moduledoc """
-  Image-generation provider adapter contract. See spec §35.3.
+  Image-generation provider adapter contract.
 
   Layer B — runtime. Implementations take an `ALLM.ImageRequest` plus a
-  keyword opts list (resolved at the call site by `ALLM.generate_image/3`
-  in Phase 14.2) and return either `{:ok, %ALLM.ImageResponse{}}` or
+  keyword opts list (resolved at the call site by `ALLM.generate_image/3`)
+  and return either `{:ok, %ALLM.ImageResponse{}}` or
   `{:error, %ALLM.Error.ImageAdapterError{}}`.
+
+  ## Minimum impl skeleton
+
+      defmodule MyImageProvider do
+        @behaviour ALLM.ImageAdapter
+
+        @impl true
+        def generate(%ALLM.ImageRequest{operation: op} = req, opts) do
+          if op in supported_operations do
+            # Translate request → HTTP body, fire via Req, translate
+            # response → %ALLM.ImageResponse{}.
+            {:ok, %ALLM.ImageResponse{}}
+          else
+            {:error, %ALLM.Error.ImageAdapterError{reason: :unsupported_operation, metadata: %{operation: op}}}
+          end
+        end
+
+        @impl true
+        def supported_operations, do: [:generate]
+      end
 
   ## HTTP transport guidance
 
   Use `Req` for non-streaming image calls. Image generation is a
-  request/response shape — there is no streaming counterpart in v0.3
-  (per phasing principle #2).
+  request/response shape — there is no streaming counterpart.
 
   ## Invariants
 
@@ -28,7 +47,7 @@ defmodule ALLM.ImageAdapter do
     4. `generate/2` MUST return
        `{:error, %ImageAdapterError{reason: :unsupported_operation,
        metadata: %{operation: op}}}` BEFORE any HTTP I/O when
-       `request.operation not in supported_operations()`. This is the
+       `request.operation not in supported_operations`. This is the
        entry-point gate; per-model gating (e.g., dall-e-3 only supports
        `:generate`) is the adapter's internal concern.
     5. `generate/2` MUST preserve `opts[:request_id]` onto
@@ -38,7 +57,7 @@ defmodule ALLM.ImageAdapter do
        `x-request-id` HTTP header).
     6. `generate/2` MUST round-trip `request.metadata` onto
        `response.metadata` UNCHANGED when the adapter has no use for it.
-       (§35.2.2/§35.2.3 metadata invariant — opaque to the library.)
+       (Library treats request/response metadata as opaque.)
     7. `prepare_request/2` (optional) returns an unfired `Req.Request`
        configured exactly as `generate/2` would fire it. Callers may
        mutate the returned request before firing.
@@ -69,10 +88,10 @@ defmodule ALLM.ImageAdapter do
   @doc """
   Return the closed list of operations the adapter can perform.
 
-  Per-module (one list for the adapter), NOT per-call-with-model-arg —
-  per-Phase 14.1 Decision #3. Per-model gating (e.g., `dall-e-3` is
-  generate-only while `gpt-image-1` does generate+edit) is the adapter's
-  internal concern, asserted separately in the adapter's own tests.
+  Per-module (one list for the adapter), NOT per-call-with-model-arg.
+  Per-model gating (e.g., `dall-e-3` is generate-only while
+  `gpt-image-1` does generate+edit) is the adapter's internal concern,
+  asserted separately in the adapter's own tests.
 
   The conformance suite asserts that requests whose `:operation` is not
   in this list are rejected with

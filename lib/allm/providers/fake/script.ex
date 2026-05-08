@@ -1,17 +1,17 @@
 defmodule ALLM.Providers.Fake.Script do
   @moduledoc """
   Script shape detection, validation, and interpretation for
-  `ALLM.Providers.Fake`. See spec §31.
+  `ALLM.Providers.Fake`.
 
   Layer B — pure helper module, no runtime state.
 
   Fake accepts two disjoint script shapes:
 
-  - **Spec §31 (user-facing)** — the vocabulary the spec itself samples with
+  - **Spec (user-facing)** — the vocabulary the spec itself samples with
     `{:text, "hi"}, {:finish, :stop}`. Tags: `:text`, `:tool_call`,
     `:tool_call_delta`, `:usage`, `:raw_chunk`, `:finish`, `:error` (2-tuple),
     `:delay`, `:sleep` (deprecated alias of `:delay`).
-  - **Phase 3 harness** — the vocabulary `ALLM.Test.AdapterConformance` and
+  - ** harness** — the vocabulary `ALLM.Test.AdapterConformance` and
     `ALLM.Test.StreamAdapterConformance` pass to `StubAdapter`. Tags:
     `:ok`, `:error` (3-tuple), `:text_delta`, `:preflight_error`,
     `:error_event`, `:stream_error`, and shared-semantics `:tool_call` /
@@ -26,7 +26,7 @@ defmodule ALLM.Providers.Fake.Script do
   - `interpret/1` — translate one entry into a list of `ALLM.Event` values
     (streaming path).
 
-  See spec §31 for the script entry grammar; §8 for the event union.
+  for the script entry grammar; for the event union.
   """
 
   require Logger
@@ -147,7 +147,7 @@ defmodule ALLM.Providers.Fake.Script do
 
   Guards (in order):
 
-  1. Mixing `:script` and `:scripts` raises `ArgumentError` (spec §31).
+  1. Mixing `:script` and `:scripts` raises `ArgumentError`.
   2. `:script` must be a list (of entries).
   3. `:scripts` must be a list of lists (each inner list is one call's script).
   4. `:stream_script` must be a list of lists.
@@ -156,7 +156,7 @@ defmodule ALLM.Providers.Fake.Script do
   Returns `:ok` on success.
 
   Users may call this directly on their `adapter_opts` for construction-time
-  feedback (Non-obvious Decision #5 in the Phase 4 design doc) — Fake itself
+  feedback — Fake itself
   calls it at the first adapter invocation.
   """
   @spec validate!(keyword()) :: :ok
@@ -207,13 +207,13 @@ defmodule ALLM.Providers.Fake.Script do
   @doc """
   Fold a list of script entries into a single `%ALLM.Response{}`.
 
-  Handles both the spec §31 vocabulary (`:text`, `:tool_call`,
+  Handles both the the documented contract vocabulary (`:text`, `:tool_call`,
   `:tool_call_delta`, `:usage`, `:raw_chunk`, `:finish`, `:error`/2,
   `:delay`, `:sleep`) and the harness-shape terminal entries (`{:ok, map}`,
   `{:error, reason, opts}`). Harness-shape is one entry per call; the
   reducer returns on the first harness entry it sees.
 
-  A §31 `{:error, term}` entry short-circuits to
+  A `{:error, term}` entry short-circuits to
   `{:error, %AdapterError{reason: :unknown, message: "scripted error",
   cause: term}}`. `{:delay, ms}` / `{:sleep, ms}` call `Process.sleep/1`
   so non-streaming callers can still exercise timeout paths. `{:raw_chunk,
@@ -222,11 +222,11 @@ defmodule ALLM.Providers.Fake.Script do
   `{:usage, map}` calls `struct!(ALLM.Usage, map)` with last-write-wins
   semantics — passing an unknown field name (e.g., `:prompt_tokens`) raises
   `KeyError` at fold time; use the canonical field names from
-  `ALLM.Usage` (spec §5.9a).
+  `ALLM.Usage`.
 
   Returns `%ALLM.Response{}` on success (NOT `{:ok, %Response{}}` — the
   `{:ok, _}` wrapping is applied at the `ALLM.Providers.Fake.generate/2`
-  boundary in sub-phase 4.2), or `{:error, %AdapterError{}}` on
+  boundary in sub-), or `{:error, %AdapterError{}}` on
   script-defined failure.
 
   ## Examples
@@ -272,12 +272,12 @@ defmodule ALLM.Providers.Fake.Script do
   whether any `:text` was seen earlier in the same call; that state lives in
   the `Stream.resource/3` accumulator, not here. `interpret({:finish, _})`
   returns just `[{:message_completed, _}]`; the stream runner prepends
-  `:text_completed` when appropriate. Revisit in sub-phase 4.3 if the
+  `:text_completed` when appropriate. Revisit in sub- if the
   orchestration needs change.
 
   ## Deprecation
 
-  `{:sleep, ms}` is a deprecated alias for `{:delay, ms}` (spec §31). Passing
+  `{:sleep, ms}` is a deprecated alias for `{:delay, ms}`. Passing
   a `{:sleep, _}` entry triggers a one-time `Logger.warning/1` per BEAM
   lifetime (dedup via `:persistent_term`). Deletion target: v0.3.
   """

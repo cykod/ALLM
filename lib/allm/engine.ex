@@ -1,19 +1,35 @@
 defmodule ALLM.Engine do
   @moduledoc """
-  Layer B runtime engine — see spec §6.
+  Layer-B runtime engine — the composition point for an adapter, declared
+  tools, and default request params/context.
 
   An engine is a plain struct carrying only modules, atoms, and serializable
-  plain data (no PIDs, refs, funs, or API keys). It is the composition point
-  for the adapter, declared tools, and default request params/context; call
-  sites merge per-call overrides via the `resolve_*` functions.
+  plain data (no PIDs, refs, funs, or API keys). Call sites merge per-call
+  overrides via the `resolve_*` functions: **call opts win over engine
+  defaults**.
 
-  ## Serializability (closed contract — Non-obvious decision #7)
+  ## Building an engine
+
+  The deterministic `ALLM.Providers.Fake` adapter requires no API key:
+
+      iex> engine = ALLM.Engine.new(
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "Hi"}, {:finish, :stop}]]
+      ...>)
+      iex> engine.adapter
+      ALLM.Providers.Fake
+
+  Swap `ALLM.Providers.Fake` for `ALLM.Providers.OpenAI`,
+  `ALLM.Providers.Anthropic`, or `ALLM.Providers.Gemini` and pass `:model`
+  to use a real provider. API keys resolve through `ALLM.Keys`.
+
+  ## Serializability
 
   Engines are safe to round-trip through `:erlang.term_to_binary/1` and JSON
   **iff** every field carries only modules, atoms, or plain serializable data:
 
-    * `:adapter`, `:tool_executor`, `:tool_result_encoder`, `:image_adapter` —
-      `module() | nil`. Modules are restored on JSON decode via
+    * `:adapter`, `:tool_executor`, `:tool_result_encoder`, `:image_adapter`
+      `module | nil`. Modules are restored on JSON decode via
       `String.to_existing_atom/1`; an adapter module not loaded in the BEAM
       at decode time surfaces as `{:_unknown, :atom_decode_failed}` via the
       `ALLM.Serializer.from_json/1` error path (`[:adapter] :module_not_loaded`
@@ -29,31 +45,27 @@ defmodule ALLM.Engine do
       rely on atom values for provider behaviour (e.g. `verify: :peer`)
       should convert at the adapter boundary rather than expect round-trip
       equality through JSON. The same rule applies to kwlist-shaped `:retry`.
-    * `:model` — `String.t() | nil`.
-    * `:tools` — `[ALLM.Tool.t()]` where each tool's `:handler` is `nil` or
+    * `:model` — `String.t | nil`.
+    * `:tools` — `[ALLM.Tool.t]` where each tool's `:handler` is `nil` or
       `{Module, :function}`. A tool with an anonymous-function handler is not
       JSON-serializable (see `ALLM.Tool` moduledoc). Each tool's `:manual`
-      flag (boolean, default `false` — see Phase 18 / spec §12.4) controls
-      per-tool opt-out of auto-execution: when `manual: true`, `ALLM.chat/3`
-      under `mode: :auto` halts with `:manual_tool_calls` instead of running
-      the handler.
+      flag (boolean, default `false`) controls per-tool opt-out of
+      auto-execution: when `manual: true`, `ALLM.chat/3` under `mode:
+      :auto` halts with `:manual_tool_calls` instead of running the
+      handler.
     * `:params`, `:context`, `:metadata` — maps of serializable values whose
       keys are restored as atoms via `String.to_existing_atom/1` on JSON
       decode. Values pass through verbatim — the library does not deep-type
       caller-supplied data. Non-stdlib struct values (e.g. `DateTime`,
       `Decimal`) survive ETF round-trip but lose type on JSON decode unless
       the caller supplies a custom decoder; this asymmetry is by design.
-    * `:retry` — `:default | false | keyword()`.
-    * `:middleware` — `[]` in v0.2 per spec §29.
+    * `:retry` — `:default | false | keyword`.
+    * `:middleware` — `[]` today; reserved for a later version.
 
-  Resolution precedence for the `resolve_*` functions follows spec §10:
-  **call opts win over engine defaults**. Unknown opts keys that are not in
-  the engine-field deny-list are forwarded to the adapter unchanged via
-  `resolve_params/2` — this is how provider-specific knobs like
-  `:reasoning_effort` reach the adapter without the resolver having to know
-  about them.
-
-  `middleware` must stay `[]` in v0.2 (§29) — reserved for a later version.
+  Unknown opts keys that are not in the engine-field deny-list are
+  forwarded to the adapter unchanged via `resolve_params/2` — this is
+  how provider-specific knobs like `:reasoning_effort` reach the adapter
+  without the resolver having to know about them.
   """
 
   alias ALLM.Tool
@@ -126,8 +138,8 @@ defmodule ALLM.Engine do
 
   Accepts any subset of the documented struct fields; unknown keys raise
   `KeyError` via `struct!/2`. `:adapter` may be `nil` at construction — the
-  missing-adapter check fires at adapter-call time (`:missing_adapter` per
-  spec §20), not here.
+  missing-adapter check fires at adapter-call time (surfaces as
+  `%EngineError{reason: :missing_adapter}`), not here.
 
   ## Examples
 
@@ -165,7 +177,7 @@ defmodule ALLM.Engine do
 
   Naive append (`engine.tools ++ more`) — does **not** dedup by `:name`. Use
   `merge_opts/2` for per-call override semantics that replace an engine tool
-  in place when names collide (Non-obvious decision #6).
+  in place when names collide.
 
   ## Examples
 
@@ -236,9 +248,8 @@ defmodule ALLM.Engine do
   Recognized opt keys:
 
     * `:model` — replaces `engine.model` via `with_model/2`.
-    * `:tools` — dedup-by-name merge via `resolve_tools/2` (Non-obvious
-      decision #6 — this does **not** call `put_tools/2`, which is naive
-      append).
+    * `:tools` — dedup-by-name merge via `resolve_tools/2` (this does
+      **not** call `put_tools/2`, which is naive append).
     * `:params` — shallow-merge into `engine.params`. The value **must be
       a map**; a non-map value (e.g., a keyword list) is silently dropped,
       because `engine.params` is itself a map and the merge target is not
@@ -278,11 +289,10 @@ defmodule ALLM.Engine do
   Resolve the effective model for an adapter call.
 
   Reads `opts[:model]` if present, otherwise falls back to `engine.model`.
-  When `llm_db` is loaded in the BEAM, delegates to `LLMDB.model/1` on the
-  chosen value so the caller can receive a catalog-backed model ref; when
-  absent (the default v0.2 configuration), returns the value verbatim
-  (Non-obvious decision #3, spec §6.3). Core must function without
-  `llm_db`.
+  When the optional `LLMDB` model-catalog module is loaded in the BEAM,
+  delegates to `LLMDB.model/1` on the chosen value so the caller can
+  receive a catalog-backed model ref; when absent (the default), returns
+  the value verbatim. Core ALLM functions without the catalog.
 
   ## Examples
 
@@ -300,16 +310,14 @@ defmodule ALLM.Engine do
 
     # `Module.concat(["LLMDB"])` produces the `LLMDB` atom at runtime
     # without the compiler tracing it as a hard reference — required because
-    # :llm_db is an optional dep (spec §6.3 "core must function without
-    # llm_db"). When absent, `Code.ensure_loaded?/1` returns false and we
-    # pass the chosen value through verbatim (Non-obvious decision #3).
+    # :llm_db is an optional dep. When absent, `Code.ensure_loaded?/1`
+    # returns false and we pass the chosen value through verbatim.
     #
-    # Note: the `Module.concat/1` ban in the Phase 2 design doc applies to
-    # the JSON decoder path (Sub-phase 2.3), where the argument is caller-
-    # controlled JSON input and unbounded atom creation is an atom-table
-    # exhaustion vector. Here the argument is a compile-time literal string
-    # list, so only the single `LLMDB` atom is ever produced — not a
-    # vector, and the idiomatic way to reference an optional-dep module.
+    # Note: the `Module.concat/1` ban inside the Serializer's JSON decoder
+    # (where the argument is caller-controlled JSON input and unbounded
+    # atom creation is an atom-table exhaustion vector) does not apply
+    # here — the argument is a compile-time literal string list, so only
+    # the single `LLMDB` atom is ever produced.
     catalog = Module.concat(["LLMDB"])
 
     if Code.ensure_loaded?(catalog) do
@@ -321,7 +329,7 @@ defmodule ALLM.Engine do
 
   @doc """
   Resolve the effective tool list for an adapter call using dedup-by-name
-  semantics (Non-obvious decision #4, Invariant 4).
+  semantics.
 
   The result preserves `engine.tools` order; each engine tool whose `:name`
   matches a tool in `opts[:tools]` is replaced **in place** by the matching
@@ -355,18 +363,17 @@ defmodule ALLM.Engine do
 
   @doc """
   Resolve the effective params map for an adapter call via a shallow merge
-  of `engine.params` with `opts` filtered by the engine-field deny-list
-  (Non-obvious decision #5).
+  of `engine.params` with `opts` filtered by the engine-field deny-list.
 
   Returned as a **map** (not a keyword list). Engine-field keys
   (`:adapter`, `:adapter_opts`, `:model`, `:tools`, `:tool_executor`,
   `:tool_result_encoder`, `:image_adapter`, `:params`, `:context`,
-  `:retry`, `:middleware`, `:metadata`, `:api_key`) are never forwarded —
+  `:retry`, `:middleware`, `:metadata`, `:api_key`) are never forwarded
   they are consumed by the engine layer or by other resolvers. Every
   other opts key flows through unchanged, so provider-specific knobs
   (`:reasoning_effort`) and orchestration knobs (`:max_turns`,
-  `:halt_when`) naturally reach the adapter per spec §10's "unknown
-  options in `opts` are forwarded to the adapter unchanged" rule.
+  `:halt_when`) naturally reach the adapter — unknown options in `opts`
+  are forwarded to the adapter unchanged.
 
   ## Examples
 

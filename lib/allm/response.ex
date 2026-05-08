@@ -1,19 +1,37 @@
 defmodule ALLM.Response do
   @moduledoc """
-  A single LLM response. See spec §5.5.
+  A single LLM response — Layer A serializable data.
 
-  Layer A — pure serializable data. Carries the assistant `:message`, optional
-  top-level `:output_text` convenience, `:tool_calls` the model wants invoked,
-  `:finish_reason` (closed union), and `:usage` / `:raw` provider extras.
+  Carries the assistant `:message`, optional top-level `:output_text`
+  convenience, `:tool_calls` the model wants invoked, `:finish_reason`
+  (closed union), and `:usage` / `:raw` provider extras.
 
   `:output_text` exists so callers can read the flat text payload without
   re-deriving it from `:message.content`; use `text/1` for the canonical
   fallback behaviour.
+
+  ## Fields
+
+  | Field | Type | Notes |
+  |-------|------|-------|
+  | `:id` | `String.t \\| nil` | Provider-assigned response id. |
+  | `:request_id` | `String.t \\| nil` | Correlation id for telemetry / logs. |
+  | `:model` | `String.t \\| nil` | The model the provider actually served. |
+  | `:message` | `%Message{} \\| nil` | The assistant message. |
+  | `:output_text` | `String.t \\| nil` | Flat text convenience. |
+  | `:tool_calls` | `[%ToolCall{}]` | Tool calls the model wants invoked. |
+  | `:finish_reason` | `:stop \\| :length \\| :tool_calls \\| :content_filter \\| :error \\| :other \\| nil` | Canonical reason. Mid-stream errors fold in here. |
+  | `:raw_finish_reason` | `String.t \\| nil` | Provider-native value (debugging). |
+  | `:usage` | `%Usage{}` | Token + cost counters. |
+  | `:raw` | `term` | Raw provider payload (when adapter preserves it). |
+  | `:metadata` | `map` | Adapter-supplied extras. Mid-stream errors land under `metadata.error`. |
+
+  See also `guides/getting_started.md`, `guides/errors_and_retries.md`.
   """
 
   alias ALLM.{Message, ToolCall, Usage}
 
-  @typedoc "Canonical finish-reason atom; see spec §5.5."
+  @typedoc "Canonical finish-reason atom."
   @type finish_reason ::
           :stop | :length | :tool_calls | :content_filter | :error | :other
 

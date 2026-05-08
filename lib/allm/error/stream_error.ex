@@ -6,7 +6,7 @@ defmodule ALLM.Error.StreamError do
   the `:cause` field (`:reason` is `:adapter_error`) or carries the malformed
   term for `:malformed_event`.
 
-  See Phase 1 design §Sub-phase 1.1 for the closed reason enum.
+  See design §Sub- for the closed reason enum.
   """
 
   @typedoc "Closed set of streaming-specific error reasons (spec §20)."

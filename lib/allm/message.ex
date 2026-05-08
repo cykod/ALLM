@@ -1,34 +1,47 @@
 defmodule ALLM.Message do
   @moduledoc """
-  A chat message. See spec §5.1 and §35.6.
+  A chat message — Layer A serializable data.
 
-  Layer A — pure serializable data. The `:role` atom is a closed union of
-  `:system | :user | :assistant | :tool`; `:content` is either a binary or a
-  list of `ALLM.TextPart.t() | ALLM.ImagePart.t()` structs (multimodal,
-  v0.3 §35.6). The v0.2 `[map() | struct()]` shape is no longer accepted —
-  raw maps in a content list are rejected by `ALLM.Validate.message/1` with
-  `{:content, :invalid_part_type}` per Phase 14.4 Decision #11.
+  Every conversation in ALLM is a list of `%Message{}`s. The `:role` atom is
+  a closed union of `:system | :user | :assistant | :tool`; `:content` is
+  either a binary or a list of `ALLM.TextPart.t | ALLM.ImagePart.t`
+  structs (multimodal). Raw maps in a content list are rejected by
+  `ALLM.Validate.message/1` with `{:content, :invalid_part_type}`.
 
   `:tool_call_id` is required when `role: :tool` so the model can match the
   tool result back to the call that produced it; this invariant is enforced
-  by `ALLM.Validate.message/1` (sub-phase 1.4), not by the struct.
+  by `ALLM.Validate.message/1`, not by the struct.
 
-  Construct with `new/1` or directly via `%ALLM.Message{}`.
+  ## Fields
+
+  | Field | Type | Default | Notes |
+  |-------|------|---------|-------|
+  | `:role` | `:system \\| :user \\| :assistant \\| :tool` | (required) | Enforced via `@enforce_keys`. |
+  | `:content` | `String.t` or `[%TextPart{} \\| %ImagePart{}]` | (required) | Multimodal lists for vision input. |
+  | `:name` | `String.t \\| nil` | `nil` | Optional named author. |
+  | `:tool_call_id` | `String.t \\| nil` | `nil` | Required when `role: :tool`. |
+  | `:metadata` | `map` | `%{}` | Caller-owned. |
+
+  Construct with `new/1`, the `ALLM.user/1`, `ALLM.system/1`,
+  `ALLM.assistant/1`, `ALLM.tool_result/2` shortcuts, or directly via
+  `%ALLM.Message{}`.
 
   ## Multimodal example
 
       iex> img = ALLM.Image.from_url("https://example.com/cat.png")
       iex> ALLM.Message.new(role: :user, content: [
-      ...>   %ALLM.TextPart{text: "What is in this image?"},
-      ...>   %ALLM.ImagePart{image: img}
+      ...> %ALLM.TextPart{text: "What is in this image?"},
+      ...> %ALLM.ImagePart{image: img}
       ...> ]).role
       :user
+
+  See also `guides/getting_started.md`, `guides/vision.md`.
   """
 
-  @typedoc "Message role — closed union per spec §5.1."
+  @typedoc "Message role — closed union."
   @type role :: :system | :user | :assistant | :tool
 
-  @typedoc "Multimodal content — either a string or a list of TextPart/ImagePart structs (§35.6)."
+  @typedoc "Multimodal content — either a string or a list of TextPart/ImagePart structs."
   @type content :: String.t() | [ALLM.TextPart.t() | ALLM.ImagePart.t()]
 
   @type t :: %__MODULE__{
@@ -49,7 +62,7 @@ defmodule ALLM.Message do
   via `struct!/2`. Optional fields: `:name`, `:tool_call_id`, `:metadata`.
 
   `new/1` does **not** validate role/content invariants — use
-  `ALLM.Validate.message/1` (sub-phase 1.4) for that.
+  `ALLM.Validate.message/1` for that.
 
   ## Examples
 
@@ -63,7 +76,7 @@ defmodule ALLM.Message do
   def new(opts) when is_list(opts), do: struct!(__MODULE__, opts)
 
   @doc """
-  Lift a `String.t()` content value to a single-element `[%TextPart{}]` list,
+  Lift a `String.t` content value to a single-element `[%TextPart{}]` list,
   or pass an already-list content through unchanged.
 
   Used by chat-side adapters at the wire-shape boundary so the translator

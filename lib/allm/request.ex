@@ -1,15 +1,40 @@
 defmodule ALLM.Request do
   @moduledoc """
-  A single LLM request. See spec §5.4.
+  A single LLM request — Layer A serializable data.
 
-  Layer A — pure serializable data. Carries the `:messages` list, optional
-  `:model`, `:tools`, `:tool_choice`, `:temperature`, `:max_tokens`,
-  `:response_format`, and adapter-opaque `:options` and `:metadata`.
+  Carries the `:messages` list, optional `:model`, `:tools`, `:tool_choice`,
+  `:temperature`, `:max_tokens`, `:response_format`, and adapter-opaque
+  `:options` and `:metadata`.
 
-  Validation lives in `ALLM.Validate.request/1` (sub-phase 1.4). Per spec
-  §9 and the Phase 1 design (non-obvious decision #7), `new/2` itself does
-  not validate — it stays composable so callers can opt into validation
+  ## Fields
+
+  | Field | Type | Default | Notes |
+  |-------|------|---------|-------|
+  | `:messages` | `[%Message{}]` | (required) | The conversation. |
+  | `:model` | `String.t \\| nil` | `nil` | Late-resolved against the engine. |
+  | `:tools` | `[%Tool{}]` | `[]` | Declared tools. |
+  | `:tool_choice` | `:auto \\| :none \\| :required \\| String.t \\| map \\| nil` | `nil` | Provider-specific shapes pass through verbatim. |
+  | `:temperature` | `number \\| nil` | `nil` | |
+  | `:max_tokens` | `non_neg_integer \\| nil` | `nil` | Anthropic's adapter injects `1024` if `nil`. |
+  | `:response_format` | `nil \\| :text \\| %{type: :json_object} \\| %{type: :json_schema, ...}` | `nil` | Build with `ALLM.json_schema/3`. |
+  | `:stream` | `boolean` | `false` | |
+  | `:structured_finalize` | `boolean` | `false` | Synthetic-tool fallback for providers without native JSON-schema mode. |
+  | `:options` | `map` | `%{}` | Adapter-opaque pass-through. |
+  | `:metadata` | `map` | `%{}` | Caller-owned. |
+
+  Validation lives in `ALLM.Validate.request/1`. `new/2` itself does not
+  validate — it stays composable so callers opt into validation
   explicitly.
+
+  ## Round-trip
+
+      iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "hi"}], model: "fake:x")
+      iex> json = ALLM.Serializer.to_json!(req)
+      iex> {:ok, ^req} = ALLM.Serializer.from_json(json)
+      iex> req.model
+      "fake:x"
+
+  See also `guides/getting_started.md`.
   """
 
   alias ALLM.{Message, Tool}

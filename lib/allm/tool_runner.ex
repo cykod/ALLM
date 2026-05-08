@@ -1,6 +1,9 @@
 defmodule ALLM.ToolRunner do
   @moduledoc """
-  Internal — use `ALLM.step/3` / `ALLM.stream_step/3` instead. See spec §17.
+  > #### Internal {: .warning}
+  >
+  > This module is internal — it's documented for transparency, but call
+  > sites should use `ALLM.step/3` / `ALLM.stream_step/3` instead.
 
   Executes a list of `%ALLM.ToolCall{}` values via the engine's tool
   executor, encodes results via the tool result encoder, and returns
@@ -12,15 +15,6 @@ defmodule ALLM.ToolRunner do
   Both variants share execution logic: parallel dispatch via
   `Task.async_stream/5`, per-tool timeout, and the `on_tool_error`
   policy.
-
-  ## Phase 6 extension
-
-  `stream_tool_calls/3` is a Phase 6 addition; spec §17 stipulates only
-  `run_tool_calls/3` on this module. The streaming variant is required
-  by `ALLM.stream_step/3`'s event-stream composition and shares
-  `execute_one_tool/3` with its non-streaming sibling so both paths
-  exercise identical execution semantics (see PHASE_6_DESIGN.md Non-obvious
-  Decision #2).
 
   ## Result ordering
 
@@ -38,7 +32,7 @@ defmodule ALLM.ToolRunner do
   `on_tool_error: :halt` fires on a failure — the runner continues
   reducing `Task.async_stream/5` until it naturally exhausts. Completed
   siblings still emit their results; the first-observed halt wins for
-  the returned `halt_metadata` (see PHASE_6_DESIGN.md Non-obvious Decision #5).
+  the returned `halt_metadata`.
 
   ## Error policy
 
@@ -48,7 +42,7 @@ defmodule ALLM.ToolRunner do
       content and the batch proceeds normally.
     * `:halt` — the batch drains to completion and the final return is
       `{:ok, msgs, halt_metadata}` with `halted_reason: :tool_error`.
-    * `(ToolCall.t(), term() -> {:continue, term()} | :halt)` (Phase 7) —
+    * `(ToolCall.t, term -> {:continue, term} | :halt)`
       called synchronously inside the per-tool task with the failing
       tool call and the error term. `{:continue, replacement}` encodes
       `replacement` via the encoder as the tool-result content;
@@ -59,19 +53,19 @@ defmodule ALLM.ToolRunner do
 
   ## Function-form semantics
 
-  See Phase 7 design Non-obvious Decision #8. Inside the per-tool
-  `Task.async_stream/5` task, the runner resolves the function's return
-  to a concrete `:continue` / `:halt` decision FIRST, then delegates to
-  the same `route_error/3` path used for atom-form `on_tool_error`. The
-  function reference is dropped from the dispatch context before the
-  delegated call, so a re-entry with the same function is impossible.
+  Inside the per-tool `Task.async_stream/5` task, the runner resolves
+  the function's return to a concrete `:continue` / `:halt` decision
+  FIRST, then delegates to the same `route_error/3` path used for
+  atom-form `on_tool_error`. The function reference is dropped from
+  the dispatch context before the delegated call, so a re-entry with
+  the same function is impossible.
 
   ## Reserved halt atoms
 
-  Per spec §5.2, the following atoms are reserved as orchestrator-owned
-  halt reasons and MUST NOT be used by handlers in `{:halt, reason, _}`
-  returns: `:ask_user`, `:max_turns`, `:halt_when`, `:tool_error`,
-  `:cancelled`, `:completed`. A handler that returns one is wrapped as
+  The following atoms are reserved as orchestrator-owned halt reasons
+  and MUST NOT be used by handlers in `{:halt, reason, _}` returns:
+  `:ask_user`, `:max_turns`, `:halt_when`, `:tool_error`, `:cancelled`,
+  `:completed`. A handler that returns one is wrapped as
   `%ToolError{reason: :invalid_return, metadata: %{reserved_halt_atom: r}}`
   and routed via `on_tool_error`.
   """
@@ -82,9 +76,9 @@ defmodule ALLM.ToolRunner do
   @default_tool_timeout 30_000
   @awaiting_user_response "<awaiting user response>"
 
-  # Spec §5.2 — reserved halt reasons that handlers MUST NOT reuse. A
-  # meta-test asserts this attribute equals exactly the spec's stated
-  # set so future spec changes trigger a test failure on import.
+  # Reserved halt reasons that handlers MUST NOT reuse. A meta-test
+  # asserts this attribute equals the documented set so future
+  # changes trigger a test failure on import.
   @reserved_halt_atoms [:ask_user, :max_turns, :halt_when, :tool_error, :cancelled, :completed]
 
   @type on_tool_error ::
@@ -147,11 +141,11 @@ defmodule ALLM.ToolRunner do
   | `:engine` | `nil` | Engine for context / executor / encoder fallback. |
   | `:tool_executor` | `engine.tool_executor \\|\\| ALLM.ToolExecutor.Default` | Override the executor module. |
   | `:tool_result_encoder` | `engine.tool_result_encoder \\|\\| ALLM.ToolResultEncoder.JSON` | Override the encoder module. |
-  | `:on_tool_error` | `:continue` | `:continue`, `:halt`, or `(tool_call, error -> {:continue, term} \| :halt)` (Phase 7). |
+  | `:on_tool_error` | `:continue` | `:continue`, `:halt`, or `(tool_call, error -> {:continue, term} \| :halt)`. |
   | `:tool_timeout` | `30_000` | Milliseconds before `Task.async_stream/5` kills a task. Timed-out tasks surface as `%ToolError{reason: :timeout}`. |
-  | `:max_concurrency` | `max(1, min(length(tool_calls), System.schedulers_online() * 2))` | Upper bound on concurrent handler invocations. |
+  | `:max_concurrency` | `max(1, min(length(tool_calls), System.schedulers_online * 2))` | Upper bound on concurrent handler invocations. |
   | `:context` | `engine.context` | Passed to arity-2 handlers. |
-  | `:session_id` | `nil` | Phase 6 — session integration lands in Phase 8. |
+  | `:session_id` | `nil` | Threaded from `ALLM.Session` so handler context can correlate. |
   | `:request_id` | `nil` | Forwarded from the adapter's `Response.request_id`. |
 
   ## Error reason table
@@ -171,11 +165,11 @@ defmodule ALLM.ToolRunner do
 
       iex> engine = ALLM.Engine.new(adapter: ALLM.Providers.Fake)
       iex> tool = ALLM.Tool.new(
-      ...>   name: "echo",
-      ...>   description: "",
-      ...>   schema: %{},
-      ...>   handler: fn args -> {:ok, args} end
-      ...> )
+      ...> name: "echo",
+      ...> description: "",
+      ...> schema: %{},
+      ...> handler: fn args -> {:ok, args} end
+      ...>)
       iex> call = ALLM.ToolCall.new(id: "c0", name: "echo", arguments: %{"x" => 1})
       iex> {:ok, [msg]} = ALLM.ToolRunner.run_tool_calls([call], [tool], engine: engine)
       iex> msg.role
@@ -217,7 +211,7 @@ defmodule ALLM.ToolRunner do
     * One of:
       * `{:tool_result_encoded, %{id, content}}` — normal handler return
         (including `{:error, _}` routed via `on_tool_error`)
-      * `{:ask_user_requested, %{tool_call_id, tool_name, question, opts}}` —
+      * `{:ask_user_requested, %{tool_call_id, tool_name, question, opts}}`
         handler returned `{:ask_user, _}` / `{:ask_user, _, _}`
       * `{:tool_halt, %{tool_call_id, reason, result}}` — handler returned
         `{:halt, reason, result}`
@@ -234,8 +228,7 @@ defmodule ALLM.ToolRunner do
   `Task.async_stream/5`'s `:on_timeout: :kill_task` option. The event
   stream emits `{:tool_execution_completed, %{result: {:error,
   %ToolError{reason: :timeout}}}}` — no new `:tool_execution_cancelled`
-  variant (Phase 6 keeps the `ALLM.Event` closed union at 16 tags; see
-  PHASE_6_DESIGN.md Non-obvious Decision #7).
+  variant (the `ALLM.Event` closed union stays at 16 tags).
 
   ## Empty short-circuit
 
@@ -246,16 +239,16 @@ defmodule ALLM.ToolRunner do
 
       iex> engine = ALLM.Engine.new(adapter: ALLM.Providers.Fake)
       iex> tool = ALLM.Tool.new(
-      ...>   name: "echo",
-      ...>   description: "",
-      ...>   schema: %{},
-      ...>   handler: fn args -> {:ok, args} end
-      ...> )
+      ...> name: "echo",
+      ...> description: "",
+      ...> schema: %{},
+      ...> handler: fn args -> {:ok, args} end
+      ...>)
       iex> call = ALLM.ToolCall.new(id: "c0", name: "echo", arguments: %{"x" => 1})
       iex> events =
-      ...>   [call]
-      ...>   |> ALLM.ToolRunner.stream_tool_calls([tool], engine: engine)
-      ...>   |> Enum.to_list()
+      ...> [call]
+      ...> |> ALLM.ToolRunner.stream_tool_calls([tool], engine: engine)
+      ...> |> Enum.to_list
       iex> Enum.map(events, &elem(&1, 0))
       [:tool_execution_started, :tool_execution_completed, :tool_result_encoded]
   """

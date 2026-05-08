@@ -135,3 +135,7 @@
 [BUILD] wed 5/6 9pm - Build all phases from RELEASE_PLAN.md (Hex release tooling)
 
 [MILE] wed 5/6 9pm - Added scripts/release.exs for Hex publish flow and restructured CHANGELOG/HISTORY around the /changelog skill model
+
+[DSGN] thu 5/7 4pm - Design documentation rebuild — remove internal phasing/spec refs, expand examples
+
+[BUILD] thu 5/7 6pm - Build all 14 phases of REBUILD_DOCUMENTATION.md (docstring rewrite, audit script, guides/, README/CHANGELOG/examples/mix.exs prose) with review/retro deferred to end

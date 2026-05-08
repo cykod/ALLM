@@ -1,50 +1,90 @@
 defmodule ALLM do
   @moduledoc """
-  Top-level facade for the ALLM library — provider-neutral LLM execution with
-  first-class streaming and serializable conversation state.
+  Provider-neutral LLM execution for Elixir, with first-class streaming and
+  serializable conversation state.
 
-  ALLM is organized into four conceptual layers (see
-  `steering/allm_engine_session_streaming_spec_v0_2.md` §2):
+  ALLM lets you write LLM workflows once and run them against OpenAI,
+  Anthropic, Gemini, or any custom adapter — without code changes at the
+  call site. Streaming is the primitive (non-streaming variants are simply
+  reducers over the stream), and the data structures that describe a
+  conversation (`ALLM.Request`, `ALLM.Thread`, `ALLM.Session`, …) are plain
+  structs you can persist to ETF or JSON.
 
-    * **Layer A — Serializable data.** Plain structs (`ALLM.Message`,
-      `ALLM.Request`, `ALLM.Response`, `ALLM.Thread`, `ALLM.Session`, …) that
-      round-trip through `:erlang.term_to_binary/1` and JSON via
-      `ALLM.Serializer`. No PIDs, refs, funs, or API keys.
-    * **Layer B — Runtime.** `ALLM.Engine` plus the `ALLM.Adapter`,
-      `ALLM.StreamAdapter`, `ALLM.ToolExecutor`, and `ALLM.ToolResultEncoder`
-      behaviours. Holds the non-serializable dependencies (modules, funs,
-      Finch names, keys resolved at call time).
-    * **Layer C — Stateless execution.** `generate/3`, `stream_generate/3`,
-      `step/3`, `stream_step/3`, `chat/3`, `stream/3` on this module. Each
-      call takes an engine explicitly.
-    * **Layer D — Stateful continuation.** `ALLM.Session` operations over a
-      persisted `%ALLM.Session{}`.
+  The package is organised into four small layers:
 
-  Phase 1 (this release) ships Layer A: the data structs, `ALLM.Validate`,
-  `ALLM.Serializer`, and the constructors on this facade. Layers B/C/D
-  (engines, adapters, streaming, sessions) land in later phases.
+    * **Data** — plain serializable structs (`ALLM.Message`,
+      `ALLM.Request`, `ALLM.Response`, `ALLM.Thread`, `ALLM.Session`,
+      `ALLM.Event`, …). Round-trip through `:erlang.term_to_binary/1` or
+      `ALLM.Serializer.to_json!/1`. No PIDs, refs, funs, or API keys.
+    * **Runtime** — `ALLM.Engine` plus the `ALLM.Adapter`,
+      `ALLM.StreamAdapter`, `ALLM.ToolExecutor`, `ALLM.ToolResultEncoder`,
+      and `ALLM.ImageAdapter` behaviours. Engines hold the
+      non-serializable bits (modules, key resolvers, Finch names).
+    * **Stateless execution** — `generate/3`, `stream_generate/3`,
+      `step/3`, `stream_step/3`, `chat/3`, `stream/3` on this module.
+      Each call takes an engine explicitly.
+    * **Stateful continuation** — the `ALLM.Session` API (`start/3`,
+      `reply/4`, `continue/3`, `submit_tool_result/3`, …) over a persisted
+      `%ALLM.Session{}`.
 
-  ## Getting Started
+  ## Hello, ALLM
 
-  Drive a `chat/3` round-trip against the deterministic `ALLM.Providers.Fake`
-  adapter — no API key, no network. Parallel to the README's Getting Started
-  snippet (kept in sync by visual review):
+  The deterministic `ALLM.Providers.Fake` adapter requires no API key and
+  no network — it's the canonical test vehicle and the easiest way to see
+  how a `chat/3` round-trip fits together:
 
-      iex> engine = ALLM.Engine.new(adapter: ALLM.Providers.Fake, adapter_opts: [script: [{:text, "Hello, ALLM!"}, {:finish, :stop}]])
-      iex> {:ok, %ALLM.ChatResult{final_response: %ALLM.Response{output_text: text}}} = ALLM.chat(engine, [ALLM.user("Hi.")])
+      iex> engine = ALLM.Engine.new(
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "Hello, ALLM!"}, {:finish, :stop}]]
+      ...>)
+      iex> {:ok, %ALLM.ChatResult{final_response: %ALLM.Response{output_text: text}}} =
+      ...> ALLM.chat(engine, [ALLM.user("Hi.")])
       iex> text
       "Hello, ALLM!"
 
-  ## Example
+  Once that runs, swap `ALLM.Providers.Fake` for `ALLM.Providers.OpenAI`,
+  `ALLM.Providers.Anthropic`, or `ALLM.Providers.Gemini` and provide a
+  real `:model`. Keys resolve from per-call opts, engine config, app
+  config, or environment variables — see `ALLM.Keys`.
 
-      iex> messages = [ALLM.system("Be helpful."), ALLM.user("Name three primes.")]
-      iex> req = ALLM.request(messages, model: "fake:gpt-test")
-      iex> :ok = ALLM.Validate.request(req)
-      iex> json = ALLM.Serializer.to_json!(req)
-      iex> {:ok, ^req} = ALLM.Serializer.from_json(json)
+  ## When to reach for what
 
-  See `steering/allm_engine_session_streaming_spec_v0_2.md` §4 for the full
-  public API surface.
+  | You want to… | Use this | Returns |
+  |---|---|---|
+  | One-shot completion, no tools | `generate/3` | `{:ok, %ALLM.Response{}}` |
+  | One-shot completion, with streaming | `stream_generate/3` | `{:ok, Enumerable.t}` of `t:ALLM.Event.t/0` |
+  | Single round-trip with tool execution | `step/3` / `stream_step/3` | `{:ok, %ALLM.StepResult{}}` |
+  | Multi-turn loop with auto tool execution | `chat/3` / `stream/3` | `{:ok, %ALLM.ChatResult{}}` |
+  | Multi-turn with persistence between turns | `ALLM.Session` API | `{:ok, %ALLM.Session{}}` |
+  | Generate or edit images | `generate_image/3`, `edit_image/4`, `image_variations/3` | `{:ok, %ALLM.ImageResponse{}}` |
+
+  Stateless calls (`generate/3` / `chat/3` / etc.) are pure functions of
+  their inputs. The `ALLM.Session` API is what you use when the
+  conversation needs to outlive a single request — the session struct
+  encodes everything needed to resume after persisting it.
+
+  ## Building messages
+
+  The constructors below produce plain `%ALLM.Message{}` values you pass
+  directly to a request or thread:
+
+      iex> [ALLM.system("Be concise."), ALLM.user("Name three primes.")]
+      ...> |> hd() |> Map.get(:role)
+      :system
+
+  Multi-modal content (text + images) is built with `ALLM.TextPart` and
+  `ALLM.ImagePart`; see `guides/vision.md`.
+
+  ## Where to next
+
+    * `guides/getting_started.md` — install, run the Fake example, swap to
+      a real provider.
+    * `guides/streaming.md` — `stream_generate/3` / `stream/3`, the event
+      union, filter opts, cancellation.
+    * `guides/tools.md` — declaring tools, `mode: :auto` vs `mode:
+      :manual`, per-tool `manual: true`, ask-user.
+    * `guides/sessions.md` — multi-turn persistence patterns.
+    * Module-by-module reference in the sidebar.
   """
 
   alias ALLM.{
@@ -117,7 +157,8 @@ defmodule ALLM do
   Build an `%ALLM.Tool{}` from keyword opts. Delegates to `ALLM.Tool.new/1`.
 
   `:name`, `:description`, and `:schema` are required; omitting any raises
-  `ArgumentError`. `:handler` is optional.
+  `ArgumentError`. `:handler` is optional. Pass `manual: true` to opt this
+  tool out of automatic execution under `chat/3`'s `mode: :auto`.
 
   ## Examples
 
@@ -129,11 +170,14 @@ defmodule ALLM do
   def tool(opts), do: Tool.new(opts)
 
   @doc """
-  Build the canonical tagged map for a JSON-schema response format (spec §5.4).
+  Build the canonical tagged map for a JSON-schema response format.
 
   Returns `%{type: :json_schema, name: name, schema: schema, strict: boolean}`.
   `:strict` defaults to `true`; pass `strict: false` to relax provider-side
   schema enforcement.
+
+  Pass the returned map as `:response_format` on a request to ask the
+  provider to constrain its output to the schema.
 
   ## Examples
 
@@ -160,8 +204,8 @@ defmodule ALLM do
 
   Does **not** validate — call `ALLM.Validate.image_request/1` to check
   operation-arity and field rules. Mirrors `request/2`'s no-validate
-  precedent (Phase 13.3 design Decision #7). Unknown opts raise `KeyError`
-  via `struct!/2`.
+  precedent: construction is composable, validation is an explicit step.
+  Unknown opts raise `KeyError` via `struct!/2`.
 
   Callers wanting `:variation` (which forbids a non-empty `:prompt`) should
   build the struct directly via `ALLM.ImageRequest.new/1`.
@@ -188,10 +232,10 @@ defmodule ALLM do
   Build an `%ALLM.Request{}` from a list of messages and keyword opts.
   Delegates to `ALLM.Request.new/2`.
 
-  Does **not** validate — validation runs at the adapter boundary (Phase 5)
-  or via an explicit `ALLM.Validate.request/1` call. Keeping construction
-  composable matches the Non-obvious Decision #7 of the Phase 1 design:
-  `request/2` returns a `%Request{}` directly, not `{:ok | :error}`.
+  Does **not** validate — validation runs at the adapter boundary or via
+  an explicit `ALLM.Validate.request/1` call. Construction stays
+  composable: `request/2` returns a `%Request{}` directly, not an
+  `{:ok | :error}` tuple.
 
   ## Examples
 
@@ -207,18 +251,22 @@ defmodule ALLM do
   def request(messages, opts \\ []), do: Request.new(messages, opts)
 
   @doc """
-  Open a streaming generation against the engine's adapter. See spec §4 and
-  §10.2.
+  Open a streaming generation against the engine's adapter.
 
   Returns `{:ok, enumerable}` where the enumerable is a lazy stream of
-  `ALLM.Event` values (no event fires until the caller reduces), or
+  `t:ALLM.Event.t/0` values (no event fires until the caller reduces), or
   `{:error, struct}` on a synchronous pre-flight failure (missing adapter,
   invalid request, adapter-reported pre-flight error).
+
+  Mid-stream adapter errors fold into a terminal `:message_completed`
+  event with `finish_reason: :error` rather than a call-site error tuple
+  — collect events with `ALLM.StreamCollector.to_response/1` to recover
+  the full `%ALLM.Response{}` (including `metadata.error` when populated).
 
   ## Options
 
   In addition to any provider-specific opts the adapter honours, the
-  following Phase 5 streaming-layer keys are consumed by this function:
+  following streaming-layer keys are consumed by this function:
 
     * `:emit_text_deltas` — `true` (default) keeps `:text_delta` events in
       the stream; `false` drops them. `:text_completed` and
@@ -232,15 +280,15 @@ defmodule ALLM do
       filters apply. Exceptions raised inside the callback surface in the
       consumer's reducing process, not at this call site.
 
-  Phase 7 orchestration opts (`:mode`, `:max_turns`, `:halt_when`) are
-  silently stripped here; `stream_generate/3` is single-request.
+  Multi-turn orchestration opts (`:mode`, `:max_turns`, `:halt_when`) are
+  silently stripped — `stream_generate/3` is single-request.
 
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
+      ...>)
       iex> req = ALLM.request([ALLM.user("say hi")])
       iex> {:ok, stream} = ALLM.stream_generate(engine, req)
       iex> Enum.any?(Enum.to_list(stream), &match?({:message_completed, _}, &1))
@@ -253,14 +301,16 @@ defmodule ALLM do
     do: ALLM.StreamRunner.run(engine, request, opts)
 
   @doc """
-  Execute a non-streaming generation against the engine's adapter. See
-  spec §4 and §10.1.
+  Execute a non-streaming generation against the engine's adapter.
 
-  Implemented as a reducer over `stream_generate/3` (spec §3) — the
-  streaming path is the primitive. A mid-stream adapter error folds into
+  Implemented as a reducer over `stream_generate/3` — the streaming path
+  is the primitive. A mid-stream adapter error folds into
   `response.finish_reason == :error` with the error struct under
   `response.metadata.error`; pre-flight errors surface directly as
-  `{:error, struct}`.
+  `{:error, struct}` at the call site. Callers matching only
+  `{:error, _}` will silently swallow rate limits, content-filter
+  blocks, and stream cancellations — match on
+  `response.finish_reason == :error` to handle mid-stream failures.
 
   ## Options
 
@@ -268,15 +318,12 @@ defmodule ALLM do
   defaults to `false` but `{:usage, _}` raw chunks always survive the
   filter so `response.usage` is populated regardless.
 
-  See `ALLM.Runner` for the full mid-stream error contract and the
-  stream-first reducer rationale.
-
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}]]
+      ...>)
       iex> req = ALLM.request([ALLM.user("say hi")])
       iex> {:ok, response} = ALLM.generate(engine, req)
       iex> {response.output_text, response.finish_reason}
@@ -290,44 +337,45 @@ defmodule ALLM do
 
   @doc """
   Execute a single chat step (one adapter round-trip plus any auto-executed
-  tool calls) and return a `%ALLM.StepResult{}`. See spec §4 and §10.3.
+  tool calls) and return a `%ALLM.StepResult{}`.
 
   `thread_or_messages` is either an `%ALLM.Thread{}` or a list of
   `%ALLM.Message{}` (normalised via `ALLM.Thread.from_messages/1`). The
-  thread is validated via `ALLM.Validate.thread/1` at entry. Pure
-  one-line delegation to `ALLM.Chat.step/3`; see that module for the
-  full behaviour contract (mode dispatch, on_tool_error policy, halt
-  metadata).
+  thread is validated via `ALLM.Validate.thread/1` at entry.
+
+  Use `step/3` when you want a single round-trip — one adapter call,
+  with any tool calls executed inline — but you don't need the multi-turn
+  loop. For full multi-turn behaviour use `chat/3`.
 
   ## Options
 
   In addition to any provider-specific opts the adapter honours:
 
-    * `:mode` — `:auto` (default) executes tool calls; `:manual` returns
-      them for the caller to submit results.
-    * `:tool_timeout` — milliseconds per tool (default 30_000).
+    * `:mode` — `:auto` (default) executes tool calls inline; `:manual`
+      returns them on the `%StepResult{}` for the caller to submit results.
+    * `:tool_timeout` — milliseconds per tool (default `30_000`).
     * `:on_tool_error` — `:continue` (default) or `:halt`.
     * `:tool_executor`, `:tool_result_encoder` — module overrides.
-    * Phase 5 stream filter opts are accepted but have no effect on this
+    * Stream filter opts are accepted but have no effect on this
       non-streaming path.
 
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [
-      ...>     script: [
-      ...>       {:tool_call, id: "call_0", name: "weather", arguments: %{"city" => "NYC"}},
-      ...>       {:finish, :tool_calls}
-      ...>     ]
-      ...>   ],
-      ...>   tools: [ALLM.tool(
-      ...>     name: "weather",
-      ...>     description: "forecast by city",
-      ...>     schema: %{"type" => "object"},
-      ...>     handler: fn %{"city" => c} -> {:ok, %{forecast: "sunny", city: c}} end
-      ...>   )]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [
+      ...> script: [
+      ...> {:tool_call, id: "call_0", name: "weather", arguments: %{"city" => "NYC"}},
+      ...> {:finish, :tool_calls}
+      ...> ]
+      ...> ],
+      ...> tools: [ALLM.tool(
+      ...> name: "weather",
+      ...> description: "forecast by city",
+      ...> schema: %{"type" => "object"},
+      ...> handler: fn %{"city" => c} -> {:ok, %{forecast: "sunny", city: c}} end
+      ...>)]
+      ...>)
       iex> {:ok, sr} = ALLM.step(engine, [ALLM.user("weather in NYC?")])
       iex> {sr.done?, length(sr.tool_results)}
       {false, 1}
@@ -339,45 +387,41 @@ defmodule ALLM do
     do: ALLM.Chat.step(engine, thread_or_messages, opts)
 
   @doc """
-  Execute a single chat step as a lazy stream of `ALLM.Event` values. See
-  spec §4 and §10.4.
+  Execute a single chat step as a lazy stream of `t:ALLM.Event.t/0`
+  values.
 
   `thread_or_messages` is either an `%ALLM.Thread{}` or a list of
   `%ALLM.Message{}`. The returned stream is open — no events fire until
-  the caller reduces. Events are emitted in this order: all adapter
-  events (pass-through from `stream_generate/3`), then zero-to-N
-  tool-execution event groups (per tool: `:tool_execution_started` →
+  the caller reduces. Events arrive in this order: all adapter events
+  (pass-through from `stream_generate/3`), then zero-to-N tool-execution
+  event groups (per tool: `:tool_execution_started` →
   `:tool_execution_completed` → `:tool_result_encoded` /
   `:ask_user_requested` / `:tool_halt`), then exactly one terminal
   `:step_completed` event.
 
-  Pure one-line delegation to `ALLM.Chat.stream_step/3`; see that
-  module for the three-phase `Stream.resource/3` state machine and the
-  unknown-tool error-in-stream contract.
-
   ## Options
 
-  Same as `step/3`. Additionally accepts the Phase 5 streaming filter
-  opts (`:emit_text_deltas`, `:emit_tool_deltas`, `:include_raw_chunks`,
-  `:on_event`) — they apply to the adapter-stream pass-through phase.
+  Same as `step/3`. Additionally accepts the streaming filter opts
+  (`:emit_text_deltas`, `:emit_tool_deltas`, `:include_raw_chunks`,
+  `:on_event`) — they apply to the adapter-stream pass-through.
 
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [
-      ...>     script: [
-      ...>       {:tool_call, id: "call_0", name: "weather", arguments: %{"city" => "NYC"}},
-      ...>       {:finish, :tool_calls}
-      ...>     ]
-      ...>   ],
-      ...>   tools: [ALLM.tool(
-      ...>     name: "weather",
-      ...>     description: "forecast by city",
-      ...>     schema: %{"type" => "object"},
-      ...>     handler: fn %{"city" => c} -> {:ok, %{forecast: "sunny", city: c}} end
-      ...>   )]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [
+      ...> script: [
+      ...> {:tool_call, id: "call_0", name: "weather", arguments: %{"city" => "NYC"}},
+      ...> {:finish, :tool_calls}
+      ...> ]
+      ...> ],
+      ...> tools: [ALLM.tool(
+      ...> name: "weather",
+      ...> description: "forecast by city",
+      ...> schema: %{"type" => "object"},
+      ...> handler: fn %{"city" => c} -> {:ok, %{forecast: "sunny", city: c}} end
+      ...>)]
+      ...>)
       iex> {:ok, stream} = ALLM.stream_step(engine, [ALLM.user("weather in NYC?")])
       iex> events = Enum.to_list(stream)
       iex> Enum.any?(events, &match?({:step_completed, _}, &1))
@@ -391,14 +435,11 @@ defmodule ALLM do
 
   @doc """
   Run a multi-turn chat loop against the engine and return a
-  `%ALLM.ChatResult{}`. See spec §4 and §10.5.
+  `%ALLM.ChatResult{}`.
 
   `thread_or_messages` is either an `%ALLM.Thread{}` or a list of
   `%ALLM.Message{}` (normalised via `ALLM.Thread.from_messages/1`). The
-  thread is validated via `ALLM.Validate.thread/1` at entry. Pure
-  one-line delegation to `ALLM.Chat.run/3`; see that module for the
-  full multi-turn loop semantics, the seven-entry terminal-condition
-  ordering, and the `%ChatResult{}` shape.
+  thread is validated via `ALLM.Validate.thread/1` at entry.
 
   ## Mode
 
@@ -418,42 +459,39 @@ defmodule ALLM do
 
       call opts > engine.params[:max_turns] > Application.get_env(:allm, :max_turns) > library default 8
 
-  Per Phase 7 design Non-obvious Decision #9. `max_turns` must be a
-  `pos_integer()`; non-positive integers raise `ArgumentError`.
+  `max_turns` must be a `pos_integer`; non-positive integers raise
+  `ArgumentError`.
 
   ## `:halt_when` semantics
 
-  `:halt_when` is a `(StepResult.t() -> boolean())` callback invoked
-  AFTER the step's thread mutation has been applied (Phase 7 design
-  Non-obvious Decision #11). It is the LAST per-step gate consulted —
-  ask-user, handler `{:halt, _, _}`, `on_tool_error: :halt`,
-  `:manual_tool_calls`, and adapter `finish_reason ∈ {:stop, :error,
-  :length, :content_filter}` all preempt it. Exceptions raised inside
-  `halt_when` propagate to the caller of `chat/3`; they are NOT
-  caught.
+  `:halt_when` is a `(StepResult.t -> boolean)` callback invoked
+  AFTER the step's thread mutation has been applied. It is the LAST
+  per-step gate consulted — ask-user, handler `{:halt, _, _}`,
+  `on_tool_error: :halt`, `:manual_tool_calls`, and adapter
+  `finish_reason ∈ {:stop, :error, :length, :content_filter}` all
+  preempt it. Exceptions raised inside `halt_when` propagate to the
+  caller of `chat/3`; they are NOT caught.
 
   ## `:on_tool_error`
 
-  Atom forms `:continue` (default) and `:halt` behave as in Phase 6.
-  The function form `(ToolCall.t(), term() -> {:continue, term()} |
-  :halt)` was deferred from Phase 6 and lands in Phase 7. The
-  function is invoked synchronously inside the per-tool task after
-  the handler's return / encoder failure resolves to an error term
-  (Phase 7 Non-obvious Decision #8): `{:continue, replacement}`
-  encodes `replacement` as the tool-result content; `:halt` halts the
-  batch with `halted_reason: :tool_error`. An invalid return shape or
-  a raise from inside the function is wrapped as `%ALLM.Error.ToolError{reason:
-  :invalid_return}` and treated as `:halt`.
+  Atom forms `:continue` (default) and `:halt` are the common cases.
+  The function form `(ToolCall.t, term -> {:continue, term} |
+  :halt)` is invoked synchronously inside the per-tool task after
+  the handler's return / encoder failure resolves to an error term:
+  `{:continue, replacement}` encodes `replacement` as the tool-result
+  content; `:halt` halts the batch with `halted_reason: :tool_error`.
+  An invalid return shape or a raise from inside the function is
+  wrapped as `%ALLM.Error.ToolError{reason: :invalid_return}` and
+  treated as `:halt`.
 
   ## `:on_event` scope
 
-  Inherits the Phase 5 contract: `:on_event` observes only
-  adapter-emitted events (text deltas, tool-call deltas, message
-  bookends, `:raw_chunk`, adapter-emitted `:error`). Phase 6 / Phase
-  7 chat-layer events (`:tool_execution_*`, `:tool_result_encoded`,
-  `:ask_user_requested`, `:tool_halt`, `:step_completed`,
-  `:chat_completed`) are NOT delivered to `:on_event` — they fire
-  outside `ALLM.StreamRunner`. Per Phase 7 Non-obvious Decision #13.
+  `:on_event` observes only adapter-emitted events (text deltas,
+  tool-call deltas, message bookends, `:raw_chunk`, adapter-emitted
+  `:error`). Chat-layer events (`:tool_execution_*`,
+  `:tool_result_encoded`, `:ask_user_requested`, `:tool_halt`,
+  `:step_completed`, `:chat_completed`) are NOT delivered to
+  `:on_event`.
 
   ## Halt-reason table
 
@@ -465,10 +503,10 @@ defmodule ALLM do
   | `:halt_when` | `halt_when.(step_result)` returned `true` | `%{halt_when_step_index: idx}` |
   | `:ask_user` | Handler returned `{:ask_user, _}` / `{:ask_user, _, _}` | `%{pending_question: q, pending_tool_call_id: id, ask_user_opts: opts}` (also on top-level `%ChatResult{}`) |
   | `:tool_error` | `on_tool_error: :halt`, fun returned `:halt`, or fun raised | `%{halt_tool_call_id: id}` (plus `:on_tool_error_exception` if fun raised) |
-  | `:manual_tool_calls` | `mode: :manual` and step's `response.finish_reason == :tool_calls`, OR (Phase 18) `mode: :auto` and one or more called tools have `manual: true` | `%{manual_turn_index: idx}` (whole-loop) — additionally `%{manual_tool_calls: [%ToolCall{}, ...]}` (per-tool, only the manual bucket) |
-  | atom() (user) | Handler returned `{:halt, reason, result}` not in the above set | `%{halt_tool_call_id: id, halt_result: result}` |
+  | `:manual_tool_calls` | `mode: :manual` and step's `response.finish_reason == :tool_calls`, OR `mode: :auto` and one or more called tools have `manual: true` | `%{manual_turn_index: idx}` (whole-loop) — additionally `%{manual_tool_calls: [%ToolCall{}, ...]}` (per-tool, only the manual bucket) |
+  | atom (user) | Handler returned `{:halt, reason, result}` not in the above set | `%{halt_tool_call_id: id, halt_result: result}` |
 
-  ## Mixed-bucket re-issue (Phase 18 per-tool manual)
+  ## Mixed-bucket re-issue (per-tool manual)
 
   When `mode: :auto` and at least one called tool has `manual: true`, the
   loop halts with `halted_reason: :manual_tool_calls` after running the
@@ -497,30 +535,30 @@ defmodule ALLM do
 
       {:ok, final} = ALLM.chat(engine, augmented)
 
-  The `ALLM.Session` API (`Session.start/3` + `submit_tool_result/3`)
-  enforces this discipline automatically; raw `chat/3` callers must guard
-  by hand. Whole-loop `mode: :manual` callers are unaffected — every
-  tool call surfaces on `result.final_response.tool_calls`, no auto
-  bucket exists.
+  The `ALLM.Session` API (`ALLM.Session.start/3` +
+  `ALLM.Session.submit_tool_result/3`) enforces this discipline
+  automatically; raw `chat/3` callers must guard by hand. Whole-loop
+  `mode: :manual` callers are unaffected — every tool call surfaces on
+  `result.final_response.tool_calls`, no auto bucket exists.
 
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [
-      ...>     scripts: [
-      ...>       [{:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
-      ...>        {:finish, :tool_calls}],
-      ...>       [{:text, "done"}, {:finish, :stop}]
-      ...>     ]
-      ...>   ],
-      ...>   tools: [ALLM.tool(
-      ...>     name: "echo",
-      ...>     description: "",
-      ...>     schema: %{},
-      ...>     handler: fn args -> {:ok, args} end
-      ...>   )]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [
+      ...> scripts: [
+      ...> [{:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+      ...> {:finish, :tool_calls}],
+      ...> [{:text, "done"}, {:finish, :stop}]
+      ...> ]
+      ...> ],
+      ...> tools: [ALLM.tool(
+      ...> name: "echo",
+      ...> description: "",
+      ...> schema: %{},
+      ...> handler: fn args -> {:ok, args} end
+      ...>)]
+      ...>)
       iex> {:ok, %ALLM.ChatResult{} = result} = ALLM.chat(engine, [ALLM.user("echo please")])
       iex> {result.halted_reason, length(result.steps)}
       {:completed, 2}
@@ -532,26 +570,20 @@ defmodule ALLM do
     do: ALLM.Chat.run(engine, thread_or_messages, opts)
 
   @doc """
-  Stream a multi-turn chat loop as a lazy enumerable of `ALLM.Event`
-  values terminating in exactly one `:chat_completed` event. See spec
-  §4 and §10.6.
+  Stream a multi-turn chat loop as a lazy enumerable of `t:ALLM.Event.t/0`
+  values terminating in exactly one `:chat_completed` event.
 
   `thread_or_messages` is either an `%ALLM.Thread{}` or a list of
   `%ALLM.Message{}`. The returned stream is open — no events fire
-  until the caller reduces. Pure one-line delegation to
-  `ALLM.Chat.stream/3`; see that module for the two-phase
-  `Stream.resource/3` state machine and the cleanup chain.
+  until the caller reduces.
 
   ## Single terminal `:chat_completed`
 
   A naturally-terminating stream emits adapter events plus tool
   events for each turn, one `:step_completed` per turn, and exactly
-  one trailing `{:chat_completed, %{result: %ChatResult{}}}` event
-  (Phase 7 Non-obvious Decision #3). Both `chat/3` and
-  `stream/3 |> ALLM.StreamCollector.to_chat_result/1` produce the
-  SAME `%ChatResult{}` for identical inputs because both paths
-  construct it via the same `ALLM.Chat.build_chat_result/1` helper
-  (Phase 7 Non-obvious Decision #4).
+  one trailing `{:chat_completed, %{result: %ChatResult{}}}` event.
+  Both `chat/3` and `stream/3 |> ALLM.StreamCollector.to_chat_result/1`
+  produce the SAME `%ChatResult{}` for identical inputs.
 
   Consumer halts (`Enum.take/2`, `Stream.take_while/2`) produce NO
   `:chat_completed` event; callers needing a final `%ChatResult{}`
@@ -561,17 +593,17 @@ defmodule ALLM do
 
   ## Stream-first
 
-  `chat/3` is a reducer over this stream (per spec §3). The streaming
-  path is the primitive; the non-streaming variant exists so callers
+  `chat/3` is itself a reducer over this stream. The streaming path
+  is the primitive; the non-streaming variant exists so callers
   who don't need event-level visibility get a synchronous result.
 
   ## Ask-user thread asymmetry
 
   When a step's handler returns `{:ask_user, _}`, the streamed
   `:step_completed.thread` does NOT include the assistant question
-  message — only the terminal `:chat_completed.result.thread` does
-  (Phase 7 Invariant 8). Consumers persisting thread state across
-  turns must read `ChatResult.thread`, never `:step_completed.thread`.
+  message — only the terminal `:chat_completed.result.thread` does.
+  Consumers persisting thread state across turns must read
+  `ChatResult.thread`, never `:step_completed.thread`.
 
   ## `:on_event` scope
 
@@ -579,33 +611,32 @@ defmodule ALLM do
   adapter-emitted events. Chat-layer events
   (`:tool_execution_*`, `:tool_result_encoded`, `:ask_user_requested`,
   `:tool_halt`, `:step_completed`, `:chat_completed`) are NOT
-  delivered to `:on_event` — they fire outside `ALLM.StreamRunner`.
-  Per Phase 7 Non-obvious Decision #13.
+  delivered to `:on_event`.
 
   ## Options
 
-  Same options as `chat/3`. The Phase 5 streaming filter opts
+  Same options as `chat/3`. The streaming filter opts
   (`:emit_text_deltas`, `:emit_tool_deltas`, `:include_raw_chunks`,
   `:on_event`) apply to each turn's adapter pass-through.
 
   ## Examples
 
       iex> engine = ALLM.Engine.new(
-      ...>   adapter: ALLM.Providers.Fake,
-      ...>   adapter_opts: [
-      ...>     scripts: [
-      ...>       [{:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
-      ...>        {:finish, :tool_calls}],
-      ...>       [{:text, "done"}, {:finish, :stop}]
-      ...>     ]
-      ...>   ],
-      ...>   tools: [ALLM.tool(
-      ...>     name: "echo",
-      ...>     description: "",
-      ...>     schema: %{},
-      ...>     handler: fn args -> {:ok, args} end
-      ...>   )]
-      ...> )
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [
+      ...> scripts: [
+      ...> [{:tool_call, id: "c0", name: "echo", arguments: %{"x" => 1}},
+      ...> {:finish, :tool_calls}],
+      ...> [{:text, "done"}, {:finish, :stop}]
+      ...> ]
+      ...> ],
+      ...> tools: [ALLM.tool(
+      ...> name: "echo",
+      ...> description: "",
+      ...> schema: %{},
+      ...> handler: fn args -> {:ok, args} end
+      ...>)]
+      ...>)
       iex> {:ok, stream} = ALLM.stream(engine, [ALLM.user("echo please")])
       iex> events = Enum.to_list(stream)
       iex> Enum.count(events, &match?({:chat_completed, _}, &1))
@@ -618,10 +649,9 @@ defmodule ALLM do
     do: ALLM.Chat.stream(engine, thread_or_messages, opts)
 
   @doc """
-  Generate one or more images against the engine's `:image_adapter`. See
-  spec §35.4, §35.5.
+  Generate one or more images against the engine's `:image_adapter`.
 
-  Layer C façade. Two input shapes:
+  Layer-C façade. Two input shapes:
 
     * Binary `prompt` — sugar over `ALLM.image_request/2`. Opts merge into
       the built `%ALLM.ImageRequest{operation: :generate}`.
@@ -631,16 +661,16 @@ defmodule ALLM do
 
   Returns `{:error, %ALLM.Error.EngineError{reason: :no_image_adapter}}`
   when `engine.image_adapter == nil`. This is the first gate; no other
-  validation runs (per Phase 14.2 design Decision #5).
+  validation runs.
 
-  ## Validation policy (Decision #13)
+  ## Validation policy
 
   The façade does NOT call `ALLM.Validate.image_request/1`. Caller-opt-in
   only — mirrors `request/2`'s no-validate precedent. A manually-built
   request that the validator would reject (e.g., empty prompt for
   `:generate`) still dispatches.
 
-  ## `request_id` precedence (Decision #7)
+  ## `request_id` precedence
 
   `opts[:request_id]` wins over an auto-generated id from
   `ALLM.Telemetry.request_id/0`. The id is forwarded to the adapter via
@@ -651,8 +681,8 @@ defmodule ALLM do
 
   ## `:stream` opt is silently dropped
 
-  Image generation is non-streaming in v0.3 (phasing principle #2).
-  Passing `stream: true` does not error — the opt is ignored.
+  Image generation is non-streaming. Passing `stream: true` does not
+  error — the opt is ignored.
 
   ## Unknown opts
 
@@ -663,16 +693,16 @@ defmodule ALLM do
 
       iex> img = ALLM.Image.from_binary(<<137, 80, 78, 71>>, "image/png")
       iex> engine = ALLM.Engine.new(
-      ...>   image_adapter: ALLM.Providers.FakeImages,
-      ...>   adapter_opts: [image_script: [{:ok, [img]}]]
-      ...> )
+      ...> image_adapter: ALLM.Providers.FakeImages,
+      ...> adapter_opts: [image_script: [{:ok, [img]}]]
+      ...>)
       iex> {:ok, %ALLM.ImageResponse{images: [_]}} = ALLM.generate_image(engine, "a kestrel")
       iex> :ok
       :ok
 
       iex> engine = ALLM.Engine.new()
       iex> {:error, %ALLM.Error.EngineError{reason: :no_image_adapter}} =
-      ...>   ALLM.generate_image(engine, "a kestrel")
+      ...> ALLM.generate_image(engine, "a kestrel")
       iex> :ok
       :ok
   """
@@ -692,9 +722,9 @@ defmodule ALLM do
 
   @doc """
   Edit a base image (optionally with a mask) against the engine's
-  `:image_adapter`. See spec §35.4, §35.5.
+  `:image_adapter`.
 
-  Three call shapes (Phase 14.2 design Decision #6):
+  Three call shapes:
 
     * `edit_image(engine, base_image, prompt)` — single base, no mask;
       builds `%ImageRequest{operation: :edit, input_images: [base], mask: nil}`.
@@ -716,12 +746,12 @@ defmodule ALLM do
 
       iex> img = ALLM.Image.from_binary(<<137, 80, 78, 71>>, "image/png")
       iex> engine = ALLM.Engine.new(
-      ...>   image_adapter: ALLM.Providers.FakeImages,
-      ...>   adapter_opts: [image_script: [{:ok, [img]}]]
-      ...> )
+      ...> image_adapter: ALLM.Providers.FakeImages,
+      ...> adapter_opts: [image_script: [{:ok, [img]}]]
+      ...>)
       iex> base = ALLM.Image.from_binary(<<1, 2, 3>>, "image/png")
       iex> {:ok, %ALLM.ImageResponse{images: [_]}} =
-      ...>   ALLM.edit_image(engine, base, "make sky pink")
+      ...> ALLM.edit_image(engine, base, "make sky pink")
       iex> :ok
       :ok
   """
@@ -766,7 +796,7 @@ defmodule ALLM do
 
   @doc """
   Build variations of a single input image against the engine's
-  `:image_adapter`. See spec §35.4, §35.5.
+  `:image_adapter`.
 
   Builds `%ImageRequest{operation: :variation, input_images: [image],
   prompt: nil}` and forwards opts. Returns
@@ -780,9 +810,9 @@ defmodule ALLM do
 
       iex> img = ALLM.Image.from_binary(<<137, 80, 78, 71>>, "image/png")
       iex> engine = ALLM.Engine.new(
-      ...>   image_adapter: ALLM.Providers.FakeImages,
-      ...>   adapter_opts: [image_script: [{:ok, [img]}]]
-      ...> )
+      ...> image_adapter: ALLM.Providers.FakeImages,
+      ...> adapter_opts: [image_script: [{:ok, [img]}]]
+      ...>)
       iex> input = ALLM.Image.from_binary(<<1, 2, 3>>, "image/png")
       iex> {:ok, %ALLM.ImageResponse{images: [_]}} = ALLM.image_variations(engine, input)
       iex> :ok
@@ -809,16 +839,13 @@ defmodule ALLM do
   end
 
   # ---------------------------------------------------------------------------
-  # Internals — Phase 14.3 telemetry + preflight + retry wrap (§35.9, §6.1).
+  # Internals — image telemetry + preflight + retry wrap.
   # ---------------------------------------------------------------------------
 
-  # Image-side retryable reason atoms (Phase 14.3 design Decision #4 +
-  # Decision #9 augmentation). Engaged by both `augment_image_retry_policy/1`
-  # (extends the chat-side `default_policy/0.retry_on` at the call site) and
-  # `dispatch_image_attempt/3` (the per-attempt closure passed to
-  # `Retry.run/3`). Placed at the top of the image-internals block per the
-  # codebase convention (module attributes live above their consumer
-  # cluster, not interleaved between private helpers).
+  # Image-side retryable reason atoms. Engaged by both
+  # `augment_image_retry_policy/1` (extends the chat-side default
+  # policy's `retry_on` at the call site) and `dispatch_image_attempt/3`
+  # (the per-attempt closure passed to `Retry.run/3`).
   @retryable_image_reasons [:rate_limited, :provider_unavailable, :timeout, :network_error]
 
   # Drop call-control opts that would collide with `ImageRequest` struct
@@ -839,10 +866,10 @@ defmodule ALLM do
     ])
   end
 
-  # Phase 14.3: wrap the entire body in `Telemetry.span(:image, ...)` so
-  # the `:start` event ALWAYS fires (even when the adapter is missing or
-  # preflight rejects) — observability is uniform. Inside the span, the
-  # `with`-chain runs in this order (per design Decision #15):
+  # Wrap the entire body in `Telemetry.span(:image, ...)` so the `:start`
+  # event ALWAYS fires (even when the adapter is missing or preflight
+  # rejects) — observability is uniform. Inside the span, the
+  # `with`-chain runs in this order:
   #
   #   (1) adapter-presence gate (`engine.image_adapter != nil`) — FIRST
   #   (2) `Capability.preflight_image/2` (no-op when catalog absent)
@@ -873,10 +900,9 @@ defmodule ALLM do
          _request_id,
          _resolved_model
        ) do
-    # Adapter-presence gate fires FIRST — per design Decision #15 and
-    # spec line 817, this short-circuits BEFORE preflight so a missing
-    # adapter + tools-disabled-model surfaces `:no_image_adapter`,
-    # not `:unsupported_capability`.
+    # Adapter-presence gate fires FIRST so a missing adapter +
+    # tools-disabled-model surfaces `:no_image_adapter`, not
+    # `:unsupported_capability`.
     {:error, EngineError.new(:no_image_adapter)}
   end
 
@@ -891,16 +917,17 @@ defmodule ALLM do
       # Stamp the engine-resolved model onto the request so adapters that
       # gate / shape the wire body off `request.model` (e.g. OpenAI's
       # multipart `:edit` / `:variation`, which require `model` on the
-      # wire) see it. Mirrors the chat-side `StreamRunner.resolve_request_model/3`
-      # at `lib/allm/stream_runner.ex:209-213`. Preserves an explicitly-set
-      # request model.
+      # wire) see it. Mirrors the chat-side
+      # `StreamRunner.resolve_request_model/3`. Preserves an
+      # explicitly-set request model.
       request = %{request | model: request.model || resolved_model}
 
-      # Concat engine.adapter_opts with call-site adapter_opts. `Keyword.get/2`
-      # returns the FIRST occurrence on duplicate keys, so engine wins on
-      # collision. Mirrors the chat-side `StreamRunner.build_dispatch_opts/2`
-      # adapter_opts concat at `lib/allm/stream_runner.ex:229-230` (NOT
-      # `Keyword.merge/2`, which would have OPPOSITE precedence — call wins).
+      # Concat engine.adapter_opts with call-site adapter_opts.
+      # `Keyword.get/2` returns the FIRST occurrence on duplicate keys, so
+      # engine wins on collision. Mirrors the chat-side
+      # `StreamRunner.build_dispatch_opts/2` adapter_opts concat (NOT
+      # `Keyword.merge/2`, which would have OPPOSITE precedence — call
+      # wins).
       merged_adapter_opts =
         engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, [])
 
@@ -912,7 +939,7 @@ defmodule ALLM do
 
       # Pass `telemetry_metadata` to `Retry.run/3` so any
       # `[:allm, :adapter, :retry]` event shares the surrounding
-      # `:image` span's correlation id (Decision #15).
+      # `:image` span's correlation id.
       telemetry_metadata = %{
         request_id: request_id,
         model: resolved_model,
@@ -920,14 +947,13 @@ defmodule ALLM do
       }
 
       # Augment the engine's retry policy with the image-side
-      # retryable reasons. v0.2's `default_policy/0.retry_on` is HTTP-
-      # status-coded (`[429, 500, 502, 503, 504, :timeout]`); image
+      # retryable reasons. The default chat-side policy's `retry_on` is
+      # HTTP-status-coded (`[429, 500, 502, 503, 504, :timeout]`); image
       # adapters surface closed-enum atoms (`:rate_limited`,
       # `:provider_unavailable`, `:timeout`, `:network_error`) via
       # `%ImageAdapterError{}`. We extend `retry_on` here at the call
       # site so `ALLM.Retry.error_matches?/2` recognises image atoms,
-      # without modifying the chat-side default (Decision #9 — "default
-      # policy reused unchanged").
+      # without modifying the chat-side default.
       policy = augment_image_retry_policy(engine.retry)
 
       result =
@@ -951,8 +977,7 @@ defmodule ALLM do
   # Per-attempt closure for `Retry.run/3`. Engages the retry loop on the
   # four documented retryable `ImageAdapterError` reasons (see
   # `@retryable_image_reasons` at the top of this internals block);
-  # surfaces any other error verbatim with NO retry attempt (per design
-  # Decision #4 error-table + Phase 14.3 spec line 358).
+  # surfaces any other error verbatim with NO retry attempt.
   defp augment_image_retry_policy(false), do: :no_retry
 
   defp augment_image_retry_policy(retry_config) do
@@ -982,10 +1007,10 @@ defmodule ALLM do
     end
   end
 
-  # Compute `:stop`-event extras per design Decision #8: `image_count` is
-  # a MEASUREMENT (numeric — the actual number of images on success /
-  # `0` on error). `:usage`, `:response`, `:error` are METADATA (structured
-  # context). Returns `{metadata_extras, extra_measurements}`.
+  # Compute `:stop`-event extras: `image_count` is a MEASUREMENT (numeric
+  # — the actual number of images on success / `0` on error). `:usage`,
+  # `:response`, `:error` are METADATA (structured context). Returns
+  # `{metadata_extras, extra_measurements}`.
   defp image_stop_extras({:ok, %ImageResponse{} = response}) do
     metadata = %{
       usage: response.usage,

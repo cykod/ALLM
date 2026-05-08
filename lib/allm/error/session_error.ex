@@ -1,28 +1,22 @@
 defmodule ALLM.Error.SessionError do
   @moduledoc """
-  Session-state error. Returned (or raised) by Phase 8's `ALLM.Session`
-  operations.
+  Session-state error. Returned (or raised) by `ALLM.Session` operations.
 
-  Layer A — serializable (no PIDs, refs, funs, or raw API keys). Refines
-  spec §20's atom taxonomy into a first-class struct so every Layer D
-  public function can return `{:error, %ALLM.Error.SessionError{}}`
+  Layer A — serializable (no PIDs, refs, funs, or raw API keys). Every
+  Layer-D public function can return `{:error, %ALLM.Error.SessionError{}}`
   uniformly.
-
-  See `steering/PHASE_8_DESIGN.md` §"Atom vocabulary additions" for the
-  closed reason enum and the §"Error Contract" table for the recovery
-  guidance per reason.
 
   ## Reasons
 
-  | Reason | Fires when |
-  |--------|------------|
-  | `:session_in_error_state` | Caller invokes a Phase-8 operation on a `%Session{status: :error}`. |
-  | `:invalid_status_for_operation` | Reserved for future use (currently unused — Decision #7 routes status mismatches to `ArgumentError`). |
-  | `:no_pending_tool_call` | Reserved for future use; the Phase-8 status guard catches this case via `ArgumentError`. |
-  | `:unknown_tool_call_id` | `submit_tool_result/3` or `submit_tool_results/2` received a `tool_call_id` that does not match any pending `%ToolCall{}` on the session. Data validation, NOT a programmer-flow error. |
+  | Reason | Fires when | Caller recovery |
+  |--------|------------|------------------|
+  | `:session_in_error_state` | Caller invokes a Layer-D operation on a `%Session{status: :error}`. | Construct a fresh session; do not retry. |
+  | `:invalid_status_for_operation` | Reserved for future use. | n/a |
+  | `:no_pending_tool_call` | Reserved for future use; the Layer-D status guard catches this case via `ArgumentError`. | n/a |
+  | `:unknown_tool_call_id` | `submit_tool_result/3` or `submit_tool_results/2` received a `tool_call_id` that does not match any pending `%ToolCall{}` on the session. Data validation, NOT a programmer-flow error. | Read `metadata.tool_call_id`; verify the caller is submitting against the right pending call. |
   """
 
-  @typedoc "Closed set of session-level error reasons (spec §20)."
+  @typedoc "Closed set of session-level error reasons."
   @type reason ::
           :session_in_error_state
           | :invalid_status_for_operation

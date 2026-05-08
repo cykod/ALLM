@@ -4,7 +4,7 @@ defmodule ALLM.Providers.Support.ImageMime do
 
   Layer B helper used by the OpenAI and (future) Anthropic vision pre-flight
   to gate `%ALLM.ImagePart{}` content against per-provider accept-sets and a
-  shared 20-MB byte-size ceiling. See spec §35.6 and Phase 17 design §3.1.
+  shared 20-MB byte-size ceiling.and design.
 
   ## Per-image validation (`validate/2`)
 
@@ -15,7 +15,7 @@ defmodule ALLM.Providers.Support.ImageMime do
     * `byte_size/1` of the resolved bytes against `@max_bytes` (20 MB).
 
   URL sources (`{:url, _}`) skip the size check — the adapter does NOT
-  fetch the URL during pre-flight (Decision #1); size validation is
+  fetch the URL during pre-flight size validation is
   deferred to the provider. MIME enforcement still applies (the URL's
   `:mime_type` is always `nil` per `ALLM.Image.from_url/1`, so a URL-source
   `%ImagePart{}` is accepted regardless of accept-set today; future
@@ -137,8 +137,8 @@ defmodule ALLM.Providers.Support.ImageMime do
   either `:ok` or a `%ValidationError{reason: :invalid_message}` carrying
   per-image field errors.
 
-  Field paths: `[:content, msg_idx, part_idx]` per spec §35.6 / Phase 17
-  design §7.
+  Field paths: `[:content, msg_idx, part_idx]` per the documented contract /
+  design.
 
   ## Examples
 

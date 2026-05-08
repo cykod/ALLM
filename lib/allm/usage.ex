@@ -1,11 +1,26 @@
 defmodule ALLM.Usage do
   @moduledoc """
-  Token and cost usage for a single response. See spec §5.9a.
+  Token and cost usage for a single response — Layer A serializable data.
 
-  Layer A — pure serializable data. Every numeric field is optional and
-  `nil`-able because not every provider returns every counter. Costs are
-  populated either by an adapter that knows its own pricing or (in Phase 9)
-  by an optional `llm_db` integration.
+  Every numeric field is optional and `nil`-able because not every
+  provider returns every counter. Costs are populated either by an
+  adapter that knows its own pricing or by an optional model-catalog
+  integration.
+
+  ## Fields
+
+  | Field | Type | Notes |
+  |-------|------|-------|
+  | `:input_tokens` | `non_neg_integer \\| nil` | |
+  | `:output_tokens` | `non_neg_integer \\| nil` | |
+  | `:cached_input_tokens` | `non_neg_integer \\| nil` | Provider-cached prompt tokens. |
+  | `:reasoning_tokens` | `non_neg_integer \\| nil` | Reasoning-model thinking tokens. |
+  | `:total_tokens` | `non_neg_integer \\| nil` | |
+  | `:input_cost` | `float \\| nil` | USD; populated when the adapter knows pricing. |
+  | `:output_cost` | `float \\| nil` | |
+  | `:total_cost` | `float \\| nil` | |
+  | `:tool_usage` | `map` | Per-tool tally (caller-derived). |
+  | `:extra` | `map` | Provider-specific spillover. |
   """
 
   @type cost :: float()
