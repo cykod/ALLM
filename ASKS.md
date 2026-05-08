@@ -139,3 +139,5 @@
 [DSGN] thu 5/7 4pm - Design documentation rebuild — remove internal phasing/spec refs, expand examples
 
 [BUILD] thu 5/7 6pm - Build all 14 phases of REBUILD_DOCUMENTATION.md (docstring rewrite, audit script, guides/, README/CHANGELOG/examples/mix.exs prose) with review/retro deferred to end
+
+[MILE] fri 5/8 3pm - Committed REBUILD_DOCUMENTATION rebuild — 14 phases, 85 files, banned-token-clean across 75-file user-facing surface, plus async-safety fix for anthropic_stream_wire_test

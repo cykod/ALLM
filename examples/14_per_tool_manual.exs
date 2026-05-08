@@ -1,6 +1,6 @@
 # examples/14_per_tool_manual.exs
 #
-# Provider: openai, anthropic
+# Provider: openai, anthropic, gemini
 # Demonstrates: per-tool manual mode (Phase 18 / spec §12.4). One tool
 #               (`get_weather`) auto-executes; another (`confirm_action`,
 #               `manual: true`) halts the loop with `:manual_tool_calls`.

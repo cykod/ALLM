@@ -1,6 +1,6 @@
 # examples/15_per_tool_manual_session.exs
 #
-# Provider: openai, anthropic
+# Provider: openai, anthropic, gemini
 # Demonstrates: per-tool manual mode via the Session API (Phase 18 / spec
 #               §12.4). Auto-bucket tools execute eagerly during `Session.start/3`;
 #               the session lands in `:awaiting_tools` with `pending_tool_calls`

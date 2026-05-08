@@ -1,11 +1,21 @@
-## [DOC] User-facing documentation rebuild
+## [REL] v0.3.1 — Documentation rebuild
 
-Rewrite user-facing documentation — drop internal phase/spec
-references, expand examples, add `guides/` ExDoc extras (Getting
-Started, Streaming, Tools, Sessions, Vision, Image Generation, Errors
-& Retries, Multi-Tenant Keys). The README now opens with a 5-minute
-on-ramp and cross-links the guides instead of duplicating their
-content.
+Other changes:
+- Rewrite every `@moduledoc` and public `@doc` so prose is self-contained
+  — no internal phase, spec-section, or design-decision references
+- Add eight ExDoc guides under `guides/` (Getting Started, Streaming,
+  Tools, Sessions, Vision, Image Generation, Errors & Retries,
+  Multi-Tenant Keys), shipped to both hexdocs and the source tarball
+- Restructure README around a 5-minute on-ramp and cross-link the
+  guides instead of duplicating their content
+- Drop the alpha warning in favor of a concrete stability statement
+  (semver promise within v0.x)
+- Add `scripts/audit_user_docs.exs` (banned-token gate) and
+  `scripts/check_lib_diff_non_doc.exs` (docstring-vs-body classifier)
+- Fix an `async: true` flake in `anthropic_stream_wire_test` by
+  passing the stub key per-call instead of through the global
+  `ALLM.Keys.Store` agent
+- Clean up the release script — drop the redundant `finalize` step
 
 ## [REL] v0.3.0 — Initial public release
 
