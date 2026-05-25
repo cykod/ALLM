@@ -579,7 +579,13 @@ defmodule ALLM.Release do
       abort("could not find `@version \"...\"` in #{@mix_exs_path}")
     end
 
-    new_body = Regex.replace(pattern, body, "\\1#{new_version}\\2", global: false)
+    # Use `\g{N}` (unambiguous back-ref) rather than `\N` — when
+    # `new_version` starts with a digit (e.g. "0.4.0"), `\1` followed
+    # by `0` is parsed as back-ref 10 by Erlang's `re`, eats the
+    # leading capture group, and produces a mangled `mix.exs` like
+    # `.4.0"` instead of `@version "0.4.0"`.
+    new_body =
+      Regex.replace(pattern, body, "\\g{1}#{new_version}\\g{2}", global: false)
 
     cond do
       new_body == body ->

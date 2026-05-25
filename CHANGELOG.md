@@ -47,6 +47,10 @@ Other changes:
   calls each)
 - Extend `guides/vision.md` to point at `Image.from_data_uri/1` for
   data-URI inputs
+
+## [REL] v0.4.1 — Streaming HTTP timeout forwarding
+
+Other changes:
 - Forward `:receive_timeout`, `:request_timeout`, and `:pool_timeout`
   from `opts` to `Finch.async_request/3` in the streaming codepath of
   `ALLM.Providers.OpenAI`, `ALLM.Providers.Anthropic`, and
@@ -60,6 +64,11 @@ Other changes:
   (HTTP-level) are distinct timers
 - Extend `ALLM.Test.FinchStub` with `captured_opts/1` so tests can
   assert which Finch-level options the adapter forwarded
+- Fix `scripts/release.exs` mangling `mix.exs` `@version` when the
+  new version starts with a digit (e.g. `0.4.0`). The replacement used
+  `\1` back-references which Erlang's `re` parsed as `\10` followed by
+  literal text — producing `.4.0"` instead of `@version "0.4.0"`.
+  Switch to unambiguous `\g{N}` back-refs
 
 ## [REL] v0.3.1 — Documentation rebuild
 
