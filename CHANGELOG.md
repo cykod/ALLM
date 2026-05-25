@@ -47,6 +47,19 @@ Other changes:
   calls each)
 - Extend `guides/vision.md` to point at `Image.from_data_uri/1` for
   data-URI inputs
+- Forward `:receive_timeout`, `:request_timeout`, and `:pool_timeout`
+  from `opts` to `Finch.async_request/3` in the streaming codepath of
+  `ALLM.Providers.OpenAI`, `ALLM.Providers.Anthropic`, and
+  `ALLM.Providers.Gemini`. Previously these opts were dropped on the
+  streaming arm — only `generate/2`'s non-streaming `Req`-based path
+  honoured them — so callers passing `request_timeout:` to long-running
+  streaming requests fell back to Finch's defaults (≈20s receive),
+  causing premature `:timeout` failures on slow-first-token requests.
+  Each `stream/2`'s `@doc` now documents the new opts and clarifies
+  that `:stream_timeout` (inter-message) and `:receive_timeout`
+  (HTTP-level) are distinct timers
+- Extend `ALLM.Test.FinchStub` with `captured_opts/1` so tests can
+  assert which Finch-level options the adapter forwarded
 
 ## [REL] v0.3.1 — Documentation rebuild
 

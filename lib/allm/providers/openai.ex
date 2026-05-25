@@ -784,7 +784,14 @@ defmodule ALLM.Providers.OpenAI do
     * `:api_key` / `:adapter_opts[:plug]` — see `prepare_request/2`.
     * `:stream_timeout` — milliseconds to wait between consecutive Finch
       messages. Default `60_000`. Exceeding it emits a terminal
-      `{:error, %AdapterError{reason: :timeout}}` event.
+      `{:error, %AdapterError{reason: :timeout}}` event. This is the
+      inter-message timer; see `:receive_timeout` for the underlying
+      Finch HTTP receive timeout.
+    * `:receive_timeout`, `:request_timeout`, `:pool_timeout` —
+      forwarded verbatim to `Finch.async_request/3`. Each governs a
+      different Finch timer: receive is per-chunk, request is end-to-end
+      response receipt, pool is connection acquisition. Omit to use
+      Finch's defaults.
     * `:finch_name` — the registered Finch name (default `ALLM.Finch`).
     * `:finch_module` — the module used to call `async_request/3` and
       `cancel_async_request/1`. Defaults to `Finch`. Tests inject
@@ -823,7 +830,15 @@ defmodule ALLM.Providers.OpenAI do
 
     finch_module = Keyword.get(opts, :finch_module, Finch)
     finch_name = Keyword.get(opts, :finch_name, ALLM.Finch)
-    finch_extra_opts = Keyword.take(opts, [:finch_stub_ref])
+
+    finch_extra_opts =
+      Keyword.take(opts, [
+        :finch_stub_ref,
+        :receive_timeout,
+        :request_timeout,
+        :pool_timeout
+      ])
+
     stream_timeout = Keyword.get(opts, :stream_timeout, @default_stream_timeout)
 
     enumerable =

@@ -81,6 +81,7 @@ defmodule ALLM.Test.FinchStub do
       delay_ms: Keyword.get(opts, :delay_ms, 1),
       initial_status: Keyword.get(opts, :initial_status, 200),
       cancel_count: 0,
+      captured_opts: nil,
       caller: self()
     })
 
@@ -106,11 +107,18 @@ defmodule ALLM.Test.FinchStub do
   Mimics `Finch.async_request/3`. Looks up the install state by
   `opts[:finch_stub_ref]` and spawns a sender process that delivers the
   configured chunks back to the caller process.
+
+  Captures the full `opts` keyword list on the install state (read via
+  `captured_opts/1`) so tests can assert which Finch-level options the
+  adapter forwarded (e.g. `:receive_timeout`, `:request_timeout`,
+  `:pool_timeout`).
   """
   @spec async_request(any(), atom(), keyword()) :: ref()
   def async_request(_req, _name, opts) when is_list(opts) do
     stub_ref = Keyword.fetch!(opts, :finch_stub_ref)
     state = Process.get({:allm_finch_stub, stub_ref}) || raise "no stub installed for ref"
+
+    Process.put({:allm_finch_stub, stub_ref}, %{state | captured_opts: opts})
 
     caller = state.caller
     chunks = state.chunks
@@ -123,6 +131,17 @@ defmodule ALLM.Test.FinchStub do
     end)
 
     stub_ref
+  end
+
+  @doc """
+  Read the `opts` keyword list captured on the most recent
+  `async_request/3` call for this ref. Returns `nil` when the adapter
+  hasn't called `async_request/3` yet.
+  """
+  @spec captured_opts(ref()) :: keyword() | nil
+  def captured_opts(ref) when is_reference(ref) do
+    %{captured_opts: opts} = Process.get({:allm_finch_stub, ref})
+    opts
   end
 
   @doc """

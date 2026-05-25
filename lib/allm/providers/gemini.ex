@@ -1288,7 +1288,13 @@ defmodule ALLM.Providers.Gemini do
   ## Options
 
     * `:stream_timeout` (default 60_000 ms) — receive-loop after-clause
-      between chunks.
+      between chunks. This is the inter-message timer; see
+      `:receive_timeout` for the underlying Finch HTTP receive timeout.
+    * `:receive_timeout`, `:request_timeout`, `:pool_timeout` —
+      forwarded verbatim to `Finch.async_request/3`. Each governs a
+      different Finch timer: receive is per-chunk, request is
+      end-to-end response receipt, pool is connection acquisition.
+      Omit to use Finch's defaults.
     * `:finch_module` (default `Finch`) — test injection seam.
     * `:finch_name` (default `ALLM.Finch`).
     * `:finch_stub_ref` — opaque ref forwarded to the Finch shim
@@ -1318,7 +1324,15 @@ defmodule ALLM.Providers.Gemini do
 
     finch_module = Keyword.get(opts, :finch_module, Finch)
     finch_name = Keyword.get(opts, :finch_name, ALLM.Finch)
-    finch_extra_opts = Keyword.take(opts, [:finch_stub_ref])
+
+    finch_extra_opts =
+      Keyword.take(opts, [
+        :finch_stub_ref,
+        :receive_timeout,
+        :request_timeout,
+        :pool_timeout
+      ])
+
     stream_timeout = Keyword.get(opts, :stream_timeout, @default_stream_timeout)
 
     enumerable =
