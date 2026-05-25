@@ -1,3 +1,53 @@
+## [REL] v0.4.0 — Integrator ergonomics
+
+Breaking changes:
+- `ALLM.Tool.new/1` (and `__from_tagged__/1`) now recursively normalize
+  atom-keyed `:schema` maps to string keys for deterministic adapter
+  wire shape; callers depending on atom keys on `%Tool{}.schema` will
+  see strings instead
+- `ALLM.Providers.Fake` streaming `{:usage, map}` script entries now
+  fold onto `:message_completed.metadata.usage` instead of emitting a
+  `:raw_chunk` event; tests asserting the prior `:raw_chunk` shape
+  should pass `{:raw_chunk, {:usage, _}}` directly
+
+Other changes:
+- Add `ALLM.Sandbox` — Mox-style `set_engine/1` / `get_engine/0` /
+  `with_engine/2` honouring `$callers` so engines set in a parent
+  test process are visible to `Task.async/1` / `Task.async_stream/3`
+  workers
+- Add `ALLM.unwrap/1` — fold the three-clause `generate/3` return
+  (`:stop` / `:error` / `{:error, _}`) into `{:ok, text} | {:error, _}`
+- Add `ALLM.Providers.Fake` `adapter_opts[:usage]` (Usage struct or
+  keyword; populates `response.usage` on every call) and
+  `adapter_opts[:record]` (sends `{:allm_fake_record, request, opts}`
+  to a pid before script interpretation)
+- Add `ALLM.Image.from_data_uri/1` — parse `data:<mime>;base64,...`
+  strings into a `{:base64, _}`-source `%Image{}` that round-trips
+  through `to_data_uri/1`
+- Add `ALLM.JsonSchema.normalize/1` — shared atom-to-string key
+  normalizer called by both `Tool.new/1` and `ALLM.json_schema/3`
+- Carry structured detail for `Validate.message/1`'s
+  `{:content, :invalid_part_type}` error in
+  `%ValidationError{}.metadata` (machine-readable) plus a human-readable
+  `Exception.message/1` — `errors` list shape unchanged
+- Document the arity-2 `:handler` context keys
+  (`:context | :session_id | :tool_call | :engine | :request_id`) in
+  `ALLM.Tool`'s `@typedoc`
+- Document `chat(engine, thread, response_format: schema,
+  structured_finalize: true)` in `guides/tools.md` — the existing
+  tool-loop + structured coda flow was previously undiscoverable
+- Add `guides/fakes.md` — consolidated Fake testing patterns
+  (script vocabulary, cursor disambiguation, `:usage` / `:record`,
+  halt-cleanup observation, retry simulation, Sandbox cross-process
+  injection)
+- Extend `guides/getting_started.md` with the three-clause
+  finish-reason fold pattern and the engine-no-`:api_key` clarification
+- Extend `guides/tools.md` with handler-context keys and an
+  "Adapter-call cadence" subsection (tool-loop turns consume 2 adapter
+  calls each)
+- Extend `guides/vision.md` to point at `Image.from_data_uri/1` for
+  data-URI inputs
+
 ## [REL] v0.3.1 — Documentation rebuild
 
 Other changes:
