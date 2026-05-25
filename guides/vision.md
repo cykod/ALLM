@@ -135,6 +135,28 @@ instead of letting you debug an opaque 400.
 shape is the same, and you get text deltas back as the model
 incrementally describes the image.
 
+### data: URI input
+
+When you already have a `data:image/<mime>;base64,<payload>` string (a
+browser upload, a `FileReader.readAsDataURL` result, a clipboard paste),
+use `ALLM.Image.from_data_uri/1` — it parses the URI into a
+`{:base64, encoded}` source plus the explicit MIME, ready for
+`%ALLM.ImagePart{}`:
+
+```elixir
+img = ALLM.Image.from_data_uri("data:image/png;base64,iVBORw0KGgo...")
+
+ALLM.user([
+  %ALLM.TextPart{text: "Describe this:"},
+  %ALLM.ImagePart{image: img}
+])
+```
+
+`from_data_uri/1` only accepts the standard `;base64,<payload>` form —
+URL-encoded payloads (`data:<mime>,<urlencoded>`) raise
+`ArgumentError`. `from_url/1` is for `http(s)://` URLs only; it does
+NOT accept `data:` URIs.
+
 ## File size and MIME limits
 
 Each provider has its own limits (Anthropic caps base64 image bytes at

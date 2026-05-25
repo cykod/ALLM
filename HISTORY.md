@@ -1,3 +1,28 @@
+## [FEAT] Phase 21 Amesbury feedback rollup (21.1-21.5)
+*Monday, May 25th at 6pm*
+Ship the Amesbury integration feedback rollup across all five non-release 
+sub-phases. Layer A: Validate.message/1 now carries machine-readable 
+metadata.invalid_part_type plus a human-readable Exception.message while 
+preserving the existing errors-list shape; Tool.new/1 and __from_tagged__/1 
+recursively normalize atom-keyed JSON schemas (deterministic adapter wire 
+shape) via the extracted ALLM.JsonSchema.normalize/1, which ALLM.json_schema/3 
+also calls to close the cross-helper asymmetry; Tool.handler @typedoc 
+enumerates the arity-2 :context | :session_id | :tool_call | :engine | 
+:request_id keys. Layer B: ALLM.Providers.Fake gains :usage and :record 
+adapter_opts (streaming usage rides on the additive 
+:message_completed.metadata.usage payload key — no new Event variant), 
+StreamCollector folds metadata.usage into state.usage, and new ALLM.Sandbox 
+exposes Mox-style set_engine/get_engine/with_engine over $callers so Task 
+workers inherit a parent's engine. Layer C: ALLM.unwrap/1 collapses the 
+three-clause finish_reason case to {:ok, text} | {:error, _} by delegating to 
+Response.text/1. Layer A: Image.from_data_uri/1 parses data: URIs into a base64 
+source. Docs: new guides/fakes.md plus additions to getting_started.md, 
+tools.md (incl. structured_finalize: true coverage), and vision.md. 2409 tests 
+/ 294 doctests / 92.61% coverage; all gates green (format, credo strict, 
+dialyzer).
+
+---
+
 ## [DOC] Rewrite user-facing docs and add guides/ ExDoc extras
 *Friday, May 8th at 3pm*
 Replace internal phase/spec/decision vocabulary across every @moduledoc, @doc, 

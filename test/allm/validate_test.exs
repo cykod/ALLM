@@ -337,6 +337,47 @@ defmodule ALLM.ValidateTest do
       assert {:content, :invalid_part_type} in errors
     end
 
+    test "invalid_part_type carries structured metadata naming the offending module" do
+      # Phase 21.1: errors list shape is UNCHANGED (still bare atom in the
+      # field-error tuple); the structured detail rides on `:metadata`.
+      assert {:error, %ValidationError{} = err} =
+               Validate.message(%Message{
+                 role: :user,
+                 content: [%{type: "text", text: "x"}]
+               })
+
+      assert {:content, :invalid_part_type} in err.errors
+      assert %{invalid_part_type: detail} = err.metadata
+      assert detail.expected == [ALLM.TextPart, ALLM.ImagePart]
+      # The offending element is a plain map, so its "module" is Map.
+      assert detail.got == Map
+    end
+
+    test "Exception.message/1 names the expected and offending modules" do
+      {:error, err} =
+        Validate.message(%Message{
+          role: :user,
+          content: [%{type: "text", text: "x"}]
+        })
+
+      msg = Exception.message(err)
+      assert msg =~ "ALLM.TextPart"
+      assert msg =~ "ALLM.ImagePart"
+      assert msg =~ "Map"
+    end
+
+    test "invalid_part_type metadata names the actual struct module when present" do
+      # A non-TextPart/non-ImagePart struct (here: %URI{}) is reported with
+      # its own module name in `:got`.
+      uri = %URI{}
+
+      {:error, err} =
+        Validate.message(%Message{role: :user, content: [uri]})
+
+      assert {:content, :invalid_part_type} in err.errors
+      assert err.metadata.invalid_part_type.got == URI
+    end
+
     test "content that is neither string nor list is invalid" do
       assert {:error, %ValidationError{reason: :invalid_message, errors: errors}} =
                Validate.message(%Message{role: :user, content: 42})

@@ -200,11 +200,15 @@ defmodule ALLM.StreamRunnerTest do
     end
 
     test "usage carve-out: {:raw_chunk, {:usage, _}} passes even when include_raw_chunks: false" do
-      usage = %{input_tokens: 1, output_tokens: 2}
-
+      # Phase 21.2: Fake's per-script `{:usage, _}` entry no longer emits
+      # `:raw_chunk` events on the streaming path (it now folds onto
+      # `:message_completed.metadata.usage`). To exercise the carve-out
+      # against real-adapter wire shape, emit `{:raw_chunk, {:usage, _}}`
+      # directly via the `:raw_chunk` script entry — real adapters
+      # surface usage via `:raw_chunk` per StreamCollector's contract.
       engine =
         fake_engine([
-          {:usage, usage},
+          {:raw_chunk, {:usage, %{input_tokens: 1, output_tokens: 2}}},
           {:text, "hi"},
           {:finish, :stop}
         ])
@@ -216,8 +220,12 @@ defmodule ALLM.StreamRunnerTest do
     end
 
     test "usage carve-out: {:raw_chunk, {:usage, _}} passes when include_raw_chunks: true too" do
-      usage = %{input_tokens: 1, output_tokens: 2}
-      engine = fake_engine([{:usage, usage}, {:text, "hi"}, {:finish, :stop}])
+      engine =
+        fake_engine([
+          {:raw_chunk, {:usage, %{input_tokens: 1, output_tokens: 2}}},
+          {:text, "hi"},
+          {:finish, :stop}
+        ])
 
       {:ok, stream} = StreamRunner.run(engine, req(), include_raw_chunks: true)
       events = Enum.to_list(stream)
@@ -230,7 +238,7 @@ defmodule ALLM.StreamRunnerTest do
         fake_engine([
           {:text, "hi"},
           {:raw_chunk, "debug"},
-          {:usage, %{input_tokens: 1}},
+          {:raw_chunk, {:usage, %{input_tokens: 1}}},
           {:finish, :stop}
         ])
 

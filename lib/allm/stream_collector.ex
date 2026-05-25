@@ -271,6 +271,7 @@ defmodule ALLM.StreamCollector do
       state
       | last_message: msg,
         finish_reason: fr || state.finish_reason,
+        usage: extract_metadata_usage(payload, state.usage),
         metadata: merge_message_completed_metadata(state.metadata, payload)
     }
   end
@@ -282,6 +283,7 @@ defmodule ALLM.StreamCollector do
     %{
       state
       | last_message: msg,
+        usage: extract_metadata_usage(payload, state.usage),
         metadata: merge_message_completed_metadata(state.metadata, payload)
     }
   end
@@ -614,4 +616,13 @@ defmodule ALLM.StreamCollector do
   end
 
   defp merge_message_completed_metadata(base, _payload), do: base
+
+  # Phase 21.2: `:message_completed` payloads may carry `metadata.usage`
+  # (additive payload-key extension — see `lib/allm/event.ex:18-34`). When
+  # present, the Usage struct lands on `state.usage` so non-streaming
+  # collection produces a `%Response{usage: %Usage{}}`. Absence is a no-op
+  # — pre-existing `state.usage` (set by an earlier `:raw_chunk {:usage, _}`
+  # event) is preserved.
+  defp extract_metadata_usage(%{metadata: %{usage: %Usage{} = usage}}, _prior), do: usage
+  defp extract_metadata_usage(_payload, prior), do: prior
 end

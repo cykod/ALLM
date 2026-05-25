@@ -12,6 +12,28 @@ defmodule ALLM.Validate do
   structs is rejected with `{:content, :invalid_part_type}` — raw maps in
   content lists are not accepted.
 
+  ## Field-error vocabulary — `invalid_part_type` extension
+
+  The field-error tuple `{:content, :invalid_part_type}` retains its
+  atom-only second element so existing pattern-matching callers continue to
+  match. Phase 21.1 carries the structured detail on the surrounding
+  `%ValidationError{}`'s `:metadata` map:
+
+      %ALLM.Error.ValidationError{
+        errors: [{:content, :invalid_part_type}],
+        metadata: %{
+          invalid_part_type: %{
+            expected: [ALLM.TextPart, ALLM.ImagePart],
+            got: <module>
+          }
+        },
+        message: "validation failed: content element is not %ALLM.TextPart{} or %ALLM.ImagePart{} (got: <module>)"
+      }
+
+  `<module>` is the offending element's struct module, or `Map` when the
+  element is a plain map. The structured `:metadata` makes the failure
+  machine-readable; `Exception.message/1` makes it human-readable.
+
   Validators are opt-in: constructors like `ALLM.Request.new/2` do not call
   these functions. Users invoke `request/1`, `message/1`, `tool/1`,
   `thread/1`, `session/1`, or `image_request/1` explicitly when they need
@@ -101,7 +123,13 @@ defmodule ALLM.Validate do
       |> validate_tool_call_id(msg.role, msg.tool_call_id)
       |> Enum.reverse()
 
-    finalize(:invalid_message, errors)
+    # Phase 21.1: when invalid_part_type fires, build metadata + a
+    # human-readable message naming the expected and offending modules.
+    # The errors list itself is unchanged so existing pattern-matching
+    # callers continue to match.
+    opts = invalid_part_type_opts(errors, msg.content)
+
+    finalize(:invalid_message, errors, opts)
   end
 
   # ---------------------------------------------------------------------------
@@ -438,11 +466,56 @@ defmodule ALLM.Validate do
   defp prepend_path(prefix, {field, reason}) when is_list(field),
     do: {prefix ++ field, reason}
 
-  defp finalize(_reason, []), do: :ok
+  defp finalize(reason, errors, opts \\ [])
 
-  defp finalize(reason, errors) do
-    {:error, ValidationError.new(reason, errors)}
+  defp finalize(_reason, [], _opts), do: :ok
+
+  defp finalize(reason, errors, opts) do
+    {:error, ValidationError.new(reason, errors, opts)}
   end
+
+  # Phase 21.1: build the `metadata: %{invalid_part_type: %{expected: _,
+  # got: _}}` + human-readable `:message` opt pair when an
+  # `{:content, :invalid_part_type}` field-error is in scope. Returns `[]`
+  # (no opts) when the error didn't fire so existing default-message
+  # callers are unaffected.
+  defp invalid_part_type_opts(errors, content) do
+    if {:content, :invalid_part_type} in errors do
+      got = invalid_part_module(content)
+
+      [
+        metadata: %{
+          invalid_part_type: %{expected: [TextPart, ImagePart], got: got}
+        },
+        message:
+          "validation failed: content element is not %ALLM.TextPart{} or " <>
+            "%ALLM.ImagePart{} (got: #{inspect(got)})"
+      ]
+    else
+      []
+    end
+  end
+
+  # Find the first non-conforming element's module name (Map for plain
+  # maps, the struct module otherwise). Defensive against malformed
+  # inputs.
+  defp invalid_part_module(content) when is_list(content) do
+    case Enum.find(content, fn part -> not valid_content_part?(part) end) do
+      nil -> :unknown
+      bad -> module_of(bad)
+    end
+  end
+
+  defp invalid_part_module(_), do: :unknown
+
+  # Per moduledoc contract: struct module for a struct, `Map` for a plain
+  # map, `:unknown` for anything else. The earlier eight-clause form
+  # (BitString / Integer / Float / Atom / List / Tuple) carried no
+  # callers; the human-readable `:message` opt already inspects the
+  # offending element via `inspect/1` for the other cases.
+  defp module_of(%mod{}), do: mod
+  defp module_of(m) when is_map(m), do: Map
+  defp module_of(_), do: :unknown
 
   # ---------------------------------------------------------------------------
   # Internal: image_request rules

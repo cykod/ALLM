@@ -99,7 +99,13 @@ defmodule ALLM.Providers.FakeStreamTest do
       assert Enum.any?(events, &match?({:raw_chunk, %{some: "term"}}, &1))
     end
 
-    test "{:usage, map} becomes {:raw_chunk, {:usage, map}}" do
+    test "{:usage, map} folds onto :message_completed.metadata.usage (Phase 21.2)" do
+      # Phase 21.2: streaming `{:usage, _}` entries no longer emit
+      # `:raw_chunk` — they accumulate and ride on the terminal
+      # `:message_completed` payload's `metadata.usage` key (additive
+      # payload-key extension; no new event variant). Tests asserting
+      # the carve-out for real-adapter `{:raw_chunk, {:usage, _}}` shape
+      # use the `:raw_chunk` script entry directly.
       opts = [
         adapter_opts: [
           script: [{:usage, %{input_tokens: 1, output_tokens: 2}}, {:finish, :stop}]
@@ -109,13 +115,12 @@ defmodule ALLM.Providers.FakeStreamTest do
       assert {:ok, stream} = Fake.stream(fake_request(), opts)
       events = Enum.to_list(stream)
 
-      assert Enum.any?(
-               events,
-               &match?(
-                 {:raw_chunk, {:usage, %{input_tokens: 1, output_tokens: 2}}},
-                 &1
-               )
-             )
+      refute Enum.any?(events, &match?({:raw_chunk, {:usage, _}}, &1))
+
+      assert {:message_completed, payload} =
+               Enum.find(events, &match?({:message_completed, _}, &1))
+
+      assert %ALLM.Usage{input_tokens: 1, output_tokens: 2} = payload.metadata.usage
     end
   end
 

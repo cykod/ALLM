@@ -13,11 +13,12 @@ defmodule ALLM.Image do
   - `{:binary, bytes}` — raw image bytes; an explicit `:mime_type` MUST be
     supplied via `from_binary/2`.
   - `{:base64, encoded}` — standard base64-encoded bytes (with padding) plus
-    explicit `:mime_type`. Constructed via `from_base64/2` — pure data, no
-    decode validation. Callers passing URL-safe (`-`/`_`) or unpadded base64
-    will round-trip cleanly through ETF / JSON but `to_data_uri/1`'s fast-path
-    (which forwards the encoded string verbatim) may emit a `data:` URI a
-    consumer rejects.
+    explicit `:mime_type`. Constructed via `from_base64/2` or
+    `from_data_uri/1` (the latter parses a `data:<mime>;base64,<encoded>`
+    string). Pure data, no decode validation. Callers passing URL-safe
+    (`-`/`_`) or unpadded base64 will round-trip cleanly through ETF / JSON
+    but `to_data_uri/1`'s fast-path (which forwards the encoded string
+    verbatim) may emit a `data:` URI a consumer rejects.
   - `{:url, url}` — public HTTP/HTTPS URL. `from_url/1` does NOT inspect or
     fetch the URL; `:mime_type` is `nil` and the adapter resolves it. URLs are
     NEVER fetched in Layer A — see `to_binary/1` and `to_data_uri/1` for the
@@ -160,6 +161,67 @@ defmodule ALLM.Image do
   @spec from_base64(String.t(), String.t()) :: t()
   def from_base64(encoded, mime_type) when is_binary(encoded) and is_binary(mime_type) do
     %__MODULE__{source: {:base64, encoded}, mime_type: mime_type}
+  end
+
+  @doc """
+  Build an `%Image{}` from a `data:<mime>;base64,<encoded>` URI string.
+
+  Parses the URI scheme into `{:base64, encoded}` source + explicit
+  `:mime_type` — no base64 decode, no MIME validation. The output is
+  equivalent to `from_base64(encoded, mime)` so the `to_data_uri/1`
+  fast-path round-trips the input string verbatim.
+
+  Only the standard `;base64,<payload>` form is supported. URL-encoded
+  payloads (`data:<mime>,<urlencoded>` without `;base64`) raise
+  `ArgumentError` — adapters that consume `data:` URIs expect base64.
+
+  Media-type parameters (`data:image/svg+xml;charset=utf-8;base64,...`)
+  are accepted: the leading `<type>/<subtype>` segment is kept and any
+  trailing `;`-delimited parameters are dropped before storage so the
+  resulting `%Image{}.mime_type` is a bare type/subtype.
+
+  Raises `ArgumentError` when the input is not a `data:` URI, when the
+  `;base64,` segment is missing, or when the MIME segment is empty.
+
+  ## Examples
+
+      iex> img = ALLM.Image.from_data_uri("data:image/png;base64,aGk=")
+      iex> img.source
+      {:base64, "aGk="}
+      iex> img.mime_type
+      "image/png"
+
+      iex> ALLM.Image.to_data_uri(ALLM.Image.from_data_uri("data:image/jpeg;base64,QUJDRA=="))
+      {:ok, "data:image/jpeg;base64,QUJDRA=="}
+
+      iex> ALLM.Image.from_data_uri("data:image/svg+xml;charset=utf-8;base64,PHN2Zy8+").mime_type
+      "image/svg+xml"
+  """
+  @spec from_data_uri(String.t()) :: t()
+  def from_data_uri("data:" <> rest) when is_binary(rest) do
+    case String.split(rest, ";base64,", parts: 2) do
+      [mime_with_params, encoded] when mime_with_params != "" ->
+        # Strip trailing `;`-delimited media-type parameters (e.g.
+        # `charset=utf-8`) — adapters expect a bare `<type>/<subtype>`
+        # MIME and would otherwise mis-route a parameterised value.
+        mime = mime_with_params |> String.split(";", parts: 2) |> hd()
+        %__MODULE__{source: {:base64, encoded}, mime_type: mime}
+
+      [_no_split] ->
+        raise ArgumentError,
+              "ALLM.Image.from_data_uri/1: missing ';base64,' segment — only " <>
+                "data:<mime>;base64,<encoded> is supported (URL-encoded form NOT supported)"
+
+      _ ->
+        raise ArgumentError,
+              "ALLM.Image.from_data_uri/1: empty mime segment in data: URI"
+    end
+  end
+
+  def from_data_uri(other) when is_binary(other) do
+    raise ArgumentError,
+          "ALLM.Image.from_data_uri/1: expected a string starting with 'data:', " <>
+            "got: #{inspect(other)}"
   end
 
   @doc """

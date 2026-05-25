@@ -71,6 +71,7 @@ defmodule ALLM.MixProject do
     guides/image_generation.md
     guides/errors_and_retries.md
     guides/multi_tenant_keys.md
+    guides/fakes.md
   )
 
   defp docs do
@@ -123,6 +124,7 @@ defmodule ALLM.MixProject do
           ALLM.ImageRequest,
           ALLM.ImageResponse,
           ALLM.ImageUsage,
+          ALLM.JsonSchema,
           ALLM.TextPart,
           ALLM.ImagePart
         ],
@@ -134,7 +136,8 @@ defmodule ALLM.MixProject do
           ALLM.Retry,
           ALLM.Telemetry,
           ALLM.StreamCollector,
-          ALLM.Serializer
+          ALLM.Serializer,
+          ALLM.Sandbox
         ],
         Internals: [
           ALLM.Chat,

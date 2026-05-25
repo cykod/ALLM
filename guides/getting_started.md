@@ -55,6 +55,45 @@ Three things happened:
    scripted reply (`"Hello, ALLM!"`). That's the whole point — Fake is
    for testing orchestration, not provider wire fidelity.
 
+## Handling responses — the three-clause pattern
+
+Every Layer-C call (`generate/3`, `chat/3`, etc.) returns one of:
+
+* `{:ok, %Response{finish_reason: :stop, output_text: text}}` — the
+  happy path.
+* `{:ok, %Response{finish_reason: :error, metadata: %{error: e}}}` — a
+  mid-stream adapter failure (rate limit, content filter, network blip)
+  folded back into the response. The call-site tuple stays `{:ok, _}` —
+  matching only `{:error, _}` silently swallows these.
+* `{:error, struct}` — a synchronous pre-flight failure (no adapter, no
+  key, invalid request).
+
+The full three-clause shape:
+
+```elixir
+case ALLM.generate(engine, request) do
+  {:ok, %ALLM.Response{finish_reason: :stop, output_text: text}} ->
+    {:ok, text}
+
+  {:ok, %ALLM.Response{finish_reason: :error, metadata: %{error: err}}} ->
+    {:error, err}
+
+  {:error, err} ->
+    {:error, err}
+end
+```
+
+When you just want the text or a clear error, reach for
+`ALLM.unwrap/1` — it collapses the three clauses into one call:
+
+```elixir
+{:ok, text} = ALLM.unwrap(ALLM.generate(engine, request))
+```
+
+`unwrap/1` also handles non-stop finishes (`:length`, `:tool_calls`,
+`:content_filter`) and structured-content responses; see its `@doc` for
+the full clause list.
+
 ## Building a request explicitly
 
 `ALLM.chat/3` accepts either a list of messages or a `%Request{}`. The
@@ -135,6 +174,11 @@ You have four resolution paths, in priority order:
 3. **Application config** — `config :allm, :keys, openai: "sk-..."`.
 4. **Environment variable** — each provider has a default
    (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`).
+
+`%ALLM.Engine{}` has no `:api_key` field; keys resolve per-call via
+`opts[:api_key]` or via the `:allm, :keys` application config (see
+`ALLM.Keys`). An engine struct can be persisted to ETF or JSON safely —
+it carries no secrets.
 
 Engines never persist API keys — they round-trip safely through ETF and
 JSON. See `multi_tenant_keys.md` for the full resolution chain.

@@ -40,6 +40,44 @@ defmodule ALLM.ImageTest do
     end
   end
 
+  describe "from_data_uri/1 (Phase 21.5)" do
+    test "parses a standard data:<mime>;base64,<encoded> URI" do
+      img = Image.from_data_uri("data:image/png;base64,aGk=")
+      assert img.source == {:base64, "aGk="}
+      assert img.mime_type == "image/png"
+    end
+
+    test "supports JPEG and other common mime types" do
+      img = Image.from_data_uri("data:image/jpeg;base64,QUJDRA==")
+      assert img.source == {:base64, "QUJDRA=="}
+      assert img.mime_type == "image/jpeg"
+    end
+
+    test "raises ArgumentError when the data: prefix is missing" do
+      assert_raise ArgumentError, ~r/data:/i, fn ->
+        Image.from_data_uri("image/png;base64,aGk=")
+      end
+    end
+
+    test "raises ArgumentError when the ;base64, segment is missing (URL-encoded form unsupported)" do
+      assert_raise ArgumentError, ~r/base64/i, fn ->
+        Image.from_data_uri("data:image/png,hello%20world")
+      end
+    end
+
+    test "raises ArgumentError on an empty mime segment" do
+      assert_raise ArgumentError, fn ->
+        Image.from_data_uri("data:;base64,aGk=")
+      end
+    end
+
+    test "round-trips through to_data_uri/1" do
+      uri = "data:image/png;base64,aGk="
+      img = Image.from_data_uri(uri)
+      assert {:ok, ^uri} = Image.to_data_uri(img)
+    end
+  end
+
   describe "from_url/1" do
     test "stores the URL with nil mime_type" do
       img = Image.from_url("https://example.com/x.png")

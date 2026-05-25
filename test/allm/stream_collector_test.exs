@@ -171,6 +171,47 @@ defmodule ALLM.StreamCollectorTest do
       assert s.last_message == msg
       assert s.finish_reason == nil
     end
+
+    test "Phase 21.2: metadata.usage is copied onto state.usage" do
+      msg = %Message{role: :assistant, content: "ok"}
+      usage = %Usage{input_tokens: 12, output_tokens: 4, total_tokens: 16}
+
+      s =
+        StreamCollector.apply_event(
+          StreamCollector.new(),
+          {:message_completed, %{message: msg, finish_reason: :stop, metadata: %{usage: usage}}}
+        )
+
+      assert s.usage == usage
+    end
+
+    test "Phase 21.2: metadata.usage without finish_reason still lands on state" do
+      msg = %Message{role: :assistant, content: "ok"}
+      usage = %Usage{input_tokens: 8, output_tokens: 2}
+
+      s =
+        StreamCollector.apply_event(
+          StreamCollector.new(),
+          {:message_completed, %{message: msg, metadata: %{usage: usage}}}
+        )
+
+      assert s.usage == usage
+    end
+
+    test "Phase 21.2: metadata.usage on collected stream lands on Response.usage" do
+      msg = %Message{role: :assistant, content: "ok"}
+      usage = %Usage{input_tokens: 5, output_tokens: 1, total_tokens: 6}
+
+      s =
+        StreamCollector.new()
+        |> StreamCollector.apply_event({:text_delta, %{id: nil, delta: "ok"}})
+        |> StreamCollector.apply_event(
+          {:message_completed, %{message: msg, finish_reason: :stop, metadata: %{usage: usage}}}
+        )
+
+      response = StreamCollector.to_response(s)
+      assert response.usage == usage
+    end
   end
 
   describe "apply_event/2 — :raw_chunk" do

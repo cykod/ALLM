@@ -57,6 +57,7 @@ defmodule ALLM do
   | Multi-turn loop with auto tool execution | `chat/3` / `stream/3` | `{:ok, %ALLM.ChatResult{}}` |
   | Multi-turn with persistence between turns | `ALLM.Session` API | `{:ok, %ALLM.Session{}}` |
   | Generate or edit images | `generate_image/3`, `edit_image/4`, `image_variations/3` | `{:ok, %ALLM.ImageResponse{}}` |
+  | Fold `generate/3` result into `{:ok, text}` | `unwrap/1` | `{:ok, String.t()} \| {:error, term()}` |
 
   Stateless calls (`generate/3` / `chat/3` / etc.) are pure functions of
   their inputs. The `ALLM.Session` API is what you use when the
@@ -179,6 +180,11 @@ defmodule ALLM do
   Pass the returned map as `:response_format` on a request to ask the
   provider to constrain its output to the schema.
 
+  Atom-keyed schemas (and atom values such as `type: :object`) are
+  normalized to strings via `ALLM.JsonSchema.normalize/1`, matching
+  `ALLM.Tool.new/1`'s `:schema` handling. Pre-stringified maps pass
+  through verbatim (fast path).
+
   ## Examples
 
       iex> ALLM.json_schema("person", %{"type" => "object"})
@@ -186,13 +192,16 @@ defmodule ALLM do
 
       iex> ALLM.json_schema("person", %{"type" => "object"}, strict: false)
       %{type: :json_schema, name: "person", schema: %{"type" => "object"}, strict: false}
+
+      iex> ALLM.json_schema("person", %{type: :object, properties: %{name: %{type: :string}}}).schema
+      %{"properties" => %{"name" => %{"type" => "string"}}, "type" => "object"}
   """
   @spec json_schema(String.t(), map(), keyword()) :: map()
   def json_schema(name, schema, opts \\ []) do
     %{
       type: :json_schema,
       name: name,
-      schema: schema,
+      schema: ALLM.JsonSchema.normalize(schema),
       strict: Keyword.get(opts, :strict, true)
     }
   end
@@ -334,6 +343,71 @@ defmodule ALLM do
           | {:error, EngineError.t() | AdapterError.t() | ValidationError.t()}
   def generate(engine, request, opts \\ []),
     do: ALLM.Runner.run(engine, request, opts)
+
+  @doc """
+  Fold a `generate/3`-shaped return tuple into `{:ok, text} | {:error, _}`.
+
+  Useful when the caller just wants the response text or a clear error and
+  doesn't need the full `%Response{}`. Composes with the
+  pipe-into-`generate/3` pattern:
+
+      engine
+      |> ALLM.generate(ALLM.request([ALLM.user("hi")]))
+      |> ALLM.unwrap()
+
+  ## Clauses
+
+    * `{:ok, %Response{finish_reason: :stop, message: %Message{content: list}}}`
+      where `list` is a list (vision / structured parts) →
+      `{:error, :structured_content}`. The caller should access
+      `:message` directly. This branch fires BEFORE the text fold below.
+    * `{:ok, %Response{finish_reason: :stop}}` → delegates to
+      `ALLM.Response.text/1` (which prefers `:output_text` over
+      `message.content`). Returns `{:ok, text}` when text is a binary;
+      `{:error, :empty_stop_response}` when both `:output_text` and
+      `message.content` are absent / non-binary.
+    * `{:ok, %Response{finish_reason: :error, metadata: %{error: e}}}` →
+      `{:error, e}` (mid-stream error folded back to the call site).
+    * `{:ok, %Response{finish_reason: other}}` →
+      `{:error, {:non_stop_finish, other}}` for non-stop finishes
+      (`:length`, `:tool_calls`, `:content_filter`, `:other`).
+    * `{:error, _} = err` → `err` (pass-through).
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...> adapter: ALLM.Providers.Fake,
+      ...> adapter_opts: [script: [{:text, "hello"}, {:finish, :stop}]]
+      ...>)
+      iex> ALLM.unwrap(ALLM.generate(engine, ALLM.request([ALLM.user("hi")])))
+      {:ok, "hello"}
+  """
+  @spec unwrap({:ok, ALLM.Response.t()} | {:error, term()}) ::
+          {:ok, String.t()} | {:error, term()}
+  def unwrap({:ok, %ALLM.Response{finish_reason: :stop, message: %Message{content: c}}})
+      when is_list(c),
+      do: {:error, :structured_content}
+
+  def unwrap({:ok, %ALLM.Response{finish_reason: :stop} = resp}) do
+    # Delegate to Response.text/1 so the `:output_text → message.content
+    # → nil` fall-back has a single implementation (Phase 21 F1). An
+    # explicit `:empty_stop_response` surfaces the case where neither
+    # `:output_text` nor `message.content` carries a binary — previously
+    # mis-routed through the `:non_stop_finish` clause despite a `:stop`
+    # finish.
+    case ALLM.Response.text(resp) do
+      text when is_binary(text) -> {:ok, text}
+      nil -> {:error, :empty_stop_response}
+    end
+  end
+
+  def unwrap({:ok, %ALLM.Response{finish_reason: :error, metadata: %{error: e}}}),
+    do: {:error, e}
+
+  def unwrap({:ok, %ALLM.Response{finish_reason: other}}),
+    do: {:error, {:non_stop_finish, other}}
+
+  def unwrap({:error, _} = err), do: err
 
   @doc """
   Execute a single chat step (one adapter round-trip plus any auto-executed

@@ -200,9 +200,15 @@ defmodule ALLM.Providers.Fake do
   @impl ALLM.Adapter
   @spec generate(ALLM.Request.t(), keyword()) ::
           {:ok, ALLM.Response.t()} | {:error, AdapterError.t()}
-  def generate(_request, opts) do
+  def generate(request, opts) do
     adapter_opts = Keyword.get(opts, :adapter_opts, [])
     :ok = Script.validate!(adapter_opts)
+
+    # Phase 21.2 (F2): when `adapter_opts[:record]` is a pid, send
+    # `{:allm_fake_record, request, opts}` verbatim BEFORE the script
+    # interpretation runs. Fire-and-forget; a dead pid raises ArgumentError
+    # — a dead recording pid is a test bug, not Fake's problem.
+    :ok = maybe_send_record(adapter_opts, request, opts)
 
     # Phase 9.3: wrap the per-call work in `ALLM.Retry.run/3` so the
     # `retry_until_call: n` opt drives a real retry loop and emits
@@ -258,9 +264,12 @@ defmodule ALLM.Providers.Fake do
   @impl ALLM.StreamAdapter
   @spec stream(ALLM.Request.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, AdapterError.t()}
-  def stream(_request, opts) do
+  def stream(request, opts) do
     adapter_opts = Keyword.get(opts, :adapter_opts, [])
     :ok = Script.validate!(adapter_opts)
+
+    # Phase 21.2 (F2): record at call-open time (before the stream is built).
+    :ok = maybe_send_record(adapter_opts, request, opts)
 
     # Phase 9.3: spec §6.1 — streaming calls are NOT retried. We do
     # NOT call `ALLM.Retry.run/3` here. Instead, when
@@ -475,9 +484,27 @@ defmodule ALLM.Providers.Fake do
       resp
       |> maybe_attach_request_id(adapter_opts)
       |> maybe_attach_empty_metadata(entries)
+      |> maybe_override_usage(adapter_opts)
 
     {:ok, resp}
   end
+
+  # Phase 21.2 (F1): when `adapter_opts[:usage]` is set, normalize via
+  # `normalize_usage/1` and override `response.usage`. The adapter-opt
+  # wins over any per-script `{:usage, _}` entry (last-write-wins at the
+  # adapter boundary).
+  defp maybe_override_usage(%ALLM.Response{} = resp, adapter_opts) do
+    case Keyword.get(adapter_opts, :usage) do
+      nil -> resp
+      usage -> %{resp | usage: normalize_usage(usage)}
+    end
+  end
+
+  # Normalize a `:usage` adapter_opt value: accept either a pre-built
+  # `%ALLM.Usage{}` (pass-through) or a keyword list (route through
+  # `ALLM.Usage.new/1`).
+  defp normalize_usage(%ALLM.Usage{} = usage), do: usage
+  defp normalize_usage(kw) when is_list(kw), do: ALLM.Usage.new(kw)
 
   defp maybe_attach_request_id(%ALLM.Response{} = resp, adapter_opts) do
     case Keyword.get(adapter_opts, :request_id) do
@@ -533,18 +560,31 @@ defmodule ALLM.Providers.Fake do
     cursor = advance_cursor(scripts, adapter_opts)
 
     case Enum.at(scripts, cursor) do
-      nil ->
-        {:error, script_exhausted_error()}
+      nil -> {:error, script_exhausted_error()}
+      entries -> dispatch_entries(entries, adapter_opts)
+    end
+  end
 
-      entries ->
-        case preflight_error(entries) do
-          {:preflight, err} ->
-            {:error, err}
+  defp dispatch_entries(entries, adapter_opts) do
+    case preflight_error(entries) do
+      {:preflight, err} -> {:error, err}
+      :no_preflight -> {:ok, build_stream_from_entries(entries, adapter_opts)}
+    end
+  end
 
-          :no_preflight ->
-            observer = Keyword.get(adapter_opts, :cleanup_observer)
-            {:ok, build_stream(entries, observer)}
-        end
+  defp build_stream_from_entries(entries, adapter_opts) do
+    observer = Keyword.get(adapter_opts, :cleanup_observer)
+    # Phase 21.2 (F1): pre-normalize the adapter-opt usage so the stream's
+    # `:message_completed` payload picks it up via `metadata.usage` without
+    # re-parsing per call.
+    forced_usage = forced_usage_from_opts(adapter_opts)
+    build_stream(entries, observer, forced_usage)
+  end
+
+  defp forced_usage_from_opts(adapter_opts) do
+    case Keyword.get(adapter_opts, :usage) do
+      nil -> nil
+      u -> normalize_usage(u)
     end
   end
 
@@ -561,15 +601,15 @@ defmodule ALLM.Providers.Fake do
   # stash a `:message_started` event in the acc's `:pending` list so the
   # first next_fun call emits it before consuming any entry. This keeps
   # `:message_started` synchronous with the consumer's first reduce.
-  defp build_stream(entries, observer) do
+  defp build_stream(entries, observer, forced_usage) do
     Stream.resource(
-      fn -> start_fun(entries, observer) end,
+      fn -> start_fun(entries, observer, forced_usage) end,
       &next_fun/1,
       &after_fun/1
     )
   end
 
-  defp start_fun(entries, observer) do
+  defp start_fun(entries, observer, forced_usage) do
     msg = %Message{role: :assistant, content: ""}
 
     %{
@@ -579,6 +619,13 @@ defmodule ALLM.Providers.Fake do
       accumulated_text: "",
       closed?: false,
       finish_reason: nil,
+      # Phase 21.2 (F1): `:usage` adapter-opt wins; otherwise the LAST
+      # per-script `{:usage, _}` entry seen in the stream becomes
+      # `metadata.usage` on `:message_completed`. `nil` means "no usage
+      # to surface" — the payload key is omitted entirely (preserves the
+      # existing closed payload shape for consumers).
+      forced_usage: forced_usage,
+      script_usage: nil,
       pending: [{:message_started, %{message: msg}}]
     }
   end
@@ -622,6 +669,18 @@ defmodule ALLM.Providers.Fake do
     {closing, %{acc | entries: rest, closed?: true}}
   end
 
+  # Phase 21.2 (F1): a per-script `{:usage, _}` entry is absorbed into
+  # `acc.script_usage` so the LAST one folds onto `:message_completed`'s
+  # `metadata.usage`. Pre-21.2 this entry surfaced as a `:raw_chunk`
+  # event via `Script.interpret/1` (`lib/allm/providers/fake/script.ex:309`);
+  # post-21.2 the streaming arm reroutes it onto the payload's metadata
+  # key so `StreamCollector.collect/1` produces a `%Response{usage: _}`
+  # without a parallel `:raw_chunk` channel.
+  defp next_fun(%{entries: [{:usage, map} | rest]} = acc) when is_map(map) do
+    usage = struct!(ALLM.Usage, map)
+    next_fun(%{acc | entries: rest, script_usage: usage})
+  end
+
   defp next_fun(%{entries: [entry | rest]} = acc) do
     events = Script.interpret(entry)
     acc = update_emitted_text(acc, events)
@@ -635,20 +694,42 @@ defmodule ALLM.Providers.Fake do
     {closing, %{acc | closed?: true}}
   end
 
-  defp closing_events(%{emitted_text?: true, accumulated_text: text, finish_reason: reason}) do
+  defp closing_events(%{emitted_text?: true, accumulated_text: text} = acc) do
+    payload =
+      maybe_attach_usage_metadata(
+        %{message: %Message{role: :assistant, content: text}, finish_reason: acc.finish_reason},
+        acc
+      )
+
     [
       {:text_completed, %{id: nil, text: text}},
-      {:message_completed,
-       %{message: %Message{role: :assistant, content: text}, finish_reason: reason}}
+      {:message_completed, payload}
     ]
   end
 
-  defp closing_events(%{emitted_text?: false, finish_reason: reason}) do
-    [
-      {:message_completed,
-       %{message: %Message{role: :assistant, content: ""}, finish_reason: reason}}
-    ]
+  defp closing_events(%{emitted_text?: false} = acc) do
+    payload =
+      maybe_attach_usage_metadata(
+        %{message: %Message{role: :assistant, content: ""}, finish_reason: acc.finish_reason},
+        acc
+      )
+
+    [{:message_completed, payload}]
   end
+
+  # Phase 21.2 (F1): attach `metadata.usage` to the `:message_completed`
+  # payload when EITHER `adapter_opts[:usage]` was set (`forced_usage`
+  # wins) OR a per-script `{:usage, _}` entry was observed. Absence is a
+  # no-op — the payload's pre-21.2 shape is preserved verbatim.
+  defp maybe_attach_usage_metadata(payload, %{forced_usage: %ALLM.Usage{} = u}) do
+    Map.put(payload, :metadata, %{usage: u})
+  end
+
+  defp maybe_attach_usage_metadata(payload, %{script_usage: %ALLM.Usage{} = u}) do
+    Map.put(payload, :metadata, %{usage: u})
+  end
+
+  defp maybe_attach_usage_metadata(payload, _acc), do: payload
 
   # Track whether any :text_delta has been emitted so we know whether to
   # prepend :text_completed at close. Also accumulate the text so
@@ -675,6 +756,37 @@ defmodule ALLM.Providers.Fake do
     # test-only hook and a bogus observer value shouldn't mask the real
     # test failure.
     _ -> :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # Internals — :record opt (Phase 21.2 / F2)
+  # ---------------------------------------------------------------------------
+
+  # When `adapter_opts[:record]` is a pid, send `{:allm_fake_record,
+  # request, opts}` verbatim. No key scrubbing — the caller owns the
+  # opts they passed in. Fake never resolves real API keys (no
+  # `ALLM.Keys.fetch!/2` path), BUT a BYOK-flow caller's `opts[:api_key]`
+  # flows in verbatim per `lib/allm/stream_runner.ex`'s
+  # `maybe_put_api_key/2`. Callers wanting redaction can
+  # `Keyword.delete(opts, :api_key)` before asserting on the recorded
+  # message. A dead pid is treated as a test bug: `Process.alive?/1` is
+  # checked first and `ArgumentError` is raised with the dead pid in the
+  # message so the failure surfaces inside the test body rather than as
+  # a silently-lost `send/2`.
+  defp maybe_send_record(adapter_opts, request, opts) do
+    case Keyword.get(adapter_opts, :record) do
+      nil ->
+        :ok
+
+      pid when is_pid(pid) ->
+        unless Process.alive?(pid) do
+          raise ArgumentError,
+                "ALLM.Providers.Fake :record pid #{inspect(pid)} is not alive — pass self() or a live pid"
+        end
+
+        send(pid, {:allm_fake_record, request, opts})
+        :ok
+    end
   end
 
   # ---------------------------------------------------------------------------

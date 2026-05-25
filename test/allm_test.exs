@@ -45,12 +45,26 @@ defmodule ALLMTest do
 
   describe "json_schema/3" do
     test "returns a canonical tagged map" do
-      assert %{type: :json_schema, name: "foo", strict: true, schema: %{type: "object"}} =
-               ALLM.json_schema("foo", %{type: "object"}, strict: true)
+      assert %{type: :json_schema, name: "foo", strict: true, schema: %{"type" => "object"}} =
+               ALLM.json_schema("foo", %{"type" => "object"}, strict: true)
     end
 
     test "defaults strict to true" do
       assert %{strict: true} = ALLM.json_schema("foo", %{})
+    end
+
+    test "normalizes atom-keyed schema to string keys (mirrors ALLM.Tool.new/1)" do
+      # Phase 21 (code-review F2): ALLM.json_schema/3 now applies the same
+      # ALLM.JsonSchema.normalize/1 helper as ALLM.Tool.new/1's :schema
+      # field, so a caller passing %{type: :object, ...} no longer leaks
+      # atom keys/values into the adapter wire shape.
+      result =
+        ALLM.json_schema("person", %{type: :object, properties: %{name: %{type: :string}}})
+
+      assert result.schema == %{
+               "type" => "object",
+               "properties" => %{"name" => %{"type" => "string"}}
+             }
     end
   end
 

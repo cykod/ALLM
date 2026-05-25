@@ -141,3 +141,17 @@
 [BUILD] thu 5/7 6pm - Build all 14 phases of REBUILD_DOCUMENTATION.md (docstring rewrite, audit script, guides/, README/CHANGELOG/examples/mix.exs prose) with review/retro deferred to end
 
 [MILE] fri 5/8 3pm - Committed REBUILD_DOCUMENTATION rebuild — 14 phases, 85 files, banned-token-clean across 75-file user-facing surface, plus async-safety fix for anthropic_stream_wire_test
+
+[DSGN] mon 5/25 11am - Design Amesbury implementation feedback fixes for ALLM ergonomics
+
+[BUILD] mon 5/25 12pm - Build Phase 21 Amesbury feedback fixes from AMESBURY_IMPLEMENTATION_FEEDBACK.md
+
+[IMPL] mon 5/25 12pm - Implement phases 21.1-21.5 from AMESBURY feedback: validation metadata, Fake :usage/:record, ALLM.Sandbox, ALLM.unwrap, Image.from_data_uri + docs
+
+[CDRV] mon 5/25 12pm - Code review on current session
+
+[RETR] mon 5/25 12pm - Retro on Phase 21 Amesbury feedback sub-phases 21.1-21.5
+
+[FIX] mon 5/25 12pm - Fix issues from Phase 21 Amesbury feedback reviews (overview + code-review + retro)
+
+[MILE] mon 5/25 6pm - Shipped Phase 21 Amesbury feedback rollup with ALLM.Sandbox, unwrap/1, Fake :usage/:record, Image.from_data_uri/1, ALLM.JsonSchema, and guides updates

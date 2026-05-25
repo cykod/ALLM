@@ -195,6 +195,85 @@ the tool, emits a `:tool_result` event, and continues the loop.
 
 See `streaming.md` for the full event-shape table.
 
+## Handler context (arity-2)
+
+A tool handler may be 1-arity (`fn args -> ... end`) or 2-arity
+(`fn args, context -> ... end`). ALLM detects the arity at dispatch
+time and routes accordingly.
+
+The arity-2 keyword list carries call context. Standard keys provided by
+`ALLM.ToolExecutor.Default`:
+
+| Key | Type | Notes |
+|-----|------|-------|
+| `:context` | `term()` | The opaque value passed via `ALLM.chat(engine, thread, context: ...)` or `Session.reply(session, msg, context: ...)`. Caller-defined shape. |
+| `:session_id` | `String.t() \| nil` | The `%Session{}.id` when invoked through the Session API; `nil` for stateless `chat/3` / `step/3`. |
+| `:tool_call` | `%ALLM.ToolCall{}` | The exact tool call the assistant emitted (`:id`, `:name`, `:arguments`). |
+| `:engine` | `%ALLM.Engine{}` | The engine driving the call — handlers needing to issue downstream LLM calls reuse it via `ALLM.generate/3`. |
+| `:request_id` | `String.t() \| nil` | Telemetry-correlation id from the parent span. |
+
+```elixir
+handler = fn args, ctx ->
+  case Keyword.get(ctx, :context) do
+    %{user_id: id} -> {:ok, lookup_for_user(id, args)}
+    _ -> {:ok, args}
+  end
+end
+```
+
+Reach for the 1-arity form when handlers don't need context — it keeps
+the call site simple. Custom keys in `:context` are passed through
+unchanged so tests can inject arbitrary correlation data.
+
+## Adapter-call cadence
+
+Each turn of the tool loop consumes **two adapter calls**: one for the
+assistant's tool-call request, and one for the post-tool-result
+assistant turn. Token bills scale with `turn_count × 2`. Multi-tool
+turns (parallel tool calls) still count as one assistant call each
+direction — only the turn count drives the call multiplier.
+
+A loop running three tool-call turns issues six adapter requests. With
+`max_turns: 8` (the library default), the upper bound is sixteen calls
+per `ALLM.chat/3` invocation.
+
+## Structured response after tool loop
+
+When you need the post-tool-loop assistant turn to return JSON matching
+a schema (rather than free-form text), pass both `:response_format` and
+`structured_finalize: true`:
+
+```elixir
+schema = ALLM.json_schema("answer", %{
+  "type" => "object",
+  "properties" => %{"answer" => %{"type" => "string"}},
+  "required" => ["answer"]
+})
+
+{:ok, result} =
+  ALLM.chat(engine, [ALLM.user("what is 6×7?")],
+    response_format: schema,
+    structured_finalize: true
+  )
+
+{:ok, %{"answer" => "42"}} = Jason.decode(result.final_response.output_text)
+```
+
+`structured_finalize: true` runs a two-pass orchestration: pass 1 runs
+the tool loop freely (the model may emit any text or tool calls); pass 2
+re-prompts the model with `response_format` constrained to the schema so
+the *final* turn is guaranteed to match.
+
+The result's metadata carries observability for the two passes:
+
+* `result.metadata.structured_finalize.pass_1_halted` — the halt reason
+  pass 1 reached (typically `:completed`).
+* `result.metadata.structured_finalize.pass_1_response` — pass 1's
+  raw `%Response{}` for inspection.
+
+`result.steps` contains the merged step list from both passes so step
+indexes remain stable across the two-pass boundary.
+
 ## Where to next
 
 * `sessions.md` — multi-turn tool flows with persistence.
