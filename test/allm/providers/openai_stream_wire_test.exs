@@ -430,6 +430,40 @@ defmodule ALLM.Providers.OpenAIStreamWireTest do
     assert response.metadata.reasoning.summary == "Thinking carefully."
   end
 
+  # Regression: `maybe_apply_usage_from_response/2` was a no-op, so every
+  # gpt-5* Responses-API stream landed `response.usage == %Usage{}` (all
+  # nils). The fix routes usage through `:raw_chunk {:usage, _}` mirroring
+  # the Chat-Completions streaming path and using `decode_responses_usage/1`'s
+  # field shape (input_tokens/output_tokens/total_tokens/reasoning_tokens/extra).
+  test "Responses-API streaming: response.completed.usage folds into response.usage with reasoning_tokens" do
+    chunks = Fx.responses_stream_chunks(:happy_text_with_usage)
+    stub = install_stub(chunks)
+
+    {:ok, stream} = call_stream(stub, req(model: "gpt-5.5"))
+    events = consume(stream)
+
+    assert Enum.any?(
+             events,
+             &match?(
+               {:raw_chunk,
+                {:usage,
+                 %{
+                   input_tokens: 12,
+                   output_tokens: 7,
+                   total_tokens: 19,
+                   reasoning_tokens: 4
+                 }}},
+               &1
+             )
+           )
+
+    response = collect(events)
+    assert response.usage.input_tokens == 12
+    assert response.usage.output_tokens == 7
+    assert response.usage.total_tokens == 19
+    assert response.usage.reasoning_tokens == 4
+  end
+
   test "streaming never retries — zero [:allm, :adapter, :retry] events on mid-stream 5xx" do
     handler_id = "openai_stream_no_retry_test_#{System.unique_integer([:positive])}"
 

@@ -1,3 +1,21 @@
+## [BUG] Fix Responses-API streaming usage no-op (gpt-5* totals)
+*Thursday, May 28th at 1pm*
+Replaced the no-op maybe_apply_usage_from_response/2 in the OpenAI 
+Responses-API streaming path with responses_usage_events/1, which emits a 
+:raw_chunk {:usage, _} event so StreamCollector folds usage into 
+Response.usage. Field shape mirrors decode_responses_usage/1 
+(input/output/total tokens plus reasoning_tokens from output_tokens_details and 
+an extra spillover map) so streaming and non-streaming Responses paths now 
+produce identical %Usage{} structs. Previously, every gpt-5* stream landed 
+Response.usage as an all-nil %Usage{}; the recorded happy_text.sse fixture 
+omitted the usage block so no test caught it. Added 
+test/fixtures/openai/responses/happy_text_with_usage.sse with a gpt-5*-shaped 
+usage block on response.completed and a regression test in 
+openai_stream_wire_test.exs asserting both the intermediate :raw_chunk event 
+and final response.usage fields.
+
+---
+
 ## [FEAT] Phase 21 Amesbury feedback rollup (21.1-21.5)
 *Monday, May 25th at 6pm*
 Ship the Amesbury integration feedback rollup across all five non-release 

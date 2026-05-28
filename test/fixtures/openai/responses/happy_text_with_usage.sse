@@ -1,0 +1,13 @@
+: synthesized OpenAI Responses API streaming wire shape with usage block
+: per https://platform.openai.com/docs/api-reference/responses-streaming accessed 2026-05-26
+: hand-crafted; not recorded from the live API
+: locks in the gpt-5* usage fold (regression: maybe_apply_usage_from_response no-op)
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"hel"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"lo"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_stream_2","status":"completed","usage":{"input_tokens":12,"output_tokens":7,"total_tokens":19,"output_tokens_details":{"reasoning_tokens":4}}}}
+

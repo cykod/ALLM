@@ -1053,16 +1053,13 @@ defmodule ALLM.Providers.OpenAI do
     # for the synthetic :message_completed event.
     response_obj = decoded["response"] || %{}
     {finish_reason, _raw} = map_responses_status(response_obj)
-
-    state =
-      state
-      |> Map.put(:finish_reason, finish_reason)
-      |> maybe_apply_usage_from_response(response_obj)
+    state = Map.put(state, :finish_reason, finish_reason)
+    usage_events = responses_usage_events(response_obj)
 
     if state.message_completed_emitted? do
-      {[], true, %{state | done: true}}
+      {usage_events, true, %{state | done: true}}
     else
-      events = synthesize_responses_completed(state)
+      events = usage_events ++ synthesize_responses_completed(state)
       {events, true, %{state | done: true, message_completed_emitted?: true}}
     end
   end
@@ -1276,12 +1273,30 @@ defmodule ALLM.Providers.OpenAI do
     end)
   end
 
-  # Embed any usage block carried on the response.completed payload into the
-  # state via the same :raw_chunk mechanism (StreamCollector folds it onto
-  # Response.usage). Defensive — the field may be absent for partial
-  # completions; we leave state unchanged in that case.
-  defp maybe_apply_usage_from_response(state, %{"usage" => %{} = _usage}), do: state
-  defp maybe_apply_usage_from_response(state, _), do: state
+  # Emit a `:raw_chunk {:usage, _}` event when the `response.completed` payload
+  # carries a `usage` block (gpt-5* and other modern Responses models include
+  # it). `StreamCollector` folds the map through `struct!(%Usage{}, _)`, so
+  # keys MUST be `%Usage{}` field names. Shape matches `decode_responses_usage/1`
+  # so streaming and non-streaming paths produce identical `%Usage{}` structs.
+  defp responses_usage_events(%{"usage" => %{} = usage}) do
+    pre_mapped = %{
+      input_tokens: usage["input_tokens"],
+      output_tokens: usage["output_tokens"],
+      total_tokens: usage["total_tokens"],
+      reasoning_tokens: extract_reasoning_tokens(usage, "output_tokens_details"),
+      extra:
+        Map.drop(usage, [
+          "input_tokens",
+          "output_tokens",
+          "total_tokens",
+          "output_tokens_details"
+        ])
+    }
+
+    [{:raw_chunk, {:usage, pre_mapped}}]
+  end
+
+  defp responses_usage_events(_), do: []
 
   defp process_choice(nil, state), do: {[], state}
 
