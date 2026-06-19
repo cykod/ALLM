@@ -155,3 +155,5 @@
 [FIX] mon 5/25 12pm - Fix issues from Phase 21 Amesbury feedback reviews (overview + code-review + retro)
 
 [MILE] mon 5/25 6pm - Shipped Phase 21 Amesbury feedback rollup with ALLM.Sandbox, unwrap/1, Fake :usage/:record, Image.from_data_uri/1, ALLM.JsonSchema, and guides updates
+
+[MILE] thu 5/28 1pm - Fixed Responses-API streaming usage no-op so gpt-5* total_tokens populates Response.usage

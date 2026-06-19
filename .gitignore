@@ -31,3 +31,4 @@ erl_crash.dump
 *.tar
 .claude/settings.local.json
 code-reviews/
+steering/examples
