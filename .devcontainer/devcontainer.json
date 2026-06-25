@@ -22,7 +22,7 @@
   "mounts": [
     "source=${localEnv:HOME}/.claude/skills,target=/root/.claude/skills,type=bind,readonly",
   ],
-  "postCreateCommand": "corepack enable && corepack prepare pnpm@10.28.1 --activate && npm install -g @playwright/cli@latest && playwright-cli install && mix local.hex --force && mix local.rebar --force",
+  "postCreateCommand": "corepack enable && corepack prepare pnpm@10.28.1 --activate && npm install -g @playwright/cli@latest && playwright-cli install && asdf global erlang 27.1.2 && asdf global elixir 1.17.3-otp-27 && mix local.hex --force && mix local.rebar --force",
   "remoteUser": "root",
   "containerEnv": {
     "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
