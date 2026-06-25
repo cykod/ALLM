@@ -1,3 +1,11 @@
+## [REL] v0.4.2 — Streaming usage fidelity
+
+Other changes:
+- Fix OpenAI Responses-API streaming usage landing as an all-nil
+  `%Usage{}` for `gpt-5*` models — streaming now folds input/output/total
+  and reasoning token counts into `Response.usage`, matching the
+  non-streaming Responses path
+
 ## [REL] v0.4.0 — Integrator ergonomics
 
 Breaking changes:
