@@ -179,3 +179,5 @@
 [FIX] sat 6/27 1am - Fix issues from Phase 3 (final) engine-id cursor reviews (overview + code-review + security-review + retro)
 
 [ASKS] sat 6/27 2am - Future: re-key FakeImages bump_retry_visits/2 retry-visit counter off phash2(script) onto engine identity (or document the collision as benign) — residual content-hash footgun, scoped out of UNLLMTD Phase 3 (retro F2)
+
+[MILE] sat 6/27 2am - Keyed Fake/FakeImages multi-call cursor on engine identity via a new serializable Engine :id, removing the content-hash cursor footgun at the façade

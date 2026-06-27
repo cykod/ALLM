@@ -1,4 +1,4 @@
-## [REL] v0.5.0 — Engine identity
+## [REL] v0.4.3 — Engine identity
 
 Breaking changes:
 - `ALLM.Engine.new/1` now stamps each engine with a unique `:id`, so two
