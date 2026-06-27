@@ -68,9 +68,13 @@ defmodule ALLM.StreamStepTest do
   end
 
   describe "stream_step/3 — delegation invariant" do
-    # Isolate Fake's per-process cursor via Task.async — the two calls
-    # use content-equal scripts that would collide on a shared process
-    # dictionary cursor.
+    # Since the §31 fix, Fake's façade-driven cursor keys on `engine.id`
+    # (injected as `adapter_opts[:cursor_key]` by `StreamRunner`). Each path
+    # builds its own engine via `plain_text_engine/0`, so `ALLM.stream_step/3`
+    # and `Chat.stream_step/3` get distinct cursor keys and never collide —
+    # even sequentially in one process. `Task.async/1` is retained as
+    # defensive process isolation (belt-and-suspenders), no longer the
+    # collision guard.
     test "ALLM.stream_step/3 and ALLM.Chat.stream_step/3 emit the same events" do
       thread = user_thread()
 

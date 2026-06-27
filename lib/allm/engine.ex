@@ -28,6 +28,13 @@ defmodule ALLM.Engine do
   Engines are safe to round-trip through `:erlang.term_to_binary/1` and JSON
   **iff** every field carries only modules, atoms, or plain serializable data:
 
+    * `:id` — `integer() | nil`. A plain positive integer
+      (`System.unique_integer([:positive])`) auto-stamped by `new/1`, or
+      `nil` for a hand-built `%Engine{}`. Round-trips natively through both
+      ETF and JSON. `__from_tagged__/1` restores it verbatim (no
+      re-stamping); a pre-fix serialized engine lacking `"id"` decodes to
+      `nil`. Used as the per-engine cursor key for the deterministic
+      `ALLM.Providers.Fake` / `ALLM.Providers.FakeImages` adapters (§31).
     * `:adapter`, `:tool_executor`, `:tool_result_encoder`, `:image_adapter`
       `module | nil`. Modules are restored on JSON decode via
       `String.to_existing_atom/1`; an adapter module not loaded in the BEAM
@@ -81,6 +88,7 @@ defmodule ALLM.Engine do
   @type resolved_model :: String.t() | tuple() | struct() | nil
 
   @type t :: %__MODULE__{
+          id: integer() | nil,
           adapter: module() | nil,
           adapter_opts: keyword(),
           model: String.t() | nil,
@@ -96,6 +104,7 @@ defmodule ALLM.Engine do
         }
 
   defstruct [
+    :id,
     :adapter,
     :model,
     :tool_executor,
@@ -141,6 +150,17 @@ defmodule ALLM.Engine do
   missing-adapter check fires at adapter-call time (surfaces as
   `%EngineError{reason: :missing_adapter}`), not here.
 
+  A stable, serializable `:id` is auto-stamped via
+  `System.unique_integer([:positive])` when none is supplied — this is the
+  per-engine identity used as the `Fake`/`FakeImages` multi-call cursor key
+  (see §31). Because every constructed engine gets a distinct id,
+  `Engine.new(opts) != Engine.new(opts)` by `:id` — each constructed engine
+  *is* a distinct instance. An explicitly-passed `id:` opt is preserved
+  (supports deterministic reconstruction). Derived engines built via
+  struct-update (`with_model/2`, `merge_opts/2`, `put_tool/2`, …) keep the
+  same `:id` — correct for "same engine, reconfigured"; use `new/1` when you
+  need two independent multi-call engines.
+
   ## Examples
 
       iex> engine = ALLM.Engine.new(adapter: ALLM.Providers.Fake, model: "fake:m")
@@ -150,9 +170,28 @@ defmodule ALLM.Engine do
       "fake:m"
       iex> engine.tools
       []
+      iex> is_integer(engine.id) and engine.id > 0
+      true
   """
   @spec new(keyword()) :: t()
-  def new(opts \\ []), do: struct!(__MODULE__, opts)
+  def new(opts \\ []) do
+    engine = struct!(__MODULE__, opts)
+    %{engine | id: engine.id || System.unique_integer([:positive])}
+  end
+
+  @doc false
+  # Inject the engine's `:id` as `adapter_opts[:cursor_key]` so content-equal
+  # engines don't share the `Fake`/`FakeImages` process-dict cursor (§31).
+  # `Keyword.put_new/3` — an explicit caller-supplied `:cursor_key` wins;
+  # a `nil`-id (hand-built) engine passes through untouched and falls back to
+  # the `:erlang.phash2(scripts)` default. Provider-neutral: real adapters
+  # read only named `adapter_opts` keys, so `:cursor_key` is an inert no-op.
+  @spec put_cursor_key(keyword(), t()) :: keyword()
+  def put_cursor_key(adapter_opts, %__MODULE__{id: nil}) when is_list(adapter_opts),
+    do: adapter_opts
+
+  def put_cursor_key(adapter_opts, %__MODULE__{id: id}) when is_list(adapter_opts),
+    do: Keyword.put_new(adapter_opts, :cursor_key, id)
 
   @doc """
   Append a single tool to the engine's `:tools` list.
@@ -397,6 +436,10 @@ defmodule ALLM.Engine do
   @spec __from_tagged__(map()) :: t()
   def __from_tagged__(data) when is_map(data) do
     %__MODULE__{
+      # Plain pass-through — NO re-stamping on decode, or round-trip equality
+      # breaks. A pre-fix engine map lacking "id" decodes to id: nil
+      # (backward compatible; falls back to the phash2 cursor default).
+      id: data["id"],
       adapter: restore_module(data["adapter"]),
       adapter_opts: restore_keyword(data["adapter_opts"] || []),
       model: data["model"],

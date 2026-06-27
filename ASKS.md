@@ -157,3 +157,25 @@
 [MILE] mon 5/25 6pm - Shipped Phase 21 Amesbury feedback rollup with ALLM.Sandbox, unwrap/1, Fake :usage/:record, Image.from_data_uri/1, ALLM.JsonSchema, and guides updates
 
 [MILE] thu 5/28 1pm - Fixed Responses-API streaming usage no-op so gpt-5* total_tokens populates Response.usage
+
+[DSGN] fri 6/26 2pm - Design fix for Providers.Fake content-hash cursor footgun (per-engine identity key)
+
+[BUILD] sat 6/27 1am - Build all 3 phases of engine-identity cursor key fix per steering/20260626_UNLLMTD_FOOTGUN_DESIGN.md
+
+[CDRV] sat 6/27 1am - Code review on Phase 1 of UNLLMTD footgun design: ALLM.Engine serializable :id field
+
+[RETR] sat 6/27 1am - Retro on Phase 1 (ALLM.Engine stable :id) of the UNLLMTD footgun design build
+
+[CDRV] sat 6/27 1am - Code review of Phase 2 (engine-id cursor key) per steering/20260626_UNLLMTD_FOOTGUN_DESIGN.md
+
+[RETR] sat 6/27 1am - Retro on UNLLMTD_FOOTGUN Phase 2 (engine-id cursor_key at chat dispatch chokepoint)
+
+[FIX] sat 6/27 1am - Fix Phase 2 engine-id cursor findings: refresh stale phash2 comments in four façade test files and correct stream_runner put_cursor_key comment
+
+[CDRV] sat 6/27 1am - Code review on Phase 3 engine-id cursor changes per steering/20260626_UNLLMTD_FOOTGUN_DESIGN.md
+
+[RETR] sat 6/27 1am - Retro on Phase 3 (final) of UNLLMTD_FOOTGUN build — image-path cursor fix mirror
+
+[FIX] sat 6/27 1am - Fix issues from Phase 3 (final) engine-id cursor reviews (overview + code-review + security-review + retro)
+
+[ASKS] sat 6/27 2am - Future: re-key FakeImages bump_retry_visits/2 retry-visit counter off phash2(script) onto engine identity (or document the collision as benign) — residual content-hash footgun, scoped out of UNLLMTD Phase 3 (retro F2)

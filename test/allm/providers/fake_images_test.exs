@@ -1,6 +1,7 @@
 defmodule ALLM.Providers.FakeImagesTest do
   use ExUnit.Case, async: true
 
+  alias ALLM.Engine
   alias ALLM.Error.ImageAdapterError
   alias ALLM.{Image, ImageRequest, ImageResponse, ImageUsage}
   alias ALLM.Providers.FakeImages
@@ -317,6 +318,96 @@ defmodule ALLM.Providers.FakeImagesTest do
 
       assert {:error, %ImageAdapterError{reason: :unknown, metadata: %{cause: :no_scripted_image}}} =
                FakeImages.generate(req, adapter_opts: adapter_opts)
+    end
+  end
+
+  # Phase 3 — the image-path mirror of the chat-path footgun fix (§6, §31).
+  # At the façade the cursor keys on engine identity (`engine.id` injected as
+  # `adapter_opts[:cursor_key]` by `ALLM.do_generate_image_body/5` via
+  # `ALLM.Engine.put_cursor_key/2`), so two content-equal engines driven through
+  # `ALLM.generate_image/3` in the SAME process no longer share a cursor.
+  describe "cursor management — engine identity at the façade (Phase 3)" do
+    defp image_engine(image_script) do
+      Engine.new(image_adapter: FakeImages, adapter_opts: [image_script: image_script])
+    end
+
+    test "two engines, content-equal :image_script via ALLM.generate_image/3 → each first call reads index 0" do
+      img1 = Image.from_binary(<<1>>, "image/png")
+      img2 = Image.from_binary(<<2>>, "image/png")
+      script = [{:ok, [img1]}, {:ok, [img2]}]
+
+      e1 = image_engine(script)
+      e2 = image_engine(script)
+
+      # Distinct identity for content-equal engines.
+      assert e1.id != e2.id
+
+      assert {:ok, %ImageResponse{images: [^img1]}} = ALLM.generate_image(e1, "x")
+
+      # Was img2 before the fix (shared phash2 cursor); now img1.
+      assert {:ok, %ImageResponse{images: [^img1]}} = ALLM.generate_image(e2, "x")
+    end
+
+    test "one engine, N generate_image calls → cursor advances in order" do
+      img1 = Image.from_binary(<<1>>, "image/png")
+      img2 = Image.from_binary(<<2>>, "image/png")
+      img3 = Image.from_binary(<<3>>, "image/png")
+      e = image_engine([{:ok, [img1]}, {:ok, [img2]}, {:ok, [img3]}])
+
+      assert {:ok, %ImageResponse{images: [^img1]}} = ALLM.generate_image(e, "x")
+      assert {:ok, %ImageResponse{images: [^img2]}} = ALLM.generate_image(e, "x")
+      assert {:ok, %ImageResponse{images: [^img3]}} = ALLM.generate_image(e, "x")
+    end
+
+    test "{:retry_until_call, n} still works under cursor_key (peek + advance share the key)" do
+      # Driven directly against the adapter with an explicit `:cursor_key`
+      # (exactly what `ALLM.do_generate_image_body/5` injects at the façade),
+      # because `ALLM.generate_image/3` wraps the adapter in `Retry.run/3`,
+      # which would transparently retry the `:rate_limited` returns and mask the
+      # per-call sequence. The leading `{:ok, [a]}` entry is load-bearing: it
+      # forces `advance_cursor/2` to WRITE the cursor_key slot that
+      # `peek_cursor/2` later READS — if advance/peek keyed on different slots
+      # the second call would re-read entry 0 and `retry_until_call` counting
+      # would break.
+      a = Image.from_binary(<<1>>, "image/png")
+      b = Image.from_binary(<<2>>, "image/png")
+      req = ImageRequest.new(prompt: "x")
+
+      adapter_opts = [
+        image_script: [{:ok, [a]}, {:retry_until_call, 2}, {:ok, [b]}],
+        cursor_key: 4242
+      ]
+
+      # Call 1: leading entry — advances the cursor_key slot to 1.
+      assert {:ok, %ImageResponse{images: [^a]}} =
+               FakeImages.generate(req, adapter_opts: adapter_opts)
+
+      # Call 2: retry entry — prior call retries (n - 1 = 1 retry).
+      assert {:error, %ImageAdapterError{reason: :rate_limited}} =
+               FakeImages.generate(req, adapter_opts: adapter_opts)
+
+      # Call 3 (n-th): advances past the retry entry and dispatches the next.
+      assert {:ok, %ImageResponse{images: [^b]}} =
+               FakeImages.generate(req, adapter_opts: adapter_opts)
+    end
+
+    test "explicit script_cursor still overrides cursor_key on the image path (Agent pid wins)" do
+      img1 = Image.from_binary(<<1>>, "image/png")
+      img2 = Image.from_binary(<<2>>, "image/png")
+      cursor = FakeImages.start_script_cursor()
+
+      e =
+        Engine.new(
+          image_adapter: FakeImages,
+          adapter_opts: [image_script: [{:ok, [img1]}, {:ok, [img2]}], script_cursor: cursor]
+        )
+
+      # The Agent pid takes precedence over the injected cursor_key.
+      assert {:ok, %ImageResponse{images: [^img1]}} = ALLM.generate_image(e, "x")
+      assert FakeImages.cursor_index(cursor) == 1
+
+      assert {:ok, %ImageResponse{images: [^img2]}} = ALLM.generate_image(e, "x")
+      assert FakeImages.cursor_index(cursor) == 2
     end
   end
 end

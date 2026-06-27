@@ -41,12 +41,36 @@ defmodule ALLM.Providers.FakeImages do
 
   ## Cursor behaviour
 
-  By default the cursor lives in the process dictionary at
-  `{:allm_fake_images_cursor, :erlang.phash2(scripts)}` — isolated per
-  ExUnit test process (`async: true`), GC'd on pid-down. Pass
-  `adapter_opts[:script_cursor]` with the pid returned from
-  `start_script_cursor/0` to share / isolate cursors explicitly across
-  processes.
+  Multi-call scripts (`:image_script`) advance a per-process cursor on every
+  call. The cursor lives in the process dictionary at
+  `{:allm_fake_images_cursor, key_id}`, isolated per ExUnit test process
+  (`async: true`), GC'd on pid-down, zero-setup for the common case. The
+  `key_id` is chosen by this precedence (§31):
+
+    1. `adapter_opts[:script_cursor]` — an explicit Agent pid (handled
+       separately; see `start_script_cursor/0`).
+    2. `adapter_opts[:cursor_key]` — the engine's stable `:id`, injected by the
+       façade dispatch chokepoint (`ALLM.do_generate_image_body/5` via
+       `ALLM.Engine.put_cursor_key/2`).
+    3. `:erlang.phash2(script)` — the content-hash fallback for direct adapter
+       calls with no engine.
+
+  **At the façade the cursor keys on engine identity, so the historical
+  content-hash footgun is gone.** Two engines built with content-equal
+  `:image_script` values and driven through `ALLM.generate_image/3` get
+  distinct `engine.id` cursor keys — each engine's first call reads index 0,
+  even in the same process.
+
+  **The footgun remains only for DIRECT adapter calls.**
+  `ALLM.Providers.FakeImages.generate(req, opts)` invoked without an engine
+  receives no `:cursor_key` and falls back to `:erlang.phash2(script)` — two
+  direct calls with content-equal scripts in the same process still share a
+  cursor. Workaround for that path: pass distinct
+  `adapter_opts[:script_cursor]` Agent pids from `start_script_cursor/0`.
+
+  The explicit-Agent override also supports cross-process cursor sharing
+  (`Task.async/1` over the adapter call) and mitigates the rare hash-collision
+  case (`:erlang.phash2/1` is a 27-bit hash).
 
   ## Test-only capture seam
 
@@ -370,15 +394,19 @@ defmodule ALLM.Providers.FakeImages do
   defp advance_cursor(script, adapter_opts) do
     case Keyword.get(adapter_opts, :script_cursor) do
       nil ->
-        advance_process_dict_cursor(script)
+        advance_process_dict_cursor(script, adapter_opts)
 
       pid when is_pid(pid) ->
         Agent.get_and_update(pid, fn i -> {i, i + 1} end)
     end
   end
 
-  defp advance_process_dict_cursor(script) do
-    key = {:allm_fake_images_cursor, :erlang.phash2(script)}
+  # Precedence (§31): `script_cursor` (Agent pid, handled above) >
+  # `cursor_key` (engine id, injected by the façade) > `:erlang.phash2(script)`
+  # (direct-call default). `||` falls back only on `nil` — a real engine id and
+  # any `phash2` value (including `0`) are truthy.
+  defp advance_process_dict_cursor(script, adapter_opts) do
+    key = {:allm_fake_images_cursor, cursor_key_id(script, adapter_opts)}
     current = Process.get(key, 0)
     Process.put(key, current + 1)
     current
@@ -386,16 +414,22 @@ defmodule ALLM.Providers.FakeImages do
 
   # Read the current cursor without advancing — used by `run_scripted/2`
   # to support the `{:retry_until_call, n}` entry shape (which holds
-  # the cursor in place for `n - 1` calls).
+  # the cursor in place for `n - 1` calls). MUST key on the SAME slot as
+  # `advance_process_dict_cursor/2`, or retry counting breaks.
   defp peek_cursor(script, adapter_opts) do
     case Keyword.get(adapter_opts, :script_cursor) do
       nil ->
-        key = {:allm_fake_images_cursor, :erlang.phash2(script)}
-        Process.get(key, 0)
+        Process.get({:allm_fake_images_cursor, cursor_key_id(script, adapter_opts)}, 0)
 
       pid when is_pid(pid) ->
         Agent.get(pid, & &1)
     end
+  end
+
+  # Single source of truth for the process-dict cursor key id, shared by
+  # `advance_process_dict_cursor/2` and `peek_cursor/2` so the two never drift.
+  defp cursor_key_id(script, adapter_opts) do
+    Keyword.get(adapter_opts, :cursor_key) || :erlang.phash2(script)
   end
 
   # ---------------------------------------------------------------------------

@@ -1002,8 +1002,16 @@ defmodule ALLM do
       # `StreamRunner.build_dispatch_opts/2` adapter_opts concat (NOT
       # `Keyword.merge/2`, which would have OPPOSITE precedence — call
       # wins).
+      #
+      # Then inject the engine's stable `:id` as `adapter_opts[:cursor_key]`
+      # (§6, §31) so `FakeImages` keys its multi-call cursor on engine identity
+      # at the façade — two content-equal engines no longer share a cursor.
+      # `put_cursor_key/2` is `Keyword.put_new/3` (caller-supplied `:cursor_key`
+      # wins) and a no-op for real adapters, which read only named opts. Mirrors
+      # the chat-side injection in `StreamRunner.build_dispatch_opts/2`.
       merged_adapter_opts =
-        engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, [])
+        (engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, []))
+        |> Engine.put_cursor_key(engine)
 
       dispatch_opts =
         opts

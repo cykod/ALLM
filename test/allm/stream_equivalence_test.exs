@@ -8,10 +8,12 @@ defmodule ALLM.StreamEquivalenceTest do
   property), `ALLM.generate/3` returns a `%Response{}` equal to
   `ALLM.stream_generate/3 |> reduce(StreamCollector) |> to_response`.
 
-  Each iteration isolates Fake's per-process cursor via `Task.async/1` +
-  `Task.await/1`, so the `generate/3` and `stream_generate/3` calls see
-  separate fresh process-dict cursors and don't collide on the cursor
-  key derived from the script content.
+  Since the §31 fix, Fake's façade-driven cursor keys on `engine.id`
+  (injected as `adapter_opts[:cursor_key]` by `StreamRunner`), so the two
+  paths build distinct engines and never share a cursor — even in one
+  process. Each iteration still runs inside `Task.async/1` + `Task.await/1`
+  as defensive process isolation (belt-and-suspenders), no longer the
+  collision guard.
   """
 
   use ExUnit.Case, async: true
@@ -122,12 +124,11 @@ defmodule ALLM.StreamEquivalenceTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Helpers — run calls in isolated processes so each sees a fresh
-  # process-dict cursor. Fake's default cursor lives in the reducing
-  # process's dictionary keyed by :erlang.phash2(scripts), so running
-  # `generate/3` then `stream_generate/3` in the same process against the
-  # same content-equal script would bump the cursor and script-exhaust the
-  # second call. Task.async/1 gives each call its own process.
+  # Helpers — each path builds its own engine via `engine_of/1`, so the
+  # façade keys the Fake cursor on the distinct `engine.id` (via
+  # adapter_opts[:cursor_key]) and the two paths never collide. Task.async/1
+  # is retained as defensive process isolation (belt-and-suspenders), no
+  # longer the collision guard.
   # ---------------------------------------------------------------------------
 
   defp run_generate(script) do

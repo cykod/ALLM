@@ -67,11 +67,12 @@ defmodule ALLM.StepTest do
   end
 
   describe "step/3 — delegation invariant" do
-    # Fake's default per-process script cursor is keyed by
-    # `:erlang.phash2(scripts)` — running facade + internal calls
-    # sequentially in the same test process with content-equal scripts
-    # would collide. Each call runs in its own `Task.async/1` so the
-    # process-dict cursors stay isolated.
+    # Since the §31 fix, Fake's façade-driven cursor keys on `engine.id`
+    # (injected as `adapter_opts[:cursor_key]` by `StreamRunner`). Each path
+    # builds its own engine via `plain_text_engine/0`, so `ALLM.step/3` and
+    # `Chat.step/3` get distinct cursor keys and never collide — even
+    # sequentially in one process. `Task.async/1` is retained as defensive
+    # process isolation (belt-and-suspenders), no longer the collision guard.
     test "ALLM.step/3 and ALLM.Chat.step/3 return equal results for identical inputs" do
       thread = user_thread()
       # Phase 9.1: pin request_id so the two delegation arms produce

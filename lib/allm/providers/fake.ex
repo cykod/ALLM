@@ -71,32 +71,56 @@ defmodule ALLM.Providers.Fake do
   ## Cursor behaviour
 
   Multi-call scripts (`:scripts` / `:stream_script`) advance a per-process
-  cursor on every call. By default the cursor lives in the process dictionary
-  at `{:allm_fake_cursor, :erlang.phash2(scripts)}` — isolated per ExUnit test
-  process (`async: true`), GC'd on pid-down, zero-setup for the common case.
+  cursor on every call. The cursor lives in the process dictionary at
+  `{:allm_fake_cursor, key_id}`, isolated per ExUnit test process
+  (`async: true`), GC'd on pid-down, zero-setup for the common case. The
+  `key_id` is chosen by this precedence (§31):
 
-  **Two engines built with content-equal `:scripts` values in the same
-  process share a cursor.** This is a documented footgun: the cursor key is
-  `:erlang.phash2(scripts)`, so identical script contents collide. A test
-  that constructs two Fake engines simulating two distinct providers with the
-  same fixture script finds the second engine's first call already at index 1.
-  Workaround: pass distinct `adapter_opts[:script_cursor]` Agent pids,
-  obtained from `start_script_cursor/0`.
+    1. `adapter_opts[:script_cursor]` — an explicit Agent pid (handled
+       separately; see below).
+    2. `adapter_opts[:cursor_key]` — the engine's stable `:id`, injected by
+       the façade dispatch chokepoint (`ALLM.StreamRunner.build_dispatch_opts/2`
+       via `ALLM.Engine.put_cursor_key/2`).
+    3. `:erlang.phash2(scripts)` — the content-hash fallback for direct adapter
+       calls with no engine.
+
+  **At the façade the cursor keys on engine identity, so the historical
+  content-hash footgun is gone.** Two engines built with content-equal
+  `:scripts` / `:stream_script` values and driven through `ALLM.generate/3`,
+  `ALLM.stream_generate/3`, `ALLM.chat/3`, `ALLM.stream/3`, `ALLM.step/3`, or
+  the `ALLM.Session` quartet get distinct `engine.id` cursor keys — each
+  engine's first call reads index 0, even in the same process.
+
+  **The footgun remains only for DIRECT adapter calls.**
+  `ALLM.Providers.Fake.generate(req, opts)` / `.stream(req, opts)` invoked
+  without an engine receive no `:cursor_key` and fall back to
+  `:erlang.phash2(scripts)` — two direct calls with content-equal scripts in
+  the same process still share a cursor. Workaround for that path: pass
+  distinct `adapter_opts[:script_cursor]` Agent pids from
+  `start_script_cursor/0`.
 
   The explicit-Agent override also supports cross-process cursor sharing
   (`Task.async/1` over the adapter call) and mitigates the rare hash-collision
   case (`:erlang.phash2/1` is a 27-bit hash).
 
+  Because `:cursor_key` rides in `adapter_opts`, it surfaces in the `:record`
+  side-channel: a façade-driven call recorded via `adapter_opts[:record]` now
+  includes `{:cursor_key, engine.id}` in the forwarded opts. Focused
+  assertions (model/temperature/api_key) are unaffected; an assertion on the
+  *exact* recorded `adapter_opts` keyword list must account for it.
+
   ## Testing patterns
 
-  **Use `start_script_cursor/0` for multi-call tests.** Reach for the explicit
-  Agent cursor whenever a test (a) runs multiple Fake calls with a `:scripts`
-  or `:stream_script` list AND (b) another test in the same `async: true`
-  module could share content-equal script entries, OR (c) the test dispatches
-  the adapter call across processes (`Task.async/1`). The default
-  process-dict cursor is fine for one-shot `:script` calls and for
-  single-multi-call tests whose script content is unique in the module; for
-  everything else, the explicit cursor is load-bearing:
+  **Façade-driven tests need no cursor ceremony.** Engines built via
+  `ALLM.Engine.new/1` (or any provider `engine/1` helper) carry a unique `:id`,
+  so multiple content-equal engines driven through the public façade in one
+  process do not collide — no `start_script_cursor/0` required.
+
+  **Use `start_script_cursor/0` for the cases identity doesn't cover:** direct
+  adapter calls (no engine, hence no `:cursor_key`), cross-process cursor
+  sharing (`Task.async/1` over the adapter call), or the rare `phash2`
+  collision. Reach for the explicit Agent cursor whenever a test bypasses the
+  façade:
 
       cursor = ALLM.Providers.Fake.start_script_cursor
       opts = [adapter_opts: [scripts: [...]] ++ [script_cursor: cursor]]
@@ -799,15 +823,20 @@ defmodule ALLM.Providers.Fake do
   defp advance_cursor(scripts, adapter_opts) do
     case Keyword.get(adapter_opts, :script_cursor) do
       nil ->
-        advance_process_dict_cursor(scripts)
+        advance_process_dict_cursor(scripts, adapter_opts)
 
       pid when is_pid(pid) ->
         Agent.get_and_update(pid, fn i -> {i, i + 1} end)
     end
   end
 
-  defp advance_process_dict_cursor(scripts) do
-    key = {:allm_fake_cursor, :erlang.phash2(scripts)}
+  # Precedence (§31): `script_cursor` (Agent pid, handled above) >
+  # `cursor_key` (engine id, injected by the façade) > `:erlang.phash2(scripts)`
+  # (direct-call default). `||` falls back only on `nil` — a real engine id and
+  # any `phash2` value (including `0`) are truthy.
+  defp advance_process_dict_cursor(scripts, adapter_opts) do
+    key_id = Keyword.get(adapter_opts, :cursor_key) || :erlang.phash2(scripts)
+    key = {:allm_fake_cursor, key_id}
     current = Process.get(key, 0)
     Process.put(key, current + 1)
     current

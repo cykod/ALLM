@@ -439,6 +439,53 @@ defmodule ALLM.StreamRunnerTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # cursor_key injection (§31) — the façade stamps adapter_opts[:cursor_key]
+  # with engine.id so content-equal Fake engines don't share the process-dict
+  # cursor. A caller-supplied :cursor_key wins (put_new).
+  # ---------------------------------------------------------------------------
+
+  describe "run/3 — cursor_key injection" do
+    test "build path injects cursor_key == engine.id into adapter_opts" do
+      me = self()
+
+      engine =
+        Engine.new(
+          adapter: Fake,
+          adapter_opts: [script: [{:text, "hi"}, {:finish, :stop}], record: me]
+        )
+
+      assert {:ok, stream} = StreamRunner.run(engine, req())
+      _ = Enum.to_list(stream)
+
+      assert_received {:allm_fake_record, _request, opts}
+      adapter_opts = Keyword.get(opts, :adapter_opts, [])
+      assert Keyword.get(adapter_opts, :cursor_key) == engine.id
+    end
+
+    test "a caller-supplied adapter_opts[:cursor_key] is preserved (put_new)" do
+      me = self()
+
+      engine =
+        Engine.new(
+          adapter: Fake,
+          adapter_opts: [
+            script: [{:text, "hi"}, {:finish, :stop}],
+            record: me,
+            cursor_key: 999
+          ]
+        )
+
+      assert {:ok, stream} = StreamRunner.run(engine, req())
+      _ = Enum.to_list(stream)
+
+      assert_received {:allm_fake_record, _request, opts}
+      adapter_opts = Keyword.get(opts, :adapter_opts, [])
+      assert Keyword.get(adapter_opts, :cursor_key) == 999
+      refute Keyword.get(adapter_opts, :cursor_key) == engine.id
+    end
+  end
+
   defp any_function_in?(term) when is_function(term), do: true
   defp any_function_in?(list) when is_list(list), do: Enum.any?(list, &any_function_in?/1)
 

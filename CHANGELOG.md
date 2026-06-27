@@ -1,3 +1,22 @@
+## [REL] v0.5.0 — Engine identity
+
+Breaking changes:
+- `ALLM.Engine.new/1` now stamps each engine with a unique `:id`, so two
+  engines constructed from identical opts are no longer equal
+  (`Engine.new(o) != Engine.new(o)`); code comparing two independently
+  built engines for equality will see them differ
+
+Other changes:
+- Add a stable, serializable `:id` field to `%ALLM.Engine{}` —
+  auto-assigned at `new/1`, preserved across `with_model/2` /
+  `merge_opts/2` / `put_tool/2`, and round-tripping through both ETF and
+  JSON (pre-existing serialized engines decode with `id: nil`)
+- Fix the `ALLM.Providers.Fake` / `FakeImages` multi-call cursor footgun
+  — the cursor is now keyed on engine identity at the façade, so engines
+  built with content-equal scripts no longer share a cursor (each
+  engine's first call reads index 0); direct adapter calls without an
+  engine keep the prior content-hash behavior
+
 ## [REL] v0.4.2 — Streaming usage fidelity
 
 Other changes:

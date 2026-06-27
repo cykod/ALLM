@@ -16,6 +16,66 @@ defmodule ALLM.EngineTest do
   end
 
   # ---------------------------------------------------------------------------
+  # new/1 — stable :id identity (§6, footgun design Phase 1)
+  # ---------------------------------------------------------------------------
+
+  describe "new/1 :id stamping" do
+    test "stamps a positive-integer :id when none is supplied" do
+      engine = Engine.new(adapter: ALLM.Providers.Fake)
+      assert is_integer(engine.id)
+      assert engine.id > 0
+    end
+
+    test "with explicit id: preserves it" do
+      assert Engine.new(id: 42, adapter: ALLM.Providers.Fake).id == 42
+    end
+
+    test "two calls with identical opts produce distinct ids" do
+      opts = [adapter: ALLM.Providers.Fake, model: "m"]
+      assert Engine.new(opts).id != Engine.new(opts).id
+    end
+
+    test "with_model/2 preserves :id" do
+      engine = Engine.new(model: "old")
+      assert Engine.with_model(engine, "new").id == engine.id
+    end
+
+    test "merge_opts/2 preserves :id" do
+      engine = Engine.new(model: "old")
+      assert Engine.merge_opts(engine, model: "new").id == engine.id
+    end
+
+    test "put_tool/2 preserves :id" do
+      engine = Engine.new()
+      assert Engine.put_tool(engine, tool("a")).id == engine.id
+    end
+
+    test "a hand-built %Engine{} struct has id: nil" do
+      assert %Engine{}.id == nil
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # put_cursor_key/2 — inject :id as adapter_opts[:cursor_key] (§31)
+  # ---------------------------------------------------------------------------
+
+  describe "put_cursor_key/2" do
+    test "stamps the engine :id as :cursor_key on empty opts" do
+      engine = Engine.new(adapter: ALLM.Providers.Fake)
+      assert Engine.put_cursor_key([], engine) == [cursor_key: engine.id]
+    end
+
+    test "passes opts through untouched for a nil-id engine" do
+      assert Engine.put_cursor_key([scripts: 1], %Engine{id: nil}) == [scripts: 1]
+    end
+
+    test "a caller-supplied :cursor_key wins (put_new precedence)" do
+      engine = Engine.new(adapter: ALLM.Providers.Fake)
+      assert Engine.put_cursor_key([cursor_key: 999], engine) == [cursor_key: 999]
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # merge_opts/2
   # ---------------------------------------------------------------------------
 

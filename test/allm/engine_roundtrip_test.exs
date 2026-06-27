@@ -55,6 +55,36 @@ defmodule ALLM.EngineRoundtripTest do
     assert round_tripped == engine
   end
 
+  test "stamped :id survives the ETF round-trip" do
+    # Phase 1 (footgun design): `new/1` stamps a positive-integer :id; ETF
+    # round-trip must preserve it (it's a plain integer).
+    engine = populated_engine()
+    assert is_integer(engine.id) and engine.id > 0
+    round_tripped = engine |> :erlang.term_to_binary() |> :erlang.binary_to_term()
+    assert round_tripped.id == engine.id
+  end
+
+  test "stamped :id survives the JSON round-trip" do
+    # `__from_tagged__/1` restores `id: data["id"]` as a plain pass-through —
+    # no re-stamping on decode, or round-trip equality would break.
+    engine = populated_engine()
+    json = ALLM.Serializer.to_json!(engine)
+    assert {:ok, decoded} = ALLM.Serializer.from_json(json)
+    assert decoded.id == engine.id
+  end
+
+  test "a serialized engine map without an \"id\" key decodes to id: nil" do
+    # Backward-compat: a pre-fix serialized engine lacking "id" decodes to
+    # id: nil and falls back to the phash2 cursor default.
+    engine = populated_engine()
+    decoded_map = engine |> ALLM.Serializer.to_json!() |> Jason.decode!()
+    without_id = update_in(decoded_map["data"], &Map.delete(&1, "id"))
+    patched_json = Jason.encode!(without_id)
+
+    assert {:ok, decoded} = ALLM.Serializer.from_json(patched_json)
+    assert decoded.id == nil
+  end
+
   test "populated engine round-trips through ALLM.Serializer JSON" do
     engine = populated_engine()
     json = ALLM.Serializer.to_json!(engine)

@@ -227,8 +227,15 @@ defmodule ALLM.StreamRunner do
 
     params_kw = params_map |> Map.to_list()
 
+    # Inject the engine's `:id` as `adapter_opts[:cursor_key]` (§31) so
+    # content-equal Fake engines don't share the process-dict cursor at the
+    # façade. `Engine.put_cursor_key/2` is `Keyword.put_new/3` (caller-supplied
+    # `:cursor_key` wins) and a no-op for `nil`-id engines. For real adapters
+    # the key is still injected but inert — they read only named `adapter_opts`
+    # keys and never splat the list onto the wire (Decision #2).
     adapter_opts =
-      engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, [])
+      (engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, []))
+      |> Engine.put_cursor_key(engine)
 
     params_kw
     |> Keyword.put(:adapter_opts, adapter_opts)

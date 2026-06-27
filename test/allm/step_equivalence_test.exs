@@ -14,14 +14,15 @@ defmodule ALLM.StepEquivalenceTest do
   messages within the thread (Phase 6 design Non-obvious Decision #9).
   `assert_equivalent_step_result/2` normalises the order.
 
-  ## Process-dict cursor isolation
+  ## Cursor isolation
 
-  Fake's default per-process script cursor is keyed by
-  `:erlang.phash2(scripts)` in the reducing process's dictionary. Running
-  `ALLM.step/3` then `ALLM.stream_step/3` sequentially in the same process
-  with the same script content would share a cursor and script-exhaust
-  the second call. Each path therefore runs inside its own `Task.async/1`
-  process so the two calls see fresh process-dict cursors.
+  Since the §31 fix, Fake's façade-driven cursor keys on `engine.id`
+  (injected as `adapter_opts[:cursor_key]` by `StreamRunner`). Each path
+  builds its own engine via `engine_of/2`, so `ALLM.step/3` and
+  `ALLM.stream_step/3` get distinct cursor keys and never collide — even
+  sequentially in one process. Each path still runs inside its own
+  `Task.async/1` as defensive process isolation (belt-and-suspenders), no
+  longer the collision guard.
 
   ## Thread extraction from `:step_completed`
 
@@ -174,8 +175,9 @@ defmodule ALLM.StepEquivalenceTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Task.async isolation — Fake's per-process cursor collides on
-  # content-equal scripts in the same process.
+  # Each path builds its own engine via `engine_of/2`, so the façade keys
+  # the Fake cursor on the distinct `engine.id`. Task.async/1 is retained as
+  # defensive process isolation (belt-and-suspenders), not the collision guard.
   # ---------------------------------------------------------------------------
 
   defp run_step(script, tools) do

@@ -200,13 +200,16 @@ defmodule ALLM.Providers.FakeTest do
     end
 
     @doc """
-    Documented footgun — Non-obvious Decision #1 in the Phase 4 design doc.
+    Documented footgun — DIRECT adapter calls only (§31).
 
-    Two engines built with content-equal `scripts:` values in the same process
-    share a cursor (key: `:erlang.phash2(scripts)`). Workaround: pass distinct
-    `script_cursor: pid` Agents.
+    Two DIRECT `Fake.generate/2` calls (no engine, hence no injected
+    `:cursor_key`) with content-equal `scripts:` values in the same process
+    share a cursor (key: `:erlang.phash2(scripts)`). The façade fixes this by
+    keying on engine identity (see `ALLM.FakeFootgunFacadeTest`); the
+    content-hash default remains only on this engine-less direct-call path.
+    Workaround for direct calls: pass distinct `script_cursor: pid` Agents.
     """
-    test "content-equal collision (documented footgun — see Non-obvious Decision #1)" do
+    test "content-equal collision (documented footgun — direct adapter calls, no cursor_key)" do
       common_scripts = [
         [{:text, "a"}, {:finish, :stop}],
         [{:text, "b"}, {:finish, :stop}]
@@ -215,12 +218,28 @@ defmodule ALLM.Providers.FakeTest do
       opts1 = [adapter_opts: [scripts: common_scripts]]
       opts2 = [adapter_opts: [scripts: common_scripts]]
 
-      # First engine's call consumes index 0 → "a".
+      # First direct call consumes index 0 → "a".
       assert {:ok, %Response{output_text: "a"}} = Fake.generate(fake_request(), opts1)
 
-      # Second engine's FIRST call reads index 1 (not 0) because the cursor
-      # is keyed on :erlang.phash2(scripts) — content collision.
+      # Second direct call's FIRST invocation reads index 1 (not 0) because
+      # the cursor is keyed on :erlang.phash2(scripts) — content collision.
+      # No engine is involved, so no :cursor_key is injected.
       assert {:ok, %Response{output_text: "b"}} = Fake.generate(fake_request(), opts2)
+    end
+
+    test "advance_process_dict_cursor prefers cursor_key over phash2 (direct call)" do
+      common_scripts = [
+        [{:text, "a"}, {:finish, :stop}],
+        [{:text, "b"}, {:finish, :stop}]
+      ]
+
+      # Same scripts (same phash2) but distinct :cursor_key values — each
+      # gets its own process-dict slot, so each first call reads index 0.
+      opts1 = [adapter_opts: [scripts: common_scripts, cursor_key: 999]]
+      opts2 = [adapter_opts: [scripts: common_scripts, cursor_key: 1000]]
+
+      assert {:ok, %Response{output_text: "a"}} = Fake.generate(fake_request(), opts1)
+      assert {:ok, %Response{output_text: "a"}} = Fake.generate(fake_request(), opts2)
     end
 
     test "explicit :script_cursor pid disambiguates content-equal scripts" do

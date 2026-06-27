@@ -1,3 +1,18 @@
+## [FEAT] Key Fake/FakeImages cursor on engine identity
+*Saturday, June 27th at 2am*
+Add a stable, serializable :id to %ALLM.Engine{} (auto-stamped at new/1, 
+preserved across struct-update transforms, round-tripping through ETF and JSON) 
+and thread it as adapter_opts[:cursor_key] through the chat and image dispatch 
+chokepoints, where Fake/FakeImages now prefer it over :erlang.phash2(scripts). 
+This removes the multi-call cursor footgun (see §31): two engines built with 
+content-equal scripts no longer share a cursor, so each engine's first façade 
+call reads index 0. Direct adapter calls without an engine keep the prior 
+content-hash behavior, and the explicit start_script_cursor/0 Agent still wins 
+precedence. Implements all three phases of 
+steering/20260626_UNLLMTD_FOOTGUN_DESIGN.md; full suite green at 2438 tests.
+
+---
+
 ## [BUG] Fix Responses-API streaming usage no-op (gpt-5* totals)
 *Thursday, May 28th at 1pm*
 Replaced the no-op maybe_apply_usage_from_response/2 in the OpenAI 

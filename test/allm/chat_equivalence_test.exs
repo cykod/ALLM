@@ -20,12 +20,14 @@ defmodule ALLM.ChatEquivalenceTest do
   construction (Non-obvious Decision #4); this property is the
   end-to-end witness.
 
-  ## Process-dict cursor isolation
+  ## Cursor isolation
 
-  Fake's default per-process script cursor is keyed by
-  `:erlang.phash2(scripts)` in the reducing process's dictionary. Each
-  fixture is constructed twice (once per path) inside its own
-  `Task.async/1` so the two paths see fresh process-dict cursors.
+  Since the §31 fix, Fake's façade-driven cursor keys on `engine.id`
+  (injected as `adapter_opts[:cursor_key]` by `StreamRunner`). Each fixture's
+  `engine_builder` yields a fresh engine per path, so the two paths get
+  distinct cursor keys and never collide. Each path still runs inside its own
+  `Task.async/1` as defensive process isolation (belt-and-suspenders), no
+  longer the collision guard.
 
   ## Fixture matrix
 
@@ -121,8 +123,8 @@ defmodule ALLM.ChatEquivalenceTest do
   # ---------------------------------------------------------------------------
   # Fixture builders. Each returns `{engine_builder, opts}` where
   # `engine_builder` is a 0-arity fun that yields a fresh engine on each
-  # call (so the Fake cursor lives in the calling process — see
-  # `step_equivalence_test.exs` for the pattern).
+  # call (so each path's engine carries a distinct `:id` and the façade keys
+  # the Fake cursor on it — see `step_equivalence_test.exs` for the pattern).
   # ---------------------------------------------------------------------------
 
   defp fixture(:happy_multi_turn) do
@@ -283,8 +285,9 @@ defmodule ALLM.ChatEquivalenceTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Path runners — Task.async isolation per path so the Fake cursor is
-  # scoped to a single call's process.
+  # Path runners — each path builds its own engine (distinct `:id`), so the
+  # façade keys the Fake cursor per engine. Task.async/1 is retained as
+  # defensive process isolation (belt-and-suspenders), not the collision guard.
   # ---------------------------------------------------------------------------
 
   defp run_chat(engine_builder, opts) do

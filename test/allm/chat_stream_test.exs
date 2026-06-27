@@ -231,9 +231,12 @@ defmodule ALLM.ChatStreamTest do
       assert chat_last.content == "which city?"
 
       # Cross-path equality: streaming ChatResult.thread == non-streaming Chat.run/3 thread.
-      # Use Task.async/await to give Chat.run a fresh process — Fake's per-
-      # process cursor is keyed by erlang phash2 of scripts and shares the
-      # cursor across two consecutive same-process calls (see Fake docs).
+      # Since the §31 fix, Fake's façade-driven cursor keys on `engine.id`
+      # (injected as `adapter_opts[:cursor_key]` by `StreamRunner`); the run
+      # path builds its own engine via `FakeFixtures.engine/2`, so it gets a
+      # distinct cursor key from the streaming path and never collides.
+      # `Task.async/await` is retained as defensive process isolation
+      # (belt-and-suspenders), no longer the collision guard.
       run_result =
         Task.async(fn ->
           run_engine =
