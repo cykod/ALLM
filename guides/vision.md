@@ -18,7 +18,7 @@ import ALLM, only: [user: 1]
 
 msg = user([
   %ALLM.TextPart{text: "What's in this picture?"},
-  %ALLM.ImagePart{source: {:url, "https://example.com/photo.png"}}
+  %ALLM.ImagePart{image: ALLM.Image.from_url("https://example.com/photo.png")}
 ])
 ```
 
@@ -27,18 +27,20 @@ like a string.
 
 ## ImagePart sources
 
-`%ImagePart{}` accepts three source shapes:
+An `%ImagePart{}` wraps an `%ALLM.Image{}` in its `:image` field. Build
+the image with the `ALLM.Image.from_*` constructors — each covers a
+different source shape:
 
 ```elixir
 # Public URL
-%ALLM.ImagePart{source: {:url, "https://example.com/photo.png"}}
+%ALLM.ImagePart{image: ALLM.Image.from_url("https://example.com/photo.png")}
 
 # Raw bytes (with required mime_type)
 bytes = File.read!("/path/to/photo.png")
-%ALLM.ImagePart{source: {:bytes, bytes}, mime_type: "image/png"}
+%ALLM.ImagePart{image: ALLM.Image.from_binary(bytes, "image/png")}
 
 # File path (read at adapter time)
-%ALLM.ImagePart{source: {:file, "/path/to/photo.png"}}
+%ALLM.ImagePart{image: ALLM.Image.from_file("/path/to/photo.png")}
 ```
 
 Each adapter chooses the most efficient wire shape automatically:
@@ -57,7 +59,7 @@ Each adapter chooses the most efficient wire shape automatically:
     ...> )
     iex> msg = ALLM.user([
     ...>   %ALLM.TextPart{text: "Describe this."},
-    ...>   %ALLM.ImagePart{source: {:url, "https://example.com/red.png"}}
+    ...>   %ALLM.ImagePart{image: ALLM.Image.from_url("https://example.com/red.png")}
     ...> ])
     iex> {:ok, %ALLM.Response{output_text: text}} =
     ...>   ALLM.generate(engine, ALLM.request([msg]))
@@ -73,7 +75,7 @@ OpenAI's vision models accept a per-image detail hint:
 
 ```elixir
 %ALLM.ImagePart{
-  source: {:url, "https://example.com/photo.png"},
+  image: ALLM.Image.from_url("https://example.com/photo.png"),
   detail: :high  # :auto | :low | :high
 }
 ```
@@ -112,7 +114,7 @@ instead of letting you debug an opaque 400.
   ALLM.system("Extract every word visible in the image. Reply with a JSON array of strings."),
   ALLM.user([
     %ALLM.TextPart{text: "Extract text from this screenshot:"},
-    %ALLM.ImagePart{source: {:file, "/tmp/screenshot.png"}}
+    %ALLM.ImagePart{image: ALLM.Image.from_file("/tmp/screenshot.png")}
   ])
 ]))
 ```
@@ -123,8 +125,8 @@ instead of letting you debug an opaque 400.
 {:ok, response} = ALLM.generate(engine, ALLM.request([
   ALLM.user([
     %ALLM.TextPart{text: "Which of these two images has more red?"},
-    %ALLM.ImagePart{source: {:url, "https://example.com/a.png"}},
-    %ALLM.ImagePart{source: {:url, "https://example.com/b.png"}}
+    %ALLM.ImagePart{image: ALLM.Image.from_url("https://example.com/a.png")},
+    %ALLM.ImagePart{image: ALLM.Image.from_url("https://example.com/b.png")}
   ])
 ]))
 ```

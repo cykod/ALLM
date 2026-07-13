@@ -31,9 +31,13 @@ An engine has two adapter slots: `:adapter` for chat and
 engine = ALLM.Engine.new(
   adapter: ALLM.Providers.OpenAI,             # for chat, optional here
   image_adapter: ALLM.Providers.OpenAI.Images,
-  image_default_model: "dall-e-2"
+  model: "dall-e-2"
 )
 ```
+
+The image model comes from the engine's `:model` field, or from a
+per-call `model:` opt (`ALLM.generate_image(engine, prompt, model: "dall-e-3")`)
+which overrides it.
 
 If you only generate images (no chat), the `:adapter` slot can stay
 unset.
@@ -42,10 +46,10 @@ unset.
 
     iex> engine = ALLM.Engine.new(
     ...>   image_adapter: ALLM.Providers.FakeImages,
-    ...>   image_adapter_opts: [
-    ...>     scripts: [[{:ok, %{
-    ...>       images: [%ALLM.Image{source: {:bytes, <<137, 80, 78, 71>>}, mime_type: "image/png"}]
-    ...>     }}]]
+    ...>   adapter_opts: [
+    ...>     image_script: [
+    ...>       {:ok, [%ALLM.Image{source: {:bytes, <<137, 80, 78, 71>>}, mime_type: "image/png"}]}
+    ...>     ]
     ...>   ]
     ...> )
     iex> {:ok, %ALLM.ImageResponse{images: [%ALLM.Image{} = img]}} =
@@ -128,12 +132,10 @@ response and assert against it:
 
     iex> engine = ALLM.Engine.new(
     ...>   image_adapter: ALLM.Providers.FakeImages,
-    ...>   image_adapter_opts: [
-    ...>     scripts: [[{:ok, %{
-    ...>       images: [
-    ...>         %ALLM.Image{source: {:bytes, <<137, 80, 78, 71, 0, 0>>}, mime_type: "image/png"}
-    ...>       ]
-    ...>     }}]]
+    ...>   adapter_opts: [
+    ...>     image_script: [
+    ...>       {:ok, [%ALLM.Image{source: {:bytes, <<137, 80, 78, 71, 0, 0>>}, mime_type: "image/png"}]}
+    ...>     ]
     ...>   ]
     ...> )
     iex> {:ok, %ALLM.ImageResponse{images: images}} =

@@ -181,3 +181,25 @@
 [ASKS] sat 6/27 2am - Future: re-key FakeImages bump_retry_visits/2 retry-visit counter off phash2(script) onto engine identity (or document the collision as benign) — residual content-hash footgun, scoped out of UNLLMTD Phase 3 (retro F2)
 
 [MILE] sat 6/27 2am - Keyed Fake/FakeImages multi-call cursor on engine identity via a new serializable Engine :id, removing the content-hash cursor footgun at the façade
+
+[DSGN] mon 7/13 12pm - Design ALLM guide-drift doc corrections and Engine.new/1 fail-fast validation fix per steering/ALLM_VERIFIED_FACTS.md
+
+[BUILD] mon 7/13 1pm - Build all 4 phases of Phase 21 (guide-drift corrections + Engine.new/1 fail-fast validation + max_tokens/temperature request-builder fix) from 20260713_ALLM_FIX_DOCS_AND_ERRORS.md
+
+[RETR] mon 7/13 1pm - Retro on Phase 21 Batch 1 (Engine.new/1 validation, guide-drift corrections, doctest_file execution)
+
+[DREV] mon 7/13 1pm - Design-review Phase 21 Batch 1 (Engine validation guard + guide/doctest doc fixes) against reference in steering/20260713_ALLM_FIX_DOCS_AND_ERRORS.md — N/A, backend-only, no renderable front-end or reference design.
+
+[FIX] mon 7/13 1pm - Fix Phase 21 Batch 1 issues from review/code-review/security/retro files, priority guide-drift fix in errors_and_retries.md
+
+[ASKS] mon 7/13 1pm - Convert errors_and_retries.md retry examples to Fake-runnable iex> blocks so they gain doctest_file protection (currently fences, per Phase 21 retro F2)
+
+[ASKS] mon 7/13 1pm - Add a fenced-API denylist check to test/guides_test.exs seeded with retry_policy:, ALLM.Retry.none, retry_on_reasons:, %ALLM.Retry{, image_adapter_opts:, 'tool_executor: {' (Phase 21 retro F2/F3)
+
+[ASKS] mon 7/13 1pm - Add a Fake-scripting cheat-sheet to guides/fakes.md (keyword-not-map tool calls, string-keyed args, apply_event/2 arg order, full-consumption-before-finalize) — Phase 21 retro F4
+
+[CDRV] mon 7/13 1pm - Code review Phase 21 Batch 2 (Phase 4) chat.ex request-param routing per steering/20260713_ALLM_FIX_DOCS_AND_ERRORS.md
+
+[RETR] mon 7/13 1pm - Retro on Phase 21 Batch 2 (Phase 4) — wiring resolved max_tokens/temperature/opaque params onto %Request{} in Chat.build_request/4
+
+[ASKS] mon 7/13 1pm - Optional hardening: also strip :api_key nested inside Engine.new(params: %{...}) so a deliberate misuse can't forward a key onto the wire body (Phase 21 Batch 2 security Finding 1, pre-existing, not widened by the max_tokens fix)

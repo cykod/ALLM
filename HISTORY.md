@@ -1,3 +1,27 @@
+## [BUG] Honor max_tokens/temperature in chat/stream/session + fix guide drift
+*Monday, July 13th at 7pm*
+Fixes a silent-correctness bug where Chat.build_request/4 never populated 
+max_tokens/temperature, so every chat/3, stream/3, and Session.* turn shipped 
+the Anthropic adapter's 1024 default regardless of engine.params or call opts 
+— truncating multi-tool turns (finish_reason: :length) and losing all tool 
+execution. The builder now folds Engine.resolve_params/2's 
+max_tokens/temperature onto the typed %Request{} fields and routes remaining 
+opaque params onto request.options via a derived, drift-guarded strip-set 
+(built from StreamRunner and OpenAI accessors so future opt-list growth fails 
+closed in test, and closing a reasoning-control key leak on the OpenAI 
+Responses endpoint found in review). Adds Engine.new/1 fail-fast ArgumentError 
+validation of module-typed fields 
+(:adapter/:tool_executor/:tool_result_encoder/:image_adapter) so a malformed 
+engine can no longer crash deep in tool_runner.ex. Corrects long-standing drift 
+in seven guides (engine-first 3-tuples, session status atoms, handler-on-tool 
+pattern, Fake keyword tool-call scripts, StreamReducer API, event names, 
+JSON-vs-ETF round-trip, retry config) and wires the Fake-based guide iex> 
+blocks into doctest_file so the drift becomes a red test rather than a silent 
+ship. Cites spec sections 5.2/6.3/6.4/8/10/12.3/31 and references 
+steering/ALLM_VERIFIED_FACTS.md.
+
+---
+
 ## [FEAT] Key Fake/FakeImages cursor on engine identity
 *Saturday, June 27th at 2am*
 Add a stable, serializable :id to %ALLM.Engine{} (auto-stamped at new/1, 

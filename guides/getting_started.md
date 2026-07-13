@@ -96,8 +96,11 @@ the full clause list.
 
 ## Building a request explicitly
 
-`ALLM.chat/3` accepts either a list of messages or a `%Request{}`. The
-list form is shorthand. Here's the explicit form:
+`ALLM.generate/3` (and `stream_generate/3`) take a `%Request{}` built
+with `ALLM.request/2`. The orchestration entry points (`chat/3`,
+`step/3`, `stream/3`) take a list of messages or a `%Thread{}` directly
+and set request options via their own opts. Here's the explicit-request
+form through `generate/3`:
 
     iex> engine = ALLM.Engine.new(
     ...>   adapter: ALLM.Providers.Fake,
@@ -107,14 +110,34 @@ list form is shorthand. Here's the explicit form:
     ...>   ALLM.system("Be concise."),
     ...>   ALLM.user("Name three primes.")
     ...> ])
-    iex> {:ok, %ALLM.ChatResult{final_response: %ALLM.Response{output_text: text}}} =
-    ...>   ALLM.chat(engine, req)
+    iex> {:ok, %ALLM.Response{output_text: text}} = ALLM.generate(engine, req)
     iex> text
     "Three primes: 2, 3, 5."
 
 `ALLM.request/2` accepts the same opts you'd set on the request struct
 directly: `:model`, `:tools`, `:tool_choice`, `:response_format`,
 `:stream`, `:max_tokens`, `:temperature`, `:metadata`.
+
+### `max_tokens` and the provider floor
+
+On the orchestration paths (`chat/3`, `stream/3`, `Session.*`),
+`max_tokens` defaults to the provider's floor (Anthropic's adapter
+injects `1024` when unset). Raise it on the engine or per call — engine
+`params` set the default, call opts win:
+
+```elixir
+# engine-level default for every turn
+engine = ALLM.Engine.new(adapter: ALLM.Providers.Anthropic,
+                         model: "claude-sonnet-4-6",
+                         params: %{max_tokens: 8192, temperature: 0.2})
+
+# per-call override (wins over engine.params)
+ALLM.chat(engine, [ALLM.user("extract every field…")], max_tokens: 4096)
+```
+
+Leaving `max_tokens` unset keeps the provider floor — a floor, not a cap:
+a multi-tool turn that needs more than 1024 tokens should raise it, or the
+turn truncates (`finish_reason: :length`) before the tools run.
 
 ## When to reach for what
 
@@ -125,7 +148,7 @@ directly: `:model`, `:tools`, `:tool_choice`, `:response_format`,
 | Single round-trip with tool execution | `ALLM.step/3` | `{:ok, %StepResult{}}` |
 | Multi-turn auto-loop with tools | `ALLM.chat/3` | `{:ok, %ChatResult{}}` |
 | Multi-turn auto-loop, streaming | `ALLM.stream/3` | `{:ok, Enumerable.t}` |
-| Multi-turn with persistence between turns | `ALLM.Session.*` | `{:ok, %Session{}}` |
+| Multi-turn with persistence between turns | `ALLM.Session.*` | `{:ok, %Session{}, %ChatResult{}}` |
 | Generate / edit / vary images | `ALLM.generate_image/3` etc. | `{:ok, %ImageResponse{}}` |
 
 ## Swap to a real provider

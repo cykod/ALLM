@@ -142,6 +142,13 @@ defmodule ALLM.Engine do
     :api_key
   ]
 
+  # Module-typed scalar engine fields (`module() | nil`). `new/1` validates
+  # each is `nil` or an atom, failing fast with `ArgumentError` on a non-module
+  # value (e.g. the historical `tool_executor: {Mod, tools: %{}}` mistake, which
+  # would otherwise crash deep in `tool_runner.ex`). `:middleware` is
+  # `[module()]` (must stay `[]` in v0.2, §29) and is not validated here.
+  @module_fields [:adapter, :tool_executor, :tool_result_encoder, :image_adapter]
+
   @doc """
   Build an `%ALLM.Engine{}` from keyword opts.
 
@@ -149,6 +156,16 @@ defmodule ALLM.Engine do
   `KeyError` via `struct!/2`. `:adapter` may be `nil` at construction — the
   missing-adapter check fires at adapter-call time (surfaces as
   `%EngineError{reason: :missing_adapter}`), not here.
+
+  The module-typed fields `:adapter`, `:tool_executor`, `:tool_result_encoder`,
+  and `:image_adapter` must each be a module (a plain atom) or `nil`. A
+  non-atom value — most commonly the unsupported
+  `tool_executor: {ALLM.ToolExecutor.Default, tools: %{...}}` form — raises
+  `ArgumentError` at construction rather than crashing later inside the tool
+  runner. Tool handlers live on the tool (`ALLM.tool(handler: fn args -> ... end)`),
+  not on the engine; `:tool_executor` is a bare module override for the
+  default executor. The guard is `is_atom/1`, so `nil` and any module (even one
+  not yet loaded) pass; a tuple, string, or map fails. See §6.4.
 
   A stable, serializable `:id` is auto-stamped via
   `System.unique_integer([:positive])` when none is supplied — this is the
@@ -176,7 +193,29 @@ defmodule ALLM.Engine do
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
     engine = struct!(__MODULE__, opts)
+    :ok = validate_module_fields!(engine)
     %{engine | id: engine.id || System.unique_integer([:positive])}
+  end
+
+  # Raise `ArgumentError` naming the first module-typed field carrying a
+  # non-atom, non-nil value (`nil` is an atom, so it passes). Keeps the
+  # documented `tool_executor: {Mod, tools: %{}}` mistake from reaching
+  # `tool_runner.ex` (§6.4).
+  @spec validate_module_fields!(t()) :: :ok
+  defp validate_module_fields!(%__MODULE__{} = engine) do
+    Enum.each(@module_fields, fn field ->
+      case Map.fetch!(engine, field) do
+        value when is_atom(value) ->
+          :ok
+
+        value ->
+          raise ArgumentError,
+                "engine field #{inspect(field)} must be a module (atom) or nil, " <>
+                  "got: #{inspect(value)}"
+      end
+    end)
+
+    :ok
   end
 
   @doc false

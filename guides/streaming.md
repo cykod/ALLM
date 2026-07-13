@@ -61,16 +61,22 @@ Every event is a tagged tuple with a payload map. The closed set:
 
 | Tag | When it fires | Payload keys |
 |---|---|---|
-| `{:request_started, _}` | Before the first byte to the provider | `:request`, `:engine_summary` |
-| `{:text_delta, _}` | Each chunk of assistant text | `:delta`, `:cumulative` |
-| `{:tool_call_delta, _}` | Each chunk of a tool-call argument blob | `:index`, `:delta`, `:cumulative_args` |
-| `{:tool_call, _}` | A complete tool call has assembled | `:tool_call` |
-| `{:tool_result, _}` | A tool executed and returned a result | `:tool_call_id`, `:result`, `:status` |
-| `{:message_completed, _}` | The assistant message finished | `:response` |
-| `{:step_completed, _}` | One round-trip completed (chat/3 emits this each loop iteration) | `:step_result`, `:mode` |
-| `{:halted, _}` | The chat loop halted (manual mode, ask-user, etc.) | `:reason`, `:metadata` |
-| `{:raw_chunk, _}` | Provider-native chunk passthrough (when `:include_raw_chunks` is on) | `:chunk` |
-| `{:error, _}` | Mid-stream error from the provider | `:error` |
+| `{:message_started, _}` | The assistant message begins | `:message` |
+| `{:text_delta, _}` | Each chunk of assistant text | `:id`, `:delta` |
+| `{:text_completed, _}` | The assistant text finished | `:id`, `:text` |
+| `{:tool_call_started, _}` | A tool call begins assembling | `:id`, `:name` |
+| `{:tool_call_delta, _}` | Each chunk of a tool-call argument blob | `:id`, `:arguments_delta` |
+| `{:tool_call_completed, _}` | A complete tool call has assembled | `:id`, `:name`, `:arguments`, `:raw_arguments` |
+| `{:tool_execution_started, _}` | A tool handler is about to run | `:id`, `:name`, `:arguments` |
+| `{:tool_execution_completed, _}` | A tool handler returned a result | `:id`, `:name`, `:result` |
+| `{:tool_result_encoded, _}` | The result was encoded for the model | `:id`, `:content` |
+| `{:ask_user_requested, _}` | A tool returned `{:ask_user, _, _}` | `:tool_call_id`, `:tool_name`, `:question`, `:opts` |
+| `{:tool_halt, _}` | A tool halted the loop | `:tool_call_id`, `:reason`, `:result` |
+| `{:message_completed, _}` | The assistant message finished | `:message`, `:finish_reason` |
+| `{:step_completed, _}` | One round-trip completed (chat/3 emits this each loop iteration) | `:response`, `:thread`, `:mode`, `:manual_tool_calls` |
+| `{:chat_completed, _}` | The chat loop finished (terminal) | `:result` |
+| `{:raw_chunk, _}` | Provider-native chunk passthrough (when `:include_raw_chunks` is on) | opaque |
+| `{:error, _}` | Mid-stream error from the provider | opaque |
 
 Pattern-matching on a payload key is **not exhaustive** — adding new
 keys to a payload map is non-breaking. Match on the leading tag.
@@ -84,7 +90,7 @@ Most consumers don't need every event. `stream_generate/3` and
   `:text_delta` events.
 * `:emit_tool_deltas` (default `true`) — set to `false` to drop
   `:tool_call_delta` events; you'll still receive the assembled
-  `:tool_call` event.
+  `:tool_call_completed` event.
 * `:include_raw_chunks` (default `false`) — set to `true` to receive
   `:raw_chunk` events with provider-native chunks (useful for
   passthrough proxies).
@@ -104,8 +110,8 @@ Most consumers don't need every event. `stream_generate/3` and
 `ALLM.stream/3` is `chat/3` plus streaming. It runs the auto-loop —
 calling tools as they're requested, feeding results back in, looping
 until the model stops asking — and emits events the entire way. You'll
-see a `:step_completed` event per loop iteration, and a final
-`:message_completed` when the loop exits.
+see a `:step_completed` event per loop iteration, and a final terminal
+`:chat_completed` event when the loop exits.
 
     iex> engine = ALLM.Engine.new(
     ...>   adapter: ALLM.Providers.Fake,
@@ -149,8 +155,9 @@ A mid-stream `{:error, struct}` event surfaces as
 from the non-streaming variants — the call-site tuple stays `{:ok, _}`.
 
 For streaming consumers, you see the `{:error, _}` event in the stream
-itself. The stream then ends; subsequent enumeration yields no further
-events.
+itself. The error is folded mid-stream and does **not** terminate the
+enumeration — scan collected events for `{:error, _}` before folding
+deltas.
 
 ```elixir
 {:ok, stream} = ALLM.stream_generate(engine, req)

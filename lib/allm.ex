@@ -536,6 +536,19 @@ defmodule ALLM do
   `max_turns` must be a `pos_integer`; non-positive integers raise
   `ArgumentError`.
 
+  ## Sampling params (`:max_tokens`, `:temperature`, …)
+
+  Sampling params resolve through the same precedence — call opts win over
+  `engine.params` — and are folded onto the built `%Request{}`:
+  `:max_tokens` and `:temperature` land on their typed fields; every other
+  opaque param (`:top_p`, `:reasoning_effort`, …) rides on
+  `request.options` for the adapter body-builder to merge. An unset
+  `:max_tokens` stays `nil`, so the provider's default applies as a
+  **floor** (Anthropic injects `1024`) — raise it via
+  `Engine.new(params: %{max_tokens: N})` or a per-call `max_tokens:` opt
+  when a turn needs more room, or it truncates (`finish_reason: :length`)
+  before tools run.
+
   ## `:halt_when` semantics
 
   `:halt_when` is a `(StepResult.t -> boolean)` callback invoked

@@ -146,6 +146,14 @@ defmodule ALLM.Providers.OpenAI do
   @summary_atoms ~w(auto concise detailed)a
   @verbosity_atoms ~w(low medium high)a
 
+  # Reasoning-control call opts consumed by `merge_reasoning_opts/4` — these
+  # are read from `opts` and re-shaped onto the wire (endpoint-aware), so they
+  # must NOT ALSO ride `request.options` or they double-route and orphan a raw
+  # atom-valued key on the Responses body. `ALLM.Chat.@request_carried_keys`
+  # DERIVES its strip-set from `reasoning_opts/0` so this list stays the single
+  # source of truth. See merge_reasoning_opts/4 and chat.ex.
+  @reasoning_opts [:reasoning_effort, :reasoning_summary, :verbosity]
+
   require Logger
 
   alias ALLM.Error.AdapterError
@@ -1508,8 +1516,16 @@ defmodule ALLM.Providers.OpenAI do
   # stripped the caller's `adapter_opts: [endpoint: ...]` override, so an
   # explicit `:chat_completions` request on `gpt-5*` still emitted the
   # Responses-shaped `reasoning: %{effort: ...}` map.
+  @doc false
+  # Accessor so `ALLM.Chat.@request_carried_keys` can DERIVE (not re-type) the
+  # reasoning-control keys it must strip from `request.options`. Promoting this
+  # inline `Keyword.take/2` list to a named, referenced attribute closes the
+  # blind spot behind the Phase 21.4 Responses double-route leak.
+  @spec reasoning_opts() :: [atom()]
+  def reasoning_opts, do: @reasoning_opts
+
   defp merge_reasoning_opts(body, %Request{} = request, endpoint, opts) when is_list(opts) do
-    relevant = Keyword.take(opts, [:reasoning_effort, :reasoning_summary, :verbosity])
+    relevant = Keyword.take(opts, @reasoning_opts)
 
     case relevant do
       [] ->

@@ -34,24 +34,35 @@ req = ALLM.request([ALLM.user("Weather in Boston?")], tools: [weather])
 ```
 
 The model now knows the tool exists. To actually run it when the model
-asks, configure a tool executor on the engine.
+asks, give the tool a `handler`.
 
-## The default tool executor
+## Handlers live on the tool
 
-`ALLM.ToolExecutor.Default` ships with the library. It takes a map of
-tool-name → 1-arity function:
+A tool runs its own handler. Pass a `handler:` function to `ALLM.tool/1`
+and the default executor (`ALLM.ToolExecutor.Default`, wired
+automatically) invokes it when the model calls the tool:
 
 ```elixir
-engine = ALLM.Engine.new(
-  adapter: ALLM.Providers.OpenAI,
-  model: "gpt-4.1-mini",
-  tool_executor: {ALLM.ToolExecutor.Default, tools: %{
-    "get_weather" => fn %{"city" => city} ->
-      {:ok, %{temperature: 62, conditions: "sunny", city: city}}
-    end
-  }}
+weather = ALLM.tool(
+  name: "get_weather",
+  description: "Returns the current weather for a city.",
+  schema: %{
+    "type" => "object",
+    "properties" => %{"city" => %{"type" => "string"}},
+    "required" => ["city"]
+  },
+  handler: fn %{"city" => city} ->
+    {:ok, %{temperature: 62, conditions: "sunny", city: city}}
+  end
 )
+
+engine = ALLM.Engine.new(adapter: ALLM.Providers.OpenAI, model: "gpt-4.1-mini")
 ```
+
+The engine's `:tool_executor` is a bare `module()` override for the
+default executor — you never pass a `{module, tools: %{}}` tuple to it
+(that raises `ArgumentError` at `Engine.new/1`; handlers belong on the
+tool, not the engine).
 
 The function receives the parsed argument map and must return one of:
 
@@ -64,13 +75,20 @@ The function receives the parsed argument map and must return one of:
 
 ## The auto-loop
 
-Pass the request to `chat/3`. The loop handles the round-trip:
+Pass the messages to `chat/3` — the tools ride on the engine. The loop
+handles the round-trip:
 
+    iex> weather = ALLM.tool(
+    ...>   name: "get_weather",
+    ...>   description: "weather",
+    ...>   schema: %{"type" => "object"},
+    ...>   handler: fn _args -> {:ok, %{temperature: 62}} end
+    ...> )
     iex> engine = ALLM.Engine.new(
     ...>   adapter: ALLM.Providers.Fake,
-    ...>   adapter_opts: [scripts: [
+    ...>   adapter_opts: [stream_script: [
     ...>     [
-    ...>       {:tool_call, %{id: "call_1", name: "get_weather", args: %{"city" => "Boston"}}},
+    ...>       {:tool_call, id: "call_1", name: "get_weather", arguments: %{"city" => "Boston"}},
     ...>       {:finish, :tool_calls}
     ...>     ],
     ...>     [
@@ -78,14 +96,10 @@ Pass the request to `chat/3`. The loop handles the round-trip:
     ...>       {:finish, :stop}
     ...>     ]
     ...>   ]],
-    ...>   tool_executor: {ALLM.ToolExecutor.Default, tools: %{
-    ...>     "get_weather" => fn _args -> {:ok, %{temperature: 62}} end
-    ...>   }}
+    ...>   tools: [weather]
     ...> )
-    iex> weather = ALLM.tool(name: "get_weather", description: "weather", schema: %{"type" => "object"})
-    iex> req = ALLM.request([ALLM.user("Weather?")], tools: [weather])
     iex> {:ok, %ALLM.ChatResult{final_response: %ALLM.Response{output_text: text}}} =
-    ...>   ALLM.chat(engine, req)
+    ...>   ALLM.chat(engine, [ALLM.user("Weather?")])
     iex> text
     "It's 62F and sunny in Boston."
 
@@ -101,15 +115,14 @@ each iteration.
 
 Sometimes you don't want the loop to run tools at all — you want the
 model's tool calls returned to your code so you can audit them, queue
-them, or run them in a different process. Pass `mode: :manual` on the
-engine:
+them, or run them in a different process. `:mode` is a **per-call opt**
+(not an engine field — passing `mode:` to `Engine.new/1` raises
+`KeyError`). Pass `mode: :manual` at the call site:
 
 ```elixir
-engine = ALLM.Engine.new(
-  adapter: ALLM.Providers.OpenAI,
-  model: "gpt-4.1-mini",
-  mode: :manual
-)
+engine = ALLM.Engine.new(adapter: ALLM.Providers.OpenAI, model: "gpt-4.1-mini")
+
+ALLM.chat(engine, req, mode: :manual)
 ```
 
 Now `chat/3` halts after one round-trip whenever the model emits tool
@@ -146,7 +159,7 @@ manual subset surfaces in `metadata.manual_tool_calls` (for
 
 After you've handled the manual tool, append a `:tool` message
 containing the result and re-issue `chat/3` (or call
-`Session.submit_tool_result/3` then `Session.continue/3`).
+`Session.submit_tool_result/3` then `Session.continue(engine, session, nil)`).
 
 `examples/14_per_tool_manual.exs` and
 `examples/15_per_tool_manual_session.exs` are runnable smoke tests of
@@ -189,9 +202,11 @@ Resume by appending the user's reply as a `:user` message and re-issuing
 ## Streaming tool calls
 
 `stream/3` is the streaming version of `chat/3`. Tool calls arrive as
-`:tool_call_delta` events (the argument blob accumulates) followed by a
-`:tool_call` event when the call is complete. The auto-loop dispatches
-the tool, emits a `:tool_result` event, and continues the loop.
+`:tool_call_started` then `:tool_call_delta` events (the argument blob
+accumulates) followed by a `:tool_call_completed` event when the call is
+complete. The auto-loop dispatches the tool, emitting
+`:tool_execution_started` → `:tool_execution_completed` →
+`:tool_result_encoded`, and continues the loop.
 
 See `streaming.md` for the full event-shape table.
 
@@ -206,7 +221,7 @@ The arity-2 keyword list carries call context. Standard keys provided by
 
 | Key | Type | Notes |
 |-----|------|-------|
-| `:context` | `term()` | The opaque value passed via `ALLM.chat(engine, thread, context: ...)` or `Session.reply(session, msg, context: ...)`. Caller-defined shape. |
+| `:context` | `term()` | The opaque value passed via `ALLM.chat(engine, thread, context: ...)` or `Session.reply(engine, session, msg, context: ...)`. Caller-defined shape. |
 | `:session_id` | `String.t() \| nil` | The `%Session{}.id` when invoked through the Session API; `nil` for stateless `chat/3` / `step/3`. |
 | `:tool_call` | `%ALLM.ToolCall{}` | The exact tool call the assistant emitted (`:id`, `:name`, `:arguments`). |
 | `:engine` | `%ALLM.Engine{}` | The engine driving the call — handlers needing to issue downstream LLM calls reuse it via `ALLM.generate/3`. |

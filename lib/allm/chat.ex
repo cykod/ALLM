@@ -1996,9 +1996,21 @@ defmodule ALLM.Chat do
   # caller invokes, not on this field. We still set it truthfully so that
   # serialized `%Request{}` records round-trip with intent intact.
   defp build_request(%Thread{messages: msgs}, %Engine{} = engine, opts, flags) do
+    # Resolve sampling params (call opts > engine.params; engine-field keys
+    # already denied by resolve_params/2 — see engine.ex:129-143 and §6.3).
+    # The two typed fields ride on the %Request{} struct; every other opaque
+    # param (top_p, reasoning_effort, …) rides on request.options, which the
+    # adapter body-builders merge onto the wire (§10). Fixes the silent
+    # max_tokens/temperature drop on chat/stream/session (Phase 21.4).
+    params = Engine.resolve_params(engine, opts)
+    {typed, opaque} = Map.split(params, [:max_tokens, :temperature])
+
     base = [
       tools: Engine.resolve_tools(engine, opts),
-      stream: Keyword.get(flags, :stream, false)
+      stream: Keyword.get(flags, :stream, false),
+      max_tokens: Map.get(typed, :max_tokens),
+      temperature: Map.get(typed, :temperature),
+      options: drop_request_carried_keys(opaque)
     ]
 
     extra =
@@ -2015,6 +2027,57 @@ defmodule ALLM.Chat do
       end
 
     Request.new(msgs, base ++ extra ++ structured)
+  end
+
+  # Keys that `resolve_params/2` does NOT strip (they're not engine-field
+  # keys) but which must never land in `request.options` — they're either
+  # already routed onto typed %Request{} fields via `extra`/`structured`, or
+  # consumed by the orchestration/streaming/tool-runner/reasoning layers and
+  # would leak onto the provider wire body if forwarded.
+  #
+  # Partition contract: engine-field keys (`:tool_executor`,
+  # `:tool_result_encoder`, `:context`, `:api_key`, …) are already stripped
+  # upstream by `resolve_params/2`'s `@engine_field_keys` (engine.ex:129-143)
+  # and are intentionally absent below — this list catches only keys that
+  # arrive as *call opts*.
+  #
+  # The orchestration + streaming-layer entries are DERIVED (not re-typed) from
+  # `StreamRunner.orchestration_opts/0` + `phase_5_layer_opts/0`, so a new opt
+  # added upstream propagates automatically. The reasoning-control set consumed
+  # by `OpenAI.merge_reasoning_opts/4` (openai.ex `@reasoning_opts`) is listed
+  # locally to keep this neutral orchestration layer decoupled from a specific
+  # provider; `chat_request_params_test.exs`'s drift guard asserts this local
+  # copy stays byte-identical to `OpenAI.reasoning_opts/0` and folds the whole
+  # union through a real `chat/3` call to prove nothing reaches `request.options`.
+  @local_request_carried_keys [
+    # handled by `extra`
+    :response_format,
+    :tool_choice,
+    # handled by `structured` / two-pass orchestration
+    :structured_finalize,
+    :structured_finalize_nudge,
+    # tool-runner opts (the call-opt subset; engine-field members stripped upstream)
+    :tool_timeout,
+    :on_tool_error,
+    :max_concurrency,
+    :session_id,
+    # reasoning controls — consumed by OpenAI.merge_reasoning_opts/4 (they read
+    # from opts and re-shape onto the wire endpoint-aware); double-routing them
+    # through request.options orphans a raw atom-valued key on the Responses body.
+    :reasoning_effort,
+    :reasoning_summary,
+    :verbosity
+  ]
+
+  @request_carried_keys @local_request_carried_keys ++
+                          StreamRunner.orchestration_opts() ++
+                          StreamRunner.phase_5_layer_opts()
+
+  # Strip the orchestration/streaming/request-carried keys from the opaque
+  # param map so `request.options` carries only genuine adapter body params.
+  @spec drop_request_carried_keys(map()) :: map()
+  defp drop_request_carried_keys(opaque) when is_map(opaque) do
+    Map.drop(opaque, @request_carried_keys)
   end
 
   # Phase 6 design Non-obvious Decision #10: construct the assistant

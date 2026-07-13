@@ -62,6 +62,18 @@ defmodule ALLM.StreamRunner do
     :request_id
   ]
 
+  @doc false
+  # Accessor so `ALLM.Chat.@request_carried_keys` can DERIVE (not re-type)
+  # the orchestration keys it must strip from `request.options`, and so the
+  # drift-guard test can fold the union. See chat.ex:@request_carried_keys.
+  @spec orchestration_opts() :: [atom()]
+  def orchestration_opts, do: @orchestration_opts
+
+  @doc false
+  # Accessor for the Phase-5 streaming-layer opts — see orchestration_opts/0.
+  @spec phase_5_layer_opts() :: [atom()]
+  def phase_5_layer_opts, do: @phase_5_layer_opts
+
   @doc """
   Dispatch a streaming request. Validates, resolves params, forwards to
   `engine.adapter.stream/2`, and wires the post-processing pipeline.

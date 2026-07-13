@@ -1,3 +1,30 @@
+## [Unreleased]
+
+Changed:
+- `ALLM.Engine.new/1` now raises `ArgumentError` on a non-module
+  `:adapter`/`:tool_executor`/`:tool_result_encoder`/`:image_adapter`
+  value (e.g. the unsupported `tool_executor: {Mod, tools: %{}}` form) —
+  previously it constructed a booby-trapped engine that crashed later at
+  tool-run time (§6.4)
+- Bundled `guides/*.md` `iex>` examples now execute under `mix test` via
+  `doctest_file` (`test/guides_doctest_test.exs`), so guide drift is a
+  red test rather than a silent ship (§31)
+
+Fixed:
+- `chat/3`, `stream/3`, and `Session.*` now honor `max_tokens`/`temperature`
+  from `engine.params` and call opts (previously silently capped at the
+  adapter default, e.g. Anthropic 1024) — `Chat.build_request/4` folds the
+  resolved sampling params onto the built `%Request{}`; opaque params
+  (`top_p`, …) ride on `request.options` (§6.3, §10)
+- Correct guide-content drift against the real 0.4.x API: engine-first
+  3-tuple `Session.*` calls, the real status union
+  (`:idle | :awaiting_user | :awaiting_tools | :completed | :error`),
+  handler-on-tool executor pattern, `StreamReducer.{new,apply_event,finalize}`
+  API, the closed streaming-event union, JSON round-trip field assertions,
+  and the `FakeImages` `adapter_opts: [image_script: …]` shape
+  (`guides/{sessions,tools,streaming,getting_started,image_generation,vision,errors_and_retries}.md`;
+  see `steering/ALLM_VERIFIED_FACTS.md`)
+
 ## [REL] v0.4.3 — Engine identity
 
 Breaking changes:

@@ -42,56 +42,67 @@ encounter. The closed `:reason` set:
 | `:content_filter` | Provider blocked output | no |
 | `:unknown` | Catch-all | no |
 
-The retryable set is the default `ALLM.Retry` policy's
-`:retry_on_reasons` list.
+The retryable HTTP statuses/reasons are the default `ALLM.Retry`
+policy's `:retry_on` list (see below).
 
 ## The retry policy
 
-Engines have a `:retry_policy` slot. The default is
-`ALLM.Retry.default_policy/0`:
+Engines have a `:retry` slot (`:default | false | keyword`). The
+default policy is a plain map returned by `ALLM.Retry.default_policy/0`
+(there is no `%ALLM.Retry{}` struct — `ALLM.Retry` is a module of
+functions):
 
 ```elixir
-%ALLM.Retry{
+%{
   max_attempts: 3,
   base_delay_ms: 500,
-  max_delay_ms: 8_000,
-  jitter: 0.25,
-  retry_on_reasons: [:rate_limited, :overloaded, :server_error,
-                     :service_unavailable, :timeout, :connection_closed]
+  max_delay_ms: 30_000,
+  retry_on: [429, 500, 502, 503, 504, :timeout],
+  jitter_ms: 250,
+  respect_retry_after: true
 }
 ```
 
-Override per-engine:
+`retry_on` holds HTTP status codes (integers) and the `:timeout` atom,
+matched against the failure via `ALLM.Retry.error_matches?/2`.
+
+Override per-engine by passing a keyword list under `:retry` — it is
+shallow-merged over the default policy via `ALLM.Retry.materialize/1`:
 
 ```elixir
 engine = ALLM.Engine.new(
   adapter: ALLM.Providers.OpenAI,
   model: "gpt-4.1-mini",
-  retry_policy: %ALLM.Retry{max_attempts: 5, base_delay_ms: 1_000, jitter: 0.5}
+  retry: [max_attempts: 5, base_delay_ms: 1_000]
 )
 ```
 
-Disable retries entirely:
+Disable retries entirely with `retry: false`:
 
 ```elixir
-engine = ALLM.Engine.new(adapter: ..., retry_policy: ALLM.Retry.none())
+engine = ALLM.Engine.new(adapter: ..., retry: false)
 ```
 
-The retry helper applies exponential backoff with full jitter:
-attempt N waits `min(base * 2^(N-1), max) * (1 - jitter ± jitter)`. A
-`:retry_after` header (if the provider sent one) overrides the computed
-delay.
+The retry helper applies exponential backoff with **additive** jitter:
+attempt N waits `min(base_delay_ms * 2^(N-1), max_delay_ms)` plus a
+random jitter in `[0, jitter_ms]` (never subtractive). When
+`respect_retry_after: true` and the provider sent a `Retry-After`
+header, that value (plus jitter) overrides the computed delay.
 
 ## Pattern-matching errors
 
     iex> engine = ALLM.Engine.new(
     ...>   adapter: ALLM.Providers.Fake,
-    ...>   adapter_opts: [script: [{:error, :rate_limited}]]
+    ...>   adapter_opts: [script: [{:preflight_error, :rate_limited, []}]]
     ...> )
     iex> {:error, %ALLM.Error.AdapterError{reason: reason}} =
     ...>   ALLM.generate(engine, ALLM.request([ALLM.user("hi")]))
     iex> reason
     :rate_limited
+
+A **pre-flight** adapter error surfaces as `{:error, _}` at the call
+site (above). A **mid-stream** error is different — it folds into the
+response; see "Mid-stream errors fold into the response" below.
 
 In application code:
 
