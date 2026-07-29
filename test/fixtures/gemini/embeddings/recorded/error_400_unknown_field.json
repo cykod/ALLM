@@ -1,0 +1,18 @@
+{
+  "error": {
+    "code": 400,
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.BadRequest",
+        "fieldViolations": [
+          {
+            "description": "Invalid JSON payload received. Unknown name \"totallyNotAField\" at 'requests[0]': Cannot find field.",
+            "field": "requests[0]"
+          }
+        ]
+      }
+    ],
+    "message": "Invalid JSON payload received. Unknown name \"totallyNotAField\" at 'requests[0]': Cannot find field.",
+    "status": "INVALID_ARGUMENT"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "_comment": "Synthesized (Phase 20.5) — Gemini batchEmbedContents 400 envelope. HAND-WRITTEN IN FULL, including the details[] entry: no live response backs this file. Its only job is the adapter's key-redaction test, for which the message deliberately embeds a key-shaped string (AIzaSy...) that Google's real INVALID_ARGUMENT text does not echo back. For a GENUINE Gemini 400 envelope see recorded/error_400_unknown_field.json, which the probe in scripts/record_gemini_embeddings_fixtures.exs writes from a live response and which carries a google.rpc.BadRequest details entry rather than the google.rpc.ErrorInfo one invented here. The :invalid_request and google_status assertions run against that recorded file; this one is asserted only for redaction.",
+  "error": {
+    "code": 400,
+    "message": "API key not valid. Please pass a valid API key. (received AIzaSyFAKEKEY000111222333444555666777)",
+    "status": "INVALID_ARGUMENT",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "domain": "googleapis.com",
+        "metadata": {
+          "service": "generativelanguage.googleapis.com"
+        },
+        "reason": "API_KEY_INVALID"
+      }
+    ]
+  }
+}

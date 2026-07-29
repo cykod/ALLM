@@ -1,3 +1,25 @@
+## [FEAT] Add Gemini embeddings adapter with a self-asserting wire probe (Phase 20.5)
+*Wednesday, July 29th at 3pm*
+Wires Google's batchEmbedContents as the second embeddings adapter. Gemini caps 
+a batch at 100, requires a models/-prefixed model on every sub-request as well 
+as in the URL, returns vectors under values rather than embedding, and carries 
+no index field at all, so the adapter assigns index by list position; a direct 
+call with a nil model is rejected before any HTTP rather than falling back to a 
+hardcoded default, because a silently-wrong embedding model produces vectors in 
+the wrong space and that is unrecoverable once written to pgvector. 
+Truncated-dimension vectors are L2-normalized unconditionally without branching 
+on model id, since re-normalizing a unit vector is a no-op and a model 
+allow-list would go stale on the next release. The design flagged 
+autoTruncate's placement as inferred rather than confirmed, so the recorder now 
+ships a four-arm live probe with a negative control that halts the run on an 
+unexpected status; it established the nested embedContentConfig form, and 
+recording a real rejection also disproved two design claims, that Gemini 
+returns usageMetadata and that it sends a correlation-id header, plus revealed 
+that a hand-written error fixture had invented its details[] while claiming 
+live verification.
+
+---
+
 ## [FEAT] Add OpenAI embeddings adapter with live wire fixtures (Phase 20.4)
 *Wednesday, July 29th at 2pm*
 Wires POST /v1/embeddings as the first real ALLM.EmbeddingAdapter 

@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized (Phase 20.5) — Gemini batchEmbedContents 429 envelope. Synthesized rather than recorded because provoking a real quota rejection would require sustained abuse of the live endpoint.",
+  "error": {
+    "code": 429,
+    "message": "Resource has been exhausted (e.g. check quota).",
+    "status": "RESOURCE_EXHAUSTED"
+  }
+}

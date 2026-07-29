@@ -60,6 +60,45 @@ defmodule ALLM.Providers.GeminiTestFixtures do
   end
 
   @doc """
+  Load a recorded `batchEmbedContents` fixture by name.
+
+  Names map to files under
+  `test/fixtures/gemini/embeddings/recorded/<name>.json`. These are genuine
+  live responses and carry no `_comment` marker; the `drop_comment/1` call
+  inside `load_json/1` is therefore inert for them, which is exactly why a
+  provenance assertion made through this loader cannot bind —
+  `embeddings_wire_test.exs` reads the raw bytes instead.
+
+  ## Examples
+
+      iex> body = ALLM.Providers.GeminiTestFixtures.embeddings_recorded(:batch_embed_contents)
+      iex> length(body["embeddings"])
+      3
+  """
+  @spec embeddings_recorded(atom()) :: body()
+  def embeddings_recorded(name) when is_atom(name) do
+    load_json(Path.join([@fixtures_root, "embeddings", "recorded", "#{name}.json"]))
+  end
+
+  @doc """
+  Load a synthesized embeddings fixture by name.
+
+  Names map to files under
+  `test/fixtures/gemini/embeddings/synthesized/<name>.json`. The leading
+  `_comment` provenance marker is stripped before the body is returned.
+
+  ## Examples
+
+      iex> body = ALLM.Providers.GeminiTestFixtures.embeddings_synthesized(:error_429)
+      iex> body["error"]["status"]
+      "RESOURCE_EXHAUSTED"
+  """
+  @spec embeddings_synthesized(atom()) :: body()
+  def embeddings_synthesized(name) when is_atom(name) do
+    load_json(Path.join([@fixtures_root, "embeddings", "synthesized", "#{name}.json"]))
+  end
+
+  @doc """
   Load a recorded or synthesized SSE stream fixture by name (Phase 16.2).
 
   Names resolve as follows: first under
