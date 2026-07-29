@@ -1,3 +1,24 @@
+## [FEAT] Add embeddings adapter behaviour, error type, and Fake (Phase 20.2)
+*Wednesday, July 29th at 3am*
+Lands the Layer B runtime for text embeddings: the ALLM.EmbeddingAdapter 
+behaviour (embed/2, max_batch_size/0, and an optional prepare_request/2 escape 
+hatch) carrying ten numbered invariants, an eleven-atom 
+ALLM.Error.EmbeddingAdapterError closed enum mirroring ImageAdapterError, and 
+:embed_adapter wired at all five ALLM.Engine sites so the module atom is 
+restorable from JSON yet excluded from resolve_params/2's adapter-bound params 
+map and can never leak onto a provider wire body. ALLM.Providers.FakeEmbeddings 
+is the scripted test vehicle, with three-tier cursor precedence, a capture_pid 
+seam that fires before any gate, and layered {:retry_until_call, n} budgets 
+that now chain rather than raising. A ten-case EmbeddingAdapterConformance 
+suite ships in the conformance sub-project for third-party adapter authors. 
+Review established that the suite cannot bind the count-and-index invariant for 
+an adapter using the embedding_script short-circuit, since that path delegates 
+to FakeEmbeddings before the adapter's own decoder runs; the limit is 
+documented in the design and compensated by required fixture-driven 
+decode_response/4 tests added to each of the three provider sub-phases.
+
+---
+
 ## [FEAT] Add Layer A embedding data types and validator (Phase 20.1)
 *Wednesday, July 29th at 3am*
 Adds the serializable Layer A foundation for provider-neutral text embeddings: 

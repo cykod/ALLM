@@ -88,7 +88,8 @@ defmodule ALLM.MixProject do
           ALLM.StreamAdapter,
           ALLM.ToolExecutor,
           ALLM.ToolResultEncoder,
-          ALLM.ImageAdapter
+          ALLM.ImageAdapter,
+          ALLM.EmbeddingAdapter
         ],
         Providers: [
           ALLM.Providers.OpenAI,
@@ -99,6 +100,7 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Fake,
           ALLM.Providers.Fake.Script,
           ALLM.Providers.FakeImages,
+          ALLM.Providers.FakeEmbeddings,
           ALLM.Providers.Support.SSE,
           ALLM.Providers.Support.OpenAIHeaders,
           ALLM.Providers.Support.GeminiHeaders,
@@ -155,7 +157,8 @@ defmodule ALLM.MixProject do
           ALLM.Error.StreamError,
           ALLM.Error.ToolError,
           ALLM.Error.ValidationError,
-          ALLM.Error.ImageAdapterError
+          ALLM.Error.ImageAdapterError,
+          ALLM.Error.EmbeddingAdapterError
         ]
       ]
     ]

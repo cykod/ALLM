@@ -215,3 +215,13 @@
 [RETR] wed 7/29 2am - Retro on Phase 20.1 Layer A embedding data types per steering/2026-07-28_EMBEDDINGS_DESIGN.md
 
 [DREV] wed 7/29 2am - Design review Phase 20.1 Layer A embedding data types against steering/2026-07-28_EMBEDDINGS_DESIGN.md — self-gated N/A, headless Elixir library with no front-end surface
+
+[MILE] wed 7/29 3am - Added Layer A embedding data types (Embedding, EmbeddingRequest, EmbeddingResponse), validator, and serializer registration for Phase 20.1
+
+[IMPL] wed 7/29 3am - Implement Phase 20.2 Layer B embeddings runtime — EmbeddingAdapter behaviour, EmbeddingAdapterError, Engine.embed_adapter, FakeEmbeddings, and the 10-case conformance suite per steering/2026-07-28_EMBEDDINGS_DESIGN.md
+
+[CDRV] wed 7/29 3am - Code review on current session
+
+[DREV] wed 7/29 3am - Design review Phase 20.2 Layer B embeddings runtime against steering/2026-07-28_EMBEDDINGS_DESIGN.md — self-gated N/A, headless Elixir library with no front-end surface
+
+[RETR] wed 7/29 3am - Retro on Phase 20.2 embeddings Layer B build (behaviour, error type, engine field, FakeEmbeddings, conformance suite)

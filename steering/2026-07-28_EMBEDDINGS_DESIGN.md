@@ -14,14 +14,14 @@
 | Phase | Description | Layer | Status |
 |-------|-------------|-------|--------|
 | 20.1 | Layer A data: `Embedding`, `EmbeddingRequest`, `EmbeddingResponse`, validator, serializer registry | A | Completed |
-| 20.2 | Layer B runtime: `ALLM.EmbeddingAdapter` behaviour, `EmbeddingAdapterError`, `Engine.embed_adapter`, `FakeEmbeddings`, conformance suite | B | Not Started |
+| 20.2 | Layer B runtime: `ALLM.EmbeddingAdapter` behaviour, `EmbeddingAdapterError`, `Engine.embed_adapter`, `FakeEmbeddings`, conformance suite | B | Completed |
 | 20.3 | Layer C façade: `ALLM.embed/3`, `ALLM.EmbeddingBatch` chunk/merge, `:embed` telemetry span, `Capability.preflight_embedding/2` | C | Not Started |
 | 20.4 | `ALLM.Providers.OpenAI.Embeddings` | B | Not Started |
 | 20.5 | `ALLM.Providers.Gemini.Embeddings` | B | Not Started |
 | 20.6 | `ALLM.Providers.Voyage.Embeddings` (Anthropic track) | B | Not Started |
 | 20.7 | Spec §36, `guides/embeddings.md`, examples 16–18, `mix.exs` wiring | — | Not Started |
 
-**Overall Progress:** 1/7 sub-phases complete
+**Overall Progress:** 2/7 sub-phases complete
 
 ---
 
@@ -446,6 +446,15 @@ Each callback traces to a user-visible operation (behaviour-checklist rule 1): `
 
 Invariant 3 (`request_timeout` → `:timeout`) is asserted per-adapter, not in the suite — it needs a hanging transport the suite cannot portably provide. Each of 20.4/20.5/20.6 carries an explicit bullet for it.
 
+**⚠ The suite cannot bind invariant 8 for a passthrough adapter** *(amended during 20.2; this qualification was missing from the mapping table above and the table oversold cases 2/5/6/7)*. Cases 2, 5, 6, and 7 must supply a script, because a successful response is the thing they assert on and the suite has no transport. But the mechanism that lets the suite drive a real adapter at all — the `adapter_opts[:embedding_script]` short-circuit two paragraphs below — delegates to `ALLM.Providers.FakeEmbeddings.embed/2` and returns the scripted embeddings **verbatim**, so the adapter's own response decoder is never reached on the success path. The four cases consequently assert that the harness's own script round-trips, not that the adapter honours `length(request.input)`.
+
+This is structural, not a defect in the case bodies: there is no script for which a verbatim passthrough both passes the case and is meaningfully exercised, and cases 5–7 cannot be run *unscripted* the way 3 and 4 are, because unscripted means real HTTP against a real key. Verified during the 20.2 fix pass with a scratchpad probe shaped exactly like 20.4–20.6 (correct gates + `embedding_script` short-circuit + a decoder returning one embedding at `index: 42` regardless of input): **10 cases, 0 failures.**
+
+Two consequences, both binding:
+
+1. **For 20.4–20.6, invariant 8 is bound by each adapter's own decoder tests, not by the conformance suite.** Every one of the three carries an explicit `decode_response/4` bullet asserting `length(embeddings) == length(input)`, `:index` values `0..length-1`, and uniform vector length, driven from recorded wire fixtures. A green conformance run is NOT evidence that a provider's decoder indexes its response correctly — treat the suite as covering gates, plumbing (`request_id`, `metadata`, `usage`), and shape, and nothing more.
+2. **Cases 2/5/6/7 still bind fully for any adapter that implements `embed/2` itself** rather than delegating — which is the third-party adapter author the published package exists to serve. Verified with a `WrongCountAdapter` probe (mis-indexed, mis-counted, ragged vectors): fails exactly cases 2, 5, 6, and 7. The case bodies were tightened in the same pass to express the invariant against `req.input` rather than repeating a literal count, to script indices out of order, and to script distinct-but-equal-length vectors, so none of the four is satisfiable by a trivially-uniform script.
+
 **Conformance-suite surface:** the suite calls only `embed/2` and `max_batch_size/0` — no `impl.script/0`-style introspection (rule 3). `@case_count 10` with a `case_count/0` accessor and a meta-test asserting the injected `describe/2` produces exactly 10 `test` cases (rule 7).
 
 **How real adapters are driven through the suite — NOT `Req.Test`.** The `conformance/` directory is a separate Mix project whose deps are `{:allm, path: ".."}`, `:jason`, `:credo`, `:dialyxir` (`conformance/mix.exs:29-40`) — **`:plug` is absent**, so `Req.Test.stub/2` is unavailable inside the injected `using` macro. The committed mechanism is instead an **in-`lib/` test-injection short-circuit**, exactly as the image adapters do it:
@@ -462,7 +471,11 @@ end
 
 Each real embeddings adapter therefore ships `adapter_opts[:embedding_script]` support in `lib/`, delegating to `ALLM.Providers.FakeEmbeddings.embed/2` **before any gate runs**, documented in a "## Test-injection escape hatch" `@moduledoc` section (`lib/allm/providers/openai/images.ex:103-111` is the model). This is a production-code deliverable, listed in the 20.4, 20.5, and 20.6 checklists.
 
-**Consequence for cases 3 and 4.** Because the script short-circuit fires *before* the gates, a scripted adapter can never reach its own `:batch_too_large` / `:invalid_request` guards. Cases 3 and 4 are therefore driven by a **sister stub** that implements the behaviour with real gates and a scripted success path — mirroring how the image suite uses `conformance/test/support/fixtures/scripted_image_stub.ex` for its gate-ordering case. `conformance/test/support/fixtures/scripted_embedding_stub.ex` is the embeddings analogue and is listed in the Module Tree.
+**Consequence for cases 3 and 4** *(amended during 20.2 — the original prose is preserved below the corrected rule, because the correction is narrow)*. The script short-circuit fires *before* the gates, so a **scripted** adapter can never reach its own `:batch_too_large` / `:invalid_request` guards. The corollary the original text missed is that omitting the script removes the short-circuit: cases 3 and 4 therefore pass **no `adapter_opts[:embedding_script]` at all** and assert directly against the adapter under test, which is what makes them non-vacuous for `FakeEmbeddings` and for the three real adapters. The **sister stub** — `conformance/test/support/fixtures/scripted_embedding_stub.ex`, the analogue of the image suite's `scripted_image_stub.ex` — still ships and is still listed in the Module Tree, but its only role is to be the **adapter under test** in the `allm_conformance` package's own self-test, where its deliberately small `max_batch_size/0` of `8` lets case 3 exercise the `:batch_too_large` boundary against a 9-element list instead of a 2049-element one. It is *not* referenced from any case body.
+
+*Amended again during the 20.2 fix pass.* The shipped cases 3 and 4 originally kept an `if stub = Harness.scripted_stub() do … end` tail as an "additional" assertion. That branch added zero coverage in both of the only two configurations that exist — in the self-test the adapter under test **is** the stub, so the tail re-ran an identical call against an identical module; in the main project and in every consumer the fixture is off the code path, so `Code.ensure_loaded?/1` is false and the branch was skipped. The `scripted_stub/0` helper and both branches were deleted, and the harness moduledoc's claim that the small cap is exercised "additionally" was corrected to say it is exercised by the self-test's primary run. The stub's now-unreachable `default_embeddings/1` synthesizer went with them; its `nil` arm returns the same `:unknown` / `%{cause: :no_scripted_embedding}` shape `FakeEmbeddings` returns, so the stub and the reference implementation agree on what a spent script means. **Standing rule this establishes: an optional fixture resolved through `Code.ensure_loaded?/1` may never appear in a conformance case body at all** — not as the only assertion, and not as an additional one.
+
+**Consequence for 20.4–20.6.** Because cases 3 and 4 run unscripted, each real adapter's `:batch_too_large` / `:invalid_request` guards must fire ahead of `ALLM.Keys.fetch!/2` — not merely ahead of the HTTP call — or the two cases raise `%EngineError{reason: :missing_key}` in a keyless CI environment. Invariants 4 and 5 already say "BEFORE any HTTP I/O"; this tightens them to "before key resolution."
 
 ### Layer B — `ALLM.Engine` extension
 
@@ -908,8 +921,8 @@ mix test && mix credo --strict && mix dialyzer && mix format --check-formatted
 `conformance/lib/allm/test/embedding_adapter_conformance.ex` (NEW) — `@case_count 10`, per the invariant→case mapping table in the contract section:
 1. `max_batch_size/0` returns a `pos_integer()`
 2. `embed/2` with one input returns one embedding with `index: 0`
-3. `embed/2` with `length(input) > max_batch_size()` returns `:batch_too_large` **before any HTTP I/O** (a `Req.Test` stub fails the test if called)
-4. `embed/2` with `input: []` returns `:invalid_request` before any HTTP I/O
+3. `embed/2` with `length(input) > max_batch_size()` returns `:batch_too_large` **before any HTTP I/O** *(amended during 20.2: driven by passing no script rather than by a `Req.Test` stub — `:plug` is not a `conformance/` dep, as this design notes two sections above, so `Req.Test.stub/2` is unavailable inside the injected `using` macro)*
+4. `embed/2` with `input: []` returns `:invalid_request` before any HTTP I/O (same mechanism)
 5. `embed/2` returns exactly `length(input)` embeddings
 6. `:index` values are exactly `0..length-1`
 7. all vectors have identical, non-zero length
@@ -925,14 +938,33 @@ Plus a meta-test asserting the injected `describe/2` yields exactly `@case_count
 
 #### 20.2.2 Implementation Checklist
 
-- [ ] `lib/allm/error/embedding_adapter_error.ex` — 11-atom closed enum, `@legal_reasons`, `legal_reasons/0`, `new/2`, `defexception`, three-clause `message/1`, `__from_tagged__/1`, `Jason.Encoder`
-- [ ] `lib/allm/error/engine_error.ex` — add `:no_embed_adapter` to BOTH `@type reason` and the private `@legal_reasons` mirror. No `legal_reasons/0` accessor and no length doctest exist on this module — do not add either.
-- [ ] `lib/allm/embedding_adapter.ex` — three `@callback`s, `@optional_callbacks prepare_request: 2`, moduledoc carrying the ten invariants
-- [ ] `lib/allm/engine.ex` — `:embed_adapter` at all five sites from the contract table
-- [ ] `lib/allm/serializer.ex` — add `ALLM.Error.EmbeddingAdapterError` to `@known_modules`
-- [ ] `lib/allm/providers/fake_embeddings.ex` — `@behaviour ALLM.EmbeddingAdapter`, three-tier cursor precedence (`:script_cursor` > `:cursor_key` > `phash2`), `:capture_pid`, `{:retry_until_call, n}`, `max_batch_size/0` → `2048`
-- [ ] `test/support/fake_embedding_fixtures.ex` — deterministic scripted vector helpers
-- [ ] `conformance/lib/allm/test/embedding_adapter_conformance.ex` — `@case_count 10` + `case_count/0`
+- [x] `lib/allm/error/embedding_adapter_error.ex` — 11-atom closed enum, `@legal_reasons`, `legal_reasons/0`, `new/2`, `defexception`, three-clause `message/1`, `__from_tagged__/1`, `Jason.Encoder`
+- [x] `lib/allm/error/engine_error.ex` — add `:no_embed_adapter` to BOTH `@type reason` and the private `@legal_reasons` mirror. No `legal_reasons/0` accessor and no length doctest exist on this module — do not add either.
+- [x] `lib/allm/embedding_adapter.ex` — three `@callback`s, `@optional_callbacks prepare_request: 2`, moduledoc carrying the ten invariants
+- [x] `lib/allm/engine.ex` — `:embed_adapter` at all five sites from the contract table
+- [x] `lib/allm/serializer.ex` — add `ALLM.Error.EmbeddingAdapterError` to `@known_modules`
+- [x] `lib/allm/providers/fake_embeddings.ex` — `@behaviour ALLM.EmbeddingAdapter`, three-tier cursor precedence (`:script_cursor` > `:cursor_key` > `phash2`), `:capture_pid`, `{:retry_until_call, n}`, `max_batch_size/0` → `2048`, plus the invariant-4/5 pre-flight gates (see Implementation Notes)
+- [x] `test/support/fake_embedding_fixtures.ex` — deterministic scripted vector helpers
+- [x] `conformance/lib/allm/test/embedding_adapter_conformance.ex` — `@case_count 10` + `case_count/0`
+- [x] `conformance/test/support/fixtures/scripted_embedding_stub.ex` — real-gate sister stub for cases 3 and 4
+- [x] `conformance/test/allm/test/embedding_adapter_conformance_test.exs` — self-test + three meta-tests
+- [x] `mix.exs` — `ALLM.EmbeddingAdapter` under `Behaviours`, `ALLM.Providers.FakeEmbeddings` under `Providers`, `ALLM.Error.EmbeddingAdapterError` under `Errors` (forced by the committed audit gate, not deferrable to 20.7)
+- [x] `mix run scripts/audit_user_docs.exs <new lib files>` returns zero hits
+
+**Implementation Notes (20.2).**
+
+- `[structural, documented]` **`ALLM.Providers.FakeEmbeddings.embed/2` implements the invariant-4 (`:batch_too_large`) and invariant-5 (`:invalid_request`) pre-flight gates**, which the 20.2 checklist did not enumerate. Without them the phase's own success criterion ("`FakeEmbeddings` passes all 10 conformance cases") is unsatisfiable for cases 3 and 4, and the two invariants are contract for *every* `ALLM.EmbeddingAdapter` implementation — `FakeEmbeddings` implements the behaviour, so it is bound by them. Gate order is `capture_pid` → empty-input → batch-size → script consult, mirroring `FakeImages`' capture-before-operation-gate ordering.
+- `[structural, documented]` **Conformance cases 3 and 4 pass NO script and assert against the caller-supplied adapter — and, after the 20.2 fix pass, against nothing else.** The design's premise — "because the script short-circuit fires *before* the gates, a scripted adapter can never reach its own guards" — holds only when a script *is* supplied. Omitting `adapter_opts[:embedding_script]` makes both gates reachable on the adapter under test, which turns two otherwise-vacuous cases (the fixture under `conformance/test/support/` is NOT on the main project's code path, so `Code.ensure_loaded?/1` is false for every main-project consumer) into real assertions. `scripted_embedding_stub.ex` still ships and still drives the `allm_conformance` package's own self-test, where its deliberately small `max_batch_size/0` of `8` exercises the `:batch_too_large` boundary without a 2049-element list. **Consequence for 20.4–20.6:** each real adapter's `:batch_too_large` / `:invalid_request` guards must fire ahead of `ALLM.Keys.fetch!/2`, not merely ahead of the HTTP call, or these two cases raise `%EngineError{reason: :missing_key}` in a keyless CI environment. *(Fix pass: the `if stub = Harness.scripted_stub()` tails first shipped on both cases added zero coverage in both of the only two configurations that exist, and were deleted along with `scripted_stub/0` and the stub's unreachable `default_embeddings/1`. See the amended "Consequence for cases 3 and 4" in the Layer B contract section.)*
+- `[structural, documented]` **The harness module body must not reference `ALLM.*` functions outside the `using/1` `quote`.** `allm_conformance` is compiled *before* `allm` in a consuming project's build, so a `def vectors_of(r), do: ALLM.EmbeddingResponse.vectors(r)` helper on the harness module emits `module is not available` on every clean build. First draft shipped two such helpers; they were inlined into the `quote` (where expansion happens at consumer compile time). `case_count/0` and `inputs/1` remain on the module because neither names an `ALLM.*` function. (`scripted_stub/0`, a third such helper using a runtime `Module.concat/1` + `Code.ensure_loaded?/1`, was deleted in the fix pass — see the cases-3/4 entry above.) No existing harness violated this; the rule was inferred from their shape and is now written down. `quote` block length is 118 lines, under Credo's `Refactor.LongQuoteBlocks` threshold of 150.
+- `[structural, documented]` **The case-count meta-test counts the injected `test` cases, it does not just re-assert the constant.** `ALLM.Test.ImageAdapterConformanceTest` asserts `case_count() == 9` only, which cannot catch a case added to the `quote` without bumping `@case_count`. The embeddings self-test adds a second meta-test that filters `__MODULE__.__ex_unit__().tests` by the injected `describe` name and compares the length against `case_count/0`, so the two drift-detection directions are both covered.
+- `[tactical]` Alias groups in the four new modules that alias both `ALLM.{Embedding, …}` and `ALLM.Error.EmbeddingAdapterError` order the brace group **first** — `Embedding…` sorts before `Error`. This is the opposite order from the image modules (`Error` before `Image`) and Credo's `AliasOrder` check enforces it; the two families cannot look alike here.
+- `[tactical]` `ALLM.Error.EngineError`'s `@moduledoc` was left untouched. `:no_embed_adapter` is documented by the closed `t:reason/0` enum; the module carries no per-reason table to extend (unlike `ImageAdapterError`/`EmbeddingAdapterError`, which do).
+- `[tactical]` Three `ALLM.Engine` docstrings that *enumerate* the module-typed fields and the `resolve_params/2` deny-list were extended with `:embed_adapter` alongside the five code sites. Leaving them stale would make the deny-list's documented contents disagree with `@engine_field_keys`, which is exactly the consumer/producer symmetry the contract table calls out.
+- **`mix docs` forward-reference warnings grew, as designed.** 20.1 left two (`ALLM.embedding_request/2`, `ALLM.Capability.preflight_embedding/2`); 20.2 adds several `ALLM.embed/3` references from `embedding_adapter.ex`, `embedding_adapter_error.ex`, and `fake_embeddings.ex`. All clear when 20.3 lands the façade — 20.3's "confirm the forward-reference warnings have cleared" checklist item now covers `ALLM.embed/3` too.
+- Coverage: `ALLM.EmbeddingAdapter`, `ALLM.Error.EmbeddingAdapterError`, and `ALLM.Providers.FakeEmbeddings` each report **100%**.
+- `[fix pass]` **The `ALLM.EmbeddingAdapter` minimum-impl skeleton was rewritten to demonstrate both mandatory gates.** It first shipped guarded as `when input != []`, which raises `FunctionClauseError` on `input: []` — contradicting invariants 2 and 5 and failing conformance case 4 — in the copy-me template that is the first thing a third-party adapter author reads. It now mirrors `lib/allm/image_adapter.ex:16-24`'s shape with an explicit `cond` returning both tagged errors, plus a sentence tying the gates to the "before key resolution" tightening.
+- `[fix pass]` **`FakeEmbeddings` handles consecutive `{:retry_until_call, _}` entries.** `script/1` validated back-to-back retry entries as well-formed while `embed/2` raised `FunctionClauseError` in `interpret_entry/3` — `handle_retry_until_call/6` dispatched the next entry into a function with no clause for that shape, violating invariant 2. Consecutive entries now **chain**: the call that spends one entry's budget lands on the next and opens its budget, so total rejections are `sum(n_i - 1)`. Layered retry budgets are exactly what 20.3's `ALLM.Retry.run/3` integration tests will script, so this had to be fixed before 20.3, not in it.
+- `[fix pass]` **`ALLM.Test.FakeEmbeddingFixtures`' moduledoc claimed vectors are "unit-length … normalized"; they are neither** (measured L2 norms `1.0` / `1.118` / `2.236`). The prose was corrected to describe the actual vectors rather than piping them through `ALLM.Embedding.normalize/1`, because unit-length is not a property 20.3's chunk/merge tests need and normalizing would replace clean literals with irrational floats in a fixture whose stated purpose is determinism and non-collision. The moduledoc now points callers who *do* want unit vectors at `ALLM.Embedding.normalize/1`.
 
 #### 20.2.3 Verification
 
@@ -942,7 +974,13 @@ mix test test/allm/error/embedding_adapter_error_test.exs \
          test/allm/providers/fake_embeddings_test.exs \
          test/allm/embedding_adapter_test.exs
 mix test && mix credo --strict && mix dialyzer
+
+# conformance/ is a SECOND Mix project — the main project's gates do not cover
+# it, and this sub-phase's Module Tree touches it.
+cd conformance && mix test && mix credo --strict && mix dialyzer
 ```
+
+`cd conformance && mix format --check-formatted` fails on `lib/allm/test/image_adapter_conformance.ex:91-92`, unformatted since Phase 14.1 (`b18ebeb`) and untouched by this sub-phase. Out of scope here; it is a stand-alone `[CHORE]` commit.
 
 **Success criterion:** `FakeEmbeddings` passes all 10 conformance cases; the meta-test confirms exactly 10; `Engine.resolve_params/2` on an engine with `embed_adapter:` set returns a map not containing `:embed_adapter`.
 
@@ -1013,7 +1051,7 @@ Retry (same file):
 - [ ] `lib/allm/telemetry.ex` — `:embed` in `@type span_name` and `@valid_span_names`
 - [ ] `@spec` + `@doc` with runnable doctests using `FakeEmbeddings` on both public façade functions
 - [ ] `test/allm_facade_doctest_inventory_test.exs` — add `ALLM.embed/3` (and `embedding_request/2`) to the hand-maintained `@public_facade` list. That gate **fails open**: an unregistered function is silently never checked, so `mix test` passing is not evidence the registration happened.
-- [ ] Re-run `mix docs` and confirm the two forward-reference warnings 20.1 left behind have cleared: `ALLM.embedding_request/2` (from `lib/allm/embedding_request.ex:11`) and `ALLM.Capability.preflight_embedding/2` (from `lib/allm/embedding_request.ex:39` and `lib/allm/validate.ex:317`). Both resolve once this sub-phase lands the functions; if either persists, the docstring cite is wrong.
+- [ ] Re-run `mix docs` and confirm the forward-reference warnings 20.1 and 20.2 left behind have cleared: `ALLM.embedding_request/2` (from `lib/allm/embedding_request.ex:11`), `ALLM.Capability.preflight_embedding/2` (from `lib/allm/embedding_request.ex:39` and `lib/allm/validate.ex:317`), and — added by 20.2 — `ALLM.embed/3` (from `lib/allm/embedding_adapter.ex`, `lib/allm/error/embedding_adapter_error.ex`, and `lib/allm/providers/fake_embeddings.ex`). All resolve once this sub-phase lands the functions; if any persists, the docstring cite is wrong. **`mix docs` is not a gate and its output is not clean to begin with, so "cleared" has to be defined against a recorded baseline or the check gets ticked without being run.** After this sub-phase the only warnings that may remain are these four pre-existing ones — `ALLM.Engine.put_cursor_key/2` (hidden, 3 sites), `ALLM.do_generate_image_body/5`, `ALLM.StreamRunner.build_dispatch_opts/2`, and `ALLM.Keys.Store` (hidden) — counted once each, i.e. halve the raw output to de-duplicate the HTML/EPUB double-emit. Anything else is a live drift.
 
 #### 20.3.3 Verification
 
@@ -1076,6 +1114,7 @@ Verified against [developers.openai.com/api/reference/resources/embeddings/metho
 - `embed/2 with dimensions: 512 and model "text-embedding-ada-002" returns :unsupported_feature before any HTTP I/O`, with `metadata: %{feature: :dimensions, model: "text-embedding-ada-002"}` — the rule-13 use site for `:unsupported_feature`
 - `embed/2 honors opts[:request_timeout] and returns :timeout` — behaviour invariant 3, driven by a `Req.Test` stub that sleeps past the timeout
 - passes the full `EmbeddingAdapterConformance` suite (driven via `adapter_opts[:embedding_script]`, in `test/allm/providers/openai/embeddings_conformance_test.exs`)
+- **`decode_response/4` binds behaviour invariant 8 — REQUIRED, and not covered by the conformance suite.** Because the suite drives this adapter through the `embedding_script` short-circuit, its success path never reaches `decode_response/4`; a decoder that drops entries or mis-indexes them passes all 10 cases (proven with a probe during the 20.2 fix pass — see "⚠ The suite cannot bind invariant 8 for a passthrough adapter" in the Layer B contract section). Assert directly against `batch_input.json`: `length(embeddings) == length(request.input)`, `Enum.map(embeddings, & &1.index) == Enum.to_list(0..length(input) - 1)`, and every vector the same non-zero length.
 
 `test/allm/providers/openai/embeddings_wire_test.exs` (NEW) — seven fixtures:
 - `single_input.json` decodes to one embedding of the fixture's dimensionality
@@ -1097,6 +1136,9 @@ Verified against [developers.openai.com/api/reference/resources/embeddings/metho
 - [ ] `scripts/record_openai_embeddings_fixtures.exs` — idempotent; refuses to overwrite files lacking the `_comment` marker
 - [ ] `test/support/openai_fixtures.ex` — embeddings loader + `drop_comment/1`
 - [ ] Naming-parity comment block enumerating identical vs divergent helper names across the three embeddings adapters, mirroring `lib/allm/providers/gemini/images.ex:159-197`
+- [ ] **Security re-check, carried forward from 20.2's security review** (that review found no issues *because* no live provider path existed yet; both items become live here and apply identically to 20.5 and 20.6):
+  - **`:cause` / `:metadata` / `:status` population.** `%EmbeddingAdapterError{}` derives `Jason.Encoder`, and downstream apps log and persist it. `to_embedding_adapter_error/4` must not capture a raw response body, a request header, or any `Authorization` / key value into those fields. The `Exception.message/1` clauses are safe by construction (they emit only `:reason` and `:provider`); the risk is entirely what the adapter *puts into* the struct. Add a test asserting a 401 whose synthesized fixture body contains a key-shaped string produces an error struct with no substring of that key in any field.
+  - **The `embedding_script` short-circuit is a caller-controllable response-injection switch in a production code path.** Once it ships in `lib/`, anyone who can set `adapter_opts` can replace a live provider's response wholesale. Accepted, on the `lib/allm/providers/openai/images.ex:251` precedent (setting `adapter_opts` already implies full control of the call), but the short-circuit must key on the presence of `:embedding_script` and nothing else — no environment variable, no application config, no `:persistent_term` — so the switch stays confined to an explicit per-call argument. Document it in the `## Test-injection escape hatch` moduledoc section.
 
 #### 20.4.3 Verification
 
@@ -1169,6 +1211,7 @@ Verified against [ai.google.dev/api/embeddings](https://ai.google.dev/api/embedd
 - `to_embedding_adapter_error/4 delegates to Gemini.classify_error/3` — 400→`:invalid_request`, 401/403→`:authentication_failed`, 404→`:invalid_request`, 429→`:rate_limited`, 500/503→`:provider_unavailable`
 - `endpoint_url/2 honors adapter_opts[:endpoint]`
 - passes the full `EmbeddingAdapterConformance` suite (driven via `adapter_opts[:embedding_script]`, in `test/allm/providers/gemini/embeddings_conformance_test.exs`)
+- **`decode_response/4` binds behaviour invariant 8 — REQUIRED, and not covered by the conformance suite.** Same reasoning and same assertions as the 20.4 bullet: the suite's success path short-circuits past this decoder, so assert directly against the batch fixture that `length(embeddings) == length(request.input)`, `:index` values are exactly `0..length-1`, and every vector has the same non-zero length. Gemini assigns `:index` by list position, which makes a dropped sub-response silently shift every subsequent index — exactly the failure this bullet exists to catch.
 
 `test/allm/providers/gemini/embeddings_wire_test.exs` (NEW) — four fixtures, same structure as 20.4.
 
@@ -1184,6 +1227,7 @@ Verified against [ai.google.dev/api/embeddings](https://ai.google.dev/api/embedd
 - [ ] Key via `Keys.fetch!(:gemini, opts)` (Decision #11); headers via `GeminiHeaders.headers/1`
 - [ ] `scripts/record_gemini_embeddings_fixtures.exs` — **includes the `truncate: false` live probe resolving the `autoTruncate` placement question flagged in the wire-field map, before `to_batch_body/2` is finalized**
 - [ ] `test/support/gemini_fixtures.ex` — embeddings loader
+- [ ] **Security re-check — both items from the 20.4 checklist apply verbatim** (no raw body / header / key material into `:cause` / `:metadata` / `:status`; the `embedding_script` short-circuit keys on the per-call opt and nothing else)
 
 #### 20.5.3 Verification
 
@@ -1246,6 +1290,7 @@ Verified against [docs.voyageai.com/reference/embeddings-api](https://docs.voyag
 - error mapping: 401→`:authentication_failed`, 429→`:rate_limited`, 400→`:invalid_request`, 5xx→`:provider_unavailable`
 - `embed/2 honors opts[:request_timeout] and returns :timeout` — behaviour invariant 3
 - passes the full `EmbeddingAdapterConformance` suite (driven via `adapter_opts[:embedding_script]`, in `test/allm/providers/voyage/embeddings_conformance_test.exs`)
+- **`decode_response/4` binds behaviour invariant 8 — REQUIRED, and not covered by the conformance suite.** Same reasoning and same assertions as the 20.4 bullet: assert against the batch fixture that `length(embeddings) == length(request.input)`, `:index` values are exactly `0..length-1`, and every vector has the same non-zero length.
 
 `test/allm/providers/voyage/embeddings_wire_test.exs` (NEW) — four fixtures.
 
@@ -1259,6 +1304,7 @@ Verified against [docs.voyageai.com/reference/embeddings-api](https://docs.voyag
 - [ ] Key via `Keys.fetch!(:voyage, opts)`
 - [ ] `scripts/record_voyage_embeddings_fixtures.exs`
 - [ ] `test/support/voyage_fixtures.ex` — loader mirroring `OpenAITestFixtures`
+- [ ] **Security re-check — both items from the 20.4 checklist apply verbatim** (no raw body / header / key material into `:cause` / `:metadata` / `:status`; the `embedding_script` short-circuit keys on the per-call opt and nothing else)
 
 #### 20.6.3 Verification
 
@@ -1305,7 +1351,7 @@ ALLM_PROVIDER=anthropic mix run examples/16_embed_single.exs   # after 20.7
 - [ ] `examples/README.md` — add rows 16–18 to the per-script table and update the per-provider key-requirements table to note that the **Anthropic arm now needs `VOYAGE_API_KEY`** (divergence D12)
 - [ ] `mix run scripts/audit_user_docs.exs` clean for `guides/embeddings.md` — no `Phase N`, `§N`, `Decision #N`, `steering/`, or `PHASE_*.md` tokens
 - [ ] `mix.exs` — `guides/embeddings.md` in `@guides`; `ALLM.EmbeddingAdapter` under `Behaviours`; the four new provider modules under `Providers`; `ALLM.Embedding` / `EmbeddingRequest` / `EmbeddingResponse` under `Data types`; `ALLM.Error.EmbeddingAdapterError` under `Errors`
-- [ ] `CHANGELOG.md` — one line per public-API change; flag any live-gate deferral honestly rather than paraphrasing the future post-record state
+- [ ] `CHANGELOG.md` — one line per public-API change; flag any live-gate deferral honestly rather than paraphrasing the future post-record state. **The entry must cover 20.1–20.6 cumulatively, not just 20.7's own surface.** CHANGELOG is deliberately deferred to this sub-phase by the Module Tree, so by the time it is written the debt spans six sub-phases: the Layer A embedding data types (20.1), `ALLM.EmbeddingAdapter` / `ALLM.Error.EmbeddingAdapterError` / `ALLM.Providers.FakeEmbeddings` / `%ALLM.Engine{}.embed_adapter` (20.2), `ALLM.embed/3` + `ALLM.embedding_request/2` (20.3), and the three provider adapters (20.4–20.6). Walk the six checklists, don't reconstruct from memory.
 - [ ] **Do NOT** regenerate `examples/RUN_OUTPUT_*.md` unless the live run happens in this commit (snapshot-defer policy)
 
 #### 20.7.3 Verification

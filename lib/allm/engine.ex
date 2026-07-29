@@ -35,8 +35,8 @@ defmodule ALLM.Engine do
       re-stamping); a pre-fix serialized engine lacking `"id"` decodes to
       `nil`. Used as the per-engine cursor key for the deterministic
       `ALLM.Providers.Fake` / `ALLM.Providers.FakeImages` adapters (§31).
-    * `:adapter`, `:tool_executor`, `:tool_result_encoder`, `:image_adapter`
-      `module | nil`. Modules are restored on JSON decode via
+    * `:adapter`, `:tool_executor`, `:tool_result_encoder`, `:image_adapter`,
+      `:embed_adapter` — `module | nil`. Modules are restored on JSON decode via
       `String.to_existing_atom/1`; an adapter module not loaded in the BEAM
       at decode time surfaces as `{:_unknown, :atom_decode_failed}` via the
       `ALLM.Serializer.from_json/1` error path (`[:adapter] :module_not_loaded`
@@ -96,6 +96,7 @@ defmodule ALLM.Engine do
           tool_executor: module() | nil,
           tool_result_encoder: module() | nil,
           image_adapter: module() | nil,
+          embed_adapter: module() | nil,
           params: map(),
           context: map(),
           retry: retry(),
@@ -110,6 +111,7 @@ defmodule ALLM.Engine do
     :tool_executor,
     :tool_result_encoder,
     :image_adapter,
+    :embed_adapter,
     adapter_opts: [],
     tools: [],
     params: %{},
@@ -134,6 +136,7 @@ defmodule ALLM.Engine do
     :tool_executor,
     :tool_result_encoder,
     :image_adapter,
+    :embed_adapter,
     :params,
     :context,
     :retry,
@@ -147,7 +150,13 @@ defmodule ALLM.Engine do
   # value (e.g. the historical `tool_executor: {Mod, tools: %{}}` mistake, which
   # would otherwise crash deep in `tool_runner.ex`). `:middleware` is
   # `[module()]` (must stay `[]` in v0.2, §29) and is not validated here.
-  @module_fields [:adapter, :tool_executor, :tool_result_encoder, :image_adapter]
+  @module_fields [
+    :adapter,
+    :tool_executor,
+    :tool_result_encoder,
+    :image_adapter,
+    :embed_adapter
+  ]
 
   @doc """
   Build an `%ALLM.Engine{}` from keyword opts.
@@ -158,7 +167,8 @@ defmodule ALLM.Engine do
   `%EngineError{reason: :missing_adapter}`), not here.
 
   The module-typed fields `:adapter`, `:tool_executor`, `:tool_result_encoder`,
-  and `:image_adapter` must each be a module (a plain atom) or `nil`. A
+  `:image_adapter`, and `:embed_adapter` must each be a module (a plain atom)
+  or `nil`. A
   non-atom value — most commonly the unsupported
   `tool_executor: {ALLM.ToolExecutor.Default, tools: %{...}}` form — raises
   `ArgumentError` at construction rather than crashing later inside the tool
@@ -445,8 +455,8 @@ defmodule ALLM.Engine do
 
   Returned as a **map** (not a keyword list). Engine-field keys
   (`:adapter`, `:adapter_opts`, `:model`, `:tools`, `:tool_executor`,
-  `:tool_result_encoder`, `:image_adapter`, `:params`, `:context`,
-  `:retry`, `:middleware`, `:metadata`, `:api_key`) are never forwarded
+  `:tool_result_encoder`, `:image_adapter`, `:embed_adapter`, `:params`,
+  `:context`, `:retry`, `:middleware`, `:metadata`, `:api_key`) are never forwarded
   they are consumed by the engine layer or by other resolvers. Every
   other opts key flows through unchanged, so provider-specific knobs
   (`:reasoning_effort`) and orchestration knobs (`:max_turns`,
@@ -486,6 +496,7 @@ defmodule ALLM.Engine do
       tool_executor: restore_module(data["tool_executor"]),
       tool_result_encoder: restore_module(data["tool_result_encoder"]),
       image_adapter: restore_module(data["image_adapter"]),
+      embed_adapter: restore_module(data["embed_adapter"]),
       params: restore_atom_keyed_map(data["params"] || %{}),
       context: restore_atom_keyed_map(data["context"] || %{}),
       retry: restore_retry(data["retry"]),
