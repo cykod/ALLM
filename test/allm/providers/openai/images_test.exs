@@ -1375,17 +1375,22 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
           retry: false
         )
 
-      # Per spec §6.4 keys never live on the engine; populate via the
-      # in-process Keys.Store for the duration of this test.
-      ALLM.Keys.put(:openai, "sk-tel-test")
-
+      # Per spec §6.4 keys never live on the engine — they resolve at
+      # adapter-call time. Supply the key through `opts[:api_key]` (the
+      # highest-precedence level of `ALLM.Keys`' resolution chain) rather than
+      # `ALLM.Keys.put/2`: this module is `async: true`, and the runtime store
+      # is process-GLOBAL, so a put here is visible to every concurrently
+      # running test — including `openai/embeddings_test.exs:241`, which
+      # asserts a missing `:openai` key raises `%EngineError{}`. `try/after`
+      # narrows that window but does not close it. Same foot-gun class as
+      # `Logger.configure/1` and `:telemetry.attach/4` (see CLAUDE.md).
       try do
-        assert {:ok, %ImageResponse{}} = ALLM.generate_image(engine, "kestrel")
+        assert {:ok, %ImageResponse{}} =
+                 ALLM.generate_image(engine, "kestrel", api_key: "sk-tel-test")
 
         assert_receive {^ref, [:allm, :image, :start], %{}}, 500
         assert_receive {^ref, [:allm, :image, :stop], %{}}, 500
       after
-        ALLM.Keys.delete(:openai)
         :telemetry.detach("test-images-#{inspect(ref)}")
       end
     end

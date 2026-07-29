@@ -18,10 +18,10 @@
 | 20.3 | Layer C façade: `ALLM.embed/3`, `ALLM.EmbeddingBatch` chunk/merge, `:embed` telemetry span, `Capability.preflight_embedding/2` | C | Completed |
 | 20.4 | `ALLM.Providers.OpenAI.Embeddings` | B | Completed |
 | 20.5 | `ALLM.Providers.Gemini.Embeddings` | B | Completed |
-| 20.6 | `ALLM.Providers.Voyage.Embeddings` (Anthropic track) | B | Not Started |
+| 20.6 | `ALLM.Providers.Voyage.Embeddings` (Anthropic track) | B | Completed |
 | 20.7 | Spec §36, `guides/embeddings.md`, examples 16–18, `mix.exs` wiring | — | Not Started |
 
-**Overall Progress:** 5/7 sub-phases complete
+**Overall Progress:** 6/7 sub-phases complete
 
 ---
 
@@ -766,9 +766,15 @@ test/fixtures/
 ├── gemini/embeddings/synthesized/                (NEW — 20.5)
 │   ├── error_400.json
 │   └── error_429.json
-├── voyage/embeddings/recorded/                   (NEW — 20.6)
+├── voyage/embeddings/recorded/                   (NEW — 20.6; shipped FIVE, not two — the three
+│   │                                                       extras are wire-probe arm bodies that were
+│   │                                                       already paid for, per 20.5.4's "record the
+│   │                                                       body, not the status")
 │   ├── single_input.json
-│   └── batch_input.json
+│   ├── batch_input.json
+│   ├── reduced_dimensions.json                   (the output_dimension probe arm's 200)
+│   ├── error_400_unknown_field.json              (the CONTROL arm's 400)
+│   └── error_400_context_length.json             (the over-length arm's 400)
 └── voyage/embeddings/synthesized/                (NEW — 20.6)
     ├── error_401.json
     └── error_429.json
@@ -807,11 +813,24 @@ CHANGELOG.md                                      (MODIFY — 20.7)
 
 **Path-existence sanity check (verified 2026-07-28).** `lib/allm/providers/openai/`, `lib/allm/providers/gemini/`, `test/fixtures/openai/`, `test/fixtures/gemini/`, `test/allm/providers/openai/`, `test/allm/providers/gemini/`, `conformance/lib/allm/test/`, `scripts/`, `guides/`, and `examples/` all exist. `lib/allm/providers/voyage/`, `test/allm/providers/voyage/`, `test/fixtures/voyage/`, and `test/fixtures/*/embeddings/` are new directories created by their sub-phases. Fixtures are `.json`, loaded via `Jason.decode!/1`, per the Phase 14/15 convention. `fake_embeddings.ex` sits at `providers/` top level, not `providers/fake/embeddings.ex`, matching `providers/fake_images.ex`.
 
-**Completeness check: 77 files.** Counting convention: 68 tagged `(NEW|MODIFY)` rows, minus the 6 rows that are fixture *directories* (containers, not files), plus the 15 individually-listed `.json` fixture leaves = **62 code/doc files + 15 fixtures = 77**. `git diff --stat <pre-20>..<post-20.7> | wc -l` should land at 77 ± 1, the ±1 being `git diff --stat`'s own summary line.
+**Completeness check: 80 files.** Counting convention: 68 tagged `(NEW|MODIFY)` rows, minus the 6 rows that are fixture *directories* (containers, not files), plus the 18 individually-listed `.json` fixture leaves = **62 code/doc files + 18 fixtures = 80**. *(Was 77 / 15 fixtures before 20.6 recorded three probe-arm bodies the design had not anticipated.)* `git diff --stat <pre-20>..<post-20.7> | wc -l` should land at 80 ± 1, the ±1 being `git diff --stat`'s own summary line.
 
 ---
 
 ## Phases
+
+**Standing verification convention (added in the 20.6 fix pass, binding on 20.7 and every later phase of this design).** Every `#### 20.N.3 Verification` block runs the suite **twice**: once at ExUnit's random seed and once at a **pinned** seed. Both must be 0 failures.
+
+```bash
+mix test                  # random seed — samples one interleaving
+mix test --seed 3333      # pinned — asserts order-independence
+```
+
+`mix test` alone is a *sample*, not a gate: ExUnit seeds randomly, so an order-dependent failure passes review indefinitely. The `--seed 3333` failure documented in 20.6.4 lives in code committed at 20.5's `a603f17` and survived five phases × a `/review`, `/code-review`, `/security-review`, `/design-review` and `/retro` each — all reporting green — before the next phase's implementer sampled the bad interleaving by running the suite more times than a reviewer does. Discovery was a function of repetition count, not of anyone looking; one extra ~19-second run converts "the suite is order-independent" from an assumption into an assertion.
+
+`3333` specifically, rather than `0` or an arbitrary value: it is the seed that exposed the `ALLM.Keys.Store` race, so it is the one value in the space with a demonstrated regression behind it. Pinning it keeps that regression covered rather than re-randomised. If a future flake surfaces at a different seed, add it alongside — the set only grows.
+
+When the pinned run goes red, `mix test --seed <n> --max-cases 1` is the discriminator: passing serially proves a **concurrency race** between `async: true` modules rather than an ordering effect, and narrows the search to process-global mutation. Any bug report naming a concurrency cause must record that experiment plus the `use ExUnit.Case, async:` line of every module it names — 20.6.4's first diagnosis was wrong precisely because it recorded neither.
 
 ### Phase 20.1 — Layer A embedding data types
 
@@ -1427,8 +1446,13 @@ Verified against [docs.voyageai.com/reference/embeddings-api](https://docs.voyag
 | Batch cap | **1000** items |
 | `max_batch_size/0` | `1000` |
 | Key atom / env var | `:voyage` → `VOYAGE_API_KEY` via `ALLM.Keys`' unknown-provider fallback (`lib/allm/keys.ex:203`) |
+| Error envelope | `{"detail": "<message>"}` — a single top-level **string**, FastAPI-shaped. **Not** OpenAI's `{"error": {message, type, code}}` and **not** Google's `{"error": {code, message, status}}`. There is no provider code or type to forward onto `:metadata`. *(Added during 20.6 — the table had no error row at all, and both siblings' shapes are wrong here. Reading `body["error"]["message"]` would have produced a generic fallback message on every real Voyage error.)* |
+| Correlation id | `x-request-id` response header, present on **both** 200s and errors. The OpenAI-style `decode_response/4` fallback IS implementable here, unlike on Gemini. Full live header list: `alt-svc`, `content-type`, `date`, `server`, `via`, `x-api-warning`, `x-request-id`. *(Added during 20.6, per the 20.5 binding note to check the provider's actual headers rather than porting either branch on faith.)* |
+| `data[]` entry keys | `embedding`, `index`, **`object`**, **`text`** (always `null` on observed responses). The decoder ignores the last two. |
 
 **`:task_type` mapping — lossy, and documented as such:** `:search_document → "document"`, `:search_query → "query"`. `:classification`, `:clustering`, and `:similarity` have no Voyage equivalent and map to an **omitted** `input_type` (Voyage's documented `null` behaviour: no retrieval prompt is prepended, the correct semantic for symmetric tasks). Logged at `:debug` via the deferred form.
+
+*(Amended during 20.6 — every row above was verified against live responses, and the three additions are what recording found that reading the documentation had not. Of the rows the design carried in, the load-bearing one held: **`usage.total_tokens`-only is CONFIRMED** — a live 200 body's `usage` object has exactly the key list `["total_tokens"]`. It is pinned in two places, at two different times: a premise guard over the recorded 200 bodies at `test/allm/providers/voyage/embeddings_wire_test.exs:130-150`, which fires at **re-record** time; and a live usage-key assertion on every 200 arm of `scripts/record_voyage_embeddings_fixtures.exs`'s wire probe (`usage_verdict/2`), which halts the recorder before a single fixture is written. Both are needed: `build_usage/1` hardcodes `input_tokens: nil` and reads one wire key, so a `prompt_tokens` Voyage adds later is dropped in silence — a hermetic-only guard cannot see it, and a live-only guard runs at most once a phase. `output_dimension`, `truncation`, and `input_type` were each confirmed accepted with a negative control in the same run.)*
 
 #### 20.6.1 Test Plan (write first)
 
@@ -1442,38 +1466,127 @@ Verified against [docs.voyageai.com/reference/embeddings-api](https://docs.voyag
 - `embed/2 with 1001 inputs returns :batch_too_large before any HTTP I/O`
 - `decode_response/4 maps usage.total_tokens to Usage.total_tokens and leaves input_tokens nil` — the Voyage-specific asymmetry
 - `decode_response/4 sorts data by :index`
-- error mapping: 401→`:authentication_failed`, 429→`:rate_limited`, 400→`:invalid_request`, 5xx→`:provider_unavailable`
-- `embed/2 honors opts[:request_timeout] and returns :timeout` — behaviour invariant 3
+- error mapping: 401→`:authentication_failed`, 429→`:rate_limited`, 400→`:invalid_request`, 5xx→`:provider_unavailable`. *(Amended during 20.6: a 400 whose `detail` names the model's context window maps to `:context_length_exceeded`, not `:invalid_request`. Voyage carries no structured error code, so the prose is the only discriminator available; the recorded `error_400_context_length.json` envelope binds it, and an unrecognised 400 still degrades to `:invalid_request` — where it would land with no marker list at all — so a wording change costs specificity, never correctness.)*
+- **`embed/2` with a non-list `:input`, AND with a non-string `:input` ELEMENT, each return `:invalid_request` instead of raising** — added during 20.6, carrying both prior adapters' fixes forward together. The element gate is needed here even though the body builder passes elements to the encoder verbatim the way OpenAI's does: a **tuple** element has no `Jason.Encoder`, so it raises `Protocol.UndefinedError` from inside `Req.request/1`, past every gate. The 20.5 note said to adopt `gate_input/2` "if the body builder likewise inspects elements", which this one does not — the tuple case is the reason the gate is adopted anyway, and a map element alone would not have exposed it (it encodes fine and earns a 400).
+- **positive control: a request that PASSES every gate reaches `ALLM.Keys.fetch!/2` and raises `%EngineError{reason: :missing_key}`** — added during 20.6. Without it the "every gate fires ahead of key resolution" test passes vacuously in any world where key resolution was removed, defaulted, or moved: a keyless assertion holds trivially when no key is ever needed. **Recommended for retrofit onto 20.4 and 20.5**, which assert the gate half without the control.
+- `embed/2 honors opts[:request_timeout] and returns :timeout` — behaviour invariant 3. Shipped as the corrected **two-assertion split** binding since 20.4: a `Req.Test.transport_error(conn, :timeout)` test for the conversion, plus a `prepare_request/2` assertion that the opt lands as `:receive_timeout`. No test passes a `request_timeout:` that an in-process plug cannot consult.
 - passes the full `EmbeddingAdapterConformance` suite (driven via `adapter_opts[:embedding_script]`, in `test/allm/providers/voyage/embeddings_conformance_test.exs`)
 - **`decode_response/4` binds behaviour invariant 8 — REQUIRED, and not covered by the conformance suite.** Same reasoning and same assertions as the 20.4 bullet: assert against the batch fixture that `length(embeddings) == length(request.input)`, `:index` values are exactly `0..length-1`, and every vector has the same non-zero length.
 
-`test/allm/providers/voyage/embeddings_wire_test.exs` (NEW) — four fixtures, **plus a `recorded/` error envelope if the recorder's probe already provokes one** (see the amended probe contract in 20.5.4: record the body, not the status).
+`test/allm/providers/voyage/embeddings_wire_test.exs` (NEW) — four fixtures, **plus a `recorded/` error envelope if the recorder's probe already provokes one** (see the amended probe contract in 20.5.4: record the body, not the status). *(Shipped as **seven**: the probe provoked two genuine 400 envelopes — the CONTROL arm's and the context-length arm's — and its `output_dimension` arm's 200 body became `recorded/reduced_dimensions.json`. All three were already paid for; discarding them and hand-writing their shapes back into `synthesized/` is precisely what 20.5's fix step condemned.)*
+- **PREMISE GUARD: every recorded 200 body's `usage` object carries exactly `["total_tokens"]`** (`embeddings_wire_test.exs:130-150`) — added in the 20.6 fix pass, because the design claimed twice that this was already pinned and it was not. `build_usage/1` hardcodes `input_tokens: nil` and reads one wire key, so `assert usage.input_tokens == nil` goes vacuous the moment Voyage reports a second counter: the new field is dropped and the suite stays green. The guard asserts the property of the INPUT that makes the assertion beside it non-trivial, and its failure message names what to extend. Paired with a live assertion on every 200 arm of the recorder's wire probe (`usage_verdict/2`), since a fixture-bound guard fires only at re-record time.
 
 #### 20.6.2 Implementation Checklist
 
-- [ ] `lib/allm/providers/voyage/embeddings.ex` — `@behaviour ALLM.EmbeddingAdapter`; `@base_url`; `embed/2`, `max_batch_size/0` → `1000`, `prepare_request/2`
-- [ ] Moduledoc opens by stating plainly that Anthropic ships no embeddings endpoint and that this adapter is Anthropic's recommended path — with the cookbook link (Decision #1)
-- [ ] `@doc false` + `@spec` seams: `to_json_body/2`, `to_voyage_input_type/1`, `decode_response/4`, `to_embedding_adapter_error/4`
-- [ ] **`adapter_opts[:embedding_script]` short-circuit in `lib/`**, mirroring 20.4
-- [ ] Inline `Bearer` headers — **no** shared `VoyageHeaders` support module. One caller; a support module at n=1 is the abstraction CLAUDE.md's Rule of 3 warns against. `OpenAIHeaders` exists because two adapters share it.
-- [ ] Key via `Keys.fetch!(:voyage, opts)`
-- [ ] `scripts/record_voyage_embeddings_fixtures.exs`
-- [ ] `test/support/voyage_fixtures.ex` — loader mirroring `OpenAITestFixtures`
-- [ ] **Security re-check — both items from the 20.4 checklist apply verbatim** (no raw body / header / key material into `:cause` / `:metadata` / `:status`; the `embedding_script` short-circuit keys on the per-call opt and nothing else)
+- [x] `lib/allm/providers/voyage/embeddings.ex` — `@behaviour ALLM.EmbeddingAdapter`; `@base_url`; `embed/2`, `max_batch_size/0` → `1000`, `prepare_request/2`
+- [x] Moduledoc opens by stating plainly that Anthropic ships no embeddings endpoint and that this adapter is Anthropic's recommended path — with the cookbook link (Decision #1)
+- [x] `@doc false` + `@spec` seams: `to_json_body/2`, `to_voyage_task_type/1`, `decode_response/4`, `to_embedding_adapter_error/4`. *(Amended during 20.6: this line said `to_voyage_input_type/1`, naming the seam for Voyage's `input_type` WIRE FIELD. The 20.5 naming-parity block — authored later and explicitly forward-binding — declares the family member to be `to_<provider>_task_type/1` alongside `to_gemini_task_type/1`, and CLAUDE.md's rule is that cross-provider alignment governs names. The seam is named for the provider-neutral CONCEPT it converts FROM, which is what keeps the pair recognisable; the wire spelling lives in `task_type_pair/1` next to every other field name. The later, explicitly-binding text wins over the unamended original checklist line.)*
+- [x] **`adapter_opts[:embedding_script]` short-circuit in `lib/`**, mirroring 20.4
+- [x] Inline `Bearer` headers — **no** shared `VoyageHeaders` support module. One caller; a support module at n=1 is the abstraction CLAUDE.md's Rule of 3 warns against. `OpenAIHeaders` exists because two adapters share it. *(Confirmed with a second, stronger reason found during 20.6: `OpenAIHeaders` prefixes an `openai-organization` header when `adapter_opts[:organization]` is set, and Voyage **rejects unknown arguments with a 400** — established by the recorder's CONTROL arm. Reusing it would have coupled this adapter to behaviour it must never inherit. Pinned by a test.)*
+- [x] Key via `Keys.fetch!(:voyage, opts)` — the unknown-provider fallback to `"VOYAGE_API_KEY"` was **verified empirically** rather than relied on: `ALLM.Keys.env_var_for(:voyage) == "VOYAGE_API_KEY"` is pinned by a test, and no `@env_var_table` edit was needed.
+- [x] `scripts/record_voyage_embeddings_fixtures.exs` — carries the full three-part probe contract (negative control · assert-and-halt · record the body), behind the overwrite guard.
+- [x] `test/support/voyage_fixtures.ex` — loader mirroring `OpenAITestFixtures`; **delegates** to `OpenAITestFixtures.drop_comment/1` rather than adding a fourth copy.
+- [x] **Security re-check — both items from the 20.4 checklist apply verbatim** (no raw body / header / key material into `:cause` / `:metadata` / `:status`; the `embedding_script` short-circuit keys on the per-call opt and nothing else)
 
 #### 20.6.3 Verification
 
 ```bash
 mix test test/allm/providers/voyage/embeddings_test.exs \
          test/allm/providers/voyage/embeddings_wire_test.exs
-mix test && mix credo --strict && mix dialyzer
+mix test && mix test --seed 3333 && mix credo --strict && mix dialyzer
 
 # BLOCKING gates (require VOYAGE_API_KEY):
 mix run scripts/record_voyage_embeddings_fixtures.exs
 ALLM_PROVIDER=anthropic mix run examples/16_embed_single.exs   # after 20.7
 ```
 
-**Success criterion:** conformance passes; a response decoded from `single_input.json` has `usage.total_tokens` set and `usage.input_tokens == nil`.
+**Success criterion:** conformance passes; a response decoded from `single_input.json` has `usage.total_tokens` set and `usage.input_tokens == nil`. **Both met** — see 20.6.4.
+
+#### 20.6.4 Implementation Notes
+
+Gates as run: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix test` (**3072 tests / 367 doctests / 31 properties, 0 failures**, up from 2922/357/31), `mix credo --strict` (0 issues), `mix dialyzer` (0 errors), `cd conformance && mix test` (90 tests, 0 failures), `mix run scripts/audit_user_docs.exs lib/allm/providers/voyage/embeddings.ex` (0 hits). The new files' own suite is 130 tests / 6 doctests.
+
+*(Re-run after the 20.6 fix pass, with the pinned-seed gate now in force: `mix test` **3073 tests / 367 doctests / 31 properties, 0 failures**; `mix test --seed 3333` **3073 / 0 failures** — the flake below is fixed, not merely observed; `mix credo --strict` 0 issues over 258 files; `mix dialyzer` 0 errors; `cd conformance && mix test` 90 / 0; `mix format --check-formatted` clean; `mix run scripts/audit_user_docs.exs` 14 hits, all pre-existing across six files 20.6 does not touch, and 0 on `lib/allm/providers/voyage/embeddings.ex`. The one new test is the `usage` premise guard added below. The fix pass also rewrote the module's naming-parity block: as first shipped it made four claims that were false against the code it described — `model_pair/1` listed as shared with both siblings when Gemini has no such function; `to_json_body/2`, `gate_empty_input/2` and `gate_batch_size/2` in the identical-body list with bodies that demonstrably differ from OpenAI's; and `malformed_error/3` for a function of arity 4 — and omitted ten of the module's helpers, including `headers/1`, the inline-headers decision this design names explicitly. Every membership claim is now mechanically derived from the three files' function lists rather than authored as prose, all 44 module-level functions appear, and all 55 arity claims plus every sibling cross-reference were checked against the ASTs.)*
+
+**Pre-existing test flake surfaced, and FIXED in the 20.6 fix pass.** `mix test --seed 3333` failed one test — `ALLM.Providers.Gemini.EmbeddingsTest` "keys on the per-call opt only — no ambient switch" (`test/allm/providers/gemini/embeddings_test.exs:388`), 20.5's own test — with *"Expected exception ALLM.Error.EngineError but nothing was raised"*. Confirmed pre-existing by reproducing it with the entire 20.6 Voyage test tree moved out of `test/`: **2942 tests, 1 failure, same seed.**
+
+*(**The cause first recorded here was wrong, and is corrected in place rather than left standing.** This note originally named `test/allm/providers/gemini_test.exs:66` and asserted "both modules are `async: true`". That module is `use ExUnit.Case, async: false` (`gemini_test.exs:25`). ExUnit runs async modules concurrently and sync modules serially afterwards, so it cannot overlap the async embeddings module at all, and the prescribed remedy would have edited a correct file while leaving the race in place. Three independent reviewers falsified it and the orchestrator re-verified.)*
+
+**Actual cause.** `ALLM.Keys.Store` is a process-global Agent, so a `Keys.put/2` from an `async: true` module is visible to every concurrently-running test. The two writers were `test/allm/providers/gemini_vision_test.exs:20` and `test/allm/providers/gemini_stream_wire_test.exs:24` — both in a `setup`, both cleaned up via `on_exit`. The cleanup is exactly what made the failure *seed-dependent* rather than deterministic: `setup`/`on_exit` narrows the window, it does not close it. The discriminating experiment, which the original diagnosis never ran:
+
+| Command | Result |
+|---|---|
+| `mix test --seed 3333` | 3072 tests, **1 failure** |
+| `mix test --seed 3333 --max-cases 1` | 3072 tests, **0 failures** — a concurrency race, not an ordering effect |
+| `mix test --seed 3333` with `gemini_stream_wire_test.exs` removed | 3070 tests, **0 failures** |
+
+The same note also claimed the sibling adapters were "safe — verified". True for `:voyage`; **false for `:openai`**: `test/allm/providers/openai/images_test.exs` is `async: true` and put an `:openai` key at `:1380`, against the structurally identical `assert_raise ALLM.Error.EngineError` at `test/allm/providers/openai/embeddings_test.exs:241`. `test/allm/engine_roundtrip_test.exs:247` was the same shape for `:anthropic`.
+
+**Fix (writers, not readers).** Making the asserting tests robust — e.g. deleting the key in their own `setup` — would convert a real global-state defect into a hidden one, so all four writer sites were changed instead:
+
+- `gemini_stream_wire_test.exs`, `gemini_vision_test.exs`, `openai/images_test.exs` — key scoped to the call via `opts[:api_key]`, the highest-precedence level of `ALLM.Keys`' resolution chain (`lib/allm/keys.ex`). No global store write remains.
+- `engine_roundtrip_test.exs` — declared `async: false`. Its `Keys.put/2` is genuinely load-bearing there (the assertion is "a *resolvable* key does not leak into the serialized engine", and there is no process-local store to resolve from), so serialising the module is the correct remedy rather than the fallback one.
+
+Repo-wide invariant now holding, and the ticket's own verification predicate: `grep -rn 'Keys\.put(' test/` returns only `async: false` modules. `mix test --seed 3333` → **0 failures**.
+
+This is the same foot-gun class CLAUDE.md documents for `Logger.configure/1` and `:telemetry.attach/4`, in a third guise — the guidance is worth generalising from those two named functions to *any* process-global mutation from an `async: true` module (application env, `:persistent_term`, `System.put_env/2`, a named `Agent`/`GenServer`, `:telemetry` handler tables). That generalisation is a `CLAUDE.md` edit and belongs to `/apply-retro`; the draft is in `.work/retro/2026-07-29-embeddings-20-6.md`.
+
+The 20.6 adapter carries the structurally identical assertion at `test/allm/providers/voyage/embeddings_test.exs:250` and `:373` and is deterministic today only because nothing anywhere puts a `:voyage` key in the store — verified, and the hazard plus a pre-emptive instruction for 20.7's `examples/16*.exs` is recorded in a comment above the test.
+
+**Full-surface audit note:** `mix run scripts/audit_user_docs.exs` with no argument exits 1 on **14 pre-existing hits across six files** — `CHANGELOG.md`, `guides/fakes.md`, `lib/allm/engine.ex`, `lib/allm/providers/fake.ex`, `lib/allm/providers/fake_images.ex`, `lib/allm/validate.ex`. None is touched by this phase (`git status` shows only `mix.exs` modified plus the new `voyage/` trees), and zero hits fall in any 20.6 file. Pre-existing, out of scope, not fixed here per cross-phase bug discipline.
+
+**★ LIVE FIXTURE RECORDING IS DONE — all five `recorded/` fixtures ARE live-recorded**, on 2026-07-29 against `voyage-3.5-lite` via `scripts/record_voyage_embeddings_fixtures.exs`, using the `VOYAGE_API_KEY` in the project-root `.env`.
+
+**Live vs synthesized fixtures, stated plainly:**
+
+* **Live-recorded, committed — five.** Three 200 bodies: `recorded/single_input.json` (1 × 1024, `usage.total_tokens: 4`), `recorded/batch_input.json` (3 × 1024, `total_tokens: 6`), `recorded/reduced_dimensions.json` (1 × 512, `output_dimension: 512`). Two genuine 400 envelopes, both captured by probe arms that were already paying for them: `recorded/error_400_unknown_field.json` (the CONTROL arm) and `recorded/error_400_context_length.json` (the over-length arm). All five carry **no `_comment` marker**. The recorder's second run is a genuine no-op — verified by running it twice: it checks every target path before issuing any request and made zero live calls on the second pass, printing the refusal.
+* **Synthesized, marked, committed — two.** `synthesized/error_401.json` and `synthesized/error_429.json`, each carrying a `_comment: "Synthesized (Phase 20.6)…"` marker, both **hand-written in full**, and each surviving for exactly one job that a recording cannot do. The 401's message embeds a planted `pa-…` string so the redaction test has a target — planted precisely **because Voyage's real 401 text is `"Provided API key is invalid."` and does not echo the key back** (verified live with a deliberately-bad key), which is what makes this one fixture unrecordable. The 429 stays synthesized because provoking a real quota rejection would mean sustained abuse of the live endpoint. Per the 20.5 binding rule, neither carries an assertion about the provider's envelope: every such claim — the `{"detail": …}` shape, the status→reason mapping, the context-window discriminator — is asserted against a `recorded/` fixture.
+* Provenance is gated both ways by raw-byte reads in `embeddings_wire_test.exs` (`assert raw["_comment"] =~ …` per synthesized file, `refute Map.has_key?(raw, "_comment")` per recorded file), never through the loader, which strips the marker.
+
+**★ THE WIRE PROBE — three parts, all three shipped, and it corrected the design.** The probe lives inside the recorder, runs behind the overwrite guard, carries a negative control, asserts an expected status per arm with `System.halt(1)` on mismatch, and writes three of its five response bodies to `recorded/`. Against `voyage-3.5-lite`, 2026-07-29:
+
+| Arm | Result |
+|-----|--------|
+| `output_dimension: 512` | **200**, 512-wide vectors |
+| `truncation: false` | **200** |
+| `input_type: "document"` | **200** |
+| **CONTROL:** `totallyNotAField: {}` | **400** `Argument 'totallyNotAField' is not supported by our API` |
+| over-length input + `truncation: false` | **400** `…too many tokens and does not fit into the model's context window of 32000 tokens…` |
+
+The control rejecting is what makes the three 200s evidence of *schema membership* rather than of unknown-argument tolerance — the same reasoning 20.5 established, applied to the fields this design inferred from documentation.
+
+**What the probe corrected.** The design's Voyage claims had been wrong three times running on OTHER providers, so the load-bearing question was which of Voyage's would hold:
+
+1. **`usage.total_tokens`-only: CONFIRMED.** The one row that drives the `ALLM.Usage` mapping survived contact. A live `usage` object's key list is exactly `["total_tokens"]`. *(Amended in the 20.6 fix pass. As first written, this bullet and the wire-field-map note both claimed the property was "pinned by its own test" — **it was not**. The only `usage` test asserted decoder OUTPUT against the fixture (`assert usage.total_tokens == fixture["usage"]["total_tokens"]; assert usage.input_tokens == nil`), and since `build_usage/1` hardcodes `input_tokens: nil`, a `prompt_tokens` Voyage added later would be dropped in silence with the suite green — precisely the failure the sentence claimed was prevented. The guards the claim asserts now exist: a premise guard over the recorded 200 bodies at `test/allm/providers/voyage/embeddings_wire_test.exs:130-150`, which fires at re-record time; and a live usage-key assertion on every 200 arm of the recorder's wire probe (`scripts/record_voyage_embeddings_fixtures.exs`, `usage_verdict/2`), which halts before a fixture is written. **Rule this cost us:** a claim of the form "pinned by a test" carries the test's `file:line` — across 20.4–20.6 every such claim that carried a cite checked out, and both that did not were false.)*
+2. **The error envelope was undocumented in the design and is neither sibling's shape.** Voyage answers `{"detail": "<string>"}`, FastAPI-style. Had the OpenAI sibling's `body["error"]["message"]` read been copied — which the "Voyage's wire is OpenAI-shaped" framing invites — every real Voyage error would have surfaced with the generic `"Voyage HTTP <status>"` fallback and no provider text at all, on a path no `Req.Test` fixture would have contradicted.
+3. **`x-request-id` IS present**, on both 200s and errors. 20.5 made "check the provider's actual response headers before implementing the fallback" binding after Gemini turned out to have none; here the check came back positive and the OpenAI-style fallback is implemented and tested.
+4. **A `:context_length_exceeded` use site exists**, discovered by probing rather than specified. It is reachable only when the caller sets `truncate: false` — the default silently truncates to the window and bills it — which makes `truncate: false` the way a caller finds out their chunks are too long instead of embedding a prefix of each.
+
+**Deviations from the checklist, with justification:**
+
+* **[structural, documented] The seam is `to_voyage_task_type/1`, not the checklist's `to_voyage_input_type/1`.** Adjudicated in favour of the 20.5 naming-parity block, which is later, explicitly forward-binding, and consistent with CLAUDE.md's name-alignment rule. Amended in 20.6.2 above with the reasoning.
+* **[structural, documented] `gate_input/2` is adopted even though the body builder does not inspect elements.** 20.5's note conditioned adoption on the body builder reaching inside elements; this one hands `:input` to the encoder verbatim like OpenAI's. Adopted anyway for a case that note did not cover: a **tuple** element is unencodable, so `Jason` raises `Protocol.UndefinedError` from inside `Req.request/1`, past every gate — an invariant-2 breach that `ALLM.EmbeddingBatch.dispatch_chunk/2` re-frames as an `ArgumentError` two layers up. Passing elements through verbatim closes the map/integer hole (they encode and earn a 400) but not the tuple one, so **the OpenAI sibling still carries it** — raised, not fixed here.
+* **[structural, documented] `redact_key_material/1` is single-clause and unguarded**, where both siblings carry a non-binary fall-through. Dialyzer proved the second clause unreachable (`pattern_match_cov`): this adapter's shape narrowing lives in `default_message/2`, which runs first and is total. Rather than contort the call order to keep a duplicate arm alive, one function owns the shape and one owns the redaction. This is the mirror image of the 20.5 finding, where the fix was to *restore* reachability by re-sourcing from the raw body — there, the arm was load-bearing and had been made unreachable by an optimistic type; here it is genuinely redundant.
+* **[structural, documented] `to_json_body/2` returns a bare `map()`**, per the design's own adjudication: the capability family wins by default, and Voyage has neither Gemini's URL-path model requirement nor a `Voyage.Images` sibling to pull the other way. Pinned by a test so a later "consistency" edit toward the Gemini shape fails loudly.
+* **[tactical] `options[:user]` is NOT forwarded**, deliberately diverging from the OpenAI sibling, which forwards it as the wire `user` field. Voyage's schema has no such argument and rejects unknown ones with a 400 — established by the CONTROL arm — so forwarding it would break every call that set it. Pinned by a negative test.
+* **[tactical] No `gate_dimensions_support/2`, and `:unsupported_feature` has no use site in this module.** Gating Voyage's per-model `output_dimension` support would need a hard-coded model allow-list, which would reject every model Voyage ships next — the failure mode the closed-enum guidance warns about. An unsupported combination earns a provider 400 instead. The atom's rule-13 use sites remain OpenAI's `dimensions`-on-`ada-002` gate and the conformance suite.
+* **[tactical] The context-length classifier matches PROSE**, which is brittle by nature and deliberately so. Voyage carries no structured error code, so `@context_length_markers` is matched case-insensitively against `detail`. The degradation is safe: an unrecognised 400 lands on `:invalid_request`, exactly where it would land without the list, so a wording change costs specificity rather than correctness. The recorded envelope is what makes a wording change visible.
+* **[tactical] Five recorded fixtures rather than the Module Tree's two.** The three extras are probe-arm bodies that were already paid for; the Module Tree rows are corrected above.
+
+**Carried-forward items honoured, not re-litigated:**
+
+* **The `:timeout` 9-vs-3 retry-budget quirk was copied as-is.** Two nested `ALLM.Retry.run/3` loops, identical in shape to both sibling embeddings adapters and both image adapters. The adapter's `## Retry integration` moduledoc states the exception explicitly rather than claiming the façade's widened list decides. Tracked in `ASKS.md`; a per-adapter "fix" would have made the three embeddings adapters diverge from each other.
+* **Alias ordering:** the brace group `ALLM.{Embedding, …}` sorts **before** `ALLM.Error.EmbeddingAdapterError` — the opposite of the image modules. Credo's `AliasOrder` enforces it; no issues.
+* **Fixture-relative assertions throughout.** No test asserts a literal dimensionality; widths come from `dimension_of/1` and the reduced/full comparison is the *relation* `dimension_of(reduced) < dimension_of(single_input)`.
+* **Doctests are wired.** `doctest Embeddings` and `doctest Fx` are both declared in `embeddings_test.exs`; all four adapter examples are hermetic (two drive `adapter_opts[:embedding_script]` and the empty-input gate, one passes a literal `api_key:`), and the loader's two assert the three-input cardinality the recorder declares load-bearing.
+* **The `request_timeout` test ships as the corrected two-assertion split.** No test passes a `request_timeout:` an in-process plug cannot consult.
+* **Security re-check, both items.** `to_embedding_adapter_error/4`'s metadata is exactly `[:status]` (+ `:request_id`) — structural, never a body preview; `:malformed_response` metadata carries the body's sorted top-level key list rather than a preview; `:cause` is never populated from a classified HTTP error and `Jason.DecodeError`'s `:data` is blanked by `sanitize_cause/1`; the redactor is widened to Voyage's `pa-…` shape, with a test asserting neither `inspect/1` nor `Jason.encode!/1` of the struct contains the fixture's planted key AND a companion test showing **both siblings' patterns would have matched nothing** — so the widening is falsifiable rather than decorative. The `embedding_script` short-circuit keys on the per-call opt and nothing else, pinned by a test that shows the real path is taken (and raises on the missing key) without it.
+* **`README.md` untouched**, per its absence from this Module Tree.
+
+**Not done here:** `ALLM_PROVIDER=anthropic mix run examples/16_embed_single.exs` — the script lands in 20.7 and does not exist yet.
+
+**Files created:** `lib/allm/providers/voyage/embeddings.ex`; `test/allm/providers/voyage/embeddings_test.exs`, `embeddings_wire_test.exs`, `embeddings_conformance_test.exs`; `test/support/voyage_fixtures.ex`; `scripts/record_voyage_embeddings_fixtures.exs`; seven fixtures under `test/fixtures/voyage/embeddings/` (five `recorded/`, two `synthesized/`).
+**Files modified:** `mix.exs` (`groups_for_modules` → `Providers`, forced by the committed audit gate), this document.
 
 ---
 
@@ -1513,7 +1626,7 @@ ALLM_PROVIDER=anthropic mix run examples/16_embed_single.exs   # after 20.7
 #### 20.7.3 Verification
 
 ```bash
-mix test && mix format --check-formatted && mix credo --strict && mix dialyzer
+mix test && mix test --seed 3333 && mix format --check-formatted && mix credo --strict && mix dialyzer
 mix docs                              # renders guides/embeddings.md without warnings
 mix hex.build && tar -tzf allm-*.tar  # confirm guides/embeddings.md is in the source tarball
 

@@ -11,7 +11,16 @@ defmodule ALLM.EngineRoundtripTest do
   structs survive ETF but require user-supplied `Jason.Encoder` impls for the
   JSON path; the library does not ship encoders for them.
   """
-  use ExUnit.Case, async: true
+  # `async: false` is load-bearing, not incidental. The Phase 11.1 test below
+  # installs a key into the process-GLOBAL `ALLM.Keys.Store` via
+  # `ALLM.Keys.put/2` — a genuine requirement there, since the assertion is
+  # "a resolvable key does not leak into the serialized engine" and there is no
+  # process-local store to install it in. Run concurrently, that put would be
+  # visible to every other async test, including any that asserts a missing
+  # `:anthropic` key raises `%EngineError{reason: :missing_key}`. `on_exit`
+  # narrows the window but does not close it. Same foot-gun class as
+  # `Logger.configure/1` and `:telemetry.attach/4` (see CLAUDE.md).
+  use ExUnit.Case, async: false
 
   @moduletag :roundtrip
 

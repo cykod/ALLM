@@ -1,0 +1,3 @@
+{
+  "detail": "The request body is not valid JSON, or some arguments were not specified properly. In particular, Argument 'totallyNotAField' is not supported by our API"
+}

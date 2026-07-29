@@ -1,0 +1,3 @@
+{
+  "detail": "Request to model 'voyage-3.5-lite' failed. The example at index 0 in your batch has too many tokens and does not fit into the model's context window of 32000 tokens. Please lower the number of tokens in the listed example(s) or use truncation."
+}

@@ -20,11 +20,17 @@ defmodule ALLM.Providers.GeminiStreamWireTest do
   alias ALLM.Request
   alias ALLM.Test.FinchStub
 
-  setup do
-    ALLM.Keys.put(:gemini, "AIza-stream-wire-test")
-    on_exit(fn -> ALLM.Keys.delete(:gemini) end)
-    :ok
-  end
+  # Key is scoped to the call via `opts[:api_key]` (the highest-precedence
+  # level of `ALLM.Keys`' resolution chain) rather than installed into the
+  # process-global `ALLM.Keys.Store`. An `ALLM.Keys.put/2` from an
+  # `async: true` module is visible to every concurrently-running test, which
+  # makes any test asserting the ABSENCE of a key (`assert_raise EngineError,
+  # reason: :missing_key`) fail at a subset of seeds. `setup` + `on_exit`
+  # narrows that window but does not close it — which is exactly what made the
+  # `--seed 3333` failure at `test/allm/providers/gemini/embeddings_test.exs`
+  # intermittent rather than deterministic. Same foot-gun class as
+  # `Logger.configure/1` and `:telemetry.attach/4` (see CLAUDE.md).
+  @api_key "AIza-stream-wire-test"
 
   test "stream/2 and generate/2 share to_gemini_request_body/2 (no stream:true field; modulo URL)" do
     request =
@@ -78,6 +84,7 @@ defmodule ALLM.Providers.GeminiStreamWireTest do
 
     {:ok, stream} =
       Gemini.stream(request,
+        api_key: @api_key,
         finch_module: FinchStub,
         finch_stub_ref: stub
       )

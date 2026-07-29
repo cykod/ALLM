@@ -1,0 +1,4 @@
+{
+  "_comment": "Synthesized (Phase 20.6). Voyage's 429 envelope, hand-written in full: provoking a real quota rejection would mean sustained abuse of the live endpoint, so no recording exists. Paired with a `retry-after: 7` response header in the wire test so `:retry_after_ms` decodes to 7000. The `detail` key and its string-valued shape are copied from the genuine 400 envelopes under `recorded/`.",
+  "detail": "Rate limit exceeded. You have hit the request-per-minute limit for voyage-3.5-lite. Please retry after some time or contact us to raise your limits."
+}

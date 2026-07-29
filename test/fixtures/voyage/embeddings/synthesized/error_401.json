@@ -1,0 +1,4 @@
+{
+  "_comment": "Synthesized (Phase 20.6). Voyage's 401 envelope is FastAPI-shaped — a single top-level `detail` string. The real live text is exactly \"Provided API key is invalid.\" and does NOT echo the offending key back, unlike OpenAI's 401. This fixture therefore deliberately PLANTS a `pa-`-shaped token in the message so the redaction test has a target; that string cannot come from a recording, which is why this fixture is synthesized rather than recorded. The redactor is defence in depth here rather than a response to observed leakage.",
+  "detail": "Provided API key is invalid: pa-FAKEKEY000111222333444555666777888999aaabb"
+}

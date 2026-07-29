@@ -1,3 +1,26 @@
+## [FEAT] Add Voyage embeddings adapter and make the suite deterministic (Phase 20.6)
+*Wednesday, July 29th at 6pm*
+Closes the embeddings adapter family with ALLM.Providers.Voyage.Embeddings, the 
+Anthropic track. Anthropic ships no embeddings endpoint and directs users to 
+Voyage, so the module is named for the wire it actually speaks rather than for 
+Anthropic, and it resolves VOYAGE_API_KEY through the Keys unknown-provider 
+fallback. Voyage caps a batch at 1000, uses snake_case output_dimension, and 
+reports only usage.total_tokens with no prompt_tokens, so input_tokens stays 
+nil; the lossy input_type mapping sends document and query and omits the field 
+entirely for the three symmetric task types, which is Voyage's documented null 
+behaviour. The recorder ships a five-arm live probe with a negative control 
+that halts on an unexpected status, and it corrected four design claims, most 
+importantly that the error envelope is a FastAPI-style detail string rather 
+than the OpenAI-shaped error object the design's framing invited copying. 
+Separately this commit fixes an order-dependent test failure that made the 
+suite non-deterministic: four async modules wrote provider keys into the global 
+Keys store, so an assertion that a missing key raises could see a key left by a 
+concurrently running module. Keys are now scoped to per-call api_key opts at 
+every async site, and a fixed-seed run joins the random-seed run in the 
+verification convention.
+
+---
+
 ## [FEAT] Add Gemini embeddings adapter with a self-asserting wire probe (Phase 20.5)
 *Wednesday, July 29th at 3pm*
 Wires Google's batchEmbedContents as the second embeddings adapter. Gemini caps 
