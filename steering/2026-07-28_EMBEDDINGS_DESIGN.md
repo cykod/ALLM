@@ -19,9 +19,9 @@
 | 20.4 | `ALLM.Providers.OpenAI.Embeddings` | B | Completed |
 | 20.5 | `ALLM.Providers.Gemini.Embeddings` | B | Completed |
 | 20.6 | `ALLM.Providers.Voyage.Embeddings` (Anthropic track) | B | Completed |
-| 20.7 | Spec §36, `guides/embeddings.md`, examples 16–18, `mix.exs` wiring | — | Not Started |
+| 20.7 | Spec §36, `guides/embeddings.md`, examples 16–18, `mix.exs` wiring | — | Completed |
 
-**Overall Progress:** 6/7 sub-phases complete
+**Overall Progress:** 7/7 sub-phases complete
 
 ---
 
@@ -792,6 +792,17 @@ examples/
 └── 18_embed_query_vs_document.exs                (NEW — 20.7)
 
 test/
+├── guides_test.exs                               (MODIFY — 20.7, +embeddings.md in @guides. NOT in the
+│                                                          tree as originally written; added during 20.7 because
+│                                                          20.7.1's Test Plan asserts this file's >2 KB /
+│                                                          one-`iex>` / zero-audit-hit gates apply to the new
+│                                                          guide, and those gates bind ONLY for a guide listed in
+│                                                          its `@guides` attribute. Registering in
+│                                                          guides_doctest_test.exs alone runs the doctests but
+│                                                          asserts nothing about size, `iex>` presence, or banned
+│                                                          tokens. Membership is opt-in — `fakes.md` is
+│                                                          deliberately absent because it carries pre-existing
+│                                                          audit hits — so it had to be added explicitly.)
 └── guides_doctest_test.exs                       (MODIFY — 20.7, +doctest_file("guides/embeddings.md"))
 
 guides/
@@ -1606,22 +1617,22 @@ The control rejecting is what makes the three 200s evidence of *schema membershi
 
 #### 20.7.2 Implementation Checklist
 
-- [ ] Spec §36 (new), mirroring §35's ten-subsection structure: `36.1` design goals, `36.2` data model, `36.3` `ALLM.EmbeddingAdapter`, `36.4` engine integration, `36.5` public API, `36.6` batching + normalization, `36.7` provider adapters in v0.5, `36.8` testing, `36.9` telemetry, `36.10` out of scope
-- [ ] Spec §32.5 + §33: strike "embeddings" from the out-of-scope lists, pointing to §36. §33's line currently reads `embeddings, audio input/output, image generation (see §32.5)` (`steering/allm_engine_session_streaming_spec_v0_2.md:1887`) — image generation shipped in v0.3 and was never struck, so this edit corrects both and leaves audio
-- [ ] Spec §35.7: scoped bundled-adapter amendment (Decision #2)
-- [ ] Spec §27 module tree + §29 telemetry event names. **Note when amending §29** that the spec writes the namespace `[:llm, …]` while the code and §35.9 use `[:allm, …]` — a pre-existing spec bug; §36.9 uses `[:allm, …]` and does not propagate the error
-- [ ] Every amendment block opens with `> **Phase 20 amendment (commits <first-sha>..<last-sha>).**` per AGENT_DESIGN_SPEC.md rule 21
-- [ ] `steering/PHASE_20_DESIGN.md` — add a superseded-by banner pointing at this document
-- [ ] `guides/embeddings.md` — provider table, task-type guidance, batching + resumable-chunking loop, normalization, and the pgvector worked example (`CREATE EXTENSION vector`, `vector(N)` sizing via `EmbeddingResponse.dimensions/1`, cosine-distance query)
-- [ ] **`guides/embeddings.md` telemetry note — carried forward from 20.3's security review** (which found *no* issues; this is its one forward-looking item). The `[:allm, :embed, :stop]` metadata carries `response:`, i.e. the full vectors. Embedding vectors are partially invertible to their source text (Vec2Text-class inversion), so an operator who attaches a handler that serializes full `:stop` metadata to an APM backend is exporting a lossy encoding of the corpus. This is **established precedent, not new exposure** — the `:image` span has carried `response:` with base64 image bytes since v0.3, which is strictly more sensitive — and it requires an explicit operator opt-in, so it is a documentation obligation rather than a defect. One short paragraph in the guide's telemetry section: name what `:stop` metadata contains, and say that handlers should select the fields they need rather than serializing the whole map. (The embedded *text* itself is never emitted: `:start` and the retry-path metadata carry only `input_count`, a pure count — verified in the 20.3 security review.)
-- [ ] `examples/_helpers.exs` — `embedding_engine/1` mirroring `image_engine/1` (raises `ArgumentError` when the row has no embedding adapter); per-row `:embed_adapter` / `:embedding_default_model` / `:embedding_key_env`. Anthropic's row points at `ALLM.Providers.Voyage.Embeddings` with `embedding_key_env: "VOYAGE_API_KEY"`, and the moduledoc states plainly why
-- [ ] `examples/16_embed_single.exs`, `17_embed_batch_chunked.exs` (250 inputs — forces ≥3 chunks on Gemini), `18_embed_query_vs_document.exs`; each with the standard header block and no `# Provider:` marker (all three arms are supported)
-- [ ] `test/guides_doctest_test.exs` — add `doctest_file("guides/embeddings.md")`. Without it the guide's `iex>` blocks never execute
-- [ ] `examples/README.md` — add rows 16–18 to the per-script table and update the per-provider key-requirements table to note that the **Anthropic arm now needs `VOYAGE_API_KEY`** (divergence D12)
-- [ ] `mix run scripts/audit_user_docs.exs` clean for `guides/embeddings.md` — no `Phase N`, `§N`, `Decision #N`, `steering/`, or `PHASE_*.md` tokens
-- [ ] `mix.exs` — `guides/embeddings.md` in `@guides`; `ALLM.EmbeddingAdapter` under `Behaviours`; the four new provider modules under `Providers`; `ALLM.Embedding` / `EmbeddingRequest` / `EmbeddingResponse` under `Data types`; `ALLM.Error.EmbeddingAdapterError` under `Errors`
-- [ ] `CHANGELOG.md` — one line per public-API change; flag any live-gate deferral honestly rather than paraphrasing the future post-record state. **The entry must cover 20.1–20.6 cumulatively, not just 20.7's own surface.** CHANGELOG is deliberately deferred to this sub-phase by the Module Tree, so by the time it is written the debt spans six sub-phases: the Layer A embedding data types (20.1), `ALLM.EmbeddingAdapter` / `ALLM.Error.EmbeddingAdapterError` / `ALLM.Providers.FakeEmbeddings` / `%ALLM.Engine{}.embed_adapter` (20.2), `ALLM.embed/3` + `ALLM.embedding_request/2` (20.3), and the three provider adapters (20.4–20.6). Walk the six checklists, don't reconstruct from memory.
-- [ ] **Do NOT** regenerate `examples/RUN_OUTPUT_*.md` unless the live run happens in this commit (snapshot-defer policy)
+- [x] Spec §36 (new), mirroring §35's ten-subsection structure: `36.1` design goals, `36.2` data model, `36.3` `ALLM.EmbeddingAdapter`, `36.4` engine integration, `36.5` public API, `36.6` batching + normalization, `36.7` provider adapters in v0.5, `36.8` testing, `36.9` telemetry, `36.10` out of scope
+- [x] Spec §32.5 + §33: strike "embeddings" from the out-of-scope lists, pointing to §36. §33's line currently reads `embeddings, audio input/output, image generation (see §32.5)` (`steering/allm_engine_session_streaming_spec_v0_2.md:1887`) — image generation shipped in v0.3 and was never struck, so this edit corrects both and leaves audio
+- [x] Spec §35.7: scoped bundled-adapter amendment (Decision #2)
+- [x] Spec §27 module tree + §29 telemetry event names. **Note when amending §29** that the spec writes the namespace `[:llm, …]` while the code and §35.9 use `[:allm, …]` — a pre-existing spec bug; §36.9 uses `[:allm, …]` and does not propagate the error
+- [x] Every amendment block opens with `> **Phase 20 amendment (commits <first-sha>..<last-sha>).**` per AGENT_DESIGN_SPEC.md rule 21
+- [x] `steering/PHASE_20_DESIGN.md` — add a superseded-by banner pointing at this document
+- [x] `guides/embeddings.md` — provider table, task-type guidance, batching + resumable-chunking loop, normalization, and the pgvector worked example (`CREATE EXTENSION vector`, `vector(N)` sizing via `EmbeddingResponse.dimensions/1`, cosine-distance query)
+- [x] **`guides/embeddings.md` telemetry note — carried forward from 20.3's security review** (which found *no* issues; this is its one forward-looking item). The `[:allm, :embed, :stop]` metadata carries `response:`, i.e. the full vectors. Embedding vectors are partially invertible to their source text (Vec2Text-class inversion), so an operator who attaches a handler that serializes full `:stop` metadata to an APM backend is exporting a lossy encoding of the corpus. This is **established precedent, not new exposure** — the `:image` span has carried `response:` with base64 image bytes since v0.3, which is strictly more sensitive — and it requires an explicit operator opt-in, so it is a documentation obligation rather than a defect. One short paragraph in the guide's telemetry section: name what `:stop` metadata contains, and say that handlers should select the fields they need rather than serializing the whole map. (The embedded *text* itself is never emitted: `:start` and the retry-path metadata carry only `input_count`, a pure count — verified in the 20.3 security review.)
+- [x] `examples/_helpers.exs` — `embedding_engine/1` mirroring `image_engine/1` (raises `ArgumentError` when the row has no embedding adapter); per-row `:embed_adapter` / `:embedding_default_model` / `:embedding_key_env`. Anthropic's row points at `ALLM.Providers.Voyage.Embeddings` with `embedding_key_env: "VOYAGE_API_KEY"`, and the moduledoc states plainly why
+- [x] `examples/16_embed_single.exs`, `17_embed_batch_chunked.exs` (250 inputs — forces ≥3 chunks on Gemini), `18_embed_query_vs_document.exs`; each with the standard header block and no `# Provider:` marker (all three arms are supported)
+- [x] `test/guides_doctest_test.exs` — add `doctest_file("guides/embeddings.md")`. Without it the guide's `iex>` blocks never execute
+- [x] `examples/README.md` — add rows 16–18 to the per-script table and update the per-provider key-requirements table to note that the **Anthropic arm now needs `VOYAGE_API_KEY`** (divergence D12)
+- [x] `mix run scripts/audit_user_docs.exs` clean for `guides/embeddings.md` — no `Phase N`, `§N`, `Decision #N`, `steering/`, or `PHASE_*.md` tokens
+- [x] `mix.exs` — `guides/embeddings.md` in `@guides`; `ALLM.EmbeddingAdapter` under `Behaviours`; the four new provider modules under `Providers`; `ALLM.Embedding` / `EmbeddingRequest` / `EmbeddingResponse` under `Data types`; `ALLM.Error.EmbeddingAdapterError` under `Errors`
+- [x] `CHANGELOG.md` — one line per public-API change; flag any live-gate deferral honestly rather than paraphrasing the future post-record state. **The entry must cover 20.1–20.6 cumulatively, not just 20.7's own surface.** CHANGELOG is deliberately deferred to this sub-phase by the Module Tree, so by the time it is written the debt spans six sub-phases: the Layer A embedding data types (20.1), `ALLM.EmbeddingAdapter` / `ALLM.Error.EmbeddingAdapterError` / `ALLM.Providers.FakeEmbeddings` / `%ALLM.Engine{}.embed_adapter` (20.2), `ALLM.embed/3` + `ALLM.embedding_request/2` (20.3), and the three provider adapters (20.4–20.6). Walk the six checklists, don't reconstruct from memory.
+- [x] **Do NOT** regenerate `examples/RUN_OUTPUT_*.md` unless the live run happens in this commit (snapshot-defer policy)
 
 #### 20.7.3 Verification
 
@@ -1638,7 +1649,78 @@ ALLM_PROVIDER=anthropic mix run examples/run_all.exs
 
 **Live-gate deferral note.** Per CLAUDE.md's "blocked-by-pre-existing-failure" rule: OpenAI's `run_all.exs` currently halts at script 13 (`dall-e-2` 404, originating commit `a7b934b`, inherited through PHASE_18.5). That failure is **not in this phase's scope**. The gate is satisfied for OpenAI by running scripts 16–18 individually with verifiable success, leaving script 13 in place, and NOT regenerating `RUN_OUTPUT_OPENAI.md`. The commit message and retrospective must flag the deferral with its originating phase + commit.
 
+*(Amended during 20.7 — the deferral is real but the stated failure point was stale, and a SECOND arm turned out to be blocked. Live-run results are in 20.7.4; the corrected statement is: OpenAI halts at script **10**, not 13, and Anthropic halts at script **09**. Both are pre-existing chat/image-surface failures with zero `lib/` changes in this sub-phase's diff. Gemini is the only arm that completes `run_all.exs` end-to-end.)*
+
 **Success criterion:** `mix docs` renders the guide; `tar -tzf` lists `guides/embeddings.md`; scripts 16–18 exit 0 on all three provider arms.
+
+**All three met** — see 20.7.4.
+
+#### 20.7.4 Implementation Notes
+
+Gates as run: `mix format --check-formatted` (clean), `mix test` (**3077 tests / 373 doctests / 31 properties, 0 failures**, up from 3073/367/31 — the **six** new doctests are the guide's six `iex>` blocks (373 − 367 = 6, confirmed by `mix test test/guides_doctest_test.exs --trace`, which prints `doctest guides/embeddings.md (1)` through `(6)`), and the **four** new *tests* are `guides_test.exs`'s four per-guide assertions for `embeddings.md` (3077 − 3073 = 4). The two deltas are different numbers and were transposed in an earlier draft of this note.), `mix test --seed 3333` (**3077 / 0 failures** — the pinned-seed gate 20.6 introduced), `mix credo --strict` (0 issues over 258 files), `mix dialyzer` (0 errors), `cd conformance && mix test` (90 tests, 0 failures), `mix docs` (renders `doc/embeddings.html`; **zero warnings referencing the new guide** — the warnings `mix docs` does print are pre-existing `put_cursor_key/2`-is-hidden references from `fake.ex` / `fake_images.ex` / `fake_embeddings.ex`), `mix hex.build` + `tar -tz` (**`guides/embeddings.md` IS in the source tarball**, verified by extracting `contents.tar.gz` rather than trusting the exit code, per CLAUDE.md's v0.3.0-CHANGELOG worked example).
+
+**Banned-token audit.** `mix run scripts/audit_user_docs.exs` with no argument exits 1 on **exactly the 14 pre-existing hits across the six files 20.6 documented** — `CHANGELOG.md` (4), `guides/fakes.md` (4), `lib/allm/engine.ex` (3), `lib/allm/providers/fake.ex` (1), `lib/allm/providers/fake_images.ex` (1), `lib/allm/validate.ex` (1). **Zero were added by this sub-phase**, which is the load-bearing claim: 20.7 modifies two files that ARE on the audit surface (`CHANGELOG.md` and `examples/README.md`) and adds a third (`guides/embeddings.md`), and a targeted run over those three plus `mix.exs` reports 0 hits. The four `CHANGELOG.md` hits are all in the pre-existing `[Unreleased]` body below the new entry, not in it. Pre-existing, out of scope, not fixed here per cross-phase bug discipline.
+
+**★ LIVE GATE — nine script runs, all green; two provider arms blocked by pre-existing failures OUTSIDE this phase.**
+
+Scripts 16–18 were run individually on all three arms with all four keys sourced from the project-root `.env`. Every one exited 0:
+
+| Script | OpenAI (`text-embedding-3-small`) | Gemini (`gemini-embedding-001`) | Anthropic → Voyage (`voyage-3.5-lite`) |
+|---|---|---|---|
+| `16_embed_single.exs` | `dimensions=1536 chunk_count=1 total_tokens=16` | `dimensions=3072 chunk_count=1 total_tokens=nil` | `dimensions=1024 chunk_count=1 total_tokens=16` |
+| `17_embed_batch_chunked.exs` | `cap=2048 chunk_count=1` | **`cap=100 chunk_count=3`** | `cap=1000 chunk_count=1` |
+| `18_embed_query_vs_document.exs` | `on_topic=0.6738 off_topic=0.1237` | `on_topic=0.7903 off_topic=0.5442` | `on_topic=0.7112 off_topic=0.3519` |
+
+Three design claims were confirmed live rather than taken on trust, and all three held:
+
+1. **Gemini reports no usage.** `total_tokens=nil` on the Gemini arm against non-`nil` on the other two — the 20.5 amendment's central finding, re-confirmed end to end through the façade rather than only against a fixture.
+2. **Chunking fires only where the cap forces it.** 250 inputs is one request on OpenAI and Voyage and **three** on Gemini, which is exactly the arithmetic script 17 asserts against `max_batch_size/0`. This is the first end-to-end exercise of the multi-chunk merge path against a real provider — every prior test drove it through `FakeEmbeddings` or the variable-batch stub.
+3. **A dropped `:task_type` is not an error.** Script 18 passes unchanged on OpenAI, which logs `task_type :search_document is not supported … dropping.` at `:debug` and proceeds. The on-topic document still outranks the off-topic one there (0.674 vs 0.124) because the documents are on wildly different subjects — which is why the script's assertion is a ranking and never a threshold.
+
+**`run_all.exs` per arm, stated honestly:**
+
+* **Gemini — GREEN END TO END.** `ALLM_PROVIDER=gemini mix run examples/run_all.exs` exited **0** with 17 `[OK]` and 1 `[SKIP]` (13, provider-gated), including all three new scripts. A second run for snapshot capture then failed at `07_manual_tool_round_trip.exs` (`halted=:completed text="Sunny"`) — a capitalization-sensitive assertion in a model-behaviour-dependent script, i.e. flake, not regression. That flake is why `RUN_OUTPUT_GEMINI.md` was **not** regenerated: the snapshot-defer policy requires the snapshot and the run that produced it to land in the same commit, and the run that would have been captured was not the green one.
+* **OpenAI — BLOCKED, and the block has MOVED since it was documented.** The design and CLAUDE.md both record the OpenAI halt as script **13** (`dall-e-2` 404, originating commit `a7b934b`, inherited through PHASE_18.5). At HEAD the arm halts **earlier, at script 10**, on a *different* error: `%ImageAdapterError{reason: :invalid_request, message: "Unknown parameter: 'response_format'.", status: 400, openai_code: "unknown_parameter"}` from `dall-e-2`. Script 13's 404 is still there too — both were confirmed by running the scripts individually. Because each failing script calls `System.halt(1)` from inside `run_all.exs`'s `Task`, the halt kills the VM and nothing after it runs, which is why the arm stops at 10. Full individual characterization: **01–09 OK, 10 FAIL, 11 OK, 12 OK, 13 FAIL, 14 OK, 15 OK, 16–18 OK.** Per the blocked-by-pre-existing-failure rule the gate is satisfied by running 16–18 individually (done, green), leaving 10 and 13 in place, and NOT regenerating `RUN_OUTPUT_OPENAI.md`. **The `response_format` 400 at script 10 is a NEW pre-existing failure first observed here** — it is not `a7b934b`'s 404 and should be raised separately rather than folded into it.
+* **Anthropic — NEWLY BLOCKED, at `09_ask_user.exs`.** `FAIL: ask_user pass-1 — halted=:completed q=nil`: `claude-sonnet-4-6` answers the prompt directly instead of calling the ask-user tool, so the script's expected `:ask_user` halt never happens. **Deterministic, not flaky** — reproduced 3/3 on consecutive runs — and **arm-specific**: the identical script passes on OpenAI and Gemini. `RUN_OUTPUT_ANTHROPIC.md:72` records it green at the last capture, so this is a regression relative to that snapshot.
+
+**Cause: MODEL DRIFT. `c3451d2` is EXONERATED — this was tested, not guessed.** The implementer's first note here speculated that `c3451d2` (`[BUG] Honor max_tokens/temperature in chat/stream/session`) might be responsible, on the theory that `ExamplesHelpers.engine/1`'s `params: %{temperature: 0}` was silently dropped before that commit and reaches the wire after it. The review pass falsified the hypothesis directly — three conditions, three reps each, all against Anthropic:
+
+| Condition | Result |
+|---|---|
+| A — `temperature: 0` (current helper default) | FAIL, FAIL, FAIL |
+| B — `temperature: 1.0` | FAIL, FAIL, FAIL |
+| C — **no `temperature` at all (the pre-`c3451d2` wire shape)** | FAIL, FAIL, FAIL |
+
+**The pre-`c3451d2` wire shape fails identically**, so temperature is not the discriminator and `c3451d2` did not cause this. Two further checks confirm ALLM is behaving correctly: the request body is well-formed and carries the tool definitions (`wire body keys: ["max_tokens", "messages", "model", "system", "temperature", "tools"]`, `max_tokens: 1024` — Anthropic's documented injected default — and `tool_choice: nil`, which is correct for `:auto` on that API), and forcing `tool_choice: :required` makes the ask-user path work **2/2** (`halted=:ask_user q="Which city?"`). What changed is the model: `claude-sonnet-4-6` under `tool_choice: :auto` now answers "What's the weather?" directly instead of calling `get_weather` with empty arguments. The ask-user suspension machinery is fine; the script's first-turn assertion depends on a model choice its own header calls handler-controlled. The likely fix is `tool_choice: :required` on pass 1. **Do not leave "possibly caused by `c3451d2`" on the record — it was ruled out experimentally.**
+
+**It is not caused by 20.7 either:** this sub-phase's diff contains **zero `lib/` changes** (`git status`: `CHANGELOG.md`, `examples/README.md`, `examples/_helpers.exs`, `mix.exs`, two `test/guides*` files, three new example scripts, one new guide, three steering docs). Same treatment as OpenAI: 16–18 run individually and green, script 09 left in place, `RUN_OUTPUT_ANTHROPIC.md` not regenerated. Raise separately.
+
+**Cost actuals vs. the estimate.** The design budgeted `< $0.01` per clean run across all three arms and `< $0.03` for a first implementation with debugging passes. Actual: nine individual script runs plus one full Gemini `run_all`, one partial Gemini `run_all`, one partial Anthropic `run_all` (×2), one partial OpenAI `run_all`, four individual OpenAI script re-runs (including one `11_edit_image.exs` at ~$0.04, the single largest line item), and three `09_ask_user.exs` reproductions. The embeddings share is well under `$0.01` as estimated — 16–18 total roughly 3,500 tokens per arm at $0.02–$0.15 per 1M. The overrun is entirely in the *chat and image* scripts that the `run_all` gate drags along, which the estimate did not model. **Estimate holds for what it covered; a future phase running `run_all.exs` should budget the arm's full cost, not the new scripts'.**
+
+**Design amendments made in this pass** (each edited in place above rather than queued as a follow-up):
+
+1. **The live-gate deferral note's failure points were stale and incomplete.** Amended in 20.7.3: OpenAI halts at 10, not 13; Anthropic is blocked too. The original note named exactly one blocked arm and one script.
+2. **The Module Tree omitted `test/guides_test.exs`.** 20.7.1's Test Plan asserts that file's >2 KB / one-`iex>` / zero-audit-hit gates apply to the new guide, but those gates iterate a hand-maintained `@guides` attribute inside the test module — they bind only for a listed guide, and membership is opt-in (`fakes.md` is deliberately absent because it carries pre-existing audit hits). Registering in `guides_doctest_test.exs` alone runs the doctests and asserts nothing else. Row added with the reasoning.
+
+**Deviations from the checklist, with justification:**
+
+* **[structural, documented] `test/guides_test.exs` was modified even though it was not in the Module Tree.** See amendment 2. The alternative — leaving it — would have shipped a guide whose size, `iex>`-presence, and banned-token gates were asserted in the design and enforced nowhere.
+* **[structural, documented] `examples/README.md` had no per-provider key-requirements table to update.** The checklist says to "update the per-provider key-requirements table"; the file had only a prose Prerequisites list and a per-provider *cost* table. A "Which keys each provider arm needs" table was **created**, with a dedicated subsection explaining why the Anthropic arm needs `VOYAGE_API_KEY` and that `run_all.exs` will halt without it.
+* **[tactical] `ExamplesHelpers.embedding_engine/1` reads `ALLM_EMBEDDING_MODEL`, not `ALLM_MODEL`.** `image_engine/1` reuses `ALLM_MODEL`, but an embedding model and a chat model are never interchangeable, and the README documents `ALLM_MODEL=gpt-4.1-mini mix run examples/run_all.exs` as a supported invocation — which under a shared variable would send a chat model id to `/v1/embeddings` and 400 every embedding script. A separate variable is the only way the documented `ALLM_MODEL` override keeps working now that 16–18 are unmarked and run on every arm.
+* **[tactical] `:embedding_key_env` falls back to the row's chat `:key_env` when absent** rather than being required per row. Only the Anthropic row needs an override; making it mandatory would put an identical string in the other two rows for no benefit and one more place to drift.
+* **[tactical] Script 18's `cosine/2` is defined inline in the script, not added to `lib/`.** Cosine similarity is one line of `Enum.zip/2` + `Enum.reduce/3` and is the caller's concern; ALLM returns `[[float()]]` and deliberately owns no distance functions (that is the vector store's job). Adding one to the public API to serve a single example script would be the abstraction the Rule of 3 warns against.
+* **[tactical] The guide's error-path doctest scripts `:invalid_request`, not `:rate_limited`.** The first draft scripted `:rate_limited` and the doctest failed with `:unknown`: the façade's widened retry policy consumed the scripted error, retried, exhausted the two-entry script, and surfaced `:no_scripted_embedding`. Correct behaviour, surprising in a guide. The example now scripts a non-retryable reason and the guide states the rule explicitly, pointing at `{:retry_until_call, n}` as the entry for exercising retries — a footgun the guide would otherwise have taught by omission.
+* **[tactical] No `RUN_OUTPUT_*.md` was regenerated, on any arm.** Two arms are blocked; the third produced one green run and one flaky run, and the snapshot must come from the run that lands in the commit. The Module Tree does not list these files for 20.7 either.
+
+**Carried-forward items honoured, not re-litigated:**
+
+* **`README.md` untouched**, per its absence from this Module Tree and CLAUDE.md's blocking pre-commit invariant. `git status` confirms.
+* **The `:voyage` key-store hazard recorded in 20.6.** No example script calls `ALLM.Keys.put/2`; all three resolve the key from the environment, so the repo-wide invariant (`grep -rn 'Keys\.put(' test/` returns only `async: false` modules) is untouched and nothing puts a `:voyage` key in the process-global store.
+* **`mix.exs` needed only the `@guides` line.** Every other 20.7 `mix.exs` obligation — `ALLM.EmbeddingAdapter` under Behaviours, the four provider modules under Providers, the three data types, the error type — was already satisfied, because 20.2 / 20.4 / 20.5 / 20.6 were each forced to touch `groups_for_modules` by the committed audit gate. Verified rather than assumed.
+* **`§36.9` uses the `[:allm, …]` namespace** and does not propagate the spec's pre-existing `[:llm, …]` error; the `§29` amendment states the discrepancy explicitly so a reader of the stale block is not misled.
+
+**Files created:** `guides/embeddings.md`; `examples/16_embed_single.exs`, `examples/17_embed_batch_chunked.exs`, `examples/18_embed_query_vs_document.exs`.
+**Files modified:** `steering/allm_engine_session_streaming_spec_v0_2.md` (new §36 + amendments to §27, §29, §32.5, §33, §35.7, each stamped `ac5d845..c3aefce`), `steering/PHASE_20_DESIGN.md` (superseded-by banner), `CHANGELOG.md` (cumulative 20.1–20.6 entry), `examples/README.md`, `examples/_helpers.exs`, `mix.exs`, `test/guides_doctest_test.exs`, `test/guides_test.exs`, this document.
 
 ---
 
@@ -1770,28 +1852,30 @@ The one bounded-time property worth asserting is that a 250-input / max-100 run 
 
 ## Definition of Done
 
-- [ ] All 7 sub-phases marked `Completed`
-- [ ] `mix test` zero failures, zero `unused_var` warnings, coverage ≥80% globally and ≥90% on new code
-- [ ] `mix credo --strict` zero issues on changed files
-- [ ] `mix dialyzer` zero new warnings vs. the prior PLT
-- [ ] `mix format --check-formatted` passes
-- [ ] Every new public function has `@spec` and `@doc` with at least one runnable doctest — except `ALLM.EmbeddingBatch`, which is `@moduledoc false` internal machinery whose three functions carry `@spec` + `@doc false` (the `chat.ex` / `stream_runner.ex` precedent for Layer C internals)
-- [ ] Every new Layer A struct has a serializability round-trip test (both ETF and JSON)
-- [ ] `ALLM.Providers.FakeEmbeddings` passes all 10 `EmbeddingAdapterConformance` cases; the `@case_count` meta-test confirms exactly 10
-- [ ] All three real adapters pass the same 10 cases via the `adapter_opts[:embedding_script]` short-circuit, each in its own `*_conformance_test.exs`
-- [ ] Batch-equivalence property passes at ≥100 `StreamData` iterations with only the two contract-defined relaxations
-- [ ] `:no_embed_adapter` and `:invalid_embedding_request` each added to BOTH `@type reason` and `@legal_reasons`; `EmbeddingAdapterError.legal_reasons/0` doctest asserts 11
-- [ ] Wire fixtures recorded live for the `recorded/` directories; each `synthesized/` file carries its `_comment: "Synthesized (Phase 20.N)…"` marker
-- [ ] All three recorder scripts run idempotently (second run is a no-op)
-- [ ] `examples/16–18` exit 0 on all three provider arms — **with any deferral flagged per the live-gate note in 20.7.3**
-- [ ] Spec §36 written; §32.5, §33, §35.7, §27, §29 amended, each block stamped with the Phase 20 commit range
-- [ ] `steering/PHASE_20_DESIGN.md` carries a superseded-by banner
-- [ ] `guides/embeddings.md` renders under `mix docs` and appears in the `tar -tzf` source tarball
-- [ ] `mix.exs` `package[:files]` remains a superset of `docs[:extras]`
-- [ ] `CHANGELOG.md` updated with one line per public-API change
-- [ ] `README.md` unmodified (not in this Module Tree)
+- [x] All 7 sub-phases marked `Completed`
+- [x] `mix test` zero failures, zero `unused_var` warnings, coverage ≥80% globally and ≥90% on new code
+- [x] `mix credo --strict` zero issues on changed files
+- [x] `mix dialyzer` zero new warnings vs. the prior PLT
+- [x] `mix format --check-formatted` passes
+- [x] Every new public function has `@spec` and `@doc` with at least one runnable doctest — except `ALLM.EmbeddingBatch`, which is `@moduledoc false` internal machinery whose three functions carry `@spec` + `@doc false` (the `chat.ex` / `stream_runner.ex` precedent for Layer C internals)
+- [x] Every new Layer A struct has a serializability round-trip test (both ETF and JSON)
+- [x] `ALLM.Providers.FakeEmbeddings` passes all 10 `EmbeddingAdapterConformance` cases; the `@case_count` meta-test confirms exactly 10
+- [x] All three real adapters pass the same 10 cases via the `adapter_opts[:embedding_script]` short-circuit, each in its own `*_conformance_test.exs`
+- [x] Batch-equivalence property passes at ≥100 `StreamData` iterations with only the two contract-defined relaxations
+- [x] `:no_embed_adapter` and `:invalid_embedding_request` each added to BOTH `@type reason` and `@legal_reasons`; `EmbeddingAdapterError.legal_reasons/0` doctest asserts 11
+- [x] Wire fixtures recorded live for the `recorded/` directories; each `synthesized/` file carries its `_comment: "Synthesized (Phase 20.N)…"` marker
+- [x] All three recorder scripts run idempotently (second run is a no-op)
+- [x] `examples/16–18` exit 0 on all three provider arms — **with any deferral flagged per the live-gate note in 20.7.3**
+- [x] Spec §36 written; §32.5, §33, §35.7, §27, §29 amended, each block stamped with the Phase 20 commit range
+- [x] `steering/PHASE_20_DESIGN.md` carries a superseded-by banner
+- [x] `guides/embeddings.md` renders under `mix docs` and appears in the `tar -tzf` source tarball
+- [x] `mix.exs` `package[:files]` remains a superset of `docs[:extras]`
+- [x] `CHANGELOG.md` updated with one line per public-API change
+- [x] `README.md` unmodified (not in this Module Tree)
 - [ ] Spec §-numbers in commit messages match the Overview
 - [ ] Reviewed via `/review` per `AGENT_REVIEW_SPEC.md`
+
+*(Ticked at the end of 20.7. Two boxes are deliberately left open because neither is the implementer's to close: the commit message is written by the committing step, and `/review` runs after it. Evidence for the ticked boxes is in each sub-phase's Implementation Notes; the 20.7-scoped ones are re-verified in 20.7.4 — global coverage **93.37%**, `mix test` 3077/0, `mix test --seed 3333` 3077/0, `mix credo --strict` 0 issues, `mix dialyzer` 0 errors, `cd conformance && mix test` 90/0, `guides/embeddings.md` present in the extracted `mix hex.build` tarball, `README.md` unmodified per `git status`. The examples box is ticked on the individually-run scripts 16–18, which are green on all three arms; the two blocked `run_all.exs` arms are pre-existing failures outside this phase and are flagged in 20.7.4.)*
 
 ---
 

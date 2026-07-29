@@ -69,6 +69,7 @@ defmodule ALLM.MixProject do
     guides/sessions.md
     guides/vision.md
     guides/image_generation.md
+    guides/embeddings.md
     guides/errors_and_retries.md
     guides/multi_tenant_keys.md
     guides/fakes.md

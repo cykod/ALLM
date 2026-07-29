@@ -1,3 +1,24 @@
+## [DOC] Add embeddings spec section, guide, and live examples (Phase 20.7)
+*Wednesday, July 29th at 6pm*
+Completes the embeddings capability by making it discoverable. Adds spec 
+section 36 mirroring the image-generation structure, strikes embeddings from 
+the two out-of-scope lists along with image generation which shipped in v0.3 
+and was never struck, and scopes the bundled-adapter rule so an adapter may be 
+bundled when it is a provider's own recommended path for a capability that 
+provider does not offer, with Voyage as the named beneficiary. 
+guides/embeddings.md carries the provider matrix, task-type guidance, the 
+pgvector worked example, and a note that telemetry stop metadata contains the 
+vectors themselves, which are partially invertible to source text, so handlers 
+should select fields rather than serializing the map. Examples 16 to 18 run on 
+all three provider arms and were verified live, including a 250-input run that 
+exercises the multi-chunk merge against Gemini's 100-item cap for the first 
+time. Review corrected two pieces of prose before they shipped: the opening 
+engine sample taught a broken mixed-provider form, since Engine has one shared 
+model field, and the retry-budget table understated the timeout worst case 
+threefold because two nested retry loops both list timeout as retryable.
+
+---
+
 ## [FEAT] Add Voyage embeddings adapter and make the suite deterministic (Phase 20.6)
 *Wednesday, July 29th at 6pm*
 Closes the embeddings adapter family with ALLM.Providers.Voyage.Embeddings, the 

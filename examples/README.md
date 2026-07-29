@@ -27,7 +27,9 @@ provider table:
     vision_default_model: "gpt-4o-mini",
     key_env: "OPENAI_API_KEY",
     image_adapter: ALLM.Providers.OpenAI.Images,
-    image_default_model: "dall-e-2"
+    image_default_model: "dall-e-2",
+    embed_adapter: ALLM.Providers.OpenAI.Embeddings,
+    embedding_default_model: "text-embedding-3-small"
   },
   "anthropic" => %{
     adapter: ALLM.Providers.Anthropic,
@@ -35,7 +37,10 @@ provider table:
     vision_default_model: "claude-haiku-4-5-20251001",
     key_env: "ANTHROPIC_API_KEY",
     image_adapter: nil,
-    image_default_model: nil
+    image_default_model: nil,
+    embed_adapter: ALLM.Providers.Voyage.Embeddings,
+    embedding_default_model: "voyage-3.5-lite",
+    embedding_key_env: "VOYAGE_API_KEY"
   },
   "gemini" => %{
     adapter: ALLM.Providers.Gemini,
@@ -44,14 +49,22 @@ provider table:
     key_env: "GEMINI_API_KEY",
     image_adapter: ALLM.Providers.Gemini.Images,
     image_default_model: "gemini-3.1-flash-image-preview",
-    default_temperature: 1.0
+    default_temperature: 1.0,
+    embed_adapter: ALLM.Providers.Gemini.Embeddings,
+    embedding_default_model: "gemini-embedding-001"
   }
 }
 ```
 
-The map shape lets future fields (`:image_adapter`,
+The map shape lets future fields (`:image_adapter`, `:embed_adapter`,
 `:vision_default_model`, …) be added without churning the destructure
 pattern in the helper.
+
+`ExamplesHelpers.embedding_engine/1` is the third constructor, sister to
+`engine/1` and `image_engine/1`. It reads `:embed_adapter` /
+`:embedding_default_model`, and `:embedding_key_env` — which falls back
+to the row's chat `:key_env` when the row omits it. `ALLM_EMBEDDING_MODEL`
+overrides the model independently of `ALLM_MODEL`.
 
 Every script's first lines are:
 
@@ -84,10 +97,35 @@ So either:
 
 1. Drop a `.env` file at the repository root with whichever keys you want
    to exercise (`OPENAI_API_KEY=sk-...`, `ANTHROPIC_API_KEY=sk-ant-...`,
-   `GEMINI_API_KEY=...`) and run `mix run examples/run_all.exs` (with
-   `ALLM_PROVIDER=…` to pick a non-default provider) — no further setup.
+   `GEMINI_API_KEY=...`, `VOYAGE_API_KEY=pa-...`) and run
+   `mix run examples/run_all.exs` (with `ALLM_PROVIDER=…` to pick a
+   non-default provider) — no further setup.
 2. Or export the vars directly:
    `export OPENAI_API_KEY=sk-... && mix run examples/run_all.exs`.
+
+### Which keys each provider arm needs
+
+| `ALLM_PROVIDER` | Chat / vision / image scripts | Embedding scripts (16–18) |
+|---|---|---|
+| `openai` | `OPENAI_API_KEY` | `OPENAI_API_KEY` |
+| `gemini` | `GEMINI_API_KEY` | `GEMINI_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` | **`VOYAGE_API_KEY`** |
+
+#### Embedding scripts and `VOYAGE_API_KEY`
+
+The Anthropic arm is the one place where a second key is required.
+Anthropic ships no embeddings endpoint and never has; it names Voyage AI
+as its recommended embeddings partner, so the `"anthropic"` provider row
+points `:embed_adapter` at `ALLM.Providers.Voyage.Embeddings` and
+overrides `:embedding_key_env` to `"VOYAGE_API_KEY"`. There is no
+`ALLM.Providers.Anthropic.Embeddings` module to point at instead — that
+name would assert a wire that does not exist.
+
+Because scripts 16–18 carry no `# Provider:` marker, they are **not**
+skipped on the Anthropic arm, and `ensure_key_present!/1` halts on a
+missing key. So `ALLM_PROVIDER=anthropic mix run examples/run_all.exs`
+requires **both** `ANTHROPIC_API_KEY` and `VOYAGE_API_KEY`. Voyage's free
+tier covers the examples budget.
 
 The `:env_loader` dep is declared `only: [:dev]` in `mix.exs`, so it does
 NOT ship in the published Hex package (the `examples/` directory itself is
@@ -183,6 +221,18 @@ two-turn flow: halt-on-manual, caller appends/submits the manual tool
 result, second call/continue completes with `"sunny"` in the assistant
 text.
 
+## Embeddings (16–18)
+
+- `16_embed_single.exs` — one input through `ALLM.embed/3`.
+- `17_embed_batch_chunked.exs` — 250 inputs in one call, chunked
+  transparently by the façade.
+- `18_embed_query_vs_document.exs` — `task_type: :search_query` vs
+  `:search_document`, ranked by cosine similarity.
+
+All three carry **no** `# Provider:` marker, so `run_all.exs` runs them
+on every arm. See "Embedding scripts and `VOYAGE_API_KEY`" above for the
+one extra key that implies.
+
 ## Running
 
 Single script (default — OpenAI):
@@ -236,6 +286,9 @@ facade (`generate/3`, `stream/3`, `chat/3`, `step/3`, `generate_image/3`,
 | `13_image_variations.exs` | tight | C | openai | `ALLM.image_variations/3` against `dall-e-2` 256×256 |
 | `14_per_tool_manual.exs` | tight | C | openai, anthropic | per-tool manual mode via `chat/3`: auto tool runs eagerly, manual tool halts with `:manual_tool_calls`, caller appends `:tool` message and re-issues |
 | `15_per_tool_manual_session.exs` | tight | D | openai, anthropic | per-tool manual mode via `Session.start → submit_tool_result → continue` |
+| `16_embed_single.exs` | tight | C | all | `ALLM.embed/3` with one input; asserts vector shape and `dimensions/1` agreement |
+| `17_embed_batch_chunked.exs` | tight | C | all | 250 inputs through transparent chunking; asserts `chunk_count` against the adapter's `max_batch_size/0` |
+| `18_embed_query_vs_document.exs` | loose | C | all | asymmetric embedding — `task_type: :search_query` vs `:search_document`, ranked by cosine similarity |
 
 ## Image generation
 
@@ -285,6 +338,37 @@ prompt, and asserts a non-empty `output_text` and
 `finish_reason: :stop`. **Runs on all three providers**
 (`# Provider: openai, anthropic, gemini`).
 
+## Embedding scripts in detail
+
+Scripts 16–18 exercise `ALLM.embed/3` against the active provider's
+`:embed_adapter`, built by `ExamplesHelpers.embedding_engine/0`. None
+carries a `# Provider:` marker, because every arm has an embedding
+adapter — see "Embedding scripts and `VOYAGE_API_KEY`" above for what
+that means on Anthropic.
+
+- **`16_embed_single.exs`** — one input in, one `%ALLM.Embedding{}` out.
+  Asserts cardinality, an all-float non-empty vector, `index: 0`,
+  agreement between `ALLM.EmbeddingResponse.dimensions/1` and the vector
+  length, and `chunk_count == 1`. Token counts are printed, never
+  asserted: Gemini returns no usage metadata at all, so `total_tokens` is
+  `nil` there by design.
+- **`17_embed_batch_chunked.exs`** — 250 inputs in a single call. The
+  count is chosen to exceed Gemini's per-request cap of 100 (that arm
+  becomes three sequential requests, merged behind the façade) while
+  staying inside OpenAI's 2048 and Voyage's 1000, so the same script
+  covers both the multi-chunk path and the single-chunk fast path
+  depending on the arm. `chunk_count` is asserted against arithmetic
+  derived from the adapter's own `max_batch_size/0`, so the script stays
+  correct if a provider's cap changes.
+- **`18_embed_query_vs_document.exs`** — embeds two documents with
+  `task_type: :search_document` and a query with `:search_query`, then
+  ranks the documents by cosine similarity and asserts the on-topic one
+  wins. Marked **loose**: the assertion is a ranking, never a threshold,
+  since absolute similarity values are not comparable across providers.
+  On OpenAI the task type is dropped (no equivalent exists on that wire,
+  logged at `:debug`), so the script measures symmetric embeddings there
+  — a dropped task type is never an error.
+
 ## Cost notes
 
 Approximate per-clean-run costs for the full `run_all.exs` pass on each
@@ -293,10 +377,13 @@ provider pricing page for any tight budget.
 
 | Provider arm | Approx cost | Notes |
 |--------------|-------------|-------|
-| OpenAI (`gpt-5.4-nano` + `dall-e-2` + `gpt-image-1`) | **~$0.13 USD** | bulk of the cost is `11_edit_image.exs` (~$0.04) |
-| Anthropic (`claude-sonnet-4-6`) | **~$0.08 USD** | drops to ~$0.01 with `ALLM_MODEL=claude-haiku-4-5` |
-| Gemini (`gemini-3-flash-preview` + image preview) | **~$0.03 USD** | image scripts on Gemini skip variations |
+| OpenAI (`gpt-5.4-nano` + `dall-e-2` + `gpt-image-1` + `text-embedding-3-small`) | **~$0.13 USD** | bulk of the cost is `11_edit_image.exs` (~$0.04) |
+| Anthropic (`claude-sonnet-4-6` + `voyage-3.5-lite`) | **~$0.08 USD** | drops to ~$0.01 with `ALLM_MODEL=claude-haiku-4-5` |
+| Gemini (`gemini-3-flash-preview` + image preview + `gemini-embedding-001`) | **~$0.03 USD** | image scripts on Gemini skip variations |
 | **All three combined** | **~$0.24 USD** | per clean dual+gemini pass |
+
+The embedding scripts add well under $0.001 per arm — a few thousand
+tokens total, and Voyage's free tier covers its share outright.
 
 A full suite typically runs in 60–120 s per provider; the per-script
 budget is 180 s, enforced by `run_all.exs`'s `Task.yield/2`.
@@ -328,12 +415,27 @@ Agent, so concurrent requests from different tenants would race.
 - **Gemini default:** `gemini-3-flash-preview` (the cost-optimized
   flash-tier model on Google's Generative Language API).
 
-Override the model at runtime independent of provider:
+`ALLM_MODEL` is the **chat** model, and scripts 16–18 do not read it.
+The embedding scripts take their model from `ALLM_EMBEDDING_MODEL`, which
+defaults per provider row to:
+
+- **OpenAI:** `text-embedding-3-small`
+- **Anthropic (via Voyage):** `voyage-3.5-lite`
+- **Gemini:** `gemini-embedding-001`
+
+The two variables are deliberately separate: a chat model id sent to an
+embeddings endpoint is a guaranteed 400, so the documented
+`ALLM_MODEL=…` invocations below would otherwise fail every embedding
+script now that 16–18 run on every arm.
+
+Override either at runtime independent of provider:
 
 ```bash
 ALLM_MODEL=gpt-4.1-mini      mix run examples/run_all.exs
 ALLM_MODEL=claude-haiku-4-5  ALLM_PROVIDER=anthropic mix run examples/run_all.exs
 ALLM_MODEL=gemini-2.5-flash  ALLM_PROVIDER=gemini    mix run examples/run_all.exs
+
+ALLM_EMBEDDING_MODEL=text-embedding-3-large mix run examples/17_embed_batch_chunked.exs
 ```
 
 `gpt-4.1-mini` is a non-reasoning model on the Chat Completions endpoint

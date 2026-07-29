@@ -1631,6 +1631,23 @@ lib/
   llm/providers/fake.ex
 ```
 
+> **Phase 20 amendment (commits `ac5d845..c3aefce`; docs land in the 20.7 commit).** The embeddings capability (§36) adds the following modules. Paths are given under the shipped `lib/allm/` prefix rather than the `llm/` prefix used in the tree above, which predates the package rename.
+>
+> ```text
+> lib/allm/embedding.ex                  # Layer A — one vector + index
+> lib/allm/embedding_request.ex          # Layer A
+> lib/allm/embedding_response.ex         # Layer A
+> lib/allm/embedding_adapter.ex          # Layer B — behaviour
+> lib/allm/embedding_batch.ex            # Layer C — chunk / dispatch / merge (@moduledoc false)
+> lib/allm/error/embedding_adapter_error.ex
+> lib/allm/providers/fake_embeddings.ex
+> lib/allm/providers/openai/embeddings.ex
+> lib/allm/providers/gemini/embeddings.ex
+> lib/allm/providers/voyage/embeddings.ex
+> ```
+>
+> Existing modules extended: `ALLM` (`embed/3`, `embedding_request/2`), `ALLM.Engine` (`:embed_adapter`), `ALLM.Validate` (`embedding_request/1`), `ALLM.Capability` (`preflight_embedding/2`), `ALLM.Telemetry` (`:embed` span), `ALLM.Serializer` (four registry entries), `ALLM.Error.EngineError` (`:no_embed_adapter`), `ALLM.Error.ValidationError` (`:invalid_embedding_request`).
+
 ---
 
 ## 28. Implementation guidance
@@ -1680,6 +1697,19 @@ Additional per-span metadata:
 - `step` — `:step_result` on `:stop`
 - `chat` — `:chat_result` on `:stop`
 - `tool` — `:tool`, `:tool_call`, plus `:result` on `:stop` or `:kind` + `:reason` + `:stacktrace` on `:exception`
+
+> **Phase 20 amendment (commits `ac5d845..c3aefce`; docs land in the 20.7 commit).** The embeddings capability (§36) adds one span:
+>
+> ```elixir
+> [:allm, :embed, :start | :stop]
+> ```
+>
+> - `:start` — measurements `%{system_time: integer()}`; metadata `:request_id`, `:engine`, `:model`, `:input_count`.
+> - `:stop` — measurements `%{duration: integer(), embedding_count: non_neg_integer(), chunk_count: non_neg_integer()}`; metadata `:request_id`, `:model`, `:usage`, `:response`, `:error` (`nil` on success).
+>
+> Both extra measurement keys are present on the success and error paths alike (`0` on error), so a handler written against the `[:allm, :image, :stop]` span does not `KeyError` when pointed at this one. `chunk_count` is the only signal that a single `ALLM.embed/3` call became N HTTP requests.
+>
+> **Namespace note.** This section writes the namespace `[:llm, …]`, which is a pre-existing error: the shipped code and §35.9 both emit `[:allm, …]`. The embeddings events above use `[:allm, …]` and deliberately do not propagate the mistake. The `[:llm, …]` spellings in the Event names block are stale and should be read as `[:allm, …]`.
 
 ### Relationship to `middleware`
 
@@ -1870,8 +1900,10 @@ All three implement `ALLM.Adapter` and `ALLM.StreamAdapter`. Additional provider
 
 ### 32.5 Explicitly out of scope for v0.2
 
-- embeddings and audio — callers drop down to a provider SDK directly
+- audio — callers drop down to a provider SDK directly
 - image generation — candidate for a first-class non-streaming primitive in a later version; not shipped in v0.2
+
+> **Phase 20 amendment (commits `ac5d845..c3aefce`; docs land in the 20.7 commit).** **Embeddings are no longer out of scope** — they ship in v0.5 as a first-class non-streaming primitive (`ALLM.embed/3`, `%ALLM.EmbeddingRequest{}` / `%ALLM.EmbeddingResponse{}`, the `ALLM.EmbeddingAdapter` behaviour, and the `:embed_adapter` engine slot). See **§36**. The line above is amended to remove "embeddings"; audio remains out of scope. Image generation likewise shipped in v0.3 (§35) but is left in the list above because that line is scoped to *v0.2* and is preserved as a historical record of what v0.2 excluded.
 
 ---
 
@@ -1884,8 +1916,15 @@ Out of scope for the initial version:
 - advanced agent planning layers
 - workflow schedulers
 - hard-coded provider-specific abstractions in the core API
-- embeddings, audio input/output, image generation (see §32.5)
+- audio input/output (see §32.5)
 - dependency on `req_llm` or any other multi-provider HTTP library (see §32.2)
+
+> **Phase 20 amendment (commits `ac5d845..c3aefce`; docs land in the 20.7 commit).** The line above previously read `embeddings, audio input/output, image generation (see §32.5)`. Two of its three entries were stale:
+>
+> - **image generation** shipped in v0.3 (**§35**) and was never struck when it did — corrected here;
+> - **embeddings** ship in v0.5 (**§36**) — struck here.
+>
+> Audio input/output remains a genuine non-goal.
 
 ---
 
@@ -2197,6 +2236,18 @@ Concrete consequence: a future `ALLM.Providers.Gemini.Imagen` (covering Imagen `
 
 Third-party image providers (Stability, Replicate, Google Imagen `:predict`, fal.ai) remain out of core per the bundled-adapter rule above.
 
+> **Phase 20 amendment (commits `ac5d845..c3aefce`; docs land in the 20.7 commit).** The bundled-adapter rule gains a **second admission criterion**, scoped narrowly.
+>
+> As written above, the rule admits an adapter when its maintenance overlaps with the same provider's already-bundled chat adapter. That criterion was authored for image generation, where every candidate had a chat-adapter sibling. It does not decide the embeddings case for Anthropic, because **Anthropic ships no embeddings endpoint at all** and so has no sibling to amortize against — leaving the most common ALLM configuration with no in-tree embeddings path.
+>
+> The amended rule:
+>
+> > An adapter may be bundled when **either** (a) its maintenance overlaps with its provider's already-bundled chat adapter, **or** (b) it is the provider's own officially-recommended path for a capability that provider does not itself offer.
+>
+> Criterion (b) has exactly one beneficiary today: `ALLM.Providers.Voyage.Embeddings`, bundled because Anthropic publicly names Voyage AI as its recommended embeddings partner and publishes a cookbook for it. Its translator shares nothing with the Anthropic chat adapter, so (a) does not apply and the carve-out is what admits it.
+>
+> **This is a carve-out, not a widening.** Criterion (b) requires the *provider* to have made the recommendation — a third party being popular, or well-suited, or cheaper does not qualify. Cohere, Mistral, and Jina embeddings remain out of core and ship as separate packages implementing `ALLM.EmbeddingAdapter`, exactly as third-party image adapters do. See §36.7.
+
 ### 35.8 Testing
 
 `ALLM.Providers.FakeImages` implements `ALLM.ImageAdapter` with scripted responses — analogous to `ALLM.Providers.Fake` (§31).
@@ -2229,3 +2280,353 @@ Two telemetry events, mirroring chat:
 - image classification / object detection as distinct primitives — users build these on top of chat + vision
 - batch image endpoints (OpenAI batch API) — candidate for a later version
 - OCR, upscaling, background removal as distinct primitives — out of core; third-party adapter territory
+
+---
+
+## 36. v0.5 — Text embeddings
+
+> **Phase 20 amendment (commits `ac5d845..c3aefce`; docs land in the 20.7 commit).** This section is new. It supersedes the "embeddings" entries struck from §32.5 and §33, and it is the named beneficiary of the §35.7 bundled-adapter amendment.
+
+v0.5 extends ALLM with a non-streaming primitive for turning text into vectors. Embeddings are request/response — there is no token stream — so the design stays parallel to the image capability (§35) and skips the streaming layer entirely. Embeddings are a *strictly simpler* instance of that pattern: no operations enum, no multipart bodies, no binary payloads.
+
+The one place embeddings are harder than images is **batching**. The bundled providers cap a single request at 2048, 100, and 1000 inputs respectively, and bulk-loading a vector store routinely exceeds all three. That asymmetry is absorbed once, behind the façade (§36.6).
+
+### 36.1 Design goals
+
+1. **Parallel to the chat pipeline, not entangled with it.** Embedding requests, responses, and adapters are separate types. Chat adapters do not implement embedding support, and vice versa.
+2. **Non-streaming.** No `ALLM.EmbeddingStreamAdapter` and no `stream_embed/3`. Same reasoning as §35.1 item 2.
+3. **Opt-in per engine.** An `ALLM.Engine` without an `:embed_adapter` returns `{:error, %ALLM.Error.EngineError{reason: :no_embed_adapter}}` for embedding calls, ahead of every other gate. No implicit wiring, and no fallback to `:adapter` or `:image_adapter`.
+4. **The output is plain data.** `ALLM.EmbeddingResponse.vectors/1` returns `[[float()]]`, ready for a `vector(N)` column. ALLM depends on no storage library and ships no repo or migration helpers; the vector store is the caller's.
+5. **Reuse engine plumbing.** Keys (§6.4), model resolution and capability pre-flight (§6.3), retries, telemetry (§29), and deterministic fakes (§31) apply identically to embedding calls.
+
+### 36.2 Data model
+
+#### 36.2.1 `ALLM.Embedding`
+
+One vector, plus the index that ties it back to its input.
+
+```elixir
+defmodule ALLM.Embedding do
+  @enforce_keys [:vector]
+  defstruct [:vector, index: 0, metadata: %{}]
+
+  @type t :: %__MODULE__{
+          vector: [float()],
+          index: non_neg_integer(),
+          metadata: map()
+        }
+
+  @spec new(keyword()) :: t()
+
+  @spec normalize(t()) :: t()      # L2; returns the input unchanged at magnitude 0.0
+  @spec magnitude(t()) :: float()  # Euclidean norm
+end
+```
+
+`:index` is **always** an integer, never `nil` — batch chunking (§36.6) rebases indices across chunk boundaries, and a sometimes-`nil` field would make that arithmetic conditional and the sort in `vectors/1` unstable.
+
+An adapter that would construct `%Embedding{vector: []}` from a provider response returns `%ALLM.Error.EmbeddingAdapterError{reason: :malformed_response}` instead.
+
+#### 36.2.2 `ALLM.EmbeddingRequest`
+
+```elixir
+defmodule ALLM.EmbeddingRequest do
+  @type task_type ::
+          :search_document | :search_query | :classification | :clustering | :similarity
+
+  @type t :: %__MODULE__{
+          input: [String.t()],
+          model: String.t() | nil,
+          dimensions: pos_integer() | nil,
+          task_type: task_type() | nil,
+          truncate: boolean(),
+          options: map(),
+          metadata: map()
+        }
+
+  defstruct [
+    :model,
+    :dimensions,
+    :task_type,
+    input: [],
+    truncate: true,
+    options: %{},
+    metadata: %{}
+  ]
+end
+```
+
+- `:input` is **always a list on the struct**. The bare-string call shape is normalized at `ALLM.embedding_request/2`, so no adapter or validator handles a union.
+- `:task_type` is a provider-neutral closed enum for asymmetric embedding — encoding a search query differently from the documents it searches. Providers that lack an equivalent **drop the field** rather than erroring (see §36.7), matching the contract images set for `response_format` on `gpt-image-1`.
+- `:truncate` defaults to `true`, the provider-side default on every bundled target, so the field is omitted from the wire when `true` and sent explicitly only when `false`.
+- `:options` is the documented home for provider-specific opaque knobs (OpenAI's request-level `user`, for one).
+
+Validation lives in `ALLM.Validate.embedding_request/1` (analogous to §16), and unlike `generate_image/3` the façade calls it — an empty-string input is a guaranteed provider rejection, and in a chunked call it should fail before the other forty-nine round-trips are spent.
+
+#### 36.2.3 `ALLM.EmbeddingResponse`
+
+```elixir
+defmodule ALLM.EmbeddingResponse do
+  @type t :: %__MODULE__{
+          id: String.t() | nil,
+          request_id: String.t() | nil,
+          model: String.t() | nil,
+          embeddings: [ALLM.Embedding.t()],
+          usage: ALLM.Usage.t(),
+          raw: term(),
+          metadata: map()
+        }
+
+  defstruct [:id, :request_id, :model, :raw, embeddings: [], usage: %ALLM.Usage{}, metadata: %{}]
+
+  @spec vectors(t()) :: [[float()]]                       # sorted by :index, flattened
+  @spec dimensions(t()) :: non_neg_integer() | nil        # width of the first vector
+end
+```
+
+Three invariants:
+
+- **Order correspondence.** `Enum.at(vectors(response), i)` is the embedding of `Enum.at(request.input, i)` for every `i` — preserved across chunk merges by the rebasing in §36.6 and by `vectors/1` sorting on `:index` before flattening. Providers document an index field precisely because array order is not contractual.
+- **Uniform dimensionality.** Every vector in `:embeddings` has the same length.
+- **Cardinality.** `length(response.embeddings) == length(request.input)` on success.
+
+`:usage` defaults to `%ALLM.Usage{}` and is never `nil`. **`ALLM.Usage` is reused rather than given an embeddings-specific twin**: embeddings bill in tokens, which `Usage` already models, and every one of its numeric fields is already documented as optional and `nil`-able. `:output_tokens` is always `nil` — embeddings produce no completion tokens — and which of the remaining counters a provider populates varies (§36.7).
+
+#### 36.2.4 `ALLM.Error.EmbeddingAdapterError`
+
+Same shape as `ALLM.Error.ImageAdapterError`: a closed reason enum, a `new/2` that raises `ArgumentError` on an unlisted atom, a `legal_reasons/0` accessor, and a `defexception` with a `message/1` catch-all.
+
+```elixir
+@type reason ::
+        :authentication_failed
+      | :rate_limited
+      | :invalid_request
+      | :context_length_exceeded
+      | :provider_unavailable
+      | :timeout
+      | :network_error
+      | :malformed_response
+      | :unsupported_feature
+      | :batch_too_large
+      | :unknown
+```
+
+Eleven atoms. Against `ImageAdapterError`'s twelve: `−:content_filter`, `−:unsupported_operation` (no operations enum here), `+:batch_too_large`.
+
+`ALLM.Error.EngineError` gains `:no_embed_adapter` and `ALLM.Error.ValidationError` gains `:invalid_embedding_request`.
+
+### 36.3 `ALLM.EmbeddingAdapter` behaviour
+
+```elixir
+defmodule ALLM.EmbeddingAdapter do
+  @callback embed(ALLM.EmbeddingRequest.t(), keyword()) ::
+              {:ok, ALLM.EmbeddingResponse.t()}
+              | {:error, ALLM.Error.EmbeddingAdapterError.t()}
+
+  @callback max_batch_size() :: pos_integer()
+
+  @callback prepare_request(ALLM.EmbeddingRequest.t(), keyword()) ::
+              {:ok, Req.Request.t()} | {:error, ALLM.Error.EmbeddingAdapterError.t()}
+
+  @optional_callbacks prepare_request: 2
+end
+```
+
+- `embed/2` is `ALLM.embed/3`'s dispatch target, and is synchronous — it returns only after the HTTP response is read in full.
+- `max_batch_size/0` is read by the batching layer **and** by callers doing their own chunking. It is per-module and constant, not per-model; per-model limits are the adapter's internal concern.
+- `prepare_request/2` is the low-level escape hatch (same role as §7.1), returning an unfired `Req.Request` configured exactly as `embed/2` would fire it.
+
+There is no `EmbeddingStreamAdapter` — streaming is deliberately out of scope.
+
+**Contract invariants.** 1–6 are asserted by the conformance suite (§36.8); 7 is documentary in v0.5 — the conformance case that would bind it (assert `Jason.encode!/1` of an error contains no substring of the `opts[:api_key]` handed in) is filed as a ticket, not shipped.
+
+1. `embed/2` never raises for HTTP-shaped failures. Network failures, 4xx, and 5xx all convert to `{:error, %EmbeddingAdapterError{}}`. The one sanctioned exception is `ALLM.Keys.fetch!/2`, which raises `%EngineError{reason: :missing_key}` by documented design (§6.4) and is not rescued.
+2. `embed/2` honors `opts[:request_timeout]`, producing `reason: :timeout`.
+3. `length(input) > max_batch_size()` returns `reason: :batch_too_large` with `metadata: %{count:, max:}` **before key resolution** — not merely before HTTP I/O, so the gate is exercisable in a keyless environment.
+4. `input: []` returns `reason: :invalid_request`, likewise before key resolution.
+5. `opts[:request_id]` is preserved onto `response.request_id`; `request.metadata` round-trips onto `response.metadata` unchanged.
+6. On success, exactly `length(request.input)` embeddings come back with `:index` values `0..length-1` and a uniform, non-zero vector width.
+7. **Error-struct hygiene.** `%EmbeddingAdapterError{}` derives `Jason.Encoder` and is commonly logged and persisted, so no raw response body, no request header, and no `Authorization` / `x-api-key` / `x-goog-api-key` value ever reaches `:message`, `:cause`, or `:metadata`. Provider messages that may echo the offending credential (OpenAI's 401 text is the known case) are passed through a key-shaped-token redactor first; a decode failure's captured payload is blanked rather than attached; and `:malformed_response` metadata carries the body's sorted top-level key list, not a body excerpt. All three bundled adapters carry this as an `## Error-struct hygiene` moduledoc section — it is stated here because §36.3 is the contract a third-party adapter author implements against, and the obligation is invisible from the callback signatures alone.
+
+There is no cleanup invariant: there is no `Stream.resource/3` and no Finch reference, because `Req.request/1` owns its own connection lifecycle. Stated so the absence reads as intent.
+
+### 36.4 Engine integration
+
+`ALLM.Engine.t()` gains one field:
+
+```elixir
+embed_adapter: module() | nil
+```
+
+It is a **peer** to `:adapter` and `:image_adapter`, never a fallback for either. A single engine may combine three providers, since the adapters are independent:
+
+```elixir
+engine =
+  ALLM.Engine.new(
+    adapter: ALLM.Providers.Anthropic,                # chat
+    image_adapter: ALLM.Providers.OpenAI.Images,      # images
+    embed_adapter: ALLM.Providers.Voyage.Embeddings,  # embeddings
+    model: "claude-sonnet-4-6"
+  )
+```
+
+Key resolution (§6.4) uses each adapter's own provider key namespace, so mixing providers requires each provider's key to be resolvable. Engines remain free of key material and safe to serialize.
+
+### 36.5 Public API
+
+```elixir
+defmodule ALLM do
+  @spec embedding_request(String.t() | [String.t()], keyword()) :: ALLM.EmbeddingRequest.t()
+
+  @spec embed(
+          ALLM.Engine.t(),
+          String.t() | [String.t()] | ALLM.EmbeddingRequest.t(),
+          keyword()
+        ) ::
+          {:ok, ALLM.EmbeddingResponse.t()}
+          | {:error,
+             ALLM.Error.EngineError.t()
+             | ALLM.Error.ValidationError.t()
+             | ALLM.Error.EmbeddingAdapterError.t()}
+end
+```
+
+`embed/3` accepts a bare string (sugar for a one-element batch), a list of strings, or a fully constructed `%ALLM.EmbeddingRequest{}` (dispatched verbatim; opts are not merged onto it). For the first two shapes, opts named after `EmbeddingRequest` fields lift onto the built request and everything else is treated as a call-control opt.
+
+Example:
+
+```elixir
+engine =
+  ALLM.Engine.new(
+    embed_adapter: ALLM.Providers.OpenAI.Embeddings,
+    model: "text-embedding-3-small"
+  )
+
+{:ok, response} = ALLM.embed(engine, chunks, task_type: :search_document)
+
+vectors = ALLM.EmbeddingResponse.vectors(response)   # [[float()]], input order
+width   = ALLM.EmbeddingResponse.dimensions(response) # size the vector(N) column
+```
+
+Dispatch order is fixed, and the ordering is load-bearing:
+
+1. adapter-presence gate (`:no_embed_adapter`) — first, so a misconfigured engine never surfaces as a request problem;
+2. `ALLM.Validate.embedding_request/1` (`:invalid_embedding_request`);
+3. `ALLM.Capability.preflight_embedding/2` (`:unsupported_capability`) — a no-op without a model catalog, per §6.3;
+4. model stamping, adapter-opt merge, then batching and dispatch.
+
+There is deliberately **no Layer D**. Embeddings carry no conversation state, so `ALLM.Session` is untouched.
+
+### 36.6 Batching and normalization
+
+#### Batching
+
+The façade chunks; **adapters never see more than `max_batch_size/0` inputs**. One implementation serves every adapter, adapters stay thin, and retry plus telemetry wrap each chunk — which is what a rate-limited provider wants. A caller who wants per-request control keeps it: `max_batch_size/0` is public, and `:batch_too_large` still fires for direct adapter calls.
+
+Chunks dispatch **sequentially**, not in parallel. Firing fifty chunks concurrently is the fastest route to a rate-limit storm, and the retry layer would serialize them anyway with backoff attached. Sequential dispatch is also the backpressure mechanism: at most one in-flight request per call.
+
+Merge semantics:
+
+| Field | Rule |
+|---|---|
+| `:embeddings` | concatenated with indices rebased by chunk offset, then sorted by `:index` |
+| `:usage` | every numeric field summed across chunks, skipping `nil`; the result is `nil` only if every chunk was `nil`. Map fields merge with the earlier chunk winning. No field is dropped, so usage does not depend on how many chunks the call became |
+| `:model`, `:id`, `:request_id` | first non-`nil` |
+| `:raw` | the first chunk's only |
+| `:metadata` | the first chunk's, plus `:chunk_count` |
+
+A single-chunk call skips the merge entirely, so `:raw` survives intact for the common case.
+
+**Budgets are per chunk, and there is no total deadline.** Retry attempts, `opts[:request_timeout]`, and backoff each apply per chunk, so a fifty-chunk ingest's worst case is fifty times each — 150 HTTP requests at the default three attempts, and an unbounded wall clock under sustained rate limiting. **`:timeout` is the exception and costs 3×:** each adapter runs its own `ALLM.Retry.run/3` with the default policy and `ALLM.embed/3` wraps a second, widened one, and `:timeout` is the only reason present in *both* `retry_on` lists, so the budgets multiply to 9 attempts per chunk (450 requests for the fifty-chunk case) against 3 for `:rate_limited` / `:provider_unavailable` / `:network_error`, which only the outer loop retries. A direct adapter `embed/2` call takes the inner loop only and makes 3. This is a pre-existing library-wide characteristic shared with `ALLM.generate_image/3` rather than an embeddings one — it is tracked as a ticket and must be corrected in the façade and both image adapters at once, not per-adapter. The `[:allm, :embed]` span reports one `duration` for all of it. No aggregate-attempt or deadline option is introduced in v0.5: the escape hatch already exists, since a caller who chunks against `max_batch_size/0` gets per-call control of both budgets for free — the same loop resumability needs. The obligation this creates is documentary, and `@doc ALLM.embed/3` carries the budget table.
+
+**A mid-batch failure fails the whole call.** No partial vectors are returned; the error is the failing chunk's own, with `metadata.completed_chunks` and `metadata.completed_inputs` merged in for diagnostics. An `{:ok, response, error}` triple or a partially-filled response would overload the return shape. Callers needing resumability chunk themselves.
+
+#### Normalization
+
+`ALLM.Embedding.normalize/1` is L2 normalization, idempotent to within `1.0e-9`, and returns a zero-magnitude vector unchanged rather than producing `NaN`.
+
+**`ALLM.Providers.Gemini.Embeddings` normalizes in-adapter whenever `:dimensions` is set to anything other than the single constant `3072` — unconditionally across models, by design.** The predicate is `@pre_normalized_dimensions 3072`, `gemini-embedding-001`'s native width, and it is a constant rather than a per-model lookup: the adapter does not know any model's native width, so a future Gemini embedding model with a different native width would be normalized *at* its own native width too. Google returns pre-normalized vectors at `gemini-embedding-001`'s native dimensionality but not at truncated ones (a recorded 768-wide response measures ≈ 0.585), while newer models auto-normalize truncated output too. The rule does not branch on model id: re-normalizing an already-unit vector is a no-op, so the unconditional form is safe on the models that self-normalize, correct on the ones that do not, and does not go stale when the next model ships — where a hard-coded allow-list would silently mis-handle it.
+
+The visible consequence, called out in the adapter's `@moduledoc` and in `guides/embeddings.md`: **a `dimensions: 768` response from ALLM differs numerically from the same request issued with `curl`.** That is the intended trade. A vector table holding a mix of normalized and unnormalized rows is unrecoverable after the fact — cosine distance tolerates unnormalized input, but inner-product operators silently return wrong rankings and nothing in the data says which rows are which.
+
+### 36.7 Provider adapters in v0.5
+
+v0.5 bundles three embedding adapters. `ALLM.Providers.OpenAI.Embeddings` and `ALLM.Providers.Gemini.Embeddings` qualify under §35.7 criterion (a) — each shares key resolution, header construction, and error-envelope handling with its provider's already-bundled chat adapter. `ALLM.Providers.Voyage.Embeddings` qualifies under criterion (b), the amendment this phase added: Anthropic ships no embeddings endpoint and names Voyage AI as its recommended partner.
+
+There is deliberately **no `ALLM.Providers.Anthropic.Embeddings`**. That name would assert a wire that does not exist, and the key resolves from `VOYAGE_API_KEY`, not `ANTHROPIC_API_KEY`.
+
+| | OpenAI | Gemini | Voyage |
+|---|---|---|---|
+| Endpoint | `POST /v1/embeddings` | `POST {base}/models/<model>:batchEmbedContents` | `POST /v1/embeddings` |
+| Base URL overridable | no | yes, via `adapter_opts[:endpoint]` | no |
+| Auth | `authorization: Bearer` | `x-goog-api-key` header | `authorization: Bearer` |
+| Key atom / env var | `:openai` / `OPENAI_API_KEY` | `:gemini` / `GEMINI_API_KEY` | `:voyage` / `VOYAGE_API_KEY` |
+| Model field | top-level `model` | **required on every sub-request**, `models/`-prefixed | top-level `model` |
+| Dimensions field | `dimensions` | `outputDimensionality` | `output_dimension` (snake_case) |
+| Task-type field | **none** — dropped | `taskType`, all five mapped | `input_type`, query/document only |
+| Truncate field | **none** — over-length is a 400 | `embedContentConfig.autoTruncate`, per sub-request | `truncation` |
+| Vector path | `data[].embedding` | `embeddings[].values` | `data[].embedding` |
+| Index | `data[].index` | **none** — positional | `data[].index` |
+| `max_batch_size/0` | 2048 | 100 | 1000 |
+| `ALLM.Usage` populated | `input_tokens` + `total_tokens` | **nothing** | `total_tokens` only |
+| Error envelope | `{"error": {message, type, code}}` | `{"error": {code, message, status}}` | `{"detail": "<string>"}` |
+
+Four provider behaviours are worth stating in the spec because each falsified an assumption during implementation and each is invisible from the type signatures:
+
+1. **Gemini returns no usage metadata at all.** A live `batchEmbedContents` 200 carries exactly `{"embeddings": [{"values": […]}, …]}`. `response.usage` is therefore an all-`nil` `%ALLM.Usage{}` on that provider; the decoder reads the field defensively and will populate automatically if Google starts reporting it.
+2. **Voyage reports `usage.total_tokens` only**, with no `prompt_tokens` sibling, so `input_tokens` is `nil` there.
+3. **OpenAI's per-request token cap is separate from its item cap.** 2048 array items, but also 300,000 tokens summed across a single request — reachable well below 2048 inputs. A 400 carrying the token-budget marker maps to `:context_length_exceeded`, and the marker rides on the envelope's `type`, not its `code`.
+4. **OpenAI rejects `dimensions` on `text-embedding-ada-002`** pre-flight, as `:unsupported_feature` with `metadata: %{feature: :dimensions, model: model}` — a request the adapter can see is malformed without spending a round-trip.
+
+Voyage's `:task_type` mapping is **lossy and documented as such**: `:search_document → "document"`, `:search_query → "query"`, and `:classification` / `:clustering` / `:similarity` omit the field entirely, which is Voyage's documented behaviour for symmetric tasks. A dropped task type is never an error on any provider.
+
+Third-party embedding providers (Cohere, Mistral, Jina, and local models per §32) remain out of core and ship as separate packages implementing `ALLM.EmbeddingAdapter`.
+
+### 36.8 Testing
+
+`ALLM.Providers.FakeEmbeddings` implements `ALLM.EmbeddingAdapter` with scripted responses — analogous to `ALLM.Providers.Fake` (§31) and `ALLM.Providers.FakeImages` (§35.8). It ships in `lib/`, not `test/support/`, because downstream applications need it for their own tests.
+
+```elixir
+engine =
+  ALLM.Engine.new(
+    embed_adapter: ALLM.Providers.FakeEmbeddings,
+    adapter_opts: [
+      embedding_script: [
+        {:ok, [%ALLM.Embedding{vector: [0.1, 0.2], index: 0}]},
+        {:error, %ALLM.Error.EmbeddingAdapterError{reason: :invalid_request}},
+        {:retry_until_call, 3}
+      ]
+    ]
+  )
+```
+
+Each call advances a cursor keyed on engine identity, so `async: true` is safe and two engines built with content-equal scripts each start at index 0. `{:retry_until_call, n}` returns a synthetic retryable error for the first `n - 1` calls against that entry, which is the vehicle for exercising retry integration. Exhausting the script returns `reason: :unknown` with `cause: :no_scripted_embedding`.
+
+`ALLM.Test.EmbeddingAdapterConformance` ships in the `allm_conformance` package with **ten cases**, covering `max_batch_size/0`'s shape, the two pre-flight gates, cardinality, index range, uniform width, `request_id` and `metadata` plumbing, and `usage` never being `nil`. Third-party adapter authors add the package as a test-only dep and `use` the suite.
+
+One limitation is binding on anyone reading a green conformance run: the suite drives a real adapter through a script short-circuit that returns the scripted embeddings verbatim, so **the adapter's own response decoder is never reached on the success path**. For a delegating adapter the cardinality, index, and uniformity cases assert that the harness's script round-trips, not that the decoder indexes correctly. Each bundled adapter therefore carries its own decoder tests against recorded wire fixtures. The cases bind fully for an adapter that implements `embed/2` itself, which is the third-party author the published suite exists to serve.
+
+### 36.9 Telemetry
+
+Three events, mirroring the image span (§35.9):
+
+- `[:allm, :embed, :start]` — measurements: `system_time`; metadata: `request_id`, `engine`, `model`, `input_count`.
+- `[:allm, :embed, :stop]` — measurements: `duration`, `embedding_count`, `chunk_count`; metadata: `request_id`, `model`, `usage`, `response`, `error` (`nil` on success).
+- `[:allm, :embed, :exception]` — measurements: `duration`; metadata: `kind`, `reason`, `stacktrace`. Emitted **instead of** `:stop` and then re-raised, via `:telemetry.span/3`. Two paths reach it: `ALLM.Keys.fetch!/2`'s `%EngineError{reason: :missing_key}` (§6.4) and the `ArgumentError` a non-conforming `:embed_adapter` triggers in `ALLM.EmbeddingBatch`. `ALLM.Telemetry` already registers the triple; the event is named here so `guides/embeddings.md` can tell a handler author that a `:start`/`:stop`-only attachment leaves an unterminated span on every missing key.
+
+`embedding_count` and `chunk_count` are present on **both** `:stop` paths, reporting `0` on error, so the measurement key set is stable for a metrics backend and a handler written against the `:image` span does not `KeyError` here. `chunk_count` is the observability payoff for §36.6 — the only signal that one `ALLM.embed/3` call became fifty HTTP requests.
+
+**Operator note.** The `:stop` metadata carries `response:`, which means it carries the full vectors. Embedding vectors are partially invertible to their source text, so a handler that serializes the whole metadata map to an external backend exports a lossy encoding of the corpus to that vendor. This is established precedent rather than new exposure — the `:image` span has carried `response:` with image bytes since v0.3 — and it requires explicit operator opt-in, so it is a documentation obligation and `guides/embeddings.md` carries it. The embedded *text* is never emitted: `:start` and the retry-path metadata carry only `input_count`, a bare count.
+
+### 36.10 Out of scope for v0.5
+
+- **streaming** — embeddings are request/response; there is no `stream_embed/3` and no relaxation budget for a stream-equivalence property, because no streaming counterpart exists
+- **multimodal / image embeddings** — different endpoint, different input union; a separate capability
+- **`encoding_format: "base64"`** — not provider-neutral (Gemini's batch endpoint has no base64 form) and it changes no Layer A value; revisit only if profiling shows JSON float parsing dominating bulk ingest
+- **quantized output (`int8`, `binary`)** — needs a `vector` vs `halfvec` vs `bit` decision that belongs to the caller's schema
+- **reranking** (`/rerank` on Voyage and Cohere) — a different primitive returning scores, not vectors
+- **token counting / pre-truncation** — requires a tokenizer per provider; the provider-side `truncate` default covers the common case
+- **vector-store integration code** — ALLM returns `[[float()]]` and depends on no storage library; the `pgvector` recipe is documented in `guides/embeddings.md`, not shipped as code
+- **`ALLM.Session` integration** — embeddings carry no conversation state
+- **parallel chunk dispatch** — sequential is the safe default under provider rate limits (§36.6)
+- **multi-vector / late-interaction models** — the provider matrix does not support it

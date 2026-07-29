@@ -24,6 +24,7 @@ defmodule GuidesTest do
     image_generation.md
     errors_and_retries.md
     multi_tenant_keys.md
+    embeddings.md
   )
 
   setup_all do

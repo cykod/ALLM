@@ -1,5 +1,84 @@
 ## [Unreleased]
 
+Added — text embeddings:
+- `ALLM.embed/3` — turn a string, a list of strings, or a
+  `%ALLM.EmbeddingRequest{}` into vectors via the engine's new
+  `:embed_adapter` slot. Returns
+  `{:ok, %ALLM.EmbeddingResponse{}}`; `EmbeddingResponse.vectors/1` hands
+  back `[[float()]]` in input order, ready for a vector column
+- `ALLM.embedding_request/2` — builds an `%ALLM.EmbeddingRequest{}` from a
+  string or list plus `:model` / `:dimensions` / `:task_type` /
+  `:truncate` / `:options` / `:metadata`; every other opt is left for
+  `embed/3` to treat as call control
+- New serializable data types `%ALLM.Embedding{}` (with `normalize/1` and
+  `magnitude/1`), `%ALLM.EmbeddingRequest{}`, and
+  `%ALLM.EmbeddingResponse{}` (with `vectors/1` and `dimensions/1`), all
+  round-tripping through both `:erlang.term_to_binary/1` and JSON
+- New `ALLM.EmbeddingAdapter` behaviour — `embed/2`, `max_batch_size/0`,
+  and the optional `prepare_request/2` escape hatch — plus a ten-case
+  `ALLM.Test.EmbeddingAdapterConformance` suite in the `allm_conformance`
+  package for third-party adapter authors
+- New `%ALLM.Error.EmbeddingAdapterError{}` with an eleven-member reason
+  enum and a `legal_reasons/0` accessor
+- `%ALLM.Engine{}` gains `:embed_adapter`, a peer to `:adapter` and
+  `:image_adapter` that never falls back to either; an engine without one
+  returns `{:error, %ALLM.Error.EngineError{reason: :no_embed_adapter}}`
+  ahead of every other gate
+- `ALLM.Error.EngineError` gains `:no_embed_adapter`;
+  `ALLM.Error.ValidationError` gains `:invalid_embedding_request`;
+  `ALLM.Validate.embedding_request/1` and
+  `ALLM.Capability.preflight_embedding/2` are new
+- `ALLM.Providers.FakeEmbeddings` — the deterministic scripted embedding
+  adapter, shipped in `lib/` so downstream apps can use it in their own
+  tests; `{:retry_until_call, n}` script entries exercise retry paths
+- `ALLM.Providers.OpenAI.Embeddings` (`/v1/embeddings`, 2048 inputs per
+  request), `ALLM.Providers.Gemini.Embeddings` (`batchEmbedContents`, 100
+  per request), and `ALLM.Providers.Voyage.Embeddings` (`/v1/embeddings`,
+  1000 per request). Voyage is the Anthropic track — Anthropic ships no
+  embeddings endpoint and names Voyage as its recommended partner, so the
+  key resolves from `VOYAGE_API_KEY`; there is deliberately no
+  `ALLM.Providers.Anthropic.Embeddings`
+- Batching is transparent: input lists longer than the adapter's
+  `max_batch_size/0` are split, dispatched **sequentially**, and merged
+  into one response with indices rebased across chunk boundaries.
+  `response.metadata.chunk_count` reports how many requests the call
+  became. Retry and timeout budgets are **per chunk** with no aggregate
+  deadline — `guides/embeddings.md` carries the multiplication table,
+  including the `:timeout` case, which costs 9 HTTP attempts per chunk
+  rather than 3 because the adapter's own retry loop and the façade's
+  widened one both retry it. A failing chunk fails the whole call, with
+  `completed_chunks` / `completed_inputs` on the error metadata
+- New `[:allm, :embed, :start | :stop | :exception]` telemetry span;
+  `:stop` measurements carry `duration`, `embedding_count`, and
+  `chunk_count` on both the success and error paths, and `:exception`
+  fires instead of `:stop` when the call raises — which a missing API key
+  does, by design
+- New `guides/embeddings.md` — provider matrix, task-type guidance,
+  batching and the resumable-chunking loop, normalization, a `pgvector`
+  worked example, and a note that `:stop` telemetry metadata carries the
+  full vectors and should not be serialized wholesale
+- New example scripts `16_embed_single.exs`,
+  `17_embed_batch_chunked.exs`, and `18_embed_query_vs_document.exs`,
+  running on all three provider arms. Live-validated against OpenAI,
+  Gemini, and Voyage
+
+Known behaviour worth flagging:
+- Google's batch embedding endpoint returns no usage metadata, so
+  `response.usage` is an all-`nil` `%ALLM.Usage{}` on Gemini. Voyage
+  reports `total_tokens` only, leaving `input_tokens` `nil`. OpenAI
+  reports both
+- The Gemini adapter L2-normalizes any response whose `:dimensions` is
+  set to anything other than `3072` (`gemini-embedding-001`'s native
+  width), because Google does not normalize truncated output. The
+  predicate is that single constant, applied unconditionally across
+  models — not a per-model native-width lookup. A `dimensions: 768` response therefore differs numerically from
+  the same request issued with `curl` — deliberate, so a vector table
+  never ends up holding a mix of normalized and unnormalized rows
+- `:task_type` is provider-neutral and lossy by design: Gemini maps all
+  five members, Voyage supports query/document only, and OpenAI drops the
+  field entirely (logged at `:debug`). A dropped task type is never an
+  error
+
 Changed:
 - `ALLM.Engine.new/1` now raises `ArgumentError` on a non-module
   `:adapter`/`:tool_executor`/`:tool_result_encoder`/`:image_adapter`

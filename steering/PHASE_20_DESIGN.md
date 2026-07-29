@@ -1,5 +1,22 @@
 # Phase 20: Embeddings — Design Document
 
+> # ⚠ SUPERSEDED — do not implement from this document
+>
+> **Superseded by `steering/2026-07-28_EMBEDDINGS_DESIGN.md`**, which shipped Phase 20 in full (20.1–20.7, commits `ac5d845..`) and is the authoritative record of what was built.
+>
+> This document was never implemented. It is retained because the successor adopts most of its decisions verbatim — the `:embed_adapter` engine field, the `:no_embed_adapter` error atom, the `[:allm, :embed, :*]` span and its `embedding_count` measurement, the `String.t() | [String.t()] | %EmbeddingRequest{}` accept set, `[float()]` vectors over binaries, the sort-by-`index` order invariant, `:embed_adapter` as a peer to `:image_adapter` rather than a fallback, and the five-step façade error-flow ordering — and its "Adopted unchanged" section cites this file as the origin.
+>
+> **What the successor reverses, and where to read why:**
+>
+> - Scope: this document shipped OpenAI only and deferred Gemini / excluded Voyage. The successor ships all three, with `ALLM.Providers.Voyage.Embeddings` as the Anthropic track.
+> - `%ALLM.EmbeddingUsage{}` does **not exist**. The successor reuses `ALLM.Usage`; the three defects in this document's Decision #4 (a field-name vocabulary split against the committed `ALLM.Usage`, a `Decimal` dependency absent from `mix.exs`, and a rationale its own moduledoc contradicts) are enumerated in the successor's divergence table.
+> - `ALLM.EmbeddingRequest.input` is `[String.t()]` with no `@enforce_keys`, not a `String.t() | [String.t()]` union.
+> - `ALLM.Embedding.index` is always an integer, never `nil`.
+> - `supported_models/0` was dropped in favour of `max_batch_size/0`, which is load-bearing for batch chunking — a capability this document did not have.
+> - The example scripts are numbered 16–18, not 14; 14 and 15 were consumed by the per-tool-manual phase.
+>
+> Every divergence is enumerated in the successor's **Relationship to `steering/PHASE_20_DESIGN.md`** section. Read that table before citing anything below.
+
 > **Goal:** Add a provider-neutral embeddings primitive (`ALLM.embed/3`) that mirrors the image pipeline's Layer A/B/C split, ships against `ALLM.Providers.FakeEmbeddings` as the test vehicle, and lands `ALLM.Providers.OpenAI.Embeddings` as the first real adapter.
 > **Outcome:** A user constructs an engine with `embed_adapter:` set, calls `ALLM.embed(engine, "two roads diverged in a yellow wood")`, and receives `{:ok, %ALLM.EmbeddingResponse{embeddings: [%ALLM.Embedding{vector: [0.0123, …]}], usage: %ALLM.EmbeddingUsage{prompt_tokens: 9, total_tokens: 9, cost: …}}}`. Engines without an `embed_adapter:` return `{:error, %ALLM.Error.EngineError{reason: :no_embed_adapter}}`. Existing v0.3 callers (chat, image) are unchanged.
 > **Spec sections:** §36 (new — embeddings; lifted out of §32.5 / §33's "callers drop down to a provider SDK directly" non-goal). Cross-references §6.3 (`llm_db` capability pre-flight), §6.4 (`ALLM.Keys`), §29 (telemetry as the extension point).

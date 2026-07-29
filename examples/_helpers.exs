@@ -5,7 +5,7 @@ defmodule ExamplesHelpers do
   adapter + default model + key env var name from the `@providers` table, and
   returns a configured `%ALLM.Engine{}` for use in any script.
 
-  Two constructors are exposed:
+  Three constructors are exposed:
 
     * `engine/1` — chat-adapter engine; reads `:adapter` / `:default_model`
       / `:key_env` from the provider row. Pass `vision: true` to route to
@@ -15,6 +15,24 @@ defmodule ExamplesHelpers do
     * `image_engine/1` — image-adapter engine (Phase 15.6); reads
       `:image_adapter` / `:image_default_model`. Raises `ArgumentError` for
       providers without an image adapter (e.g. Anthropic).
+    * `embedding_engine/1` — embed-adapter engine (Phase 20.7); reads
+      `:embed_adapter` / `:embedding_default_model` / `:embedding_key_env`.
+      Raises `ArgumentError` for providers without an embedding adapter.
+
+  ## Why the Anthropic row's embedding adapter is `Voyage`
+
+  Anthropic ships no embeddings endpoint and never has; it names Voyage AI as
+  its recommended embeddings partner. So the `"anthropic"` row points
+  `:embed_adapter` at `ALLM.Providers.Voyage.Embeddings` and overrides
+  `:embedding_key_env` to `"VOYAGE_API_KEY"` — the embedding scripts on the
+  Anthropic arm authenticate against Voyage, NOT against Anthropic. That makes
+  `VOYAGE_API_KEY` a hard requirement for `ALLM_PROVIDER=anthropic`, because
+  `ensure_key_present!/1` halts on a missing key. Naming a Voyage client after
+  Anthropic would assert a wire that does not exist, which is why there is no
+  `ALLM.Providers.Anthropic.Embeddings` module to point at instead.
+
+  `:embedding_key_env` defaults to the row's chat `:key_env` when absent, so
+  OpenAI and Gemini need no extra key.
 
   Auto-loads a project-root `.env` via `:env_loader` (dev-only dep) so reviewers
   who keep both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` in `.env` don't have to
@@ -33,7 +51,9 @@ defmodule ExamplesHelpers do
       vision_default_model: "gpt-4o-mini",
       key_env: "OPENAI_API_KEY",
       image_adapter: ALLM.Providers.OpenAI.Images,
-      image_default_model: "dall-e-2"
+      image_default_model: "dall-e-2",
+      embed_adapter: ALLM.Providers.OpenAI.Embeddings,
+      embedding_default_model: "text-embedding-3-small"
     },
     "anthropic" => %{
       adapter: ALLM.Providers.Anthropic,
@@ -41,7 +61,12 @@ defmodule ExamplesHelpers do
       vision_default_model: "claude-haiku-4-5-20251001",
       key_env: "ANTHROPIC_API_KEY",
       image_adapter: nil,
-      image_default_model: nil
+      image_default_model: nil,
+      # Anthropic has no embeddings endpoint — Voyage is its recommended
+      # partner, and the key comes from VOYAGE_API_KEY. See the moduledoc.
+      embed_adapter: ALLM.Providers.Voyage.Embeddings,
+      embedding_default_model: "voyage-3.5-lite",
+      embedding_key_env: "VOYAGE_API_KEY"
     },
     "gemini" => %{
       adapter: ALLM.Providers.Gemini,
@@ -50,7 +75,9 @@ defmodule ExamplesHelpers do
       key_env: "GEMINI_API_KEY",
       image_adapter: ALLM.Providers.Gemini.Images,
       image_default_model: "gemini-3.1-flash-image-preview",
-      default_temperature: 1.0
+      default_temperature: 1.0,
+      embed_adapter: ALLM.Providers.Gemini.Embeddings,
+      embedding_default_model: "gemini-embedding-001"
     }
   }
 
@@ -143,6 +170,51 @@ defmodule ExamplesHelpers do
 
     base = [
       image_adapter: image_adapter,
+      model: model
+    ]
+
+    ALLM.Engine.new(Keyword.merge(base, extra_opts))
+  end
+
+  @doc """
+  Build a `%ALLM.Engine{}` for the active provider's embedding adapter (Phase
+  20.7).
+
+  Reads `:embed_adapter` / `:embedding_default_model` from the provider row,
+  and `:embedding_key_env` — which falls back to the row's chat `:key_env`
+  when absent. The Anthropic row sets it to `"VOYAGE_API_KEY"` because
+  Anthropic ships no embeddings endpoint and Voyage is its recommended
+  partner; see the moduledoc.
+
+  Raises `ArgumentError` when the active provider row has no embedding
+  adapter. Every bundled provider arm has one, so the embedding scripts carry
+  no `# Provider:` marker and `run_all.exs` runs them everywhere.
+
+  `extra_opts` is merged on top of the helper defaults (`embed_adapter:` and
+  `model:` are baked in from the provider row; `ALLM_EMBEDDING_MODEL`
+  overrides the default model when set).
+  """
+  def embedding_engine(extra_opts \\ []) do
+    provider = active_provider()
+    row = lookup_provider_row()
+
+    embed_adapter = Map.get(row, :embed_adapter)
+    embedding_default_model = Map.get(row, :embedding_default_model)
+    key_env = Map.get(row, :embedding_key_env) || Map.fetch!(row, :key_env)
+
+    if is_nil(embed_adapter) or is_nil(embedding_default_model) do
+      raise ArgumentError,
+            "#{provider} does not have an embed_adapter; " <>
+              "this script cannot run on that provider arm"
+    end
+
+    ensure_adapter_loaded!(embed_adapter)
+    ensure_key_present!(key_env)
+
+    model = System.get_env("ALLM_EMBEDDING_MODEL", embedding_default_model)
+
+    base = [
+      embed_adapter: embed_adapter,
       model: model
     ]
 
