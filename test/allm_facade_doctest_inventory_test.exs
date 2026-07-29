@@ -22,6 +22,7 @@ defmodule ALLMFacadeDoctestInventoryTest do
     tool: 1,
     json_schema: 3,
     image_request: 2,
+    embedding_request: 2,
     request: 2,
     # Stateless execution
     generate: 3,
@@ -33,7 +34,9 @@ defmodule ALLMFacadeDoctestInventoryTest do
     # Image generation
     generate_image: 3,
     edit_image: 4,
-    image_variations: 3
+    image_variations: 3,
+    # Embeddings
+    embed: 3
   ]
 
   describe "every public ALLM function has a doctest" do

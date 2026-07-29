@@ -2,7 +2,7 @@ defmodule ALLM.Capability do
   @moduledoc """
   Layer-B optional model-catalog integration via the `LLMDB` Hex package.
 
-  Four helpers, all gated on `Code.ensure_loaded?(LLMDB)`:
+  Five helpers, all gated on `Code.ensure_loaded?(LLMDB)`:
 
     * `preflight/2` (and `/3`) — pre-flights tool / `response_format`
       capability against the catalog's `%ALLM.ModelRef{}` and surfaces a
@@ -12,6 +12,10 @@ defmodule ALLM.Capability do
       `ALLM.ImageRequest`: rejects requests against models with
       `images_enabled: false` or whose `supported_image_operations` does
       not include the requested op.
+    * `preflight_embedding/2` — sister of `preflight/3` for
+      `ALLM.EmbeddingRequest`: rejects requests against models with
+      `embeddings_enabled: false` or whose `:dimensions` exceeds the
+      catalog's `dimensions_max`.
     * `populate_costs/2` — fills `Usage.{input_cost, output_cost,
       total_cost}` from the catalog's per-million-token pricing after the
       adapter has reported token counts.
@@ -77,6 +81,7 @@ defmodule ALLM.Capability do
   non-nil cost field; it only fills `nil`.
   """
 
+  alias ALLM.EmbeddingRequest
   alias ALLM.Error.ValidationError
   alias ALLM.ImagePart
   alias ALLM.ImageRequest
@@ -272,6 +277,70 @@ defmodule ALLM.Capability do
     end
   end
 
+  @typedoc "Two-shape result of `preflight_embedding/2` (no rewrite branch)."
+  @type embedding_preflight_result :: :ok | {:error, ValidationError.t()}
+
+  @doc """
+  Pre-flight an `ALLM.EmbeddingRequest` against the catalog's view of a
+  model — sister of `preflight_image/2`, same narrow contract.
+
+  Returns `:ok | {:error, %ValidationError{reason: :unsupported_capability}}`
+  only — there is no rewrite branch. 2-arity by design, symmetric with
+  `preflight_image/2` and `populate_costs/2`, NOT with `preflight/3`.
+
+  ## Rejection rules (both accumulate when both fire)
+
+    * `{[:embeddings_enabled], :embeddings_disabled}` — fires when
+      `model_ref.capabilities.embeddings_enabled == false`.
+    * `{[:dimensions], :exceeds_max}` — fires when `request.dimensions` is
+      set and exceeds `model_ref.capabilities.dimensions_max`.
+
+  A missing key is never a rejection, per the module-wide
+  graceful-degradation rule, and both rules tolerate JSON-rehydrated
+  `%ModelRef{}` values with string-keyed capabilities.
+
+  The per-model dimension cap lives here rather than in
+  `ALLM.Validate.embedding_request/1` because it is model-specific catalog
+  data the validator does not have. Without a catalog both rules are inert
+  and an over-large `:dimensions` reaches the provider, earning a 400 that
+  maps to `:invalid_request` — the intended degradation.
+
+  Returns `:ok` early when the catalog is absent
+  (`catalog_loaded?/0 == false`) or when `model_ref_or_string` is a bare
+  string / tuple / `nil` (no capability info).
+
+  ## Examples
+
+      iex> req = ALLM.EmbeddingRequest.new(input: ["a kestrel"])
+      iex> ALLM.Capability.preflight_embedding("openai:text-embedding-3-small", req)
+      :ok
+
+      iex> ref = ALLM.ModelRef.new(
+      ...> provider: :local, id: "no-embeddings",
+      ...> capabilities: %{embeddings_enabled: false}
+      ...>)
+      iex> req = ALLM.EmbeddingRequest.new(input: ["a kestrel"])
+      iex> {:error, err} = ALLM.Capability.preflight_embedding(ref, req)
+      iex> err.reason
+      :unsupported_capability
+      iex> err.errors
+      [{[:embeddings_enabled], :embeddings_disabled}]
+  """
+  @spec preflight_embedding(model_ref_or_string(), EmbeddingRequest.t()) ::
+          embedding_preflight_result()
+  def preflight_embedding(model_ref_or_string, %EmbeddingRequest{} = request) do
+    cond do
+      not catalog_loaded?() ->
+        :ok
+
+      not is_struct(model_ref_or_string, ModelRef) ->
+        :ok
+
+      true ->
+        check_embedding_capabilities(model_ref_or_string, request)
+    end
+  end
+
   @doc """
   Populate `Usage.{input_cost, output_cost, total_cost}` from
   `model_ref.pricing` (per-million-token rates).
@@ -464,6 +533,52 @@ defmodule ALLM.Capability do
       _ ->
         # No supported_image_operations key — don't reject (no info).
         acc
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Private — embedding preflight
+  # ---------------------------------------------------------------------------
+
+  defp check_embedding_capabilities(%ModelRef{} = ref, %EmbeddingRequest{} = request) do
+    errors =
+      []
+      |> check_embeddings_enabled(ref)
+      |> check_dimensions_max(ref, request)
+      |> Enum.reverse()
+
+    case errors do
+      [] ->
+        :ok
+
+      list ->
+        {:error,
+         ValidationError.new(:unsupported_capability, list,
+           message: "model does not support requested embedding capabilities"
+         )}
+    end
+  end
+
+  defp check_embeddings_enabled(acc, %ModelRef{capabilities: caps}) do
+    # Tolerate JSON-rehydrated %ModelRef{} with string-keyed capabilities
+    # (see @moduledoc "JSON-rehydrated %ModelRef{} tolerance"). A missing
+    # key is "no info", never a rejection.
+    case caps do
+      %{embeddings_enabled: false} -> [{[:embeddings_enabled], :embeddings_disabled} | acc]
+      %{"embeddings_enabled" => false} -> [{[:embeddings_enabled], :embeddings_disabled} | acc]
+      _ -> acc
+    end
+  end
+
+  # A nil `:dimensions` requests the model's native dimensionality, which no
+  # cap can exclude — short-circuit before reading the capability map.
+  defp check_dimensions_max(acc, _ref, %EmbeddingRequest{dimensions: nil}), do: acc
+
+  defp check_dimensions_max(acc, %ModelRef{capabilities: caps}, %EmbeddingRequest{dimensions: d}) do
+    case caps do
+      %{dimensions_max: m} when is_integer(m) and d > m -> [{[:dimensions], :exceeds_max} | acc]
+      %{"dimensions_max" => m} when is_integer(m) and d > m -> [{[:dimensions], :exceeds_max} | acc]
+      _ -> acc
     end
   end
 

@@ -66,6 +66,15 @@ defmodule ALLM.EmbeddingAdapter do
        documented exception is `ALLM.Keys.fetch!/2`, which raises
        `%ALLM.Error.EngineError{reason: :missing_key}` by design; adapters do
        not rescue it.
+
+       The return shape is enforced, not merely documented: `ALLM.embed/3`
+       raises `ArgumentError` naming the adapter and this invariant when
+       `embed/2` returns anything other than those two tuples. The façade does
+       not launder non-conforming shapes into its own error union. Note that
+       the conformance suite's error cases are pre-flight argument gates, so a
+       transport, auth, or rate-limit failure that returns a raw error struct
+       will pass conformance and raise in production — convert every failure
+       shape.
     3. `embed/2` MUST honor `opts[:request_timeout]` if provided. Exceeding the
        timeout produces
        `{:error, %ALLM.Error.EmbeddingAdapterError{reason: :timeout}}`.

@@ -21,7 +21,13 @@ defmodule ALLM.Telemetry do
   | `[:allm, :chat, :start \\| :stop \\| :exception]` | multi-turn chat loop | as above | start metadata + `chat_result` |
   | `[:allm, :tool, :start \\| :stop \\| :exception]` | per-tool execution | as above | start metadata + `tool_call_id`, `tool_name`, `result` |
   | `[:allm, :image, :start \\| :stop \\| :exception]` | image generation | `duration`, plus `image_count` on `:stop` | `request_id`, `engine`, `model`, `operation`, `n`, plus `usage`, `response`, `error` on `:stop` |
+  | `[:allm, :embed, :start \\| :stop \\| :exception]` | text embedding | `duration`, plus `chunk_count` on `:stop` and `embedding_count` on a successful `:stop` | `request_id`, `engine`, `model`, `input_count`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :adapter, :retry]` | per-attempt retry (non-streaming) | `system_time` | `attempt`, `delay_ms`, `reason`, `request_id` |
+
+  `[:allm, :embed, :stop]` omits `embedding_count` entirely on the error
+  path — there is no count to report — while still carrying `chunk_count`.
+  `chunk_count` is the only signal that one `ALLM.embed/3` call became N
+  HTTP requests; see `ALLM.embed/3` for the batching contract.
 
   ## Common metadata
 
@@ -65,9 +71,9 @@ defmodule ALLM.Telemetry do
         }
 
   @typedoc "Span suffix; the prefix [:allm] is fixed."
-  @type span_name :: :generate | :stream | :step | :chat | :tool | :image
+  @type span_name :: :generate | :stream | :step | :chat | :tool | :image | :embed
 
-  @valid_span_names [:generate, :stream, :step, :chat, :tool, :image]
+  @valid_span_names [:generate, :stream, :step, :chat, :tool, :image, :embed]
 
   @doc """
   Return the fixed event-name prefix for every ALLM telemetry event.
@@ -115,8 +121,9 @@ defmodule ALLM.Telemetry do
       alongside the common keys.
     * `{result, extra_measurements, stop_metadata_extras}` — the
       3-tuple form, for spans that inject custom `:stop` measurements
-      beyond `:duration` and `:monotonic_time`. `:image` spans use
-      this form to carry `:image_count` as a measurement
+      beyond `:duration` and `:monotonic_time`. `:image` and `:embed`
+      spans use this form to carry `:image_count` /
+      `:embedding_count` + `:chunk_count` as measurements
       (numeric metrics → measurements; structured context →
       metadata).
 
@@ -125,7 +132,7 @@ defmodule ALLM.Telemetry do
 
   Raises `ArgumentError` for an unrecognised `name` (typo guard against
   `:chats` / `:steps`); valid names are
-  `:generate | :stream | :step | :chat | :tool | :image`.
+  `:generate | :stream | :step | :chat | :tool | :image | :embed`.
 
   ## Carve-out: `:stream :stop` `:response` is `nil`
 

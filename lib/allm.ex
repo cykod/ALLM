@@ -57,6 +57,7 @@ defmodule ALLM do
   | Multi-turn loop with auto tool execution | `chat/3` / `stream/3` | `{:ok, %ALLM.ChatResult{}}` |
   | Multi-turn with persistence between turns | `ALLM.Session` API | `{:ok, %ALLM.Session{}}` |
   | Generate or edit images | `generate_image/3`, `edit_image/4`, `image_variations/3` | `{:ok, %ALLM.ImageResponse{}}` |
+  | Turn text into vectors for a vector store | `embed/3` | `{:ok, %ALLM.EmbeddingResponse{}}` |
   | Fold `generate/3` result into `{:ok, text}` | `unwrap/1` | `{:ok, String.t()} \| {:error, term()}` |
 
   Stateless calls (`generate/3` / `chat/3` / etc.) are pure functions of
@@ -90,6 +91,8 @@ defmodule ALLM do
 
   alias ALLM.{
     ChatResult,
+    EmbeddingRequest,
+    EmbeddingResponse,
     Engine,
     Image,
     ImageRequest,
@@ -101,7 +104,13 @@ defmodule ALLM do
     Tool
   }
 
-  alias ALLM.Error.{AdapterError, EngineError, ImageAdapterError, ValidationError}
+  alias ALLM.Error.{
+    AdapterError,
+    EmbeddingAdapterError,
+    EngineError,
+    ImageAdapterError,
+    ValidationError
+  }
 
   @doc """
   Build a system-role `%ALLM.Message{}` from a text string.
@@ -925,6 +934,202 @@ defmodule ALLM do
     do_generate_image(engine, request, opts)
   end
 
+  # The opts `embedding_request/2` lifts onto the struct — an explicit
+  # ALLOW-list, never a deny-list, so a new façade opt can never leak into
+  # `EmbeddingRequest.new/1` (a bare `struct!/2` that raises `KeyError` on
+  # any unknown key). Consumer/producer symmetry: this list must equal the
+  # `%EmbeddingRequest{}` field set minus `:input`, or the missing field is
+  # silently unreachable from the string/list call shape. Pinned by a test.
+  #
+  # `drop_embedding_request_opts/1` at the bottom of this module is the
+  # outbound counterpart: it strips these same keys from the opts handed to
+  # the adapter, since they already live on the request struct.
+  @embedding_request_field_opts [
+    :model,
+    :dimensions,
+    :task_type,
+    :truncate,
+    :options,
+    :metadata
+  ]
+
+  @doc """
+  Build an `%ALLM.EmbeddingRequest{}` from a string or a list of strings.
+
+  A bare string is normalised to a one-element list, so `:input` on the
+  struct is always `[String.t()]` and no adapter or validator has to
+  handle a union.
+
+  ## Options
+
+  Only `ALLM.EmbeddingRequest` field names are read: `:model`,
+  `:dimensions`, `:task_type`, `:truncate`, `:options`, `:metadata`. Every
+  other key is ignored, which is what lets `embed/3` forward its own
+  call-control opts (`:request_id`, `:request_timeout`, `:retry`,
+  `:adapter_opts`, `:api_key`, `:telemetry_metadata`, `:stream`) through
+  this function without them landing on the struct.
+
+  No validation runs here — call `ALLM.Validate.embedding_request/1` if you
+  want the field rules checked before dispatch. `embed/3` calls it for you.
+
+  ## Examples
+
+      iex> req = ALLM.embedding_request("a kestrel", task_type: :search_document)
+      iex> req.input
+      ["a kestrel"]
+      iex> req.task_type
+      :search_document
+
+      iex> req = ALLM.embedding_request(["one chunk", "another"], dimensions: 512)
+      iex> length(req.input)
+      2
+  """
+  @spec embedding_request(String.t() | [String.t()], keyword()) :: EmbeddingRequest.t()
+  def embedding_request(input, opts \\ []) when is_list(opts) do
+    opts
+    |> Keyword.take(@embedding_request_field_opts)
+    |> Keyword.put(:input, List.wrap(input))
+    |> EmbeddingRequest.new()
+  end
+
+  @doc """
+  Turn text into vectors using the engine's `:embed_adapter`.
+
+  Layer-C façade. Three input shapes:
+
+    * Binary — sugar for a one-element batch. Opts named in
+      `embedding_request/2` (`:model`, `:dimensions`, `:task_type`,
+      `:truncate`, `:options`, `:metadata`) lift onto the built request;
+      everything else is a call-control opt.
+    * List of binaries — a batch, chunked transparently (see below). Same
+      opt-lifting rule.
+    * Pre-built `%ALLM.EmbeddingRequest{}` — dispatched verbatim; opts are
+      NOT merged onto it.
+
+  ## Unknown opts — forwarded to the adapter
+
+  Any opt that is neither a request field nor a call-control opt is passed
+  through to `c:ALLM.EmbeddingAdapter.embed/2` untouched, so provider-specific
+  knobs need no façade change.
+
+  On success the response's embeddings are in input order:
+  `Enum.at(ALLM.EmbeddingResponse.vectors(response), i)` is the vector for
+  `Enum.at(input, i)`, whatever order the provider returned items in and
+  however many HTTP requests the call became.
+
+  ## Adapter-presence gate
+
+  Returns `{:error, %ALLM.Error.EngineError{reason: :no_embed_adapter}}`
+  when `engine.embed_adapter == nil`. This is the first gate — it fires
+  ahead of validation and capability pre-flight, so a misconfigured engine
+  never surfaces as a request problem.
+
+  ## Validation policy
+
+  Unlike `generate_image/3`, this façade DOES call
+  `ALLM.Validate.embedding_request/1`, returning
+  `{:error, %ALLM.Error.ValidationError{reason: :invalid_embedding_request}}`
+  on failure. An empty-string input is a guaranteed provider rejection, and
+  in a chunked call it should fail before 49 successful round-trips are
+  spent on the other chunks.
+
+  ## Batching
+
+  Adapters declare a per-request cap (`c:ALLM.EmbeddingAdapter.max_batch_size/0`)
+  — 2048, 100, and 1000 across the bundled providers. Longer input lists are
+  split into that many items per request, dispatched **sequentially**, and
+  merged back into a single response. `response.metadata.chunk_count` records
+  how many requests the call became; the `[:allm, :embed, :stop]` telemetry
+  measurement of the same name reports it too. `:chunk_count` is **reserved**
+  on `response.metadata` — a request-supplied `metadata` key of that name is
+  overwritten.
+
+  Sequential dispatch is deliberate: firing 50 chunks concurrently is the
+  fastest route to a rate-limit storm, and it also bounds the call to one
+  in-flight request at a time.
+
+  Merging keeps the first chunk's `:raw` only and sums every numeric
+  `%ALLM.Usage{}` counter across chunks (token counts and costs alike),
+  merging `:tool_usage` / `:extra` as maps with the earlier chunk winning.
+  No usage field is dropped, so `usage` does not depend on how many chunks
+  the call became. A single-chunk call skips the merge entirely, so `:raw`
+  survives intact for the common case.
+
+  ## Retry and time budgets are PER CHUNK
+
+  There is no aggregate ceiling on a chunked call. For a 5,000-input batch
+  against a 100-item cap (50 chunks):
+
+  | Budget | Scope | Worst case |
+  |--------|-------|------------|
+  | Retry `:max_attempts` (default `3`) | per chunk | **150 HTTP requests** |
+  | `opts[:request_timeout]` | per chunk | 50 × the value |
+  | Retry backoff (base 500 ms, max 30 s, honours `Retry-After`) | per chunk | tens of minutes of wall clock under sustained rate limiting |
+  | `[:allm, :embed]` span `duration` | whole call | one number for the entire batch |
+
+  If you need a real bound, chunk the input yourself against the adapter's
+  `max_batch_size/0` and wrap each `embed/3` call — the same loop that gives
+  you resumability after a mid-batch failure.
+
+  ## Mid-batch failure
+
+  A failing chunk fails the whole call: no partial vectors are returned. The
+  error is that chunk's own, with `metadata.completed_chunks` and
+  `metadata.completed_inputs` added for diagnostics.
+
+  ## Non-conforming adapters raise
+
+  `c:ALLM.EmbeddingAdapter.embed/2` must return `{:ok, %ALLM.EmbeddingResponse{}}`
+  or `{:error, %ALLM.Error.EmbeddingAdapterError{}}` (invariant 2). Anything
+  else raises `ArgumentError` naming the offending adapter rather than being
+  laundered into this function's error union — the union above describes
+  conforming adapters only.
+
+  ## `request_id` precedence
+
+  `opts[:request_id]` wins over an auto-generated id. The id is forwarded to
+  the adapter and filled onto `response.request_id` IFF the adapter left it
+  `nil`; an adapter-populated id is preserved.
+
+  ## `:stream` opt is silently dropped
+
+  Embeddings are request/response — there is no `stream_embed/3`, by design.
+  Passing `stream: true` does not error; the opt is ignored.
+
+  ## Examples
+
+      iex> e = ALLM.Embedding.new(vector: [0.1, 0.2])
+      iex> engine = ALLM.Engine.new(
+      ...> embed_adapter: ALLM.Providers.FakeEmbeddings,
+      ...> adapter_opts: [embedding_script: [{:ok, [e]}]]
+      ...>)
+      iex> {:ok, resp} = ALLM.embed(engine, "a kestrel")
+      iex> ALLM.EmbeddingResponse.vectors(resp)
+      [[0.1, 0.2]]
+
+      iex> engine = ALLM.Engine.new()
+      iex> {:error, %ALLM.Error.EngineError{reason: :no_embed_adapter}} =
+      ...> ALLM.embed(engine, "a kestrel")
+      iex> :ok
+      :ok
+  """
+  @spec embed(Engine.t(), String.t() | [String.t()] | EmbeddingRequest.t(), keyword()) ::
+          {:ok, EmbeddingResponse.t()}
+          | {:error, EngineError.t() | ValidationError.t() | EmbeddingAdapterError.t()}
+  def embed(engine, input_or_request, opts \\ [])
+
+  def embed(%Engine{} = engine, %EmbeddingRequest{} = request, opts) when is_list(opts) do
+    do_embed(engine, request, opts)
+  end
+
+  def embed(%Engine{} = engine, input, opts) when is_binary(input) and is_list(opts) do
+    do_embed(engine, embedding_request(input, opts), opts)
+  end
+
+  def embed(%Engine{} = engine, input, opts) when is_list(input) and is_list(opts) do
+    do_embed(engine, embedding_request(input, opts), opts)
+  end
+
   # ---------------------------------------------------------------------------
   # Internals — image telemetry + preflight + retry wrap.
   # ---------------------------------------------------------------------------
@@ -1049,7 +1254,7 @@ defmodule ALLM do
       # `%ImageAdapterError{}`. We extend `retry_on` here at the call
       # site so `ALLM.Retry.error_matches?/2` recognises image atoms,
       # without modifying the chat-side default.
-      policy = augment_image_retry_policy(engine.retry)
+      policy = augment_retry_policy(engine.retry, @retryable_image_reasons)
 
       result =
         ALLM.Retry.run(policy, telemetry_metadata, fn ->
@@ -1069,24 +1274,26 @@ defmodule ALLM do
     end
   end
 
-  # Per-attempt closure for `Retry.run/3`. Engages the retry loop on the
-  # four documented retryable `ImageAdapterError` reasons (see
-  # `@retryable_image_reasons` at the top of this internals block);
-  # surfaces any other error verbatim with NO retry attempt.
-  defp augment_image_retry_policy(false), do: :no_retry
+  # Shared by the image and embedding call sites: materialise the engine's
+  # retry config, then append the capability's closed-enum reason atoms to
+  # the chat-side `retry_on` so `ALLM.Retry.error_matches?/2` recognises
+  # them. Idempotent — `Enum.uniq/1` keeps the list stable on repeat calls.
+  defp augment_retry_policy(false, _reasons), do: :no_retry
 
-  defp augment_image_retry_policy(retry_config) do
+  defp augment_retry_policy(retry_config, reasons) do
     case ALLM.Retry.materialize(retry_config) do
       :no_retry ->
         :no_retry
 
       %{retry_on: existing} = policy ->
-        # Append image atoms to the chat-side retry_on. Idempotent —
-        # `Enum.uniq/1` keeps the list stable on repeat calls.
-        %{policy | retry_on: Enum.uniq(existing ++ @retryable_image_reasons)}
+        %{policy | retry_on: Enum.uniq(existing ++ reasons)}
     end
   end
 
+  # Per-attempt closure for `Retry.run/3`. Engages the retry loop on the
+  # four documented retryable `ImageAdapterError` reasons (see
+  # `@retryable_image_reasons` at the top of this internals block);
+  # surfaces any other error verbatim with NO retry attempt.
   defp dispatch_image_attempt(adapter, request, dispatch_opts) do
     case adapter.generate(request, dispatch_opts) do
       {:ok, _} = ok ->
@@ -1126,5 +1333,158 @@ defmodule ALLM do
 
     measurements = %{image_count: 0}
     {metadata, measurements}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Internals — embedding telemetry + gates + batch dispatch.
+  # ---------------------------------------------------------------------------
+
+  # Embedding-side retryable reason atoms, widening the chat-side default
+  # `retry_on` (which is HTTP-status-coded) so `ALLM.Retry` recognises the
+  # closed-enum atoms `%EmbeddingAdapterError{}` carries. Same convention as
+  # the image side. `ALLM.EmbeddingBatch` reads the resulting policy rather
+  # than a second copy of this list, so there is exactly one source of truth
+  # for what retries.
+  @retryable_embedding_reasons [:rate_limited, :provider_unavailable, :timeout, :network_error]
+
+  # Outbound counterpart of `@embedding_request_field_opts`: request-field
+  # opts already live on the `%EmbeddingRequest{}` by the time we dispatch,
+  # so they are stripped from the opts the adapter sees. Everything else
+  # (`:request_timeout`, `:api_key`, `:retry`, unknown provider opts) is
+  # forwarded, matching the chat-side pass-through.
+  defp drop_embedding_request_opts(opts) when is_list(opts),
+    do: Keyword.drop(opts, @embedding_request_field_opts)
+
+  # Wrap the whole body in a `:embed` span so `:start` ALWAYS fires — even
+  # when the adapter is missing or validation rejects. Inside the span the
+  # gate order is:
+  #
+  #   (1) adapter-presence gate (`engine.embed_adapter != nil`) — FIRST
+  #   (2) `Validate.embedding_request/1`
+  #   (3) `Capability.preflight_embedding/2` (no-op when catalog absent)
+  #   (4) chunk + per-chunk-retry dispatch via `ALLM.EmbeddingBatch`
+  defp do_embed(%Engine{} = engine, %EmbeddingRequest{} = request, opts) do
+    request_id = Keyword.get(opts, :request_id) || ALLM.Telemetry.request_id()
+    resolved_model = Engine.resolve_model(engine, opts)
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: resolved_model,
+      input_count: input_count(request)
+    }
+
+    ALLM.Telemetry.span(:embed, start_metadata, fn ->
+      result = do_embed_body(engine, request, opts, request_id, resolved_model)
+      {extras, measurements} = embed_stop_extras(result)
+      {result, measurements, extras}
+    end)
+  end
+
+  # `:start` metadata is built before validation runs, so a non-list
+  # `:input` (which the validator rejects a moment later) must not raise
+  # here.
+  defp input_count(%EmbeddingRequest{input: input}) when is_list(input), do: length(input)
+  defp input_count(%EmbeddingRequest{}), do: 0
+
+  defp do_embed_body(
+         %Engine{embed_adapter: nil},
+         _request,
+         _opts,
+         _request_id,
+         _resolved_model
+       ) do
+    # Adapter-presence gate fires FIRST so a missing adapter plus an
+    # embeddings-disabled model surfaces `:no_embed_adapter`, not
+    # `:unsupported_capability`.
+    {:error, EngineError.new(:no_embed_adapter)}
+  end
+
+  defp do_embed_body(
+         %Engine{embed_adapter: adapter} = engine,
+         %EmbeddingRequest{} = request,
+         opts,
+         request_id,
+         resolved_model
+       ) do
+    with :ok <- ALLM.Validate.embedding_request(request),
+         :ok <- ALLM.Capability.preflight_embedding(resolved_model, request) do
+      # Stamp the engine-resolved model onto the request; adapters build both
+      # the URL and the wire body from `request.model`. Preserves an
+      # explicitly-set request model.
+      request = %{request | model: request.model || resolved_model}
+
+      telemetry_metadata = %{
+        request_id: request_id,
+        model: resolved_model,
+        input_count: input_count(request)
+      }
+
+      request
+      |> ALLM.EmbeddingBatch.run(
+        adapter,
+        build_embed_dispatch_opts(engine, opts, request_id),
+        telemetry_metadata
+      )
+      |> fill_embedding_request_id(request_id)
+    end
+  end
+
+  defp build_embed_dispatch_opts(%Engine{} = engine, opts, request_id) do
+    # Concat engine.adapter_opts with call-site adapter_opts. `Keyword.get/2`
+    # returns the FIRST occurrence on duplicate keys, so ENGINE WINS on
+    # collision — NOT `Keyword.merge/2`, which has the opposite precedence.
+    # Then inject the engine's stable `:id` as `adapter_opts[:cursor_key]` so
+    # `FakeEmbeddings` keys its multi-call cursor on engine identity;
+    # `put_cursor_key/2` is `Keyword.put_new/3` and a no-op for real adapters.
+    merged_adapter_opts =
+      (engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, []))
+      |> Engine.put_cursor_key(engine)
+
+    opts
+    |> Keyword.drop([:stream])
+    |> drop_embedding_request_opts()
+    |> Keyword.put(:request_id, request_id)
+    |> Keyword.put(:adapter_opts, merged_adapter_opts)
+    |> Keyword.put(:retry_policy, augment_retry_policy(engine.retry, @retryable_embedding_reasons))
+  end
+
+  defp fill_embedding_request_id({:ok, %EmbeddingResponse{request_id: nil} = response}, request_id),
+    do: {:ok, %{response | request_id: request_id}}
+
+  defp fill_embedding_request_id(result, _request_id), do: result
+
+  # Compute `:stop`-event extras. `embedding_count` and `chunk_count` are
+  # MEASUREMENTS (numeric); `:usage`, `:response`, `:error` are METADATA.
+  # BOTH measurements are present on BOTH paths, reporting `0` on error: a
+  # stable measurement key set is what a metrics backend wants, and it is what
+  # `image_stop_extras/1` already does with `image_count`, so a handler written
+  # against the `:image` span does not `KeyError` when pointed at `:embed`.
+  # (A `0` here is unambiguous — `ALLM.Validate.embedding_request/1` rejects
+  # `input: []`, so a *successful* empty batch is not reachable through
+  # `embed/3`.) Returns `{metadata_extras, extra_measurements}`.
+  defp embed_stop_extras({:ok, %EmbeddingResponse{} = response}) do
+    metadata = %{
+      usage: response.usage,
+      response: response,
+      error: nil
+    }
+
+    measurements = %{
+      embedding_count: length(response.embeddings),
+      chunk_count: Map.get(response.metadata, :chunk_count, 1)
+    }
+
+    {metadata, measurements}
+  end
+
+  defp embed_stop_extras({:error, error}) do
+    metadata = %{
+      usage: nil,
+      response: nil,
+      error: error
+    }
+
+    {metadata, %{embedding_count: 0, chunk_count: 0}}
   end
 end

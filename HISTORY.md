@@ -1,3 +1,25 @@
+## [FEAT] Add ALLM.embed/3 facade with transparent batch chunking (Phase 20.3)
+*Wednesday, July 29th at 4am*
+Makes the embeddings stack callable end-to-end: ALLM.embed/3 accepts a string, 
+a list, or a pre-built request, opens an :embed telemetry span, gates on 
+adapter presence before validation so a missing adapter surfaces 
+:no_embed_adapter rather than a capability error, then dispatches through 
+ALLM.EmbeddingBatch. The batch module chunks against the adapter's 
+max_batch_size/0, dispatches sequentially under a per-chunk retry policy, 
+rebases each chunk's indices by its offset, and merges, so a 5000-input ingest 
+against Gemini's 100-item cap is three lines of caller code instead of a 
+hand-rolled loop; a mid-batch failure fails the whole call with 
+completed_chunks and completed_inputs in the error metadata rather than 
+returning partial vectors. ALLM.embedding_request/2 filters opts through an 
+explicit allow-list so facade-only options such as :api_key can never land on 
+the serializable request struct. Review of the merge path found it rebuilt 
+%Usage{} from three fields while the single-chunk fast path passed all ten 
+through, making usage completeness depend on input length; the merge now covers 
+the whole struct and a sentinel-driven test fails if a future field is added 
+without a rule.
+
+---
+
 ## [FEAT] Add embeddings adapter behaviour, error type, and Fake (Phase 20.2)
 *Wednesday, July 29th at 3am*
 Lands the Layer B runtime for text embeddings: the ALLM.EmbeddingAdapter 

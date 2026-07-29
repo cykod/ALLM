@@ -225,3 +225,11 @@
 [DREV] wed 7/29 3am - Design review Phase 20.2 Layer B embeddings runtime against steering/2026-07-28_EMBEDDINGS_DESIGN.md — self-gated N/A, headless Elixir library with no front-end surface
 
 [RETR] wed 7/29 3am - Retro on Phase 20.2 embeddings Layer B build (behaviour, error type, engine field, FakeEmbeddings, conformance suite)
+
+[MILE] wed 7/29 3am - Added EmbeddingAdapter behaviour, EmbeddingAdapterError enum, Engine :embed_adapter field, FakeEmbeddings, and the ten-case conformance suite for Phase 20.2
+
+[CDRV] wed 7/29 4am - Code review Phase 20.3 embeddings Layer C facade, batching, telemetry, capability pre-flight
+
+[DREV] wed 7/29 4am - Design review Phase 20.3 embeddings Layer C facade, batching, telemetry, and capability pre-flight against steering/2026-07-28_EMBEDDINGS_DESIGN.md — self-gated N/A, headless Elixir library with no front-end surface
+
+[RETR] wed 7/29 4am - Retro on Phase 20.3 (Layer C facade, batching, telemetry, capability pre-flight) of steering/2026-07-28_EMBEDDINGS_DESIGN.md
