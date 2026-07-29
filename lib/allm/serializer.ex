@@ -87,7 +87,10 @@ defmodule ALLM.Serializer do
     ALLM.ImageResponse,
     ALLM.ImageUsage,
     ALLM.TextPart,
-    ALLM.ImagePart
+    ALLM.ImagePart,
+    ALLM.Embedding,
+    ALLM.EmbeddingRequest,
+    ALLM.EmbeddingResponse
   ]
 
   @type_tag_index Map.new(@known_modules, fn mod -> {inspect(mod), mod} end)

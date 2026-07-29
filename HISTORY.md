@@ -1,3 +1,23 @@
+## [FEAT] Add Layer A embedding data types and validator (Phase 20.1)
+*Wednesday, July 29th at 3am*
+Adds the serializable Layer A foundation for provider-neutral text embeddings: 
+ALLM.Embedding (with L2 normalize/1 and magnitude/1), ALLM.EmbeddingRequest 
+(closed 5-atom :task_type enum, input normalized to a list, truncate defaulting 
+to true) and ALLM.EmbeddingResponse (index-sorted vectors/1 for direct pgvector 
+insertion, usage defaulting to %ALLM.Usage{} rather than nil). 
+ALLM.Validate.embedding_request/1 implements the full field-error vocabulary, 
+accumulating every violation into one %ValidationError{reason: 
+:invalid_embedding_request} except a non-list :input, which hard-rejects 
+because every element rule presupposes a list. All three structs are registered 
+in ALLM.Serializer's @known_modules and round-trip through both 
+term_to_binary/1 and JSON, with __from_tagged__/1 coercing integer vector 
+elements to floats so a hand-built vector still satisfies the [float()] 
+contract. Registering the modules in test/layer_a_docs_test.exs closed a 
+fail-open audit gate that had let banned spec-section markers ship in the new 
+moduledocs.
+
+---
+
 ## [BUG] Honor max_tokens/temperature in chat/stream/session + fix guide drift
 *Monday, July 13th at 7pm*
 Fixes a silent-correctness bug where Chat.build_request/4 never populated 

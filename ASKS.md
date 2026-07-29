@@ -203,3 +203,15 @@
 [RETR] mon 7/13 1pm - Retro on Phase 21 Batch 2 (Phase 4) — wiring resolved max_tokens/temperature/opaque params onto %Request{} in Chat.build_request/4
 
 [ASKS] mon 7/13 1pm - Optional hardening: also strip :api_key nested inside Engine.new(params: %{...}) so a deliberate misuse can't forward a key onto the wire body (Phase 21 Batch 2 security Finding 1, pre-existing, not widened by the max_tokens fix)
+
+[MILE] mon 7/13 7pm - Fixed silent max_tokens/temperature drop in chat/stream/session request-builder, added Engine.new/1 fail-fast validation, corrected seven drifted guides, and wired guide iex> blocks into doctest_file (Phase 21)
+
+[DSGN] tue 7/28 8pm - Design a provider-neutral embeddings API for ALLM with OpenAI, Anthropic, and Google adapters to support local pgvector stores
+
+[BUILD] wed 7/29 2am - Build Phase 20.1-20.7 text embeddings (Layer A/B/C + OpenAI, Gemini, Voyage adapters + docs) from steering/2026-07-28_EMBEDDINGS_DESIGN.md
+
+[CDRV] wed 7/29 2am - Code review Phase 20.1 Layer A embedding data types against steering/2026-07-28_EMBEDDINGS_DESIGN.md
+
+[RETR] wed 7/29 2am - Retro on Phase 20.1 Layer A embedding data types per steering/2026-07-28_EMBEDDINGS_DESIGN.md
+
+[DREV] wed 7/29 2am - Design review Phase 20.1 Layer A embedding data types against steering/2026-07-28_EMBEDDINGS_DESIGN.md — self-gated N/A, headless Elixir library with no front-end surface

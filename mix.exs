@@ -126,7 +126,10 @@ defmodule ALLM.MixProject do
           ALLM.ImageUsage,
           ALLM.JsonSchema,
           ALLM.TextPart,
-          ALLM.ImagePart
+          ALLM.ImagePart,
+          ALLM.Embedding,
+          ALLM.EmbeddingRequest,
+          ALLM.EmbeddingResponse
         ],
         Runtime: [
           ALLM.Engine,

@@ -37,6 +37,7 @@ defmodule ALLM.Error.ValidationError do
           | :invalid_session_input
           | :unsupported_capability
           | :invalid_image_request
+          | :invalid_embedding_request
 
   @type t :: %__MODULE__{
           reason: reason(),
@@ -55,6 +56,7 @@ defmodule ALLM.Error.ValidationError do
     invalid_session_input
     unsupported_capability
     invalid_image_request
+    invalid_embedding_request
   )a
 
   defexception [:reason, :message, :cause, errors: [], metadata: %{}]
