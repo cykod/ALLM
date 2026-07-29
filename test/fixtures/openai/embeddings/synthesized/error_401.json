@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized (Phase 20.4). OpenAI's 401 envelope. The `message` deliberately embeds a key-shaped string so the security test can assert that no field of the produced %ALLM.Error.EmbeddingAdapterError{} carries it — the struct derives Jason.Encoder and downstream apps log and persist it.",
+  "error": {
+    "message": "Incorrect API key provided: sk-proj-FAKEKEY000111222333444555. You can find your API key at https://platform.openai.com/account/api-keys.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "invalid_api_key"
+  }
+}

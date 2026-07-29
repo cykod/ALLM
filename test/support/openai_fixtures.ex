@@ -100,6 +100,71 @@ defmodule ALLM.Providers.OpenAITestFixtures do
   end
 
   @doc """
+  Load a recorded embeddings fixture by name.
+
+  Names map to files under `test/fixtures/openai/embeddings/recorded/<name>.json`.
+  These are genuine live OpenAI responses and therefore carry NO `_comment`
+  marker; the `drop_comment/1` call is defensive, so the loader keeps working
+  if a fixture is ever temporarily replaced by a placeholder awaiting a
+  re-record. Because it strips unconditionally, an assertion made through this
+  loader cannot bind provenance — `embeddings_wire_test.exs` reads the raw
+  file bytes for that.
+
+  ## Examples
+
+      iex> body = ALLM.Providers.OpenAITestFixtures.embeddings_recorded(:single_input)
+      iex> length(body["data"])
+      1
+  """
+  @spec embeddings_recorded(atom()) :: body()
+  def embeddings_recorded(name) when is_atom(name) do
+    @fixtures_root
+    |> Path.join(["embeddings/recorded/", "#{name}.json"])
+    |> load_json()
+    |> drop_comment()
+  end
+
+  @doc """
+  Load a synthesized embeddings fixture by name.
+
+  Names map to files under
+  `test/fixtures/openai/embeddings/synthesized/<name>.json`. The leading
+  `_comment` marker every synthesized fixture carries is stripped.
+
+  ## Examples
+
+      iex> body = ALLM.Providers.OpenAITestFixtures.embeddings_synthesized(:error_401)
+      iex> body["error"]["code"]
+      "invalid_api_key"
+  """
+  @spec embeddings_synthesized(atom()) :: body()
+  def embeddings_synthesized(name) when is_atom(name) do
+    @fixtures_root
+    |> Path.join(["embeddings/synthesized/", "#{name}.json"])
+    |> load_json()
+    |> drop_comment()
+  end
+
+  @doc """
+  Strip the leading `_comment` provenance marker from a decoded fixture map.
+
+  Every synthesized fixture carries one; recorded fixtures do not (which is
+  also what the recorder scripts key their refuse-to-overwrite check on, and
+  what the per-file raw-read provenance tests in
+  `test/allm/providers/openai/embeddings_wire_test.exs` enforce).
+
+  This is the single implementation for the OpenAI test-support family —
+  `ALLM.Providers.OpenAI.ImagesTestHelpers.drop_comment/1` delegates here.
+
+  ## Examples
+
+      iex> ALLM.Providers.OpenAITestFixtures.drop_comment(%{"_comment" => "x", "a" => 1})
+      %{"a" => 1}
+  """
+  @spec drop_comment(map()) :: map()
+  def drop_comment(map) when is_map(map), do: Map.delete(map, "_comment")
+
+  @doc """
   Load a synthesized fixture's raw body bytes (no JSON decode).
 
   Used for the malformed-body fixture where decoding would defeat the test.
@@ -120,7 +185,7 @@ defmodule ALLM.Providers.OpenAITestFixtures do
     @fixtures_root
     |> Path.join(["synthesized/", "#{name}.headers.json"])
     |> load_json()
-    |> Map.delete("_comment")
+    |> drop_comment()
   end
 
   @doc """

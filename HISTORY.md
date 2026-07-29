@@ -1,3 +1,23 @@
+## [FEAT] Add OpenAI embeddings adapter with live wire fixtures (Phase 20.4)
+*Wednesday, July 29th at 2pm*
+Wires POST /v1/embeddings as the first real ALLM.EmbeddingAdapter 
+implementation. The adapter caps a batch at 2048, always sends input as an 
+array, drops :task_type and :truncate as OpenAI has no equivalent, and rejects 
+dimensions on text-embedding-ada-002 before any HTTP round-trip; its gate chain 
+deliberately runs ahead of key resolution so a malformed request fails the same 
+way with or without credentials. Error classification maps the token-budget 400 
+to :context_length_exceeded via the type field rather than code, which 
+recording against the live API corrected from the design. Security review of 
+the error path drove three divergences from the sibling images adapter: no raw 
+body preview in metadata, Jason.DecodeError data blanked before it reaches 
+:cause, and key-shaped tokens redacted from provider messages, because OpenAI's 
+real 401 echoes a key prefix back into a struct that is JSON-serializable and 
+commonly persisted. Three wire fixtures are genuine live recordings; the four 
+error fixtures are synthesized and marked, and a raw-read provenance check now 
+fails the suite if a placeholder is ever mistaken for a recording.
+
+---
+
 ## [FEAT] Add ALLM.embed/3 facade with transparent batch chunking (Phase 20.3)
 *Wednesday, July 29th at 4am*
 Makes the embeddings stack callable end-to-end: ALLM.embed/3 accepts a string, 

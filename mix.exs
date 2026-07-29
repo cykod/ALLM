@@ -94,6 +94,7 @@ defmodule ALLM.MixProject do
         Providers: [
           ALLM.Providers.OpenAI,
           ALLM.Providers.OpenAI.Images,
+          ALLM.Providers.OpenAI.Embeddings,
           ALLM.Providers.Anthropic,
           ALLM.Providers.Gemini,
           ALLM.Providers.Gemini.Images,

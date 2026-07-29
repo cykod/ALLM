@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized (Phase 20.4). OpenAI's 429 envelope. Paired with a `retry-after: 7` response header in the wire test so `:retry_after_ms` decodes to 7000.",
+  "error": {
+    "message": "Rate limit reached for text-embedding-3-small in organization org-example on requests per min (RPM): Limit 3000, Used 3000, Requested 1. Please try again in 20ms.",
+    "type": "requests",
+    "param": null,
+    "code": "rate_limit_exceeded"
+  }
+}

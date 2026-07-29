@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized (Phase 20.4). The per-request token-budget rejection: /v1/embeddings caps a single call at 300,000 tokens summed across all inputs, which is reachable far below the 2048-item array cap. Note OpenAI carries the discriminator on `type`, leaving `code` null — the classifier therefore matches the marker on EITHER field.",
+  "error": {
+    "message": "Requested 402420 tokens, max 300000 tokens per request",
+    "type": "max_tokens_per_request",
+    "param": null,
+    "code": null
+  }
+}

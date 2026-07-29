@@ -1,0 +1,26 @@
+{
+  "_comment": "Synthesized (Phase 20.4). A `data` array deliberately out of index order (2, 0, 1). OpenAI documents `data[].index` precisely because array order is not contractual, so `decode_response/4` sorts by `:index`. Each vector's first component encodes its index (0.20 / 0.00 / 0.10) so the wire test can assert the decoded order without relying on list position.",
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "index": 2,
+      "embedding": [0.2, 0.22, 0.24, 0.26]
+    },
+    {
+      "object": "embedding",
+      "index": 0,
+      "embedding": [0.0, 0.02, 0.04, 0.06]
+    },
+    {
+      "object": "embedding",
+      "index": 1,
+      "embedding": [0.1, 0.12, 0.14, 0.16]
+    }
+  ],
+  "model": "text-embedding-3-small",
+  "usage": {
+    "prompt_tokens": 9,
+    "total_tokens": 9
+  }
+}

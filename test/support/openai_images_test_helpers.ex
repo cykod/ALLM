@@ -16,7 +16,8 @@ defmodule ALLM.Providers.OpenAI.ImagesTestHelpers do
     * `respond_json/3` — `Plug.Conn` response with JSON content-type.
     * `respond_with/4` — `Plug.Conn` response with custom response headers
       AND JSON content-type.
-    * `drop_comment/1` — strip the `_comment` key from a fixture map.
+    * `drop_comment/1` — strip the `_comment` key from a fixture map
+      (delegates to `ALLM.Providers.OpenAITestFixtures.drop_comment/1`).
     * `load_fixture/2` — `Path.join(dir, name) |> File.read!() |> Jason.decode!()`.
     * `recorded/2` / `synthesized/2` — convenience wrappers.
 
@@ -51,8 +52,14 @@ defmodule ALLM.Providers.OpenAI.ImagesTestHelpers do
     |> Conn.resp(status, Jason.encode!(body))
   end
 
-  @spec drop_comment(map()) :: map()
-  def drop_comment(map) when is_map(map), do: Map.delete(map, "_comment")
+  # Consolidated in the Phase 20.4 fix step: this reached a third
+  # implementation on `ALLM.Providers.OpenAITestFixtures` and
+  # `AGENT_IMPLEMENTATION_SPEC.md:68` makes TWO the promotion trigger. The
+  # delegation keeps the `import ..., only: [drop_comment: 1]` call sites in
+  # the three image test files working unchanged.
+  # (`ALLM.Providers.GeminiTestFixtures` keeps its own private two-clause
+  # variant — different module family, no import surface.)
+  defdelegate drop_comment(map), to: ALLM.Providers.OpenAITestFixtures
 
   @spec load_fixture(Path.t(), String.t()) :: term()
   def load_fixture(dir, name) do

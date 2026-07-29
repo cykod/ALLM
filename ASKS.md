@@ -233,3 +233,29 @@
 [DREV] wed 7/29 4am - Design review Phase 20.3 embeddings Layer C facade, batching, telemetry, and capability pre-flight against steering/2026-07-28_EMBEDDINGS_DESIGN.md — self-gated N/A, headless Elixir library with no front-end surface
 
 [RETR] wed 7/29 4am - Retro on Phase 20.3 (Layer C facade, batching, telemetry, capability pre-flight) of steering/2026-07-28_EMBEDDINGS_DESIGN.md
+
+[MILE] wed 7/29 4am - Added ALLM.embed/3 facade with transparent batch chunking, EmbeddingBatch merge, capability pre-flight, and the :embed telemetry span for Phase 20.3
+
+[IMPL] wed 7/29 4am - Implement Phase 20.4 ALLM.Providers.OpenAI.Embeddings — POST /v1/embeddings adapter with pre-flight gates, index-sorted decoder, and wire fixtures per steering/2026-07-28_EMBEDDINGS_DESIGN.md
+
+[CDRV] wed 7/29 1pm - Code review Phase 20.4 OpenAI embeddings adapter against images.ex sibling and embeddings design doc
+
+[RETR] wed 7/29 2pm - Retro on Phase 20.4 OpenAI embeddings adapter build
+
+[DREV] wed 7/29 2pm - Design review Phase 20.4 ALLM.Providers.OpenAI.Embeddings against steering/2026-07-28_EMBEDDINGS_DESIGN.md — self-gated N/A, headless Elixir library with no front-end surface and no reference design
+
+[FIX] wed 7/29 2pm - Fix Phase 20.4 OpenAI embeddings adapter review findings from .work/reviews, code-reviews, security-reviews, design-reviews, and retro
+
+[ASKS] wed 7/29 2pm - [BUG] Port Phase 20.4's error-struct hardening to the image adapters: redact key-shaped tokens in provider messages (openai/images.ex:1069-1070 passes OpenAI's raw 401 text, which echoes an sk-proj- prefix, into a Jason.Encoder-derived struct), sanitize Jason.DecodeError's :data on :cause and stop interpolating inspect(cause) into :message (:1109-1114), and replace the 200-char body_preview in :malformed_response metadata with the body's sorted top-level key list (:1229-1241 and gemini/images.ex:660) — grep -rn 'redact' lib/ hits only the new embeddings module
+
+[ASKS] wed 7/29 2pm - [BUG] :timeout gets 9 HTTP attempts through ALLM.embed/3 and ALLM.generate_image/3 where every other retryable reason gets 3 — the adapter's Retry.run reads opts[:retry] (defaulting to :default, whose retry_on contains :timeout) while the facade sets opts[:retry_policy], so both nested loops retry :timeout and the budgets multiply; fix in the facade plus both image adapters and the embeddings adapter at once (either adapters read opts[:retry_policy] with opts[:retry] as fallback, or the facade passes retry: :no_retry in dispatch_opts)
+
+[ASKS] wed 7/29 2pm - [TEST] ALLM.Providers.OpenAI.Images' doctests are never executed — no test file declares doctest for it (Phase 20.4 wired the equivalent for OpenAI.Embeddings); audit every lib/ module with iex> examples for a missing doctest declaration
+
+[ASKS] wed 7/29 2pm - [BUG] Six of the seven scripts/record_*.exs read System.get_env/1 bare and never load the project-root .env, so they report 'KEY not set' in a fully-provisioned checkout and their own diagnostic confirms a false 'no key' premise (this shipped three placeholder fixtures under recorded/ in Phase 20.4); port record_openai_embeddings_fixtures.exs's guarded load_dotenv/0 to the other six, ideally as a shared scripts/_env.exs
+
+[ASKS] wed 7/29 2pm - [REFACTOR] Promote six byte-identical private helpers duplicated across the provider adapters into lib/allm/providers/support/ before Phases 20.5/20.6 add a seventh copy each: header_value/2, header_value_to_string/1, retry_after_ms/1 and parse_retry_after/1 into a provider-neutral Headers module, maybe_apply_req_test_stub/2 and maybe_apply_request_timeout/2 into a ReqOpts module; then point the adapters' naming-parity blocks at the shared modules
+
+[ASKS] wed 7/29 2pm - [REFACTOR] ALLM.Providers.OpenAI.ImagesTestHelpers' respond_json/3 and respond_with/4 are now imported by the embeddings test files too — four consumers, half of them non-images — so move them to a capability-neutral test-support module (defdelegate from ImagesTestHelpers keeps the three image test files untouched) before Phase 20.5's Gemini embeddings tests need the same thing
+
+[ASKS] wed 7/29 2pm - [DESIGN] Decide whether an embedding adapter must reject a ragged data[] (vectors of differing lengths) as :malformed_response — no adapter performs a cross-entry length check today, so a ragged body decodes cleanly and ALLM.EmbeddingResponse.dimensions/1 reports the head vector's width; either add the gate plus a deliberately-ragged fixture across 20.4/20.5/20.6, or document at embedding_response.ex:124 that uniformity is unenforced
