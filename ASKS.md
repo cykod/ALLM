@@ -329,3 +329,5 @@
 [MILE] wed 7/29 6pm - Added embeddings spec section 36, the embeddings guide with a pgvector worked example, and live-verified examples 16-18 across all three provider arms (Phase 20.7)
 
 [ASKS] thu 7/30 2am - Applied 16 unapplied retros into CLAUDE.md, AGENT_DESIGN_SPEC.md and AGENT_IMPLEMENTATION_SPEC.md — async-global foot-gun class, provider wire probe, live-gate discipline, fail-open audit literals, and two approved cross-phase carve-outs
+
+[MILE] thu 7/30 1pm - Applied sixteen backlogged retros to CLAUDE.md and the two agent specs, generalizing the async-global foot-gun, mandating a live provider wire probe, and adding two approved cross-phase carve-outs

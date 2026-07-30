@@ -1,108 +1,69 @@
-## [Unreleased]
+## [REL] v0.5.0 — Text embeddings
 
-Added — text embeddings:
-- `ALLM.embed/3` — turn a string, a list of strings, or a
-  `%ALLM.EmbeddingRequest{}` into vectors via the engine's new
-  `:embed_adapter` slot. Returns
-  `{:ok, %ALLM.EmbeddingResponse{}}`; `EmbeddingResponse.vectors/1` hands
-  back `[[float()]]` in input order, ready for a vector column
-- `ALLM.embedding_request/2` — builds an `%ALLM.EmbeddingRequest{}` from a
-  string or list plus `:model` / `:dimensions` / `:task_type` /
-  `:truncate` / `:options` / `:metadata`; every other opt is left for
-  `embed/3` to treat as call control
-- New serializable data types `%ALLM.Embedding{}` (with `normalize/1` and
-  `magnitude/1`), `%ALLM.EmbeddingRequest{}`, and
-  `%ALLM.EmbeddingResponse{}` (with `vectors/1` and `dimensions/1`), all
-  round-tripping through both `:erlang.term_to_binary/1` and JSON
-- New `ALLM.EmbeddingAdapter` behaviour — `embed/2`, `max_batch_size/0`,
-  and the optional `prepare_request/2` escape hatch — plus a ten-case
+Breaking changes:
+- `ALLM.Engine.new/1` now raises `ArgumentError` on a non-module
+  `:adapter` / `:tool_executor` / `:tool_result_encoder` / `:image_adapter`
+  value (e.g. the unsupported `tool_executor: {Mod, tools: %{}}` form).
+  Previously it built a booby-trapped engine that crashed later at
+  tool-run time
+- `chat/3`, `stream/3`, and `Session.*` now honor `max_tokens` /
+  `temperature` from `engine.params` and call opts. Responses that were
+  silently capped at the adapter default (Anthropic's 1024) are no longer
+  capped, so requests that previously truncated will now run to
+  completion — expect longer outputs and higher per-call cost
+
+Other changes:
+- Add text embeddings: `ALLM.embed/3` turns a string, a list of strings,
+  or an `%ALLM.EmbeddingRequest{}` into vectors via the engine's new
+  `:embed_adapter` slot. `EmbeddingResponse.vectors/1` returns
+  `[[float()]]` in input order, ready for a vector column
+- Add `ALLM.Providers.OpenAI.Embeddings` (2048 inputs/request),
+  `ALLM.Providers.Gemini.Embeddings` (100), and
+  `ALLM.Providers.Voyage.Embeddings` (1000). Voyage is the Anthropic
+  track — Anthropic ships no embeddings endpoint and names Voyage as its
+  recommended partner, so the key resolves from `VOYAGE_API_KEY` and
+  there is deliberately no `ALLM.Providers.Anthropic.Embeddings`
+- Chunk oversized input transparently: lists longer than the adapter's
+  `max_batch_size/0` are split, dispatched sequentially, and merged with
+  indices rebased across chunk boundaries. A failing chunk fails the whole
+  call, carrying `completed_chunks` / `completed_inputs` on the error
+- Add the `ALLM.EmbeddingAdapter` behaviour plus a ten-case
   `ALLM.Test.EmbeddingAdapterConformance` suite in the `allm_conformance`
   package for third-party adapter authors
-- New `%ALLM.Error.EmbeddingAdapterError{}` with an eleven-member reason
-  enum and a `legal_reasons/0` accessor
-- `%ALLM.Engine{}` gains `:embed_adapter`, a peer to `:adapter` and
-  `:image_adapter` that never falls back to either; an engine without one
-  returns `{:error, %ALLM.Error.EngineError{reason: :no_embed_adapter}}`
-  ahead of every other gate
-- `ALLM.Error.EngineError` gains `:no_embed_adapter`;
-  `ALLM.Error.ValidationError` gains `:invalid_embedding_request`;
-  `ALLM.Validate.embedding_request/1` and
-  `ALLM.Capability.preflight_embedding/2` are new
-- `ALLM.Providers.FakeEmbeddings` — the deterministic scripted embedding
-  adapter, shipped in `lib/` so downstream apps can use it in their own
-  tests; `{:retry_until_call, n}` script entries exercise retry paths
-- `ALLM.Providers.OpenAI.Embeddings` (`/v1/embeddings`, 2048 inputs per
-  request), `ALLM.Providers.Gemini.Embeddings` (`batchEmbedContents`, 100
-  per request), and `ALLM.Providers.Voyage.Embeddings` (`/v1/embeddings`,
-  1000 per request). Voyage is the Anthropic track — Anthropic ships no
-  embeddings endpoint and names Voyage as its recommended partner, so the
-  key resolves from `VOYAGE_API_KEY`; there is deliberately no
-  `ALLM.Providers.Anthropic.Embeddings`
-- Batching is transparent: input lists longer than the adapter's
-  `max_batch_size/0` are split, dispatched **sequentially**, and merged
-  into one response with indices rebased across chunk boundaries.
-  `response.metadata.chunk_count` reports how many requests the call
-  became. Retry and timeout budgets are **per chunk** with no aggregate
-  deadline — `guides/embeddings.md` carries the multiplication table,
-  including the `:timeout` case, which costs 9 HTTP attempts per chunk
-  rather than 3 because the adapter's own retry loop and the façade's
-  widened one both retry it. A failing chunk fails the whole call, with
-  `completed_chunks` / `completed_inputs` on the error metadata
-- New `[:allm, :embed, :start | :stop | :exception]` telemetry span;
-  `:stop` measurements carry `duration`, `embedding_count`, and
-  `chunk_count` on both the success and error paths, and `:exception`
-  fires instead of `:stop` when the call raises — which a missing API key
-  does, by design
-- New `guides/embeddings.md` — provider matrix, task-type guidance,
-  batching and the resumable-chunking loop, normalization, a `pgvector`
-  worked example, and a note that `:stop` telemetry metadata carries the
-  full vectors and should not be serialized wholesale
-- New example scripts `16_embed_single.exs`,
-  `17_embed_batch_chunked.exs`, and `18_embed_query_vs_document.exs`,
-  running on all three provider arms. Live-validated against OpenAI,
-  Gemini, and Voyage
+- Add serializable `%ALLM.Embedding{}`, `%ALLM.EmbeddingRequest{}`, and
+  `%ALLM.EmbeddingResponse{}`, all round-tripping through ETF and JSON,
+  plus `%ALLM.Error.EmbeddingAdapterError{}` and its eleven-member reason
+  enum
+- Add `ALLM.Providers.FakeEmbeddings`, shipped in `lib/` so downstream
+  apps can script embeddings in their own tests
+- Add the `[:allm, :embed, :start | :stop | :exception]` telemetry span,
+  with `chunk_count` on `:stop` so one call becoming fifty HTTP requests
+  is visible
+- Add `guides/embeddings.md` — provider matrix, task-type guidance,
+  batching and resumable chunking, and a `pgvector` worked example — and
+  example scripts 16–18, live-validated on all three providers
+- Execute bundled `guides/*.md` `iex>` examples under `mix test` via
+  `doctest_file`, so guide drift is a red test rather than a silent ship
+- Correct guide drift against the real 0.4.x API: engine-first `Session.*`
+  calls, the real status union, the handler-on-tool-executor pattern, the
+  `StreamReducer` API, and the `FakeImages` `image_script` shape
 
-Known behaviour worth flagging:
-- Google's batch embedding endpoint returns no usage metadata, so
-  `response.usage` is an all-`nil` `%ALLM.Usage{}` on Gemini. Voyage
-  reports `total_tokens` only, leaving `input_tokens` `nil`. OpenAI
-  reports both
-- The Gemini adapter L2-normalizes any response whose `:dimensions` is
-  set to anything other than `3072` (`gemini-embedding-001`'s native
-  width), because Google does not normalize truncated output. The
-  predicate is that single constant, applied unconditionally across
-  models — not a per-model native-width lookup. A `dimensions: 768` response therefore differs numerically from
-  the same request issued with `curl` — deliberate, so a vector table
-  never ends up holding a mix of normalized and unnormalized rows
+Upgrade notes:
+- Google's batch endpoint returns no usage metadata, so `response.usage`
+  is an all-`nil` `%ALLM.Usage{}` on Gemini. Voyage reports
+  `total_tokens` only; OpenAI reports both
+- The Gemini adapter L2-normalizes any response whose `:dimensions` is set
+  to anything other than `3072`, because Google does not normalize
+  truncated output. A `dimensions: 768` response therefore differs
+  numerically from the same request issued with `curl` — deliberate, so a
+  vector table never holds a mix of normalized and unnormalized rows
 - `:task_type` is provider-neutral and lossy by design: Gemini maps all
   five members, Voyage supports query/document only, and OpenAI drops the
-  field entirely (logged at `:debug`). A dropped task type is never an
-  error
-
-Changed:
-- `ALLM.Engine.new/1` now raises `ArgumentError` on a non-module
-  `:adapter`/`:tool_executor`/`:tool_result_encoder`/`:image_adapter`
-  value (e.g. the unsupported `tool_executor: {Mod, tools: %{}}` form) —
-  previously it constructed a booby-trapped engine that crashed later at
-  tool-run time (§6.4)
-- Bundled `guides/*.md` `iex>` examples now execute under `mix test` via
-  `doctest_file` (`test/guides_doctest_test.exs`), so guide drift is a
-  red test rather than a silent ship (§31)
-
-Fixed:
-- `chat/3`, `stream/3`, and `Session.*` now honor `max_tokens`/`temperature`
-  from `engine.params` and call opts (previously silently capped at the
-  adapter default, e.g. Anthropic 1024) — `Chat.build_request/4` folds the
-  resolved sampling params onto the built `%Request{}`; opaque params
-  (`top_p`, …) ride on `request.options` (§6.3, §10)
-- Correct guide-content drift against the real 0.4.x API: engine-first
-  3-tuple `Session.*` calls, the real status union
-  (`:idle | :awaiting_user | :awaiting_tools | :completed | :error`),
-  handler-on-tool executor pattern, `StreamReducer.{new,apply_event,finalize}`
-  API, the closed streaming-event union, JSON round-trip field assertions,
-  and the `FakeImages` `adapter_opts: [image_script: …]` shape
-  (`guides/{sessions,tools,streaming,getting_started,image_generation,vision,errors_and_retries}.md`;
-  see `steering/ALLM_VERIFIED_FACTS.md`)
+  field entirely. A dropped task type is never an error
+- Retry and timeout budgets are per chunk, with no aggregate deadline. A
+  `:timeout` costs 9 HTTP attempts per chunk rather than 3, because the
+  adapter's retry loop and the facade's widened one both retry it;
+  `guides/embeddings.md` carries the multiplication table
 
 ## [REL] v0.4.3 — Engine identity
 
