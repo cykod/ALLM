@@ -1,3 +1,30 @@
+## [DOC] Apply 16 backlogged retros to the agent instruction files
+*Thursday, July 30th at 1pm*
+Folds sixteen unapplied retrospectives — nine dating back to May and all 
+seven from the embeddings build — into CLAUDE.md, AGENT_DESIGN_SPEC.md and 
+AGENT_IMPLEMENTATION_SPEC.md, which had not been touched since early May. The 
+highest-value entries generalize rules that were previously written 
+per-mechanism: any process-global mutation from an async test module is now 
+documented as one foot-gun class with a static grep as the gate, rather than 
+separate bullets for Logger.configure and telemetry.attach, because a 
+per-mechanism rule cannot catch the next mechanism and the third instance cost 
+a silently non-deterministic suite for six phases. Provider adapters now 
+require a four-part live wire probe with a negative control, since design 
+claims about provider wires were wrong seven times across three adapters and 
+only ever falsified by a recorded response. Also records that a blocked 
+live-gate arm is re-characterized rather than inherited, which is what 
+uncovered released code broken against the live API behind a documented older 
+failure; that hand-maintained audit literals need meta-tests because a 
+fail-open gate ships a silent gap; and that recorded fixtures need a raw-byte 
+provenance check, since loader-based assertions strip the very marker they 
+claim to test. Two carve-outs to cross-phase discipline were escalated and 
+approved: extractions mandated by the two-implementations trigger may touch 
+released code, resolving a standing contradiction between two of these files, 
+and the sub-phase closing a multi-provider family owns that family's internal 
+consistency.
+
+---
+
 ## [DOC] Add embeddings spec section, guide, and live examples (Phase 20.7)
 *Wednesday, July 29th at 6pm*
 Completes the embeddings capability by making it discoverable. Adds spec 
