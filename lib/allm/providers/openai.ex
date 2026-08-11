@@ -167,6 +167,7 @@ defmodule ALLM.Providers.OpenAI do
   alias ALLM.Providers.Support.ImageMime
   alias ALLM.Providers.Support.OpenAIHeaders
   alias ALLM.Providers.Support.SSE
+  alias ALLM.Providers.Support.Transport
   alias ALLM.Request
   alias ALLM.Response
   alias ALLM.Retry
@@ -798,8 +799,12 @@ defmodule ALLM.Providers.OpenAI do
     * `:receive_timeout`, `:request_timeout`, `:pool_timeout` —
       forwarded verbatim to `Finch.async_request/3`. Each governs a
       different Finch timer: receive is per-chunk, request is end-to-end
-      response receipt, pool is connection acquisition. Omit to use
-      Finch's defaults.
+      response receipt, pool is connection acquisition. `:receive_timeout`
+      defaults to `stream_timeout + 30_000` — **not** to Finch's 15,000 ms,
+      which a reasoning model routinely spends thinking before the first
+      SSE chunk — so `:stream_timeout` is the single knob to raise. See
+      `ALLM.Providers.Support.Transport`. The other two omit to Finch's
+      defaults.
     * `:finch_name` — the registered Finch name (default `ALLM.Finch`).
     * `:finch_module` — the module used to call `async_request/3` and
       `cancel_async_request/1`. Defaults to `Finch`. Tests inject
@@ -839,15 +844,8 @@ defmodule ALLM.Providers.OpenAI do
     finch_module = Keyword.get(opts, :finch_module, Finch)
     finch_name = Keyword.get(opts, :finch_name, ALLM.Finch)
 
-    finch_extra_opts =
-      Keyword.take(opts, [
-        :finch_stub_ref,
-        :receive_timeout,
-        :request_timeout,
-        :pool_timeout
-      ])
-
     stream_timeout = Keyword.get(opts, :stream_timeout, @default_stream_timeout)
+    finch_extra_opts = Transport.finch_opts(opts, stream_timeout)
 
     enumerable =
       Stream.resource(

@@ -148,6 +148,7 @@ defmodule ALLM.Providers.Gemini do
   alias ALLM.Providers.Gemini.Decode
   alias ALLM.Providers.Support.GeminiHeaders
   alias ALLM.Providers.Support.SSE
+  alias ALLM.Providers.Support.Transport
   alias ALLM.Request
   alias ALLM.Response
   alias ALLM.Retry
@@ -1294,7 +1295,11 @@ defmodule ALLM.Providers.Gemini do
       forwarded verbatim to `Finch.async_request/3`. Each governs a
       different Finch timer: receive is per-chunk, request is
       end-to-end response receipt, pool is connection acquisition.
-      Omit to use Finch's defaults.
+      `:receive_timeout` defaults to `stream_timeout + 30_000` — **not**
+      to Finch's 15,000 ms, which a thinking model routinely spends
+      before the first SSE chunk — so `:stream_timeout` is the single
+      knob to raise. See `ALLM.Providers.Support.Transport`. The other
+      two omit to Finch's defaults.
     * `:finch_module` (default `Finch`) — test injection seam.
     * `:finch_name` (default `ALLM.Finch`).
     * `:finch_stub_ref` — opaque ref forwarded to the Finch shim
@@ -1325,15 +1330,8 @@ defmodule ALLM.Providers.Gemini do
     finch_module = Keyword.get(opts, :finch_module, Finch)
     finch_name = Keyword.get(opts, :finch_name, ALLM.Finch)
 
-    finch_extra_opts =
-      Keyword.take(opts, [
-        :finch_stub_ref,
-        :receive_timeout,
-        :request_timeout,
-        :pool_timeout
-      ])
-
     stream_timeout = Keyword.get(opts, :stream_timeout, @default_stream_timeout)
+    finch_extra_opts = Transport.finch_opts(opts, stream_timeout)
 
     enumerable =
       Stream.resource(

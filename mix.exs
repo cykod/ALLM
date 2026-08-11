@@ -108,7 +108,8 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Support.SSE,
           ALLM.Providers.Support.OpenAIHeaders,
           ALLM.Providers.Support.GeminiHeaders,
-          ALLM.Providers.Support.ImageMime
+          ALLM.Providers.Support.ImageMime,
+          ALLM.Providers.Support.Transport
         ],
         Defaults: [
           ALLM.ToolExecutor.Default,

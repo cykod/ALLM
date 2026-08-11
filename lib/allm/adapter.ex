@@ -107,4 +107,52 @@ defmodule ALLM.Adapter do
   @callback translate_options(keyword(), ALLM.Request.t()) :: keyword()
 
   @optional_callbacks prepare_request: 2, translate_options: 2
+
+  # HTTP-transport opts. These are read by the adapter off the top level of
+  # its resolved `opts` and MUST NEVER reach a provider request body — they
+  # are not model params. `ALLM.Chat` strips them from `request.options`
+  # (which the body-builders merge onto the wire) by DERIVING from this list,
+  # and `ALLM.StreamRunner` hoists them out of `engine.adapter_opts` so the
+  # documented `adapter_opts: [finch_name: MyApp.Finch]` route reaches the
+  # adapter.
+  @transport_opts [
+    :receive_timeout,
+    :request_timeout,
+    :pool_timeout,
+    :stream_timeout,
+    :finch_name,
+    :finch_module,
+    :finch_stub_ref
+  ]
+
+  @doc """
+  The provider-neutral HTTP-transport opts.
+
+  These configure the transport, never the model. They may be passed as call
+  opts (`ALLM.stream(engine, thread, stream_timeout: 300_000)`) or set once
+  on the engine via `adapter_opts:` — **not** via `params:`, which is the
+  model-parameter map and lands on the provider request body.
+
+      # per call
+      ALLM.stream(engine, thread, stream_timeout: 300_000)
+
+      # once, on the engine
+      ALLM.Engine.new(
+        adapter: ALLM.Providers.OpenAI,
+        model: "gpt-5.6",
+        adapter_opts: [stream_timeout: 300_000]
+      )
+
+  `:stream_timeout` is the knob to reach for: it is ALLM's own inter-event
+  budget and the streaming adapters default the Finch transport timer above
+  it, so raising it raises both. See
+  `ALLM.Providers.Support.Transport` for the transport-timer derivation.
+
+  ## Examples
+
+      iex> :stream_timeout in ALLM.Adapter.transport_opts()
+      true
+  """
+  @spec transport_opts() :: [atom()]
+  def transport_opts, do: @transport_opts
 end

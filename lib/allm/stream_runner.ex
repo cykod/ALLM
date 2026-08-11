@@ -38,7 +38,7 @@ defmodule ALLM.StreamRunner do
 
   require Logger
 
-  alias ALLM.{Capability, Engine, Request, Telemetry, Validate}
+  alias ALLM.{Adapter, Capability, Engine, Request, Telemetry, Validate}
   alias ALLM.Error.{AdapterError, EngineError, ValidationError}
 
   # Orchestration opts — stripped before reaching the adapter.
@@ -251,9 +251,25 @@ defmodule ALLM.StreamRunner do
 
     params_kw
     |> Keyword.put(:adapter_opts, adapter_opts)
+    |> hoist_transport_opts(adapter_opts)
     |> maybe_put_request_id(opts)
     |> maybe_put_api_key(opts)
     |> Keyword.put(:retry, engine.retry)
+  end
+
+  # Adapters read HTTP-transport opts (`:receive_timeout`, `:stream_timeout`,
+  # `:finch_name`, …) off the TOP LEVEL of their resolved opts, but the
+  # natural place to configure transport once-per-engine is `adapter_opts:` —
+  # which is exactly what `ALLM.Providers.OpenAI`'s own moduledoc has always
+  # documented for `finch_name:`. Nested there, they were never read. Hoist
+  # them so both routes work; `Keyword.put_new/3` keeps a call-opt or engine
+  # `params:` value winning over the `adapter_opts` fallback. The keys stay in
+  # `adapter_opts` too — `ALLM.Providers.Fake` and friends read named keys
+  # from there and nothing splats the list onto the wire (Decision #2).
+  defp hoist_transport_opts(kw, adapter_opts) do
+    adapter_opts
+    |> Keyword.take(Adapter.transport_opts())
+    |> Enum.reduce(kw, fn {k, v}, acc -> Keyword.put_new(acc, k, v) end)
   end
 
   defp maybe_put_request_id(kw, opts) do

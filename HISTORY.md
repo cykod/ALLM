@@ -1,3 +1,33 @@
+## [BUG] Fix transport timeouts never reaching Finch (§7.2)
+*Tuesday, August 11th at 9pm*
+Reasoning models spend their thinking time before the first SSE chunk, and 
+Finch's HTTP/1 pool defaults receive_timeout to 15,000 ms, so a gpt-5.6 turn 
+was killed mid-think and surfaced as %AdapterError{reason: :network_error}; 
+ALLM's own 60 s :stream_timeout could never fire because the transport timer 
+always won the race. All three documented ways to raise the timeout were 
+broken: a call opt or engine params: value reached the adapter but 
+Engine.resolve_params/2 also merged it onto request.options, which every 
+body-builder merges onto the wire (OpenAI answers HTTP 400 'Unknown 
+parameter'), while engine adapter_opts: was nested one level below where 
+adapters read transport keys and was never read at all — which had also made 
+the adapter_opts: [finch_name: MyApp.Finch] route in OpenAI's own moduledoc a 
+silent no-op. This adds ALLM.Adapter.transport_opts/0 as the neutral key list, 
+derives ALLM.Chat's @request_carried_keys from it so transport opts reach the 
+adapter but never the request body, hoists them out of adapter_opts in 
+ALLM.StreamRunner with put_new so call opts still outrank the engine, and adds 
+the shared ALLM.Providers.Support.Transport.finch_opts/2 that defaults 
+receive_timeout to stream_timeout + 30_000 across all three streaming adapters 
+— making :stream_timeout the single governing knob and letting ALLM's typed 
+:timeout win the race. Verified live against gpt-5.6 through the streaming 
+facade with a closed-schema tool at the new defaults: two turns, 264 s, seven 
+tool calls, zero errors, where the same shape previously died at 15 s. Note 
+that stream_finch_timeout_forwarding_test.exs's 'omits the timeout keys' test 
+was a semantic change — it pinned the 15 s default that was the bug — and 
+the Anthropic live arm is blocked on an unrelated account condition ('credit 
+balance is too low'), so only the OpenAI examples arm was exercised.
+
+---
+
 ## [DOC] Apply 16 backlogged retros to the agent instruction files
 *Thursday, July 30th at 1pm*
 Folds sixteen unapplied retrospectives — nine dating back to May and all 

@@ -185,6 +185,7 @@ defmodule ALLM.Providers.Anthropic do
   alias ALLM.Message
   alias ALLM.Providers.Support.ImageMime
   alias ALLM.Providers.Support.SSE
+  alias ALLM.Providers.Support.Transport
   alias ALLM.Request
   alias ALLM.Response
   alias ALLM.Retry
@@ -1325,7 +1326,11 @@ defmodule ALLM.Providers.Anthropic do
       forwarded verbatim to `Finch.async_request/3`. Each governs a
       different Finch timer: receive is per-chunk, request is
       end-to-end response receipt, pool is connection acquisition.
-      Omit to use Finch's defaults.
+      `:receive_timeout` defaults to `stream_timeout + 30_000` — **not**
+      to Finch's 15,000 ms, which an extended-thinking model routinely
+      spends before the first SSE chunk — so `:stream_timeout` is the
+      single knob to raise. See `ALLM.Providers.Support.Transport`. The
+      other two omit to Finch's defaults.
     * `:finch_module` — overrides `Finch` (test seam — see
       `ALLM.Test.FinchStub`).
     * `:finch_name` — name of the Finch supervisor child (default
@@ -1366,15 +1371,8 @@ defmodule ALLM.Providers.Anthropic do
     finch_module = Keyword.get(opts, :finch_module, Finch)
     finch_name = Keyword.get(opts, :finch_name, ALLM.Finch)
 
-    finch_extra_opts =
-      Keyword.take(opts, [
-        :finch_stub_ref,
-        :receive_timeout,
-        :request_timeout,
-        :pool_timeout
-      ])
-
     stream_timeout = Keyword.get(opts, :stream_timeout, @default_stream_timeout)
+    finch_extra_opts = Transport.finch_opts(opts, stream_timeout)
 
     enumerable =
       Stream.resource(

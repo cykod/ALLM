@@ -83,6 +83,7 @@ defmodule ALLM.Chat do
   """
 
   alias ALLM.{
+    Adapter,
     Capability,
     ChatResult,
     Engine,
@@ -2069,9 +2070,17 @@ defmodule ALLM.Chat do
     :verbosity
   ]
 
+  # HTTP-transport opts (`:receive_timeout`, `:stream_timeout`, `:finch_name`,
+  # …) are DERIVED from `ALLM.Adapter.transport_opts/0`. They must reach the
+  # adapter's top-level opts (StreamRunner forwards them) but must NEVER ride
+  # `request.options`, which every body-builder merges onto the provider wire
+  # — OpenAI answers `receive_timeout` on the body with HTTP 400
+  # "Unknown parameter". This was the whole reason a caller could not raise
+  # the transport timeout for a slow-to-first-token reasoning model.
   @request_carried_keys @local_request_carried_keys ++
                           StreamRunner.orchestration_opts() ++
-                          StreamRunner.phase_5_layer_opts()
+                          StreamRunner.phase_5_layer_opts() ++
+                          Adapter.transport_opts()
 
   # Strip the orchestration/streaming/request-carried keys from the opaque
   # param map so `request.options` carries only genuine adapter body params.

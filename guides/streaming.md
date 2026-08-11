@@ -180,6 +180,46 @@ returns `{:ok, response}` with `finish_reason: :error`. Pre-flight
 errors (validation failures, missing adapter) surface as `{:error, _}`
 at the `stream_generate/3` call site, before the stream is built.
 
+## Timeouts — reasoning models and the first chunk
+
+Two timers govern a stream, and only one of them is yours to set:
+
+* **`:stream_timeout`** (default `60_000`) — ALLM's inter-event budget.
+  It also covers the gap before the *first* event. Exceeding it emits a
+  terminal `{:error, %AdapterError{reason: :timeout}}`.
+* The Finch transport receive timer — a backstop. The adapters derive it
+  as `stream_timeout + 30_000` so `:stream_timeout` always fires first
+  and you get the typed `:timeout` reason rather than an untyped
+  transport failure.
+
+Reasoning models (`gpt-5.x`, extended-thinking Claude) spend their
+thinking time **before** the first SSE chunk arrives — on a long prompt
+with tools, tens of seconds with nothing on the wire is normal. Raise
+`:stream_timeout` for those:
+
+    iex> engine = ALLM.Engine.new(
+    ...>   adapter: ALLM.Providers.Fake,
+    ...>   adapter_opts: [
+    ...>     stream_timeout: 300_000,
+    ...>     stream_script: [[{:text_delta, "ok"}, {:finish, :stop}]]
+    ...>   ]
+    ...> )
+    iex> {:ok, stream} = ALLM.stream_generate(engine, ALLM.request([ALLM.user("hi")]))
+    iex> Enum.any?(Enum.to_list(stream), &match?({:message_completed, _}, &1))
+    true
+
+Set it once on the engine via `adapter_opts:` as above, or per call:
+
+```elixir
+{:ok, stream} = ALLM.stream(engine, thread, stream_timeout: 300_000)
+```
+
+Transport opts belong in `adapter_opts:` or call opts — **never** in the
+engine's `params:` map, which is the model-parameter map and lands on the
+provider request body. `ALLM.Adapter.transport_opts/0` lists the full set
+(`:stream_timeout`, `:receive_timeout`, `:request_timeout`,
+`:pool_timeout`, `:finch_name`, …).
+
 ## Where to next
 
 * `tools.md` — streaming + tool calls.

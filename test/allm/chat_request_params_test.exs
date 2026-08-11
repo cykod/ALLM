@@ -34,6 +34,11 @@ defmodule ALLM.ChatRequestParamsTest do
   defp probe_value(:mode), do: :auto
   defp probe_value(:max_turns), do: 5
   defp probe_value(:max_concurrency), do: 1
+  # transport opts — integer-valued timers and module/name-valued Finch refs
+  defp probe_value(k) when k in [:receive_timeout, :request_timeout, :pool_timeout], do: 300_000
+  defp probe_value(:stream_timeout), do: 300_000
+  defp probe_value(:finch_name), do: ALLM.Finch
+  defp probe_value(:finch_module), do: Finch
   # function-typed opts (invoked when present, regardless of leak assertion)
   defp probe_value(:on_event), do: fn _ -> :ok end
   defp probe_value(:on_tool_error), do: fn _, _ -> :halt end
@@ -147,6 +152,7 @@ defmodule ALLM.ChatRequestParamsTest do
         StreamRunner.orchestration_opts() ++
           StreamRunner.phase_5_layer_opts() ++
           OpenAI.reasoning_opts() ++
+          ALLM.Adapter.transport_opts() ++
           [
             :structured_finalize,
             :structured_finalize_nudge,
