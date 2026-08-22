@@ -1,3 +1,25 @@
+## [OTHR] Clean all compile, test, docs, and conformance warnings
+*Saturday, August 22nd at 1am*
+Cleaned up every warning and unclean-output source across the build so `mix 
+compile`, `mix test`, `mix docs`, and the `conformance/` sub-project all run 
+silent. `examples/_helpers.exs` called `EnvLoader.load/1` directly, which 
+warned on every test run because `:env_loader` is `only: [:dev]` while 
+`examples_helpers_test.exs` requires the file under `MIX_ENV=test`; it now uses 
+the `Code.ensure_loaded?/1` + `apply/3` guard the 
+`scripts/record_*_embeddings_fixtures.exs` recorders already used. 
+`ExUnit.start/1` gains `capture_log: true` so the ~25 adapter `:debug` lines 
+and the deliberate `Task` crash report from `tool_runner_test.exs:1675` no 
+longer interleave with the progress dots — verified against a planted failing 
+test that logs still replay in full on red. `mix.exs` gains 
+`skip_code_autolink_to:` for five prose references to `@doc 
+false`/private/external-hidden targets, each verified to still exist so the 
+entries suppress autolinking rather than mask a stale reference. Finally, 
+`conformance/lib/allm/test/image_adapter_conformance.ex` was formatted, closing 
+a `mix format --check-formatted` failure that had stood since Phase 14.1 
+(b18ebeb) because the main project's gates never reach the second Mix project.
+
+---
+
 ## [BUG] Fix transport timeouts never reaching Finch (§7.2)
 *Tuesday, August 11th at 9pm*
 Reasoning models spend their thinking time before the first SSE chunk, and 

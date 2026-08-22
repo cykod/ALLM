@@ -6,4 +6,16 @@
 # spec_31` even if it also carries `:pending` — i.e., `--only spec_31` shows
 # all §31 scenarios including the deferred placeholders, while a bare `mix
 # test` excludes them. See `fake_scenarios_test.exs` for the idiom.
-ExUnit.start(exclude: [:pending, :live_openai, :live_anthropic, :live_gemini, :live_openai_images])
+#
+# `capture_log: true` buffers every test's log output and replays it ONLY when
+# that test fails. Adapters legitimately log at `:debug` on well-tested paths
+# (`ImagePart.detail` drops, `task_type` omissions, stripped orchestration
+# opts) and one tool-runner test deliberately crashes a `Task`, so an
+# uncaptured run interleaves ~25 log lines with the progress dots. This keeps a
+# green run quiet WITHOUT losing diagnostics on red — and it composes with the
+# explicit `ExUnit.CaptureLog.capture_log/2` calls that assert on log content
+# (ExUnit supports nested capture).
+ExUnit.start(
+  exclude: [:pending, :live_openai, :live_anthropic, :live_gemini, :live_openai_images],
+  capture_log: true
+)

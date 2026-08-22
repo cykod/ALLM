@@ -88,8 +88,7 @@ defmodule ALLM.Test.ImageAdapterConformance do
             if unsupported do
               req = ImageRequest.new(operation: unsupported, prompt: "x")
 
-              assert {:error,
-                      %ImageAdapterError{reason: :unsupported_operation, metadata: meta}} =
+              assert {:error, %ImageAdapterError{reason: :unsupported_operation, metadata: meta}} =
                        @__allm_image_conformance_adapter__.generate(req, [])
 
               assert meta.operation == unsupported

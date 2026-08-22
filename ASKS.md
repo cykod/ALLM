@@ -331,3 +331,7 @@
 [ASKS] thu 7/30 2am - Applied 16 unapplied retros into CLAUDE.md, AGENT_DESIGN_SPEC.md and AGENT_IMPLEMENTATION_SPEC.md — async-global foot-gun class, provider wire probe, live-gate discipline, fail-open audit literals, and two approved cross-phase carve-outs
 
 [MILE] thu 7/30 1pm - Applied sixteen backlogged retros to CLAUDE.md and the two agent specs, generalizing the async-global foot-gun, mandating a live provider wire probe, and adding two approved cross-phase carve-outs
+
+[MILE] tue 8/11 9pm - Fixed the streaming transport-timeout blocker: transport opts now reach Finch instead of the request body, and receive_timeout defaults above stream_timeout so reasoning models survive their pre-first-chunk think time
+
+[IMPL] fri 8/21 11pm - Clean up all compiler warnings and other issues so mix compile and the full test suite run clean

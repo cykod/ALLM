@@ -81,6 +81,30 @@ defmodule ALLM.MixProject do
       source_ref: "v#{@version}",
       extras: ["README.md", "CHANGELOG.md"] ++ @guides,
       groups_for_extras: [{"Guides", @guides}],
+      # Prose references to intentionally-hidden or private targets. ExDoc
+      # autolinks any `Mod.fun/arity` in backticks and warns when the target is
+      # `@doc false` or private; each entry below is a DELIBERATE reference that
+      # must stay in the prose, not a stale one. Verified present at the time of
+      # writing — if a name here stops existing, delete the entry rather than
+      # letting it mask a real broken reference.
+      #
+      #   ALLM.Engine.put_cursor_key/2      lib/allm/engine.ex:239 — `@doc false`
+      #                                     test seam named by the three Fake
+      #                                     adapters' moduledocs.
+      #   ALLM.StreamRunner.build_dispatch_opts/2
+      #                                     lib/allm/stream_runner.ex:234 — defp.
+      #   ALLM.do_generate_image_body/5     lib/allm.ex:1188 — defp.
+      #   ALLM.Keys.Store                   lib/allm/keys/store.ex — hidden module,
+      #                                     named in a historical CHANGELOG entry.
+      #   Finch.HTTP1.Pool                  hidden module in the `:finch` dep,
+      #                                     cited for its `:receive_timeout` default.
+      skip_code_autolink_to: [
+        "ALLM.Engine.put_cursor_key/2",
+        "ALLM.StreamRunner.build_dispatch_opts/2",
+        "ALLM.do_generate_image_body/5",
+        "ALLM.Keys.Store",
+        "Finch.HTTP1.Pool"
+      ],
       groups_for_modules: [
         Facade: [ALLM],
         Sessions: [ALLM.Session, ALLM.Session.StreamReducer],

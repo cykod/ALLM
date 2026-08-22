@@ -222,9 +222,27 @@ defmodule ExamplesHelpers do
   end
 
   defp active_provider do
-    # Load .env from project root if present — no-op when keys are already in env.
-    EnvLoader.load(Path.expand(".env", Path.join(__DIR__, "..")))
+    load_dotenv()
     System.get_env("ALLM_PROVIDER", "openai")
+  end
+
+  # Load .env from the project root if present — no-op when keys are already in env.
+  #
+  # `:env_loader` is `only: [:dev]` and `mix run examples/…` runs in `:dev`, so
+  # the dep is available here. `test/allm/examples_helpers_test.exs` loads this
+  # file via `Code.require_file/1` under `MIX_ENV=test`, where the module is
+  # absent — hence `apply/3` rather than a direct `EnvLoader.load/1` call, which
+  # the compiler flags as an undefined remote function regardless of the
+  # `Code.ensure_loaded?/1` guard (that check is purely syntactic on the call
+  # site). Mirrors the guard in `scripts/record_*_embeddings_fixtures.exs`.
+  defp load_dotenv do
+    path = Path.expand(".env", Path.join(__DIR__, ".."))
+
+    if Code.ensure_loaded?(EnvLoader) and File.exists?(path) do
+      apply(EnvLoader, :load, [path])
+    end
+
+    :ok
   end
 
   defp lookup_provider_row do
