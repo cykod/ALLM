@@ -1,27 +1,3 @@
-## [OTHR] Add CI with an Elixir 1.19 matrix leg and a conformance job
-*Tuesday, August 25th at 8pm*
-This repo had NO CI of any kind, which is why the `conformance/` `mix format` 
-gate stayed red from Phase 14.1 until this month — nothing ever ran it. The 
-new workflow runs two Elixir legs: the pinned 1.17.3/OTP 27.1.2 toolchain from 
-`.tool-versions`, where every gate blocks, and a 1.19 leg that exists because 
-`mix.exs` declares `elixir: "~> 1.17"` and a dependency's `lib/` compiles 
-inside the consumer's project, so downstream apps on 1.19 see warnings we 
-currently do not. The 1.19 leg is `continue-on-error` for now and its `mix test 
---warnings-as-errors` step is EXPECTED TO FAIL on roughly 59 type-checker 
-warnings in `test/**/*.exs`; the TODO in the matrix says to flip it once those 
-are cleared. `conformance/` gets its own job because it is a second Mix project 
-the main gates structurally cannot reach. Two things are deliberately scoped 
-out: `mix format --check-formatted` runs only on the pinned leg (formatter 
-output differs between Elixir versions, so a 1.19 diff would be version drift 
-rather than unformatted code), and `mix dialyzer` is pinned to `MIX_ENV=dev` 
-because the job-wide `:test` pulls `test/support` into the analysis and exits 2 
-on `Function ExUnit.Assertions.assert/2 does not exist` — verified locally. 
-Every mix invocation in the workflow was run on this machine first; the 
-workflow file itself is unverified, since GitHub Actions cannot be executed 
-here and no YAML parser is installed in the dev container.
-
----
-
 ## [TWK] Make chat and runner clean under the Elixir 1.19 type checker
 *Tuesday, August 25th at 8pm*
 ALLM declares `elixir: "~> 1.17"`, which permits 1.19, and a dependency's 
