@@ -1,3 +1,25 @@
+## [TWK] Make chat and runner clean under the Elixir 1.19 type checker
+*Tuesday, August 25th at 8pm*
+ALLM declares `elixir: "~> 1.17"`, which permits 1.19, and a dependency's 
+`lib/` compiles inside the consumer's project — so these two warnings 
+surfaced for a downstream app building on 1.19 even though the pinned toolchain 
+(1.17.3/OTP 27.1.2) reports none. `ALLM.Chat.handle_step_completed/2` and 
+`finalise_unexpected/1` now destructure `%{loop_state: %LoopState{} = 
+loop_state}` in the function head so 1.19's inference engine can prove the 
+target of the `%LoopState{... | ...}` struct updates; that change is purely 
+structural and behaviour-preserving. `ALLM.Runner` drops the 
+`response.request_id ||` fallback and assigns the run-level `request_id` 
+unconditionally — NOTE this is a real behaviour change, not only a warning 
+fix: it removes a defensive fallback, and is safe only because 
+`StreamCollector.to_response/1` never populates `:request_id` (the field 
+appears nowhere in `stream_collector.ex` and `%Response{}` defaults it to nil), 
+so a future collector path that does set it would now be silently clobbered. 
+Verified on the pinned toolchain: 3089 tests green, plus format, credo 
+--strict, dialyzer, and a --warnings-as-errors compile; the 1.19 warnings 
+themselves could not be re-checked here because only 1.17.3 is installed.
+
+---
+
 ## [OTHR] Clean all compile, test, docs, and conformance warnings
 *Saturday, August 22nd at 1am*
 Cleaned up every warning and unclean-output source across the build so `mix 

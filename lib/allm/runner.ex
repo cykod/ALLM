@@ -120,7 +120,9 @@ defmodule ALLM.Runner do
        %Response{
          response
          | usage: usage,
-           request_id: response.request_id || request_id
+           # `StreamCollector.to_response/1` never populates :request_id, so the
+           # run-level id from `run/3` is always the source of truth here.
+           request_id: request_id
        }}
     end
   end

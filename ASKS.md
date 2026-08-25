@@ -335,3 +335,5 @@
 [MILE] tue 8/11 9pm - Fixed the streaming transport-timeout blocker: transport opts now reach Finch instead of the request body, and receive_timeout defaults above stream_timeout so reasoning models survive their pre-first-chunk think time
 
 [IMPL] fri 8/21 11pm - Clean up all compiler warnings and other issues so mix compile and the full test suite run clean
+
+[MILE] sat 8/22 1am - Cleaned all compile, test, docs, and conformance warnings — EnvLoader guard, ExUnit capture_log, ExDoc autolink skips, and the long-standing conformance format failure

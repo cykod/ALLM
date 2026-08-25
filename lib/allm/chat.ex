@@ -1814,7 +1814,7 @@ defmodule ALLM.Chat do
   end
 
   defp handle_step_completed(
-         data,
+         %{loop_state: %LoopState{} = loop_state} = data,
          {:step_completed, %{response: r, thread: t} = payload} = event
        ) do
     # State-boundary ownership (Phase 7 design 7.4.2 — load-bearing):
@@ -1830,7 +1830,7 @@ defmodule ALLM.Chat do
     #    (which resets per-step sub-state per Phase 7 Decision #6).
     folded_collector = StreamCollector.apply_event(data.collector, event)
 
-    new_steps = data.loop_state.steps ++ [step_result]
+    new_steps = loop_state.steps ++ [step_result]
 
     case terminal_condition(step_result, data.opts, data.step_index, t, data.max_turns) do
       :continue ->
@@ -1846,7 +1846,7 @@ defmodule ALLM.Chat do
         {:ok, next_step_stream} = stream_step(data.engine, t, data.opts)
 
         new_loop_state = %LoopState{
-          data.loop_state
+          loop_state
           | thread: t,
             steps: new_steps,
             step_index: data.step_index + 1
@@ -1876,7 +1876,7 @@ defmodule ALLM.Chat do
         new_thread = Thread.add_message(t, question_msg)
 
         halted_loop_state = %LoopState{
-          data.loop_state
+          loop_state
           | thread: new_thread,
             steps: new_steps,
             step_index: data.step_index + 1,
@@ -1891,7 +1891,7 @@ defmodule ALLM.Chat do
 
       {:halt, reason, halt_meta} ->
         halted_loop_state = %LoopState{
-          data.loop_state
+          loop_state
           | thread: t,
             steps: new_steps,
             step_index: data.step_index + 1,
@@ -1906,9 +1906,9 @@ defmodule ALLM.Chat do
 
   # Defensive — unreachable through normal flow because stream_step/3
   # ALWAYS terminates with :step_completed before its enumerable exhausts.
-  defp finalise_unexpected(data) do
+  defp finalise_unexpected(%{loop_state: %LoopState{} = loop_state} = data) do
     halted_loop_state = %LoopState{
-      data.loop_state
+      loop_state
       | thread: data.thread,
         halted_reason: :cancelled,
         halt_metadata: %{}
