@@ -1,3 +1,26 @@
+## [OTHR] Set GIT_OPTIONAL_LOCKS=0 in the dev container
+*Saturday, August 29th at 8pm*
+Sweeps up the last two uncommitted files in the tree. The substantive change is 
+`.devcontainer/devcontainer.json`, which predates this session and had been 
+carried unstaged across three commits: it sets `GIT_OPTIONAL_LOCKS=0` in 
+`containerEnv` because Zed's remote server polls git roughly once a second and 
+each poll rewrote `.git/index` via lock-and-rename, which on this virtiofs bind 
+mount exposes a transient ENOENT window to concurrent readers. Git treats a 
+MISSING index as an EMPTY one without erroring, so a `git add` landing in that 
+window silently rebuilds a one-entry index — the mechanism behind a past 
+milestone commit that recorded 1276 deletions. It must live in `containerEnv` 
+rather than `remoteEnv` because `zed-remote-server` is launched by `docker 
+exec` and inherits only the former, and only OPTIONAL locks are suppressed so 
+`add` and `commit` still take mandatory locks. This is the same hazard 
+CLAUDE.md documents for parallel review agents, now fixed at the container 
+level rather than per-command. Verified the file still parses as JSONC and 
+resolves to `containerEnv.GIT_OPTIONAL_LOCKS = "0"`. Also commits a pending 
+ASKS.md log line; note that line's CI half is stale — the workflow it 
+describes was reverted in 4b5abca because the project does not use CI, a 
+constraint already documented at steering/RELEASE_PLAN.md:393.
+
+---
+
 ## [TWK] Make chat and runner clean under the Elixir 1.19 type checker
 *Tuesday, August 25th at 8pm*
 ALLM declares `elixir: "~> 1.17"`, which permits 1.19, and a dependency's 

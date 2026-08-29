@@ -337,3 +337,5 @@
 [IMPL] fri 8/21 11pm - Clean up all compiler warnings and other issues so mix compile and the full test suite run clean
 
 [MILE] sat 8/22 1am - Cleaned all compile, test, docs, and conformance warnings — EnvLoader guard, ExUnit capture_log, ExDoc autolink skips, and the long-standing conformance format failure
+
+[MILE] tue 8/25 8pm - Committed the Elixir 1.19 lib fixes from the downstream session and added the repo's first CI workflow, with a non-blocking 1.19 matrix leg and a conformance job

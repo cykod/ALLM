@@ -31,6 +31,19 @@
     "npm_config_yes": "true",
     "PNPM_YES": "true",
     "FORCE_COLOR": "1",
+    // Stops `git status` from opportunistically rewriting `.git/index`.
+    // Zed's remote server polls git ~1x/second and each poll rewrote the
+    // index via lock+rename; on this virtiofs bind mount that rename
+    // exposes a transient ENOENT window to concurrent readers (Zed logs
+    // hitting it itself: "failed to read index ... no longer exists").
+    // Git treats a MISSING index as an EMPTY one WITHOUT erroring, so a
+    // `git add` landing in that window silently rebuilds a 1-entry index —
+    // which is how a /milestone commit once recorded 1276 deletions.
+    // Only *optional* locks are suppressed; `add`/`commit` still take
+    // mandatory locks and are unaffected. Must be in containerEnv, not
+    // remoteEnv: zed-remote-server is launched by `docker exec` and
+    // inherits containerEnv (verified against /proc/<pid>/environ).
+    "GIT_OPTIONAL_LOCKS": "0",
   },
   "customizations": {
     "vscode": {
