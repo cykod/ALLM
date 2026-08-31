@@ -18,9 +18,10 @@ defmodule ALLM.ModerationResponse do
   Unlike `ALLM.EmbeddingResponse` and `ALLM.ImageResponse`, this struct has
   **no `:usage` field**. Moderation endpoints are free and return no usage
   object, so there are no counters to carry and synthesizing empty ones
-  would be noise. Telemetry metadata still carries a `:usage` key so that a
-  metrics handler written against one capability does not `KeyError` when
-  pointed at another; the absence is on the struct only.
+  would be noise. `ALLM.moderate/3`'s `[:allm, :moderate, :stop]` telemetry
+  metadata still carries a `:usage` key (always `nil`) so that a metrics
+  handler written against one capability does not `KeyError` when pointed at
+  another; the absence is on the struct only.
 
   ## Fields
 

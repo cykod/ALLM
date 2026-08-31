@@ -1,6 +1,6 @@
 defmodule ALLM.Error.ModerationAdapterError do
   @moduledoc """
-  Errors returned by content-moderation adapter implementations.
+  Errors returned by `ALLM.ModerationAdapter` implementations.
 
   Layer A — serializable (no PIDs, refs, funs, or raw API keys). Closed-enum
   exception struct carrying the same eleven reasons as
@@ -26,7 +26,7 @@ defmodule ALLM.Error.ModerationAdapterError do
   | `:network_error` | — | TCP/TLS/DNS failure. Retried automatically. |
   | `:malformed_response` | — | 200 with an unparseable body, or a results entry missing its verdict. No retry; file a bug. |
   | `:unsupported_feature` | — | Request used a field this adapter cannot express; `metadata.feature` names it. No retry. |
-  | `:batch_too_large` | — | `length(request.input) > max_batch_size()`; `metadata` carries `:count` and `:max`. Recoverable by chunking the input yourself. |
+  | `:batch_too_large` | — | the request's item count exceeds `c:ALLM.ModerationAdapter.max_batch_size/0`; `metadata` carries `:count` and `:max`. `ALLM.moderate/3` does NOT chunk, so this IS reachable through the façade — recover by chunking the input yourself. |
   | `:unknown` | any | Catch-all for shapes the adapter cannot classify; non-retryable. |
   """
 

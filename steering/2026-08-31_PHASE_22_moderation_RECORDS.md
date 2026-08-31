@@ -722,3 +722,493 @@ documentation and has no test.
   This batch deliberately did not touch those files (out of Module Tree) and
   wrote its own `ALLM.moderate` references without an arity suffix for the
   same reason — `mix docs` stays at **0** warnings.
+
+---
+
+## Phase 22.3 — Façade, telemetry, capability pre-flight (Layer C)
+
+**Status: Completed** (2026-08-31). All four review gates ran; artifacts present and non-empty: `.work/reviews/2026-08-31-phase22-3-layer-c/overview.md` (functional, PASS), `.work/code-reviews/2026-08-31-phase22-3-layer-c.md` (10 findings, 0 High), `.work/security-reviews/2026-08-31-phase22-3-layer-c.md` (no issues), `.work/design-reviews/2026-08-31-phase22-3-layer-c.md` (N/A — backend-only). Fix pass applied 8 items, escalated 0; both reviewers independently found the capability gate unbound and the fix is mutation-verified in both directions.
+both Mix projects (transcript below); the four review gates have not run. The
+orchestrator upgrades this to `Completed` once the review artifacts land.
+
+### Implementation Checklist (22.3.2)
+
+- [x] `ALLM.moderation_request/2` + `@moderation_request_field_opts`
+      allow-list (`[:model, :options, :metadata]`)
+- [x] `ALLM.moderate/3` — `@doc` carrying "Result cardinality is
+      type-dependent" (#4), "Batching — there is none" (#5), "No `:usage`,
+      but the span still carries the key" (#6) and "Validation policy" (#11),
+      plus two doctests (happy path over `FakeModeration`; the
+      `:no_moderation_adapter` gate), `@spec`, head + three clauses
+- [x] Internals: `@retryable_moderation_reasons`,
+      `drop_moderation_request_opts/1`, `do_moderate/3`,
+      `do_moderate_body/5` (nil-adapter clause **first**, as a pattern match;
+      the `Retry.run/3` wrap in its body per the image convention),
+      `build_moderate_dispatch_opts/3` (**no** `:retry_policy` key; ends with
+      `Engine.put_cursor_key(engine)`), `dispatch_moderate_attempt/3`
+      (per-attempt closure + invariant-2 raise), `fill_moderation_request_id/2`,
+      `moderate_stop_extras/1`
+- [x] Reused the existing `augment_retry_policy/2` (`lib/allm.ex:1281-1291`
+      at 22.2 HEAD) — no third variant added
+- [x] `ALLM.Capability.preflight_moderation/2` + the
+      `# Private — moderation preflight` block + moduledoc bullet
+      ("Five helpers" → **six**)
+- [x] `ALLM.Telemetry` — `:moderate` in both `@type span_name` and
+      `@valid_span_names`, plus the moduledoc table row (and the two `span/3`
+      `@doc` enumerations that hand-copy the same list)
+- [x] `lib/allm.ex` — "When to reach for what" table row and both alias blocks
+- [x] `test/allm_facade_doctest_inventory_test.exs` `@public_facade` —
+      `moderate: 3` and `moderation_request: 2` (fail-**open** gate; both new
+      functions carry runnable doctests)
+- [x] HANDOFF item 4 — the deferred moderation doc references tightened now
+      that their targets exist
+- [x] No `async: true` module in this sub-phase calls `Keys.put/2`,
+      `Logger.configure/1`, `System.put_env/2`, or `:telemetry.attach/4`
+
+### Files
+
+**Modified (lib):** `lib/allm.ex` (aliases, moduledoc table row,
+`moderation_request/2`, `moderate/3`, the moderation internals block),
+`lib/allm/capability.ex`, `lib/allm/telemetry.ex`,
+`lib/allm/error/moderation_adapter_error.ex` (docs only),
+`lib/allm/moderation_response.ex` (docs only),
+`lib/allm/moderation_adapter.ex` (docs only).
+
+**New (test):** `test/allm/allm_moderate_test.exs`,
+`test/allm/capability_moderation_test.exs`.
+
+**Modified (test):** `test/allm_facade_doctest_inventory_test.exs`.
+
+**No `mix.exs` edit was needed or made.** `ALLM.Capability` and
+`ALLM.Telemetry` are already registered in `docs.groups_for_modules`, and this
+sub-phase creates no new public module — the fail-closed
+`test/groups_for_modules_audit_test.exs` stays green untouched.
+
+`README.md` untouched — `git --no-optional-locks diff --stat HEAD -- README.md`
+empty.
+
+### Verification transcript (22.3.3)
+
+```
+mix test test/allm/allm_moderate_test.exs
+       test/allm/capability_moderation_test.exs   4 doctests, 50 tests, 0 failures
+mix test                        416 doctests, 31 properties, 3297 tests, 0 failures, 14 excluded
+mix test --seed 0               416 doctests, 31 properties, 3297 tests, 0 failures, 14 excluded
+mix format --check-formatted    clean
+mix credo --strict              3059 mods/funs, found no issues
+mix dialyzer                    Total errors: 0, Skipped: 0, Unnecessary Skips: 0
+mix compile --force --warnings-as-errors   clean
+mix docs 2>&1 | grep -ciE '(warning|error)'   0   (0 at baseline too)
+mix test --cover                Total 93.65% (93.56% at baseline — up)
+                                ALLM                  99.36%
+                                ALLM.Capability       98.13%
+                                ALLM.Telemetry       100.00%
+
+cd conformance && mix test      103 tests, 0 failures   (unchanged — this
+                                sub-phase does not touch conformance/)
+```
+
+Baseline before the batch: 406 doctests, 31 properties, 3245 tests, 0 failures.
+Delta: **+10 doctests, +52 tests, 0 failures.** Zero warnings throughout.
+
+**Self-scoring predicates:**
+
+```
+$ mix run scripts/audit_user_docs.exs | grep moderation
+(empty)
+```
+
+Per the standing predicate (HANDOFF item 11, and the design's 22.1.3
+correction), the bare script's non-zero exit is the `main` baseline — 10 hits
+across 5 files, none in moderation — and is not this sub-phase's regression.
+
+```
+$ grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test/
+```
+
+returns the same 20 pre-existing files as at baseline, **plus
+`test/allm/allm_moderate_test.exs`**. That hit is a false positive of the same
+shape the sibling `test/allm/allm_embed_test.exs:12` already produces: the
+moduledoc contains the prose sentence *"a bare `:telemetry.attach/4` in an
+`async: true` module would capture other tests' events"*. Verified by a
+call-shaped re-grep — `grep -n 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry\.attach' test/allm/allm_moderate_test.exs`
+returns only line 13, the moduledoc. The file attaches through
+`ALLM.Test.TelemetryCapture`, the per-process filter, exactly as the audit
+rule requires. `test/allm/capability_moderation_test.exs` mutates
+`Application.put_env(:allm, :force_capability_absent, …)` and is therefore
+`async: false`, matching `ALLM.CapabilityEmbeddingTest`.
+
+### Gate-binding verification (mutation checks)
+
+The two contract points the batch was most at risk of shipping green-but-wrong
+were each falsified by mutating `lib/` and re-running the focused file:
+
+* **Dropping `|> Engine.put_cursor_key(engine)`** from
+  `build_moderate_dispatch_opts/3` turns **2 tests red** — *"the engine's
+  `:id` is injected as `adapter_opts[:cursor_key]`"* (`nil` vs `987654`) and
+  *"two content-equal-script engines with distinct `:id` values do not share a
+  cursor"*. Restored and green.
+* **Disabling the invariant-2 `raise`** (guarding the `other ->` clause so it
+  cannot match) turns **1 test red** — *"an adapter returning a bare map
+  raises ArgumentError naming the adapter and invariant 2"*. Restored and
+  green. This is the only enforcement of `ALLM.ModerationAdapter` invariant 2
+  in the tree; the published conformance suite deliberately does not bind it.
+
+### Deviations
+
+1. **[tactical] The telemetry input counter is `moderation_input_count/1`, not
+   a second set of clauses on the existing `input_count/1`.** The Layer-C
+   contract says *"`input_count/1` is computed by a two-clause private that
+   tolerates a non-list `:input`"*. Both clauses ship exactly as specified
+   (`when is_list(input) -> length(input)`; bare struct -> `0`) and the
+   tolerant arm is pinned by two tests. Only the name differs: Elixir requires
+   clauses of one name/arity to be grouped, and `input_count/1` lives inside
+   the `# Internals — embedding …` block, so sharing the name would have meant
+   either a compiler warning or interleaving two capability blocks. Sibling
+   relationship stated in the new function's comment.
+
+2. **[documented] `ModerationAdapterError`'s `:batch_too_large` row was
+   corrected beyond the autolink tightening HANDOFF item 4 asked for.** The
+   row read *"`length(request.input) > max_batch_size()`"*, which contradicts
+   behaviour invariant 5 as amended in the 22.2 fix pass (the gate measures
+   the **item count**, `1` for a multimodal request, not the raw list length).
+   Since the row was being edited anyway to autolink
+   `c:ALLM.ModerationAdapter.max_batch_size/0`, the false half was fixed in
+   the same edit rather than left standing next to a corrected autolink. The
+   row also gained the `ALLM.moderate/3`-does-not-chunk clause, replacing the
+   embeddings sibling's *"Unreachable through `ALLM.embed/3`, which chunks"*
+   framing that had been copied across and is false here (Alternative D).
+
+3. **[tactical] `check_moderation_capabilities/2` keeps the embeddings
+   sibling's accumulator-and-reverse shape for a single rule.** With one rule
+   the `Enum.reverse/1` is a no-op and the fold is ceremony. Retained for
+   family alignment: a second rule slots in as one more `|>` step, and the
+   reverse is what keeps the error list in declaration order the moment there
+   is more than one. Stated in a comment at the function so a reviewer does
+   not read it as accidental.
+
+No other deviations. In particular: the `Retry.run/3` wrap is in
+`do_moderate_body/5`'s body (the **image** convention, not the embeddings
+one), `build_moderate_dispatch_opts/3` puts **no** `:retry_policy` key —
+pinned by *"no `:retry_policy` key leaks into the adapter's dispatch opts"* —
+and `augment_retry_policy/2` was reused unmodified.
+
+### Tests beyond the Test Plan
+
+Per `agent-spec/IMPLEMENTATION.md` §4.2 ("Test Plan is a coverage floor, not
+ceiling"), these bind Contracts-section invariants the 22.3.1 bullets do not
+name:
+
+* Three cursor-key tests (injection, content-equal-engine isolation,
+  caller-supplied `:cursor_key` precedence) — the single most important line
+  in the batch per 22.2.4, and the two that fail on its removal.
+* *"no `:retry_policy` key leaks into the adapter's dispatch opts"* — the
+  negative half of the image-vs-embeddings retry-placement divergence.
+* Engine-vs-call-site `adapter_opts` precedence (first-wins `++`, not
+  `Keyword.merge/2`).
+* Multimodal cardinality through the façade, and `multimodal: true` in
+  `:start` metadata.
+* `flagged_count` over a mixed batch (1 of 3 flagged), so the measurement is
+  not satisfiable by `length(results)`.
+* `retry: false` on the engine short-circuiting a retryable reason.
+* `moderation_request/2` wrapping a bare `%ImagePart{}` list.
+* A multimodal arm on `preflight_moderation/2`, pinning that the rule reads
+  the ref and never the request.
+
+### `[DEFERRED-DRY]` entries
+
+* **`[DEFERRED-DRY]` — the moderation and embedding façade internals blocks.**
+  `do_moderate/3` / `do_embed/3`, `build_moderate_dispatch_opts/3` /
+  `build_embed_dispatch_opts/3`, `moderation_input_count/1` /
+  `input_count/1`, `fill_moderation_request_id/2` /
+  `fill_embedding_request_id/2` and `moderate_stop_extras/1` /
+  `embed_stop_extras/1` are near-clones differing by the struct in each head,
+  the span name, the measurement key names, and (deliberately) the
+  `:retry_policy` key and the `Retry.run/3` placement. `dispatch_moderate_attempt/3`
+  is a third copy of the shape `dispatch_image_attempt/3` and
+  `EmbeddingBatch.dispatch_chunk/2` already share.
+  `agent-spec/IMPLEMENTATION.md:68`'s trigger has fired.
+
+  **Not extracted:** a shared `do_capability_call/…` would have to be
+  parameterised by span name, two measurement-key names, a validator, a
+  preflight function, a request-field allow-list, a retryable-reason list AND
+  the retry-placement divergence — seven axes for three call sites, which is
+  worse than the duplication. It would also touch two released capability
+  paths from inside a sub-phase whose Module Tree scopes neither. Per
+  `IMPLEMENTATION.md:68` the Module Tree wins and the debt is recorded.
+  **DONE WHEN** — if ever revisited — a fourth capability façade arrives and
+  the axes can be counted against four call sites rather than three.
+
+* **`[EXTRACTED]` (was `[DEFERRED-DRY]`) — the four boolean capability-flag
+  matchers in `lib/allm/capability.ex`.**
+
+  **CORRECTED 2026-08-31 (fix pass, from code review F2).** This entry
+  originally read *"`check_moderation_enabled/2` vs
+  `check_embeddings_enabled/2` … Byte-identical modulo the capability key
+  atom/string and the error tuple … at two, collapsing means editing the
+  released embeddings path … re-evaluate at the third flag."* **The count was
+  wrong and the stated grounds do not hold.** `check_moderation_enabled/2` is
+  the **fourth** copy, not the second, so the entry's own re-evaluation
+  trigger had already fired a phase before it was written. Re-measured at the
+  fix-pass checkpoint:
+
+  ```
+  $ grep -n '=> false} ->' lib/allm/capability.ex     # pre-fix
+  517:  %{"json_native" => false} -> …        # NOT a member — error path is [:response_format]
+  534:  %{"vision" => false} -> …             # Phase 17
+  582:  %{"images_enabled" => false} -> …     # Phase 14.3
+  637:  %{"embeddings_enabled" => false} -> … # Phase 20
+  685:  %{"moderation_enabled" => false} -> … # Phase 22.3
+  ```
+
+  All four members are the same six-line
+  `case caps do %{key: false} -> …; %{"key" => false} -> …; _ -> acc end`
+  block differing on **one** derivable axis: the error atom is
+  `:<x>_enabled` → `:<x>_disabled` in three and `:vision` → `:vision_disabled`
+  in the fourth, and the error path is `[key]` in all four.
+
+  **Extracted** in the fix pass to one private,
+  `reject_when_flag_false(acc, caps, key, error_reason)`, in a new
+  `# Private — shared capability-flag rule` section, with **all four** call
+  sites migrated in the same edit per CLAUDE.md's migration-on-extraction
+  rule. `[structural, documented]`: private, behaviour-preserving, every
+  public name unchanged, and the whole of `capability.ex` was already in this
+  sub-phase's Module Tree — so this is **not** a cross-phase edit and
+  CLAUDE.md's promotion-trigger exception applies directly.
+
+  Behaviour equivalence pinned by the pre-existing matrices, run unchanged:
+  `mix test test/allm/capability_vision_test.exs test/allm/capability_image_test.exs
+  test/allm/capability_embedding_test.exs test/allm/capability_moderation_test.exs
+  test/allm/capability_test.exs` → **11 doctests, 75 tests, 0 failures**. The
+  string-key/atom-key tolerance arms and the "a missing key is never a
+  rejection" rule survive intact (pin-matched `%{^key => false}` /
+  `%{^string_key => false}` clauses in the same order).
+
+  **Deliberately not members:** `check_json_native/3` (capability key
+  `:json_native`, error path `[:response_format]` — the `[key]` path does not
+  hold) and `check_tools/3` (reads a nested `%{enabled: false}` map). Both
+  exclusions are stated in the helper's comment.
+
+  Self-scoring predicate: `grep -c '=> false} ->' lib/allm/capability.ex`
+  must be **1** (today: the `json_native` line only).
+
+### Notes for later sub-phases
+
+* **`input_count` on the `:moderate` span is the RAW list length, not the
+  *item* count of behaviour invariant 5.** A multimodal request with two
+  elements reports `input_count: 2` and `multimodal: true`; the item count
+  invariant 5 gates on is `1`. This is deliberate — `multimodal` rides
+  alongside precisely so a consumer can derive the item count without a
+  second measurement — and it is pinned by *"`:start` carries
+  `multimodal: true` for an `%ImagePart{}`-bearing input"*. Binds **22.5**:
+  do not "fix" `input_count` to the item count without also amending the
+  design's telemetry table and that test.
+
+* **Nothing in the façade resolves a key.** There is no `Keys.fetch!` in
+  `lib/allm.ex`'s moderation block; `:api_key` is forwarded verbatim in the
+  dispatch opts and the adapter resolves it *after* its own gates (behaviour
+  invariants 5 and 6). Binds **22.4**.
+
+* **Capability pre-flight runs in the façade, not in `moderate/2`.** A direct
+  `ALLM.Providers.OpenAI.Moderation.moderate(req, opts)` bypasses
+  `preflight_moderation/2` by design. Binds **22.4**: do not add a capability
+  gate to the adapter, and if a 22.4 test needs the capability rejection it
+  must drive `ALLM.moderate/3`.
+
+* **`@moderation_request_field_opts` is `[:model, :options, :metadata]` and
+  its symmetry test computes the expectation from
+  `Map.keys(%ModerationRequest{})`.** Any sub-phase adding a
+  `%ModerationRequest{}` field must add it to the allow-list in the same
+  commit or that test goes red — which is the point. 22.5 adds no field
+  (`:input`'s element union already accepts `%ImagePart{}`).
+
+* **`ALLM.Telemetry.@valid_span_names` is hand-copied into three places** —
+  the attribute, `@type span_name`, and two prose enumerations in `span/3`'s
+  `@doc` — with no gate binding them together. All four were updated here;
+  a future span name must update all four. The class is CLAUDE.md's
+  hand-maintained-literal hazard; a meta-test asserting the `@doc` prose
+  against `@valid_span_names` is not obviously worth its cost, so this is a
+  note rather than a `[CHORE]`.
+
+* **HANDOFF item 4 is discharged in full.** All three sites named in 22.1
+  Deviation 4 now autolink, plus the two bare `ALLM.moderate` references 22.2
+  wrote for the same reason. `mix docs` stays at **0** warnings.
+
+### 22.3 fix pass (2026-08-31)
+
+Applied from `.work/reviews/2026-08-31-phase22-3-layer-c/overview.md`
+(functional, PASS — 1 Medium, 1 Low, 2 nits),
+`.work/code-reviews/2026-08-31-phase22-3-layer-c.md` (10 findings, 0 High),
+`.work/security-reviews/2026-08-31-phase22-3-layer-c.md` (no issues) and
+`.work/design-reviews/2026-08-31-phase22-3-layer-c.md` (N/A).
+
+**Fixed (8 items):**
+
+1. **Code review F1 + functional review Finding 1 (Medium, found
+   independently by both, each with mutation proof) — gate 3 was wired but
+   bound by nothing.** Two tests added to `test/allm/allm_moderate_test.exs`'s
+   `"moderate/3 gates"` describe: *"gate 3 — `Capability.preflight_moderation/2`
+   is wired into the façade"* and *"gate 2 precedes gate 3 — validation wins
+   over the capability gate"*. Both drive `ALLM.moderate/3` against an engine
+   whose `:model` is a bare `%ModelRef{}` with `moderation_enabled: false` —
+   **no** `Application.put_env/3`, so the file stays `async: true`
+   (`test/support/llm_db.ex`'s `model(%ModelRef{} = ref), do: ref` identity
+   clause makes the override unnecessary, and the `:force_capability_absent`
+   route is the documented `async: true` foot-gun the functional reviewer
+   flagged). Verified binding by two mutations in an isolated copy: deleting
+   the `:ok <- ALLM.Capability.preflight_moderation(...)` clause from
+   `do_moderate_body/5`'s `with` turns test 1 red (1 failure, test 2 green);
+   **swapping** the two `with` clauses turns test 2 red (1 failure, test 1
+   green). Each binds a distinct property.
+2. **Code review F2 (Medium) — the second `[DEFERRED-DRY]` entry rested on a
+   miscount.** Extracted `reject_when_flag_false/4` and migrated all four call
+   sites; the entry above is corrected in place. See that entry for the
+   re-measurement and the equivalence pin.
+3. **Code review F3 (Medium) — the new telemetry paragraph contrasted against
+   a false claim about `:embed`.** `lib/allm/telemetry.ex`'s `:embed` table row
+   said `embedding_count` fires "on a **successful** `:stop`" and the
+   paragraph beneath said the span "omits `embedding_count` entirely on the
+   error path". Both are false: `embed_stop_extras({:error, _})` returns
+   `%{embedding_count: 0, chunk_count: 0}` (`lib/allm.ex:1706`) and
+   `test/allm/allm_embed_test.exs:558-561` pins *"`embedding_count` is PRESENT
+   and `0` on the error path"*. Row and paragraph corrected; the moderation
+   paragraph's *"carries **both** its measurements on both paths"* was
+   rewritten from a contrast into a statement of fact ("follows the same
+   rule"). 22.3 did not introduce the error but inserted a paragraph whose
+   rhetorical weight depended on it.
+4. **Code review F5 (Medium) — `## Retry`'s attempt-count promise would be
+   false the moment 22.4 lands.** `moderate/3`'s `@doc` rewritten to state the
+   façade/adapter `Retry.run/3` nesting and its per-reason arithmetic
+   (3 attempts at each layer → up to 9 adapter calls for a reason retryable at
+   both, up to 3 for one retryable at a single layer) instead of "the budget
+   is per call — there is nothing to multiply it by". A
+   `#### 22.3.4 Binding on later sub-phases` section was added to the design
+   doc so 22.4 implements to it.
+5. **Code review F8 (Low, kept because the snippet contradicted its own
+   `@doc`) — `## Batching`'s example mis-chunked a multimodal input.** The
+   snippet now binds `adapter = engine.moderation_adapter`, is scoped to an
+   all-strings `:input`, and is followed by an explicit "do **not** apply this
+   to a multimodal `:input`" paragraph pointing at *Result cardinality* and
+   `ALLM.ModerationRequest.multimodal?/1`.
+6. **Functional review Finding 2 (Low, kept because it documents a published
+   telemetry key) — `input_count`'s semantics lived only in a private
+   comment.** One paragraph added to `ALLM.Telemetry`'s moduledoc and one to
+   `moderate/3`'s `@doc`: `input_count` is the raw `length(request.input)`,
+   the *item* count is `1` whenever `multimodal` is `true`, the two agree
+   exactly for all-strings input, and a 40-element input carrying one
+   `ALLM.ImagePart` reports `input_count: 40` while still sitting under a
+   `max_batch_size/0` of 32. The split itself is a **defensible design
+   choice** (both reviewers agree) and was not changed.
+7. **Code review F7 (Low) — `:telemetry_metadata` was advertised but read
+   nowhere.** Dropped from `moderation_request/2`'s `## Options` list. Not
+   implemented: adding an unused opt to satisfy a doc is the wrong direction.
+   The twin advertisement in `embedding_request/2`'s `@doc`
+   (`lib/allm.ex:970-975`) and the strip in `drop_request_opts/1`
+   (`lib/allm.ex:1375`) are released code, out of this batch's tree — filed in
+   `ASKS.md`.
+8. **Code review F10 (Low) — a test name overstated its body.** *"wraps a bare
+   `%ImagePart{}` into a one-element multimodal list"* passed `[part]`, so
+   `List.wrap/1` was the identity. Renamed to *"a list containing an
+   `%ImagePart{}` produces a multimodal request"*, an `req.input == [part]`
+   assertion added, and a comment records that a **bare** `%ImagePart{}` is
+   outside `moderation_request/2`'s `@spec` and is deliberately not a
+   supported call shape. The "Tests beyond the Test Plan" bullet above should
+   be read with this correction.
+
+### `[CARRY]` entries
+
+* **`[CARRY]` — the released `embed/3` façade has the identical unbound
+  capability gate that F1 fixed for moderation.** The functional reviewer
+  established the family shape by mutating all three siblings against the full
+  suite: neutering `Capability.preflight_image/2` in `generate_image/3` →
+  **2 failures** (`ALLM.CapabilityImageTest`'s *"wired into the façade"*
+  cases); neutering `Capability.preflight_embedding/2` in `embed/3` →
+  **0 failures**; neutering `Capability.preflight_moderation/2` in
+  `moderate/3` → **0 failures**. Moderation inherited the **embeddings** gap,
+  not a family-wide one. **Not fixed here:** `test/allm/allm_embed_test.exs`
+  and the embeddings façade path are released and outside 22.3's Module Tree.
+  Per CLAUDE.md's *"shipping safer than an already-released sibling"* rule
+  this is recorded AND filed in `ASKS.md` in the same pass, with a
+  self-scoring predicate: *`grep -l unsupported_capability
+  test/allm/allm_*_test.exs` must name one file per capability façade*
+  (today: `allm_moderate_test.exs` only — `allm_embed_test.exs` missing).
+
+### Deferred to the phase-end polish pass
+
+Left unfixed by the 22.3 fix pass per the severity floor:
+
+* **Code review F6 (Low)** — two counting comments went stale when moderation
+  became the third capability: `lib/allm.ex:1495`'s *"Shared by the image and
+  embedding call sites"* (now three), and `lib/allm/capability.ex`'s
+  `## Where pre-flight runs` moduledoc section, which names only
+  `ALLM.StreamRunner.run/3` while three of the module's four preflights run in
+  `lib/allm.ex` façade functions. The second half sits directly on a CLAUDE.md
+  hard invariant and is the first place a 22.4 adapter author will look — it
+  is carried to HANDOFF as well as recorded here.
+* **Code review F9 (Low)** — `@retryable_image_reasons`,
+  `@retryable_embedding_reasons` and `@retryable_moderation_reasons`
+  (`lib/allm.ex`) are the same four atoms declared three times. Rule-of-3
+  trigger; zero parameterisation axes. Either collapse to one attribute or
+  record the clone deliberately with a *"equal today by coincidence, not by
+  contract"* comment on each.
+* **Functional review nit** — `test/allm/capability_vision_test.exs:81`
+  (`async: true`) calls
+  `Application.put_env(:allm, :force_capability_absent, true)` while every
+  other file touching that key is `async: false`. Pre-existing; F1's new tests
+  deliberately avoid the override so they add no exposure.
+* **Functional review nit** — the invariant-2 raise is bound by one shape
+  (bare map). The reviewer exercised five and all five raise; the catch-all
+  `other ->` clause makes further shapes redundant. No action recommended.
+* **`CHANGELOG.md` has no moderation entry yet.** Correct — the phase-end pass
+  owns it.
+
+### Deferred to 22.7
+
+* **Code review F4 (Medium) — the `@public_facade` gate is still
+  one-directional.** Recorded in full as the second bullet of the design's new
+  `#### 22.3.4 Binding on later sub-phases`, with the runnable shape and a
+  self-scoring check. Not fixed here: the design's own audit-gate table
+  already marks this gate **open** and scopes the bidirectional meta-test as a
+  `[CHORE]`, and closing it correctly needs the `@excluded` map plus
+  default-arity-head normalisation across the whole façade — beyond a
+  moderation fix pass.
+
+### Security carry for 22.4
+
+* **`response.raw` — the verbatim provider body — rides into `:stop`
+  telemetry metadata**, exactly as `%EmbeddingResponse{}` and
+  `%ImageResponse{}` already do. Benign while no moderation endpoint echoes
+  submitted content back, and `FakeModeration` synthesises its own bodies.
+  **Re-check when the real adapter lands (22.4):** if `/v1/moderations`
+  echoes the submitted input in its response body, that content reaches every
+  attached telemetry handler and any log sink behind one. Carried to HANDOFF.
+
+### Post-fix verification (2026-08-31)
+
+```
+mix test                        416 doctests, 31 properties, 3299 tests, 0 failures, 14 excluded
+mix test --seed 0               416 doctests, 31 properties, 3299 tests, 0 failures, 14 excluded
+mix format --check-formatted    clean
+mix credo --strict              3060 mods/funs, found no issues
+mix dialyzer                    Total errors: 0, Skipped: 0, Unnecessary Skips: 0
+mix compile --warnings-as-errors  clean
+mix docs 2>&1 | grep -ciE '(warning|error)'   0
+mix run scripts/audit_user_docs.exs | grep moderation   (empty)
+git --no-optional-locks diff --stat HEAD -- README.md   (empty)
+cd conformance && mix test      103 tests, 0 failures
+```
+
+Delta against the 22.3 build transcript: **+2 tests** (the two façade
+gate-wiring tests), 0 doctest delta, 0 failures. `credo` mods/funs went
+3059 → 3060 (the extracted `reject_when_flag_false/4`).
+
+**Mutation ledger — run on isolated copies of the tree, never in place:**
+
+| Mutant | Expected | Observed |
+|---|---|---|
+| Delete `:ok <- ALLM.Capability.preflight_moderation(resolved_model, request)` from `do_moderate_body/5`'s `with` | the new gate-3 test goes red | **1 failure** across the FULL suite — *"gate 3 — `Capability.preflight_moderation/2` is wired into the façade"*. Before F1's fix the same mutant gave **0**. |
+| **Swap** the two `with` clauses (capability before validation) | the gate-order test goes red | **1 failure** — *"gate 2 precedes gate 3 — validation wins over the capability gate"* (the gate-3 test stays green). Each test binds a distinct property. |
+| Remove the `%{^string_key => false}` arm from the extracted `reject_when_flag_false/4` | the pre-existing capability matrices go red | **4 failures** across the vision / image / embedding / moderation capability tests — the JSON-rehydrated string-key tolerance is genuinely pinned, so the extraction's equivalence claim is not vacuous. |
+
+Un-mutated, the five capability test files run **11 doctests, 75 tests,
+0 failures** — the behaviour-equivalence pin for the four-site extraction.

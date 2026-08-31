@@ -21,13 +21,33 @@ defmodule ALLM.Telemetry do
   | `[:allm, :chat, :start \\| :stop \\| :exception]` | multi-turn chat loop | as above | start metadata + `chat_result` |
   | `[:allm, :tool, :start \\| :stop \\| :exception]` | per-tool execution | as above | start metadata + `tool_call_id`, `tool_name`, `result` |
   | `[:allm, :image, :start \\| :stop \\| :exception]` | image generation | `duration`, plus `image_count` on `:stop` | `request_id`, `engine`, `model`, `operation`, `n`, plus `usage`, `response`, `error` on `:stop` |
-  | `[:allm, :embed, :start \\| :stop \\| :exception]` | text embedding | `duration`, plus `chunk_count` on `:stop` and `embedding_count` on a successful `:stop` | `request_id`, `engine`, `model`, `input_count`, plus `usage`, `response`, `error` on `:stop` |
+  | `[:allm, :embed, :start \\| :stop \\| :exception]` | text embedding | `duration`, plus `chunk_count` and `embedding_count` on `:stop` | `request_id`, `engine`, `model`, `input_count`, plus `usage`, `response`, `error` on `:stop` |
+  | `[:allm, :moderate, :start \\| :stop \\| :exception]` | content moderation | `duration`, plus `result_count` and `flagged_count` on `:stop` | `request_id`, `engine`, `model`, `input_count`, `multimodal`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :adapter, :retry]` | per-attempt retry (non-streaming) | `system_time` | `attempt`, `delay_ms`, `reason`, `request_id` |
 
-  `[:allm, :embed, :stop]` omits `embedding_count` entirely on the error
-  path — there is no count to report — while still carrying `chunk_count`.
-  `chunk_count` is the only signal that one `ALLM.embed/3` call became N
-  HTTP requests; see `ALLM.embed/3` for the batching contract.
+  `[:allm, :embed, :stop]` carries `embedding_count` and `chunk_count` on
+  **both** paths — each is `0` on the error path rather than absent, so the
+  measurement key set is stable. `chunk_count` is the only signal that one
+  `ALLM.embed/3` call became N HTTP requests; see `ALLM.embed/3` for the
+  batching contract.
+
+  `[:allm, :moderate, :stop]` follows the same rule: `result_count` and
+  `flagged_count` are present on both paths (`0` each on error). It also
+  carries `usage: nil` unconditionally, even though `ALLM.ModerationResponse`
+  has no `:usage` field — a stable key set across capability spans is what a
+  metrics backend wants, and it is what keeps a handler written against
+  `[:allm, :embed, :stop]` from `KeyError`ing when pointed at `:moderate`.
+  There is no `chunk_count`: `ALLM.moderate/3` does not chunk (see its
+  "Batching" section).
+
+  `input_count` on the `:moderate` span is `length(request.input)` — the raw
+  element count, **not** the provider's *item* count, which is `1` whenever
+  `multimodal` is `true` (an `:input` list carrying an `ALLM.ImagePart` is one
+  multimodal item, judged together). The two agree exactly for an all-strings
+  input; `multimodal` rides alongside so a consumer can derive the item count
+  without a second measurement. A 40-element input with one `ALLM.ImagePart`
+  therefore reports `input_count: 40` and is still accepted by an adapter
+  whose `c:ALLM.ModerationAdapter.max_batch_size/0` is `32`.
 
   ## Common metadata
 
@@ -71,9 +91,9 @@ defmodule ALLM.Telemetry do
         }
 
   @typedoc "Span suffix; the prefix [:allm] is fixed."
-  @type span_name :: :generate | :stream | :step | :chat | :tool | :image | :embed
+  @type span_name :: :generate | :stream | :step | :chat | :tool | :image | :embed | :moderate
 
-  @valid_span_names [:generate, :stream, :step, :chat, :tool, :image, :embed]
+  @valid_span_names [:generate, :stream, :step, :chat, :tool, :image, :embed, :moderate]
 
   @doc """
   Return the fixed event-name prefix for every ALLM telemetry event.
@@ -121,18 +141,19 @@ defmodule ALLM.Telemetry do
       alongside the common keys.
     * `{result, extra_measurements, stop_metadata_extras}` — the
       3-tuple form, for spans that inject custom `:stop` measurements
-      beyond `:duration` and `:monotonic_time`. `:image` and `:embed`
-      spans use this form to carry `:image_count` /
-      `:embedding_count` + `:chunk_count` as measurements
-      (numeric metrics → measurements; structured context →
-      metadata).
+      beyond `:duration` and `:monotonic_time`. `:image`, `:embed` and
+      `:moderate` spans use this form to carry `:image_count` /
+      `:embedding_count` + `:chunk_count` / `:result_count` +
+      `:flagged_count` as measurements (numeric metrics →
+      measurements; structured context → metadata).
 
   Caller-supplied `start_metadata` is forwarded to the `:start` event
   unchanged and used as the base for the `:stop` event's metadata.
 
   Raises `ArgumentError` for an unrecognised `name` (typo guard against
   `:chats` / `:steps`); valid names are
-  `:generate | :stream | :step | :chat | :tool | :image | :embed`.
+  `:generate | :stream | :step | :chat | :tool | :image | :embed |
+  :moderate`.
 
   ## Carve-out: `:stream :stop` `:response` is `nil`
 

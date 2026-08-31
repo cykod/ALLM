@@ -58,6 +58,7 @@ defmodule ALLM do
   | Multi-turn with persistence between turns | `ALLM.Session` API | `{:ok, %ALLM.Session{}}` |
   | Generate or edit images | `generate_image/3`, `edit_image/4`, `image_variations/3` | `{:ok, %ALLM.ImageResponse{}}` |
   | Turn text into vectors for a vector store | `embed/3` | `{:ok, %ALLM.EmbeddingResponse{}}` |
+  | Screen text (or text + images) for policy violations | `moderate/3` | `{:ok, %ALLM.ModerationResponse{}}` |
   | Fold `generate/3` result into `{:ok, text}` | `unwrap/1` | `{:ok, String.t()} \| {:error, term()}` |
 
   Stateless calls (`generate/3` / `chat/3` / etc.) are pure functions of
@@ -98,6 +99,8 @@ defmodule ALLM do
     ImageRequest,
     ImageResponse,
     Message,
+    ModerationRequest,
+    ModerationResponse,
     Request,
     StepResult,
     Thread,
@@ -109,6 +112,7 @@ defmodule ALLM do
     EmbeddingAdapterError,
     EngineError,
     ImageAdapterError,
+    ModerationAdapterError,
     ValidationError
   }
 
@@ -1130,6 +1134,247 @@ defmodule ALLM do
     do_embed(engine, embedding_request(input, opts), opts)
   end
 
+  # The opts `moderation_request/2` lifts onto the struct — an explicit
+  # ALLOW-list, never a deny-list, so a new façade opt can never leak into
+  # `ModerationRequest.new/1` (a bare `struct!/2` that raises `KeyError` on
+  # any unknown key). Consumer/producer symmetry: this list must equal the
+  # `%ModerationRequest{}` field set minus `:input`, or the missing field is
+  # silently unreachable from the string/list call shape. Pinned by a test.
+  #
+  # `drop_moderation_request_opts/1` at the bottom of this module is the
+  # outbound counterpart: it strips these same keys from the opts handed to
+  # the adapter, since they already live on the request struct.
+  @moderation_request_field_opts [
+    :model,
+    :options,
+    :metadata
+  ]
+
+  @doc """
+  Build an `%ALLM.ModerationRequest{}` from a string or a list of items.
+
+  A bare string is normalised to a one-element list, so `:input` on the
+  struct is always a list and no adapter or validator has to handle a
+  union at the top level.
+
+  An item is a `t:String.t/0` or an `t:ALLM.ImagePart.t/0`, and the
+  element types decide the result cardinality — see the "Result
+  cardinality" section of `moderate/3`, and `ALLM.ModerationRequest` for
+  the normative statement.
+
+  ## Options
+
+  Only `ALLM.ModerationRequest` field names are read: `:model`,
+  `:options`, `:metadata`. Every other key is ignored, which is what lets
+  `moderate/3` forward its own call-control opts (`:request_id`,
+  `:request_timeout`, `:retry`, `:adapter_opts`, `:api_key`, `:stream`)
+  through this function without them landing on the struct.
+
+  No validation runs here — call `ALLM.Validate.moderation_request/1` if
+  you want the field rules checked before dispatch. `moderate/3` calls it
+  for you.
+
+  ## Examples
+
+      iex> req = ALLM.moderation_request("is this ok?")
+      iex> req.input
+      ["is this ok?"]
+      iex> req.model
+      nil
+
+      iex> req = ALLM.moderation_request(["one", "two"], model: "omni-moderation-latest")
+      iex> length(req.input)
+      2
+      iex> req.model
+      "omni-moderation-latest"
+  """
+  @spec moderation_request(String.t() | [ModerationRequest.item()], keyword()) ::
+          ModerationRequest.t()
+  def moderation_request(input, opts \\ []) when is_list(opts) do
+    opts
+    |> Keyword.take(@moderation_request_field_opts)
+    |> Keyword.put(:input, List.wrap(input))
+    |> ModerationRequest.new()
+  end
+
+  @doc """
+  Screen content for policy violations using the engine's
+  `:moderation_adapter`.
+
+  Layer-C façade. Three input shapes:
+
+    * Binary — sugar for a one-element batch. Opts named in
+      `moderation_request/2` (`:model`, `:options`, `:metadata`) lift onto
+      the built request; everything else is a call-control opt.
+    * List of items — each item a `t:String.t/0` or an
+      `t:ALLM.ImagePart.t/0`. Same opt-lifting rule.
+    * Pre-built `%ALLM.ModerationRequest{}` — dispatched verbatim; opts
+      are NOT merged onto it.
+
+  The library does not decide what "unsafe" means. It returns the
+  provider's own `flagged` boolean and the provider's per-category score
+  map; there is no default threshold and no `block?/2`. Use
+  `ALLM.ModerationResponse.flagged?/1` for the provider's verdict, or
+  `ALLM.ModerationResult.score/2` to apply your own.
+
+  ## Result cardinality is type-dependent
+
+  This is the one surprising thing about the moderation wire, and it is a
+  property of the provider endpoint rather than an ALLM choice:
+
+    * **All-strings `:input`** — a batch of `length(input)` independent
+      items, so `length(response.results) == length(request.input)` and
+      `Enum.at(results, i)` is the verdict for `Enum.at(input, i)`.
+    * **Any `%ALLM.ImagePart{}` present** — the whole `:input` list is
+      **one** multimodal item (text plus its images, judged together), so
+      there is exactly **one** result, at `index: 0`.
+
+  `ALLM.ModerationRequest.multimodal?/1` reports which shape a request is
+  in, so the count is derivable *before* the call. The rule is stated
+  normatively on `ALLM.ModerationRequest`.
+
+  ## Unknown opts — forwarded to the adapter
+
+  Any opt that is neither a request field nor a call-control opt is passed
+  through to `c:ALLM.ModerationAdapter.moderate/2` untouched, so
+  provider-specific knobs need no façade change.
+
+  ## Adapter-presence gate
+
+  Returns `{:error, %ALLM.Error.EngineError{reason: :no_moderation_adapter}}`
+  when `engine.moderation_adapter == nil`. This is the first gate — it
+  fires ahead of validation and capability pre-flight, so a misconfigured
+  engine never surfaces as a request problem.
+
+  ## Validation policy
+
+  Like `embed/3` and unlike `generate_image/3`, this façade DOES call
+  `ALLM.Validate.moderation_request/1`, returning
+  `{:error, %ALLM.Error.ValidationError{reason: :invalid_moderation_request}}`
+  on failure. An empty `:input` list and an empty-string item are both
+  guaranteed provider rejections and should fail before the round-trip.
+
+  ## Batching — there is none
+
+  Unlike `embed/3`, `moderate/3` does **not** chunk transparently, and the
+  divergence is deliberate. A moderation call returns exactly one provider
+  `id` per HTTP request, so merging N chunks would produce N ids with
+  nowhere to put them; moderation is free, so the cost pressure that
+  justifies chunking embeddings is absent. Adapters still declare
+  `c:ALLM.ModerationAdapter.max_batch_size/0` and reject an over-long input
+  with `%ALLM.Error.ModerationAdapterError{reason: :batch_too_large}`, so
+  the caller-side loop — **for an all-strings `:input`** — is:
+
+      adapter = engine.moderation_adapter
+
+      input
+      |> Enum.chunk_every(adapter.max_batch_size())
+      |> Enum.map(&ALLM.moderate(engine, &1))
+
+  Do **not** apply that loop to a multimodal `:input`. Per *Result
+  cardinality* above, a list carrying an `ALLM.ImagePart` is **one** item
+  judged as a whole, so there is nothing to chunk: splitting it would sever
+  an image from the text it belongs to and turn one call into several with
+  different verdict semantics. Gate on
+  `ALLM.ModerationRequest.multimodal?/1` if the shape is not known
+  statically.
+
+  ## No `:usage`, but the span still carries the key
+
+  `%ALLM.ModerationResponse{}` has **no `:usage` field** — the endpoint is
+  free and returns no usage object. The `[:allm, :moderate, :stop]`
+  telemetry metadata nonetheless carries `usage: nil` unconditionally, so
+  a metrics handler written against the `:embed` or `:image` span does not
+  `KeyError` when pointed at this one. The `:stop` measurements
+  `result_count` and `flagged_count` are likewise present on both the
+  success and the error path (`0` each on error).
+
+  `:start` and `:stop` metadata also carry `input_count` and `multimodal`.
+  `input_count` is `length(request.input)` — the **raw element count**, not
+  the provider's *item* count, which is `1` whenever `multimodal` is `true`
+  (see *Result cardinality* above). The two agree exactly for an all-strings
+  input, and `multimodal` rides alongside so a consumer can derive the item
+  count without a second measurement — so a 40-element input carrying one
+  `ALLM.ImagePart` reports `input_count: 40` and is still under a
+  `c:ALLM.ModerationAdapter.max_batch_size/0` of `32`.
+
+  ## Retry
+
+  `:rate_limited`, `:provider_unavailable`, `:timeout` and `:network_error`
+  are retried under the engine's `:retry` policy; every other
+  `ALLM.Error.ModerationAdapterError` reason surfaces immediately.
+
+  That budget is the **façade's**, applied once per call — `moderate/3` does
+  not chunk, so there is no per-chunk multiplier the way there is in
+  `embed/3`. But `opts[:retry]` is *also* forwarded verbatim in the adapter's
+  dispatch opts, so an adapter that runs its own `ALLM.Retry.run/3` loop
+  nests inside this one and the two budgets **multiply** for any reason both
+  loops treat as retryable. With the default 3-attempt policy on each, a
+  reason retryable at both layers costs up to 9 adapter calls and a reason
+  retryable at only one costs up to 3. Read the adapter's own docs for which
+  reasons it retries; `embed/3` carries the same nesting and is the worked
+  example.
+
+  ## Non-conforming adapters raise
+
+  `c:ALLM.ModerationAdapter.moderate/2` must return
+  `{:ok, %ALLM.ModerationResponse{}}` or
+  `{:error, %ALLM.Error.ModerationAdapterError{}}` (invariant 2). Anything
+  else raises `ArgumentError` naming the offending adapter rather than
+  being laundered into this function's error union — the union above
+  describes conforming adapters only. The published conformance suite
+  deliberately does not bind that invariant, so this raise is what
+  enforces it.
+
+  ## `request_id` precedence
+
+  `opts[:request_id]` wins over an auto-generated id. The id is forwarded
+  to the adapter and filled onto `response.request_id` IFF the adapter
+  left it `nil`; an adapter-populated id is preserved.
+
+  ## `:stream` opt is silently dropped
+
+  Moderation is request/response — there is no `stream_moderate/3`, by
+  design. Passing `stream: true` does not error; the opt is ignored.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...> moderation_adapter: ALLM.Providers.FakeModeration,
+      ...> adapter_opts: [moderation_script: [{:flagged, ["violence"]}]]
+      ...>)
+      iex> {:ok, resp} = ALLM.moderate(engine, "…user text…")
+      iex> {ALLM.ModerationResponse.flagged?(resp),
+      ...>  ALLM.ModerationResponse.flagged_categories(resp)}
+      {true, ["violence"]}
+
+      iex> engine = ALLM.Engine.new()
+      iex> {:error, %ALLM.Error.EngineError{reason: :no_moderation_adapter}} =
+      ...> ALLM.moderate(engine, "is this ok?")
+      iex> :ok
+      :ok
+  """
+  @spec moderate(
+          Engine.t(),
+          String.t() | [ModerationRequest.item()] | ModerationRequest.t(),
+          keyword()
+        ) ::
+          {:ok, ModerationResponse.t()}
+          | {:error, EngineError.t() | ValidationError.t() | ModerationAdapterError.t()}
+  def moderate(engine, input_or_request, opts \\ [])
+
+  def moderate(%Engine{} = engine, %ModerationRequest{} = request, opts) when is_list(opts) do
+    do_moderate(engine, request, opts)
+  end
+
+  def moderate(%Engine{} = engine, input, opts) when is_binary(input) and is_list(opts) do
+    do_moderate(engine, moderation_request(input, opts), opts)
+  end
+
+  def moderate(%Engine{} = engine, input, opts) when is_list(input) and is_list(opts) do
+    do_moderate(engine, moderation_request(input, opts), opts)
+  end
+
   # ---------------------------------------------------------------------------
   # Internals — image telemetry + preflight + retry wrap.
   # ---------------------------------------------------------------------------
@@ -1486,5 +1731,207 @@ defmodule ALLM do
     }
 
     {metadata, %{embedding_count: 0, chunk_count: 0}}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Internals — moderation telemetry + gates + retry wrap.
+  # ---------------------------------------------------------------------------
+
+  # Moderation-side retryable reason atoms, widening the chat-side default
+  # `retry_on` (which is HTTP-status-coded) so `ALLM.Retry` recognises the
+  # closed-enum atoms `%ModerationAdapterError{}` carries. Same four the image
+  # and embedding sides use.
+  @retryable_moderation_reasons [:rate_limited, :provider_unavailable, :timeout, :network_error]
+
+  # Outbound counterpart of `@moderation_request_field_opts`: request-field
+  # opts already live on the `%ModerationRequest{}` by the time we dispatch,
+  # so they are stripped from the opts the adapter sees. Everything else
+  # (`:request_timeout`, `:api_key`, `:retry`, unknown provider opts) is
+  # forwarded, matching the chat-side pass-through.
+  defp drop_moderation_request_opts(opts) when is_list(opts),
+    do: Keyword.drop(opts, @moderation_request_field_opts)
+
+  # Wrap the whole body in a `:moderate` span so `:start` ALWAYS fires — even
+  # when the adapter is missing or validation rejects. Inside the span the
+  # gate order is:
+  #
+  #   (1) adapter-presence gate (`engine.moderation_adapter != nil`) — FIRST,
+  #       as a pattern match on the first `do_moderate_body/5` clause rather
+  #       than a conditional
+  #   (2) `Validate.moderation_request/1`
+  #   (3) `Capability.preflight_moderation/2` (no-op when catalog absent)
+  #   (4) `Retry.run/3`-wrapped dispatch
+  defp do_moderate(%Engine{} = engine, %ModerationRequest{} = request, opts) do
+    request_id = Keyword.get(opts, :request_id) || ALLM.Telemetry.request_id()
+    resolved_model = Engine.resolve_model(engine, opts)
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: resolved_model,
+      input_count: moderation_input_count(request),
+      multimodal: ModerationRequest.multimodal?(request)
+    }
+
+    ALLM.Telemetry.span(:moderate, start_metadata, fn ->
+      result = do_moderate_body(engine, request, opts, request_id, resolved_model)
+      {extras, measurements} = moderate_stop_extras(result)
+      {result, measurements, extras}
+    end)
+  end
+
+  # `:start` metadata is built before validation runs, so a non-list `:input`
+  # (which the validator rejects a moment later) must not raise here. Sibling
+  # of `input_count/1` in the embeddings block above — separately named
+  # because clauses of one function have to be grouped, and the two blocks
+  # are deliberately not interleaved.
+  #
+  # This is the RAW list length, not the *item* count of
+  # `ALLM.ModerationAdapter` invariant 5 (which is `1` for a multimodal
+  # request). The `multimodal` metadata key rides alongside precisely so a
+  # consumer can derive the item count without a second measurement.
+  defp moderation_input_count(%ModerationRequest{input: input}) when is_list(input),
+    do: length(input)
+
+  defp moderation_input_count(%ModerationRequest{}), do: 0
+
+  defp do_moderate_body(
+         %Engine{moderation_adapter: nil},
+         _request,
+         _opts,
+         _request_id,
+         _resolved_model
+       ) do
+    # Adapter-presence gate fires FIRST so a missing adapter plus a
+    # moderation-disabled model surfaces `:no_moderation_adapter`, not
+    # `:unsupported_capability`.
+    {:error, EngineError.new(:no_moderation_adapter)}
+  end
+
+  defp do_moderate_body(
+         %Engine{moderation_adapter: adapter} = engine,
+         %ModerationRequest{} = request,
+         opts,
+         request_id,
+         resolved_model
+       ) do
+    with :ok <- ALLM.Validate.moderation_request(request),
+         :ok <- ALLM.Capability.preflight_moderation(resolved_model, request) do
+      # Stamp the engine-resolved model onto the request; an adapter that
+      # sends `model` on the wire builds it from `request.model`. Preserves
+      # an explicitly-set request model.
+      request = %{request | model: request.model || resolved_model}
+
+      telemetry_metadata = %{
+        request_id: request_id,
+        model: resolved_model,
+        input_count: moderation_input_count(request)
+      }
+
+      # The `Retry.run/3` wrap lives HERE, following the image convention
+      # (`do_generate_image_body/5`) rather than the embeddings one: there is
+      # no batcher downstream to read a `:retry_policy` opt, so the policy is
+      # a local binding and never enters the adapter's dispatch opts.
+      policy = augment_retry_policy(engine.retry, @retryable_moderation_reasons)
+      dispatch_opts = build_moderate_dispatch_opts(engine, opts, request_id)
+
+      policy
+      |> ALLM.Retry.run(telemetry_metadata, fn ->
+        dispatch_moderate_attempt(adapter, request, dispatch_opts)
+      end)
+      |> fill_moderation_request_id(request_id)
+    end
+  end
+
+  defp build_moderate_dispatch_opts(%Engine{} = engine, opts, request_id) do
+    # Concat engine.adapter_opts with call-site adapter_opts. `Keyword.get/2`
+    # returns the FIRST occurrence on duplicate keys, so ENGINE WINS on
+    # collision — NOT `Keyword.merge/2`, which has the opposite precedence.
+    # Then inject the engine's stable `:id` as `adapter_opts[:cursor_key]` so
+    # `FakeModeration` keys its multi-call cursor AND its retry budget on
+    # engine identity; without it two content-equal engines silently share
+    # one slot. `put_cursor_key/2` is `Keyword.put_new/3` (a caller-supplied
+    # `:cursor_key` wins) and a no-op for real adapters.
+    merged_adapter_opts =
+      (engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, []))
+      |> Engine.put_cursor_key(engine)
+
+    opts
+    |> Keyword.drop([:stream])
+    |> drop_moderation_request_opts()
+    |> Keyword.put(:request_id, request_id)
+    |> Keyword.put(:adapter_opts, merged_adapter_opts)
+  end
+
+  # Per-attempt closure for `Retry.run/3`. Engages the retry loop on the four
+  # documented retryable `ModerationAdapterError` reasons (see
+  # `@retryable_moderation_reasons` at the top of this internals block);
+  # surfaces any other error verbatim with NO retry attempt.
+  #
+  # The final clause is an EXPLICIT raise, not a laundering fall-through and
+  # not an incidental `CaseClauseError`. `ALLM.ModerationAdapter` is a public
+  # behaviour third parties implement, so the caller set is open by
+  # construction, and its conformance suite deliberately does NOT bind
+  # invariant 2 — this raise is the only thing that does. A `raise` keeps
+  # `moderate/3`'s `@spec` honest (raises do not appear in specs, so the
+  # tuple contract is not widened) and names the offending adapter.
+  defp dispatch_moderate_attempt(adapter, request, dispatch_opts) do
+    case adapter.moderate(request, dispatch_opts) do
+      {:ok, %ModerationResponse{}} = ok ->
+        ok
+
+      {:error, %ModerationAdapterError{reason: reason} = err}
+      when reason in @retryable_moderation_reasons ->
+        {:retry, err.retry_after_ms || 0, err}
+
+      {:error, %ModerationAdapterError{}} = err ->
+        err
+
+      other ->
+        raise ArgumentError,
+              "#{inspect(adapter)} violated ALLM.ModerationAdapter invariant 2: " <>
+                "moderate/2 must return {:ok, %ALLM.ModerationResponse{}} or " <>
+                "{:error, %ALLM.Error.ModerationAdapterError{}}, got: #{inspect(other)}"
+    end
+  end
+
+  defp fill_moderation_request_id(
+         {:ok, %ModerationResponse{request_id: nil} = response},
+         request_id
+       ),
+       do: {:ok, %{response | request_id: request_id}}
+
+  defp fill_moderation_request_id(result, _request_id), do: result
+
+  # Compute `:stop`-event extras. `result_count` and `flagged_count` are
+  # MEASUREMENTS (numeric); `:usage`, `:response`, `:error` are METADATA.
+  # BOTH measurements are present on BOTH paths, reporting `0` on error, and
+  # `:usage` is `nil` on both — `%ModerationResponse{}` has no `:usage` field
+  # at all (the endpoint is free), but the key is emitted so a handler written
+  # against the `:embed` or `:image` span does not `KeyError` when pointed at
+  # `:moderate`. Returns `{metadata_extras, extra_measurements}`.
+  defp moderate_stop_extras({:ok, %ModerationResponse{results: results} = response}) do
+    metadata = %{
+      usage: nil,
+      response: response,
+      error: nil
+    }
+
+    measurements = %{
+      result_count: length(results),
+      flagged_count: Enum.count(results, & &1.flagged)
+    }
+
+    {metadata, measurements}
+  end
+
+  defp moderate_stop_extras({:error, error}) do
+    metadata = %{
+      usage: nil,
+      response: nil,
+      error: error
+    }
+
+    {metadata, %{result_count: 0, flagged_count: 0}}
   end
 end

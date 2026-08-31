@@ -2,7 +2,7 @@ defmodule ALLM.Capability do
   @moduledoc """
   Layer-B optional model-catalog integration via the `LLMDB` Hex package.
 
-  Five helpers, all gated on `Code.ensure_loaded?(LLMDB)`:
+  Six helpers, all gated on `Code.ensure_loaded?(LLMDB)`:
 
     * `preflight/2` (and `/3`) — pre-flights tool / `response_format`
       capability against the catalog's `%ALLM.ModelRef{}` and surfaces a
@@ -16,6 +16,10 @@ defmodule ALLM.Capability do
       `ALLM.EmbeddingRequest`: rejects requests against models with
       `embeddings_enabled: false` or whose `:dimensions` exceeds the
       catalog's `dimensions_max`.
+    * `preflight_moderation/2` — sister of `preflight_embedding/2` for
+      `ALLM.ModerationRequest`: rejects requests against models with
+      `moderation_enabled: false`. One rule, not two — moderation has no
+      numeric knob a catalog could cap.
     * `populate_costs/2` — fills `Usage.{input_cost, output_cost,
       total_cost}` from the catalog's per-million-token pricing after the
       adapter has reported token counts.
@@ -87,6 +91,7 @@ defmodule ALLM.Capability do
   alias ALLM.ImageRequest
   alias ALLM.Message
   alias ALLM.ModelRef
+  alias ALLM.ModerationRequest
   alias ALLM.Request
   alias ALLM.Usage
 
@@ -341,6 +346,70 @@ defmodule ALLM.Capability do
     end
   end
 
+  @typedoc "Two-shape result of `preflight_moderation/2` (no rewrite branch)."
+  @type moderation_preflight_result :: :ok | {:error, ValidationError.t()}
+
+  @doc """
+  Pre-flight an `ALLM.ModerationRequest` against the catalog's view of a
+  model — sister of `preflight_embedding/2`, same narrow contract.
+
+  Returns `:ok | {:error, %ValidationError{reason: :unsupported_capability}}`
+  only — there is no rewrite branch. 2-arity by design, symmetric with
+  `preflight_image/2`, `preflight_embedding/2` and `populate_costs/2`, NOT
+  with `preflight/3`.
+
+  ## Rejection rule (there is exactly one)
+
+    * `{[:moderation_enabled], :moderation_disabled}` — fires when
+      `model_ref.capabilities.moderation_enabled == false`.
+
+  The embeddings sibling's second rule (`dimensions_max`) has no moderation
+  analogue: moderation has no numeric knob a catalog could cap, so nothing
+  accumulates and the error list is always one element long. A missing key
+  is never a rejection, per the module-wide graceful-degradation rule, and
+  the rule tolerates JSON-rehydrated `%ModelRef{}` values with string-keyed
+  capabilities.
+
+  Nothing here reads the *request*: the request is taken for family symmetry
+  (and so a future request-shaped rule needs no signature change), and a
+  multimodal request is gated identically to an all-strings one.
+
+  Returns `:ok` early when the catalog is absent
+  (`catalog_loaded?/0 == false`) or when `model_ref_or_string` is a bare
+  string / tuple / `nil` (no capability info).
+
+  ## Examples
+
+      iex> req = ALLM.ModerationRequest.new(input: ["is this ok?"])
+      iex> ALLM.Capability.preflight_moderation("openai:omni-moderation-latest", req)
+      :ok
+
+      iex> ref = ALLM.ModelRef.new(
+      ...> provider: :local, id: "no-moderation",
+      ...> capabilities: %{moderation_enabled: false}
+      ...>)
+      iex> req = ALLM.ModerationRequest.new(input: ["is this ok?"])
+      iex> {:error, err} = ALLM.Capability.preflight_moderation(ref, req)
+      iex> err.reason
+      :unsupported_capability
+      iex> err.errors
+      [{[:moderation_enabled], :moderation_disabled}]
+  """
+  @spec preflight_moderation(model_ref_or_string(), ModerationRequest.t()) ::
+          moderation_preflight_result()
+  def preflight_moderation(model_ref_or_string, %ModerationRequest{} = request) do
+    cond do
+      not catalog_loaded?() ->
+        :ok
+
+      not is_struct(model_ref_or_string, ModelRef) ->
+        :ok
+
+      true ->
+        check_moderation_capabilities(model_ref_or_string, request)
+    end
+  end
+
   @doc """
   Populate `Usage.{input_cost, output_cost, total_cost}` from
   `model_ref.pricing` (per-million-token rates).
@@ -396,6 +465,41 @@ defmodule ALLM.Capability do
       Module.concat(["LLMDB"]).select(criteria)
     else
       {:error, :catalog_not_loaded}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Private — shared capability-flag rule
+  # ---------------------------------------------------------------------------
+
+  # The single rejection rule behind all four boolean capability flags:
+  # `:vision` (`check_vision/3`), `:images_enabled` (`check_images_enabled/2`),
+  # `:embeddings_enabled` (`check_embeddings_enabled/2`) and
+  # `:moderation_enabled` (`check_moderation_enabled/2`). The error atom is
+  # mechanically derivable from the capability atom in all four, so the
+  # capability key plus the error atom are the only axes.
+  #
+  # Extracted at the FOURTH copy (Phase 22.3 fix pass) per
+  # `agent-spec/IMPLEMENTATION.md`'s promotion trigger, with every call site
+  # migrated in the same commit per CLAUDE.md's migration-on-extraction rule.
+  # Private, behaviour-preserving, no public name changed.
+  #
+  # Tolerates a JSON-rehydrated %ModelRef{} with string-keyed capabilities
+  # (see @moduledoc "JSON-rehydrated %ModelRef{} tolerance"): atom-keyed
+  # (in-process) and string-keyed (post-Jason round-trip) both reject, and a
+  # missing key is "no info", never a rejection.
+  #
+  # `check_json_native/3` is deliberately NOT a call site: its error path is
+  # `[:response_format]` while its capability key is `:json_native`, so the
+  # `[key]` path this helper builds does not hold there. `check_tools/3` reads
+  # a nested `%{enabled: false}` map and does not fit either.
+  defp reject_when_flag_false(acc, caps, key, error_reason) when is_atom(key) do
+    string_key = Atom.to_string(key)
+
+    case caps do
+      %{^key => false} -> [{[key], error_reason} | acc]
+      %{^string_key => false} -> [{[key], error_reason} | acc]
+      _ -> acc
     end
   end
 
@@ -460,11 +564,7 @@ defmodule ALLM.Capability do
   # `:tools_disabled` precedent).
   defp check_vision(acc, %ModelRef{capabilities: caps}, %Request{messages: messages}) do
     if request_has_image_part?(messages) do
-      case caps do
-        %{vision: false} -> [{[:vision], :vision_disabled} | acc]
-        %{"vision" => false} -> [{[:vision], :vision_disabled} | acc]
-        _ -> acc
-      end
+      reject_when_flag_false(acc, caps, :vision, :vision_disabled)
     else
       acc
     end
@@ -503,17 +603,8 @@ defmodule ALLM.Capability do
     end
   end
 
-  defp check_images_enabled(acc, %ModelRef{capabilities: caps}) do
-    # Tolerate JSON-rehydrated %ModelRef{} with string-keyed capabilities
-    # (see @moduledoc "JSON-rehydrated %ModelRef{} tolerance"). Atom-keyed
-    # nested map (in-process) and string-keyed (post-Jason round-trip) both
-    # reject. Anything else passes.
-    case caps do
-      %{images_enabled: false} -> [{[:images_enabled], :images_disabled} | acc]
-      %{"images_enabled" => false} -> [{[:images_enabled], :images_disabled} | acc]
-      _ -> acc
-    end
-  end
+  defp check_images_enabled(acc, %ModelRef{capabilities: caps}),
+    do: reject_when_flag_false(acc, caps, :images_enabled, :images_disabled)
 
   defp check_supported_image_operation(acc, %ModelRef{capabilities: caps}, %ImageRequest{
          operation: op
@@ -559,16 +650,8 @@ defmodule ALLM.Capability do
     end
   end
 
-  defp check_embeddings_enabled(acc, %ModelRef{capabilities: caps}) do
-    # Tolerate JSON-rehydrated %ModelRef{} with string-keyed capabilities
-    # (see @moduledoc "JSON-rehydrated %ModelRef{} tolerance"). A missing
-    # key is "no info", never a rejection.
-    case caps do
-      %{embeddings_enabled: false} -> [{[:embeddings_enabled], :embeddings_disabled} | acc]
-      %{"embeddings_enabled" => false} -> [{[:embeddings_enabled], :embeddings_disabled} | acc]
-      _ -> acc
-    end
-  end
+  defp check_embeddings_enabled(acc, %ModelRef{capabilities: caps}),
+    do: reject_when_flag_false(acc, caps, :embeddings_enabled, :embeddings_disabled)
 
   # A nil `:dimensions` requests the model's native dimensionality, which no
   # cap can exclude — short-circuit before reading the capability map.
@@ -581,6 +664,34 @@ defmodule ALLM.Capability do
       _ -> acc
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Private — moderation preflight
+  # ---------------------------------------------------------------------------
+
+  # Accumulator shape kept even though exactly one rule exists today: a second
+  # rule slots in as one more `|>` step, and `Enum.reverse/1` keeps the error
+  # list in declaration order the moment there is more than one.
+  defp check_moderation_capabilities(%ModelRef{} = ref, %ModerationRequest{}) do
+    errors =
+      []
+      |> check_moderation_enabled(ref)
+      |> Enum.reverse()
+
+    case errors do
+      [] ->
+        :ok
+
+      list ->
+        {:error,
+         ValidationError.new(:unsupported_capability, list,
+           message: "model does not support requested moderation capabilities"
+         )}
+    end
+  end
+
+  defp check_moderation_enabled(acc, %ModelRef{capabilities: caps}),
+    do: reject_when_flag_false(acc, caps, :moderation_enabled, :moderation_disabled)
 
   # ---------------------------------------------------------------------------
   # Private — cost math

@@ -3,7 +3,7 @@ defmodule ALLM.ModerationAdapter do
   Content-moderation provider adapter contract.
 
   Layer B — runtime. Implementations take an `ALLM.ModerationRequest` plus a
-  keyword opts list (resolved at the call site by the `ALLM.moderate` façade)
+  keyword opts list (resolved at the call site by `ALLM.moderate/3`)
   and return either `{:ok, %ALLM.ModerationResponse{}}` or
   `{:error, %ALLM.Error.ModerationAdapterError{}}`.
 
@@ -73,7 +73,7 @@ defmodule ALLM.ModerationAdapter do
        `%ALLM.Error.EngineError{reason: :missing_key}` by design; adapters do
        not rescue it.
 
-       **Enforced, not merely documented:** the `ALLM.moderate` façade raises
+       **Enforced, not merely documented:** `ALLM.moderate/3` raises
        `ArgumentError` naming the adapter and this invariant on any other
        shape, rather than laundering a non-conforming return into its own
        error union. Note that the conformance suite cannot observe this

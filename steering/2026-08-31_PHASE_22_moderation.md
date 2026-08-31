@@ -15,13 +15,13 @@
 |-------|-------------|-------|--------|
 | 22.1 | Layer A data: `ModerationRequest`, `ModerationResult`, `ModerationResponse`, `ModerationAdapterError`, validator, serializer registry, enum extensions | A | Completed |
 | 22.2 | Layer B runtime: `ALLM.ModerationAdapter` behaviour, `Engine.moderation_adapter`, `FakeModeration`, conformance suite | B | Completed |
-| 22.3 | Layer C façade: `ALLM.moderate/3`, `ALLM.moderation_request/2`, `:moderate` telemetry span, `Capability.preflight_moderation/2` | C | Not Started |
+| 22.3 | Layer C façade: `ALLM.moderate/3`, `ALLM.moderation_request/2`, `:moderate` telemetry span, `Capability.preflight_moderation/2` | C | Completed |
 | 22.4 | `ALLM.Providers.OpenAI.Moderation` — text input, recorder + wire probe + fixtures | B | Not Started |
 | 22.5 | Image input: `%ALLM.ImagePart{}` items, MIME/size gate, multimodal cardinality | B | Not Started |
 | 22.6 | Spec §39, `guides/moderation.md`, examples 19–20, `mix.exs` wiring, `CHANGELOG` | — | Not Started |
 | 22.7 | `[CHORE]` sweep: CLAUDE.md stale claim, `@guides` parity meta-test, images.ex redaction `[CARRY]` | — | Not Started |
 
-**Overall Progress:** 1/7 sub-phases complete (22.2 built, gates pending)
+**Overall Progress:** 2/7 sub-phases complete (22.3 built, gates pending)
 
 ---
 
@@ -1118,6 +1118,11 @@ mix format --check-formatted && mix credo --strict && mix dialyzer
 ```
 
 **Success criterion:** every gate-order test passes in isolation *and* in combination; the symmetry test computes its expectation from `Map.keys/1` rather than a literal; both façade doctests run green under `mix test`.
+
+#### 22.3.4 Binding on later sub-phases
+
+* **The façade's retry budget and the adapter's own `ALLM.Retry.run/3` loop NEST, and the two budgets multiply.** `build_moderate_dispatch_opts/3` drops only `:stream` and the three request-field opts — `opts[:retry]` is forwarded to the adapter verbatim — and every existing ALLM adapter reads it and wraps its own HTTP call (`lib/allm/providers/openai/embeddings.ex:522`, `lib/allm/providers/voyage/embeddings.ex:749`, `lib/allm/providers/openai.ex:539`). Binds **22.4**: `moderate/3`'s `## Retry` `@doc` now states the nesting and its per-reason arithmetic (with the default 3-attempt policy at each layer, a reason retryable at *both* costs up to **9** adapter calls; one retryable at only one layer costs up to **3**) instead of promising a single attempt count. If 22.4's adapter runs its own `Retry.run/3`, that `@doc` is already correct and must not be re-flattened to "3 attempts"; if 22.4 deliberately does **not** retry internally, amend the paragraph rather than leaving the multiplier claim standing. This is CLAUDE.md's documented `embed/3` hazard (`:timeout` costs 9 attempts per chunk while every other retryable reason costs 3) arriving on the moderation path. *(Added by the 22.3 fix pass, from code review F5.)*
+* **The `@public_facade` gate is still one-directional after 22.3.** The row in "Repo-wide audit-gate obligations" above is unchanged: `test/allm_facade_doctest_inventory_test.exs` asserts `@public_facade ⊆ ALLM.__info__(:functions)` and never the converse. 22.3 added `moderate: 3` and `moderation_request: 2` to the literal but did not close the fail-open direction. Deferred to **22.7** as a `[CHORE]`: add a converse test grouping `ALLM.__info__(:functions)` by name (default-arity heads make a bare arity comparison wrong) with an explicit `@excluded %{name => "reason"}` map, self-scored by *removing `moderate: 3` from `@public_facade` must turn the suite red*. *(Added by the 22.3 fix pass, from code review F4.)*
 
 ---
 

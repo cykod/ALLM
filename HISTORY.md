@@ -1,3 +1,38 @@
+## [FEAT] Add ALLM.moderate/3 facade with telemetry and capability gate (Phase 22.3)
+*Monday, August 31st at 9pm*
+Third batch of the Phase 22 moderation family, and the one that makes
+moderation callable: `ALLM.moderate(engine, text)` now returns
+`{:ok, %ALLM.ModerationResponse{}}` end to end over
+`ALLM.Providers.FakeModeration`. The real OpenAI adapter lands in 22.4.
+
+- Add `ALLM.moderate/3` and `ALLM.moderation_request/2`. Four gates fire in
+  a fixed order inside the telemetry span: adapter-presence (a pattern match
+  in the first clause, so a missing adapter never surfaces as a request
+  problem), validation, capability pre-flight, then a retry-wrapped dispatch
+- Enforce adapter contract invariant 2 at the facade: a `moderate/2` that
+  returns anything but the two documented tuples raises `ArgumentError`
+  naming the offending module, rather than being laundered into the error
+  union. The published conformance suite deliberately cannot bind this — the
+  raise is the only thing that does
+- Add the `[:allm, :moderate, :*]` span with `result_count` and
+  `flagged_count` measurements present on both the success and error paths,
+  and `usage: nil` on `:stop`, so a handler written against `:embed` does
+  not `KeyError` when pointed at `:moderate`
+- Add `ALLM.Capability.preflight_moderation/2` — inert without the optional
+  `llm_db` catalog, per the late-model-resolution rule
+- Bind the capability gate with a test. Both reviewers found independently
+  that deleting the pre-flight call from the facade left the entire suite
+  green; the released `embed/3` has the same gap and is filed as a [CARRY].
+  The fix is mutation-verified in both directions
+- Extract `reject_when_flag_false/4` and migrate all four capability-flag
+  checks (vision, images, embeddings, moderation) to it in the same edit.
+  Removing one tolerance arm turns four tests red across all four
+  capabilities, so the behaviour-equivalence pin is real
+
+Review artifacts live under `.work/`, which is gitignored.
+
+---
+
 ## [FEAT] Add moderation adapter behaviour, engine slot, Fake, and conformance (Phase 22.2)
 *Monday, August 31st at 8pm*
 Second batch of the Phase 22 moderation family: the Layer B runtime contract,
