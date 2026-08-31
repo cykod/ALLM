@@ -1,3 +1,40 @@
+## [FEAT] Add Layer A moderation data types and validator (Phase 22.1)
+*Monday, August 31st at 7pm*
+First batch of the Phase 22 moderation capability family: the Layer A
+serializable foundation for screening user-generated content against
+OpenAI's free /v1/moderations endpoint. Implements the Layer A half of new
+spec §39 (Content moderation); §39 itself lands in 22.6. There is
+deliberately no adapter, behaviour, engine slot, or facade yet — those are
+22.2-22.4.
+
+- Add `ALLM.ModerationRequest`, `ALLM.ModerationResult`,
+  `ALLM.ModerationResponse`, and `ALLM.Error.ModerationAdapterError` —
+  plain serializable structs round-tripping through both ETF and JSON, all
+  four registered in `ALLM.Serializer`'s `@known_modules` allowlist and in
+  `mix.exs` docs groups
+- Keep the per-category maps provider-shaped and string-keyed rather than
+  normalizing to a cross-provider atom taxonomy: OpenAI spells categories
+  `"self-harm/intent"`, which is not a bare atom, and deriving atoms from
+  provider-controlled keys would grow the atom table from untrusted input.
+  `:provider` decodes through `Serializer.to_atom_field/1`
+  (`String.to_existing_atom/1`), never `String.to_atom/1`
+- Add `ALLM.Validate.moderation_request/1` with an exhaustive five-row
+  field-error vocabulary and a hard-reject short-circuit on a non-list
+  `:input`. The `item()` union accepts `%ALLM.ImagePart{}` from the start
+  so the image path in 22.5 changes no Layer A or validator code
+- Extend two closed enums — `:no_moderation_adapter` on `EngineError` and
+  `:invalid_moderation_request` on `ValidationError` — editing both the
+  `@type` union and the runtime `~w()a` literal in each
+- Extract `validate_input_non_empty/2` and `validate_model_field/2` as
+  capability-neutral shared helpers, migrating the embeddings and
+  moderation call sites in the same edit: the moderation rules had shipped
+  as byte-identical clones of their embeddings twins
+
+Review artifacts for this batch live under `.work/`, which is gitignored,
+so they are not part of this commit.
+
+---
+
 ## [OTHR] Move agent specs into agent-spec/ and rewrite references
 *Monday, August 31st at 2pm*
 Migrated the three root-level AGENT_*_SPEC.md files to the agent-spec/ layout 

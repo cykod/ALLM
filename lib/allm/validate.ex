@@ -36,8 +36,8 @@ defmodule ALLM.Validate do
 
   Validators are opt-in: constructors like `ALLM.Request.new/2` do not call
   these functions. Users invoke `request/1`, `message/1`, `tool/1`,
-  `thread/1`, `session/1`, `image_request/1`, or `embedding_request/1`
-  explicitly when they need a check before dispatch.
+  `thread/1`, `session/1`, `image_request/1`, `embedding_request/1`, or
+  `moderation_request/1` explicitly when they need a check before dispatch.
   """
 
   alias ALLM.Error.ValidationError
@@ -48,6 +48,7 @@ defmodule ALLM.Validate do
     ImagePart,
     ImageRequest,
     Message,
+    ModerationRequest,
     Request,
     Session,
     TextPart,
@@ -337,15 +338,63 @@ defmodule ALLM.Validate do
   def embedding_request(%EmbeddingRequest{} = req) do
     errors =
       []
-      |> validate_embedding_input_non_empty(req.input)
+      |> validate_input_non_empty(req.input)
       |> validate_embedding_input_elements(req.input)
       |> validate_embedding_dimensions(req.dimensions)
       |> validate_embedding_task_type(req.task_type)
       |> validate_embedding_truncate(req.truncate)
-      |> validate_embedding_model(req.model)
+      |> validate_model_field(req.model)
       |> Enum.reverse()
 
     finalize(:invalid_embedding_request, errors)
+  end
+
+  @doc """
+  Validate an `%ALLM.ModerationRequest{}`.
+
+  Returns `:ok` when every rule passes, or
+  `{:error, %ALLM.Error.ValidationError{reason: :invalid_moderation_request, errors: [...]}}`.
+
+  All rules accumulate into one error list except `{:input, :invalid_shape}`,
+  which hard-rejects: every `[:input, idx]` rule presupposes a list, so
+  evaluating them against a non-list would be meaningless.
+
+  Field rules: `:input` a non-empty list whose elements are each a non-empty
+  binary or an `%ALLM.ImagePart{}` (an empty list is rejected — a provider
+  would 400 on it); `:model` `nil` or a binary.
+
+  Per-item image rules — MIME type and byte size — are deliberately NOT
+  checked here. They are provider-specific and belong to the adapter, in the
+  same way per-model dimension caps belong to `ALLM.Capability` rather than
+  to `embedding_request/1`. Batch-size caps are likewise the adapter's,
+  measured against its own `max_batch_size()`.
+
+  ## Examples
+
+      iex> ALLM.Validate.moderation_request(ALLM.ModerationRequest.new(input: ["is this ok?"]))
+      :ok
+
+      iex> req = ALLM.ModerationRequest.new(input: [])
+      iex> {:error, err} = ALLM.Validate.moderation_request(req)
+      iex> err.reason
+      :invalid_moderation_request
+      iex> {:input, :empty} in err.errors
+      true
+  """
+  @spec moderation_request(ModerationRequest.t()) :: :ok | {:error, ValidationError.t()}
+  def moderation_request(%ModerationRequest{input: input}) when not is_list(input) do
+    finalize(:invalid_moderation_request, [{:input, :invalid_shape}])
+  end
+
+  def moderation_request(%ModerationRequest{} = req) do
+    errors =
+      []
+      |> validate_input_non_empty(req.input)
+      |> validate_moderation_input_elements(req.input)
+      |> validate_model_field(req.model)
+      |> Enum.reverse()
+
+    finalize(:invalid_moderation_request, errors)
   end
 
   # ---------------------------------------------------------------------------
@@ -675,6 +724,25 @@ defmodule ALLM.Validate do
   defp require_input_images_count_in_variation(errs, _), do: errs
 
   # ---------------------------------------------------------------------------
+  # Internal: capability-neutral field rules
+  #
+  # Shared by every capability request validator whose field carries the same
+  # rule. Extracted at the second implementation per
+  # `agent-spec/IMPLEMENTATION.md:68`: the embeddings and moderation copies were
+  # byte-identical modulo the helper name.
+  # ---------------------------------------------------------------------------
+
+  # `:input` must be a non-empty list. Callers guard the non-list case ahead of
+  # this rule, so only `[]` is rejected here.
+  defp validate_input_non_empty(errs, []), do: [{:input, :empty} | errs]
+  defp validate_input_non_empty(errs, _list), do: errs
+
+  # `:model` is `nil` (late-resolved by the engine) or a binary.
+  defp validate_model_field(errs, nil), do: errs
+  defp validate_model_field(errs, m) when is_binary(m), do: errs
+  defp validate_model_field(errs, _), do: [{:model, :invalid_shape} | errs]
+
+  # ---------------------------------------------------------------------------
   # Internal: embedding_request rules
   # ---------------------------------------------------------------------------
 
@@ -685,9 +753,6 @@ defmodule ALLM.Validate do
     :clustering,
     :similarity
   ]
-
-  defp validate_embedding_input_non_empty(errs, []), do: [{:input, :empty} | errs]
-  defp validate_embedding_input_non_empty(errs, _list), do: errs
 
   defp validate_embedding_input_elements(errs, list) do
     list
@@ -714,7 +779,22 @@ defmodule ALLM.Validate do
   defp validate_embedding_truncate(errs, t) when is_boolean(t), do: errs
   defp validate_embedding_truncate(errs, _), do: [{:truncate, :invalid_shape} | errs]
 
-  defp validate_embedding_model(errs, nil), do: errs
-  defp validate_embedding_model(errs, m) when is_binary(m), do: errs
-  defp validate_embedding_model(errs, _), do: [{:model, :invalid_shape} | errs]
+  # ---------------------------------------------------------------------------
+  # Internal: moderation_request rules
+  # ---------------------------------------------------------------------------
+
+  # `:invalid_item` rather than embeddings' `:not_a_string`: the accept set is
+  # a union (a binary or an `%ImagePart{}`), not a single type. The
+  # `%ImagePart{}` arm is live from the moment the struct ships, so no
+  # later image-input work has to reopen this validator.
+  defp validate_moderation_input_elements(errs, list) do
+    list
+    |> Enum.with_index()
+    |> Enum.reduce(errs, fn
+      {"", idx}, acc -> [{[:input, idx], :empty} | acc]
+      {s, _idx}, acc when is_binary(s) -> acc
+      {%ImagePart{}, _idx}, acc -> acc
+      {_, idx}, acc -> [{[:input, idx], :invalid_item} | acc]
+    end)
+  end
 end

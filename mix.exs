@@ -160,7 +160,10 @@ defmodule ALLM.MixProject do
           ALLM.ImagePart,
           ALLM.Embedding,
           ALLM.EmbeddingRequest,
-          ALLM.EmbeddingResponse
+          ALLM.EmbeddingResponse,
+          ALLM.ModerationRequest,
+          ALLM.ModerationResult,
+          ALLM.ModerationResponse
         ],
         Runtime: [
           ALLM.Engine,
@@ -187,7 +190,8 @@ defmodule ALLM.MixProject do
           ALLM.Error.ToolError,
           ALLM.Error.ValidationError,
           ALLM.Error.ImageAdapterError,
-          ALLM.Error.EmbeddingAdapterError
+          ALLM.Error.EmbeddingAdapterError,
+          ALLM.Error.ModerationAdapterError
         ]
       ]
     ]

@@ -38,6 +38,7 @@ defmodule ALLM.Error.ValidationError do
           | :unsupported_capability
           | :invalid_image_request
           | :invalid_embedding_request
+          | :invalid_moderation_request
 
   @type t :: %__MODULE__{
           reason: reason(),
@@ -57,6 +58,7 @@ defmodule ALLM.Error.ValidationError do
     unsupported_capability
     invalid_image_request
     invalid_embedding_request
+    invalid_moderation_request
   )a
 
   defexception [:reason, :message, :cause, errors: [], metadata: %{}]

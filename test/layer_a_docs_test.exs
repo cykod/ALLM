@@ -32,7 +32,10 @@ defmodule LayerADocsTest do
     ALLM.ImageUsage,
     ALLM.Embedding,
     ALLM.EmbeddingRequest,
-    ALLM.EmbeddingResponse
+    ALLM.EmbeddingResponse,
+    ALLM.ModerationRequest,
+    ALLM.ModerationResult,
+    ALLM.ModerationResponse
   ]
 
   @audit_paths Enum.map(@layer_a, fn mod ->

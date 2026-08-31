@@ -83,6 +83,7 @@ defmodule ALLM.Serializer do
     ALLM.Error.SessionError,
     ALLM.Error.ImageAdapterError,
     ALLM.Error.EmbeddingAdapterError,
+    ALLM.Error.ModerationAdapterError,
     ALLM.Image,
     ALLM.ImageRequest,
     ALLM.ImageResponse,
@@ -91,7 +92,10 @@ defmodule ALLM.Serializer do
     ALLM.ImagePart,
     ALLM.Embedding,
     ALLM.EmbeddingRequest,
-    ALLM.EmbeddingResponse
+    ALLM.EmbeddingResponse,
+    ALLM.ModerationRequest,
+    ALLM.ModerationResult,
+    ALLM.ModerationResponse
   ]
 
   @type_tag_index Map.new(@known_modules, fn mod -> {inspect(mod), mod} end)

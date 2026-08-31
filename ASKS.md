@@ -341,3 +341,19 @@
 [MILE] tue 8/25 8pm - Committed the Elixir 1.19 lib fixes from the downstream session and added the repo's first CI workflow, with a non-blocking 1.19 matrix leg and a conformance job
 
 [MILE] sat 8/29 8pm - Committed the dev container GIT_OPTIONAL_LOCKS=0 fix that had been carried unstaged all session, leaving the working tree fully clean
+
+[MILE] mon 8/31 2pm - Moved the three root-level agent spec files into agent-spec/ and rewrote every reference across docs, steering, retros and test code
+
+[ASKS] mon 8/31 6pm - Review ALLM for any support for moderation endpoints, specifically OpenAI's free moderation endpoint
+
+[DSGN] mon 8/31 6pm - Design the ALLM moderation capability family with OpenAI /v1/moderations adapter, Layer-A structs, behaviour, conformance and facade entry
+
+[ABLD] mon 8/31 7pm - Auto-build the Phase 22 moderation capability family through the gate, commit, and retro cycle
+
+[BUILD] mon 8/31 7pm - Build the Phase 22 moderation capability family (22.1-22.7) from steering/2026-08-31_PHASE_22_moderation.md
+
+[CDRV] mon 8/31 7pm - Code review Phase 22.1 moderation Layer A modules against the embeddings family for DRY/reuse/granularity
+
+[FIX] mon 8/31 7pm - Fix Phase 22.1 moderation Layer A review findings — extract two cloned Validate rule helpers, correct the RECORDS audit baseline and CHORE predicates, document decode_flagged's repair, and file the deferred-DRY ticket
+
+[ASKS] mon 8/31 7pm - [DEFERRED-DRY] The four *AdapterError modules are four copies of ~100 lines of mechanical code. lib/allm/error/adapter_error.ex, image_adapter_error.ex, embedding_adapter_error.ex and moderation_adapter_error.ex (new in Phase 22.1) are identical from legal_reasons/0 down to the trailing defimpl Jason.Encoder apart from the module name and a noun ("adapter" / "image adapter" / "embedding adapter" / "moderation adapter"): legal_reasons/0, new/2 including the `unless reason in @legal_reasons` guard and its raise message, the three message/1 clauses, defp default_message/2, __from_tagged__/1, and the encoder impl. ModerationAdapterError's reason enum is the SAME ELEVEN ATOMS as EmbeddingAdapterError's; AdapterError and ImageAdapterError differ only in their enums (and AdapterError's one extra :request_id field). agent-spec/IMPLEMENTATION.md:68 makes two implementations the extraction trigger — it fired at copy three in Phase 20 and was missed then too, and copy four shipped in 22.1 with the RECORDS file affirmatively stating the trigger had not fired. Consolidation was correctly declined inside 22.1 because it touches three RELEASED error modules, which CLAUDE.md's cross-phase discipline forbids; this ticket is the record IMPLEMENTATION.md:68 requires in that case. Proposed shape: a `use ALLM.Error.AdapterErrorBase, noun: "moderation adapter", reasons: @legal_reasons, extra_fields: [:request_id]` macro generating everything from legal_reasons/0 down, each module keeping its own @moduledoc, @type reason and @legal_reasons. That also eliminates the twin hand-maintained @type-vs-@legal_reasons declaration that no test binds (separate 22.7 [CHORE], recorded in steering/2026-08-31_PHASE_22_moderation_RECORDS.md). DONE WHEN: `grep -l 'defp default_message' lib/allm/error/*adapter_error.ex` comes back EMPTY — i.e. no *AdapterError module hand-writes the boilerplate any more. Today that grep returns all four files, and it scores partial progress honestly as each module is migrated.

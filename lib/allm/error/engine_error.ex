@@ -20,6 +20,7 @@ defmodule ALLM.Error.EngineError do
           | :unsupported_response_format
           | :no_image_adapter
           | :no_embed_adapter
+          | :no_moderation_adapter
 
   @type t :: %__MODULE__{
           reason: reason(),
@@ -39,6 +40,7 @@ defmodule ALLM.Error.EngineError do
     unsupported_response_format
     no_image_adapter
     no_embed_adapter
+    no_moderation_adapter
   )a
 
   defexception [:reason, :message, :provider, :cause, metadata: %{}]
