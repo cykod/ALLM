@@ -34,9 +34,12 @@ defmodule ALLM.Engine do
       ETF and JSON. `__from_tagged__/1` restores it verbatim (no
       re-stamping); a pre-fix serialized engine lacking `"id"` decodes to
       `nil`. Used as the per-engine cursor key for the deterministic
-      `ALLM.Providers.Fake` / `ALLM.Providers.FakeImages` adapters (§31).
+      `ALLM.Providers.Fake`, `ALLM.Providers.FakeImages`,
+      `ALLM.Providers.FakeEmbeddings` and `ALLM.Providers.FakeModeration`
+      adapters (§31).
     * `:adapter`, `:tool_executor`, `:tool_result_encoder`, `:image_adapter`,
-      `:embed_adapter` — `module | nil`. Modules are restored on JSON decode via
+      `:embed_adapter`, `:moderation_adapter` — `module | nil`. Modules are
+      restored on JSON decode via
       `String.to_existing_atom/1`; an adapter module not loaded in the BEAM
       at decode time surfaces as `{:_unknown, :atom_decode_failed}` via the
       `ALLM.Serializer.from_json/1` error path (`[:adapter] :module_not_loaded`
@@ -97,6 +100,7 @@ defmodule ALLM.Engine do
           tool_result_encoder: module() | nil,
           image_adapter: module() | nil,
           embed_adapter: module() | nil,
+          moderation_adapter: module() | nil,
           params: map(),
           context: map(),
           retry: retry(),
@@ -112,6 +116,7 @@ defmodule ALLM.Engine do
     :tool_result_encoder,
     :image_adapter,
     :embed_adapter,
+    :moderation_adapter,
     adapter_opts: [],
     tools: [],
     params: %{},
@@ -137,6 +142,7 @@ defmodule ALLM.Engine do
     :tool_result_encoder,
     :image_adapter,
     :embed_adapter,
+    :moderation_adapter,
     :params,
     :context,
     :retry,
@@ -155,7 +161,8 @@ defmodule ALLM.Engine do
     :tool_executor,
     :tool_result_encoder,
     :image_adapter,
-    :embed_adapter
+    :embed_adapter,
+    :moderation_adapter
   ]
 
   @doc """
@@ -167,8 +174,8 @@ defmodule ALLM.Engine do
   `%EngineError{reason: :missing_adapter}`), not here.
 
   The module-typed fields `:adapter`, `:tool_executor`, `:tool_result_encoder`,
-  `:image_adapter`, and `:embed_adapter` must each be a module (a plain atom)
-  or `nil`. A
+  `:image_adapter`, `:embed_adapter`, and `:moderation_adapter` must each be a
+  module (a plain atom) or `nil`. A
   non-atom value — most commonly the unsupported
   `tool_executor: {ALLM.ToolExecutor.Default, tools: %{...}}` form — raises
   `ArgumentError` at construction rather than crashing later inside the tool
@@ -179,7 +186,8 @@ defmodule ALLM.Engine do
 
   A stable, serializable `:id` is auto-stamped via
   `System.unique_integer([:positive])` when none is supplied — this is the
-  per-engine identity used as the `Fake`/`FakeImages` multi-call cursor key
+  per-engine identity used as the
+  `Fake`/`FakeImages`/`FakeEmbeddings`/`FakeModeration` multi-call cursor key
   (see §31). Because every constructed engine gets a distinct id,
   `Engine.new(opts) != Engine.new(opts)` by `:id` — each constructed engine
   *is* a distinct instance. An explicitly-passed `id:` opt is preserved
@@ -230,7 +238,8 @@ defmodule ALLM.Engine do
 
   @doc false
   # Inject the engine's `:id` as `adapter_opts[:cursor_key]` so content-equal
-  # engines don't share the `Fake`/`FakeImages` process-dict cursor (§31).
+  # engines don't share the `Fake`/`FakeImages`/`FakeEmbeddings`/
+  # `FakeModeration` process-dict cursor (§31).
   # `Keyword.put_new/3` — an explicit caller-supplied `:cursor_key` wins;
   # a `nil`-id (hand-built) engine passes through untouched and falls back to
   # the `:erlang.phash2(scripts)` default. Provider-neutral: real adapters
@@ -455,8 +464,9 @@ defmodule ALLM.Engine do
 
   Returned as a **map** (not a keyword list). Engine-field keys
   (`:adapter`, `:adapter_opts`, `:model`, `:tools`, `:tool_executor`,
-  `:tool_result_encoder`, `:image_adapter`, `:embed_adapter`, `:params`,
-  `:context`, `:retry`, `:middleware`, `:metadata`, `:api_key`) are never forwarded
+  `:tool_result_encoder`, `:image_adapter`, `:embed_adapter`,
+  `:moderation_adapter`, `:params`, `:context`, `:retry`, `:middleware`,
+  `:metadata`, `:api_key`) are never forwarded
   they are consumed by the engine layer or by other resolvers. Every
   other opts key flows through unchanged, so provider-specific knobs
   (`:reasoning_effort`) and orchestration knobs (`:max_turns`,
@@ -497,6 +507,7 @@ defmodule ALLM.Engine do
       tool_result_encoder: restore_module(data["tool_result_encoder"]),
       image_adapter: restore_module(data["image_adapter"]),
       embed_adapter: restore_module(data["embed_adapter"]),
+      moderation_adapter: restore_module(data["moderation_adapter"]),
       params: restore_atom_keyed_map(data["params"] || %{}),
       context: restore_atom_keyed_map(data["context"] || %{}),
       retry: restore_retry(data["retry"]),

@@ -1,3 +1,38 @@
+## [FEAT] Add moderation adapter behaviour, engine slot, Fake, and conformance (Phase 22.2)
+*Monday, August 31st at 8pm*
+Second batch of the Phase 22 moderation family: the Layer B runtime contract,
+its reference implementation, and a published conformance harness. Spans both
+Mix projects. No facade yet — `ALLM.moderate/3` lands in 22.3.
+
+- Add the `ALLM.ModerationAdapter` behaviour: `moderate/2`,
+  `max_batch_size/0`, and optional `prepare_request/2`, with ten numbered
+  invariants. Invariants 5 and 6 require the empty-input and batch-size gates
+  to fire before any I/O *and* before `ALLM.Keys.fetch!/2`, so a keyless
+  environment observes the rejection rather than a missing-key error
+- Add `:moderation_adapter` to `ALLM.Engine` at all eight sites, including
+  the three hand-maintained `@doc` prose lists that duplicate module
+  attributes and that a grep for the attribute name misses
+- Add `ALLM.Providers.FakeModeration` — a deterministic scripted adapter with
+  a four-shape vocabulary including `{:flagged, categories}`, which has no
+  embeddings counterpart and makes "assert the app rejects flagged content" a
+  one-liner. Gates fire ahead of script consumption
+- Add `ALLM.Test.ModerationAdapterConformance` (ten cases) plus its stub and
+  self-test. Every case sizes its input from the adapter's own
+  `max_batch_size/0` rather than a literal, so the published suite can certify
+  a third-party adapter with any cap; verified red against nine deliberately
+  non-conforming stubs, each on the case owning the violated invariant
+- Fix a cursor defect found independently by the code and security reviews:
+  `bump_retry_visits/2` keyed the retry-visit counter on
+  `:erlang.phash2(script)` while the cursor slot honoured the documented
+  three-source precedence, so two engines with distinct ids and content-equal
+  scripts got separate cursor slots but a *shared* retry budget. The same
+  defect is inherited in the released `FakeEmbeddings` and `FakeImages`
+  siblings and is filed as a [CARRY] rather than fixed cross-phase
+
+Review artifacts live under `.work/`, which is gitignored.
+
+---
+
 ## [FEAT] Add Layer A moderation data types and validator (Phase 22.1)
 *Monday, August 31st at 7pm*
 First batch of the Phase 22 moderation capability family: the Layer A

@@ -330,4 +330,52 @@ defmodule ALLM.EngineTest do
       refute is_list(result)
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # :moderation_adapter — Phase 22.2 (§39)
+  # ---------------------------------------------------------------------------
+
+  describe ":moderation_adapter" do
+    test "new/1 accepts moderation_adapter: SomeModule" do
+      engine = Engine.new(moderation_adapter: ALLM.Providers.FakeModeration)
+      assert engine.moderation_adapter == ALLM.Providers.FakeModeration
+    end
+
+    test "new/1 defaults :moderation_adapter to nil" do
+      assert Engine.new().moderation_adapter == nil
+    end
+
+    test "new/1 with moderation_adapter: {Mod, []} raises ArgumentError" do
+      assert_raise ArgumentError, ~r/moderation_adapter/, fn ->
+        Engine.new(moderation_adapter: {ALLM.Providers.FakeModeration, []})
+      end
+    end
+
+    test "an engine carrying :moderation_adapter round-trips through JSON" do
+      engine = Engine.new(moderation_adapter: ALLM.Providers.FakeModeration, model: "omni")
+      json = ALLM.Serializer.to_json!(engine)
+
+      assert {:ok, decoded} = ALLM.Serializer.from_json(json)
+      assert decoded.moderation_adapter == ALLM.Providers.FakeModeration
+      assert is_atom(decoded.moderation_adapter)
+    end
+
+    test "an engine carrying :moderation_adapter round-trips through term_to_binary" do
+      engine = Engine.new(moderation_adapter: ALLM.Providers.FakeModeration)
+      assert engine == engine |> :erlang.term_to_binary() |> :erlang.binary_to_term()
+    end
+
+    test "resolve_params/2 does not leak :moderation_adapter into params" do
+      engine = Engine.new(moderation_adapter: ALLM.Providers.FakeModeration)
+
+      params =
+        Engine.resolve_params(engine,
+          moderation_adapter: ALLM.Providers.FakeModeration,
+          temperature: 0.4
+        )
+
+      refute Map.has_key?(params, :moderation_adapter)
+      assert params == %{temperature: 0.4}
+    end
+  end
 end

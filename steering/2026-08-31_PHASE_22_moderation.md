@@ -14,14 +14,14 @@
 | Phase | Description | Layer | Status |
 |-------|-------------|-------|--------|
 | 22.1 | Layer A data: `ModerationRequest`, `ModerationResult`, `ModerationResponse`, `ModerationAdapterError`, validator, serializer registry, enum extensions | A | Completed |
-| 22.2 | Layer B runtime: `ALLM.ModerationAdapter` behaviour, `Engine.moderation_adapter`, `FakeModeration`, conformance suite | B | Not Started |
+| 22.2 | Layer B runtime: `ALLM.ModerationAdapter` behaviour, `Engine.moderation_adapter`, `FakeModeration`, conformance suite | B | Completed |
 | 22.3 | Layer C façade: `ALLM.moderate/3`, `ALLM.moderation_request/2`, `:moderate` telemetry span, `Capability.preflight_moderation/2` | C | Not Started |
 | 22.4 | `ALLM.Providers.OpenAI.Moderation` — text input, recorder + wire probe + fixtures | B | Not Started |
 | 22.5 | Image input: `%ALLM.ImagePart{}` items, MIME/size gate, multimodal cardinality | B | Not Started |
 | 22.6 | Spec §39, `guides/moderation.md`, examples 19–20, `mix.exs` wiring, `CHANGELOG` | — | Not Started |
 | 22.7 | `[CHORE]` sweep: CLAUDE.md stale claim, `@guides` parity meta-test, images.ex redaction `[CARRY]` | — | Not Started |
 
-**Overall Progress:** 0/7 sub-phases complete
+**Overall Progress:** 1/7 sub-phases complete (22.2 built, gates pending)
 
 ---
 
@@ -462,10 +462,14 @@ Three callbacks, one optional — structurally identical to `ALLM.EmbeddingAdapt
 2. `moderate/2` returns exactly `{:ok, %ModerationResponse{}}` or `{:error, %ModerationAdapterError{}}` — never a bare struct, never a three-tuple. **Enforced, not merely documented:** `ALLM.moderate/3` raises `ArgumentError` naming the adapter and this invariant on any other shape, rather than laundering it into the façade's error union. Copy the wording and the raise from `ALLM.EmbeddingBatch.dispatch_chunk/2` (`lib/allm/embedding_batch.ex:140-156`).
 3. Result cardinality follows `ModerationRequest`'s normative rule.
 4. `:index` values are exactly `0..length(results)-1`.
-5. Oversized input (`length(input) > max_batch_size()`) is rejected with `:batch_too_large` **before any I/O** and, for an adapter that resolves credentials, **before `ALLM.Keys.fetch!/2`** — so a keyless environment observes the rejection rather than `%EngineError{reason: :missing_key}`. This is Phase 20.2's forward-binding constraint (`lib/allm/embedding_adapter.ex:39-43`) inherited verbatim.
+5. Oversized input is rejected with `:batch_too_large` **before any I/O** and, for an adapter that resolves credentials, **before `ALLM.Keys.fetch!/2`** — so a keyless environment observes the rejection rather than `%EngineError{reason: :missing_key}`. This is Phase 20.2's forward-binding constraint (`lib/allm/embedding_adapter.ex:39-43`) inherited verbatim. **The gate measures the *item* count invariant 3 defines, NOT `length(request.input)`:** `length(request.input)` for an all-strings `:input`, and exactly `1` for an `:input` carrying any `%ImagePart{}`, because the whole list is one multimodal item. `metadata.count` carries that item count. Stating it as raw list length would put invariants 3 and 5 in contradiction — observable at `max_batch_size() == 1`, where a two-element multimodal request (conformance case 10) would be rejected by a *correct* adapter. Amended in the 22.2 fix pass from functional-review finding F2, **before 22.5 writes image input against it**; the reference `gate/1`, `ScriptedModerationStub.gate/1` and the behaviour's published skeleton all measure items.
 6. Empty input (`input == []`) is rejected with `:invalid_request`, under the same before-I/O and before-key ordering.
 7. `opts[:request_id]` is reflected onto `response.request_id` unchanged when supplied.
 8. `request.metadata` round-trips onto `response.metadata` unchanged.
+9. `moderate/2` honours `opts[:request_timeout]`; exceeding it produces `{:error, %ModerationAdapterError{reason: :timeout}}`. Wording from `lib/allm/embedding_adapter.ex:78-80`. Without this, `:timeout` is published by the error enum and listed in 22.3's `@retryable_moderation_reasons` while no conforming adapter is obliged to emit it.
+10. `prepare_request/2` (optional) returns an unfired `Req.Request` configured exactly as `moderate/2` would fire it, and is defined only for a request whose item count is `<= max_batch_size()`. Wording from `lib/allm/embedding_adapter.ex:104-107`.
+
+Invariants **9 and 10 were appended in the 22.2 fix pass** (code review finding F5 — the two obligations dropped from the embeddings sibling without replacement). They are appended rather than slotted in because 1–8 are cited by number from the conformance case names and from 22.2.4's forward-binding notes.
 
 **Cleanup invariant: none.** No `Stream.resource/3` and no Finch ref — `Req.request/1` owns its connection lifecycle. Stated so the absence reads as intent.
 
@@ -551,6 +555,16 @@ The two siblings place the wrap and the policy differently, and moderation follo
 | `generate_image/3` | `do_generate_image_body/5`'s body (`lib/allm.ex:1259-1262`) | a local `policy` binding (`:1257`) |
 | `embed/3` | `EmbeddingBatch.dispatch_chunk/2` (`lib/allm/embedding_batch.ex:140-156`) | `dispatch_opts[:retry_policy]` (`lib/allm.ex:1449`), because the batcher reads `ctx.policy` |
 | **`moderate/3`** | **`do_moderate_body/5`'s body**, mirroring `:1259-1262` | **a local binding** — there is no batcher to read an opts key |
+
+**`build_moderate_dispatch_opts/3` MUST inject `adapter_opts[:cursor_key]`.** Its last step is
+`(engine.adapter_opts ++ call_site_adapter_opts) |> Engine.put_cursor_key(engine)`, exactly as the
+embeddings façade does at `lib/allm.ex:1433-1450` (`:1439-1442` is the `put_cursor_key/2` call).
+Without it, `ALLM.Providers.FakeModeration`'s documented precedence source 2 never fires at the
+façade, every façade-driven script falls back to `:erlang.phash2(script)`, and two content-equal
+engines silently share one process-dict cursor slot **and** one retry budget — the footgun
+`fake_moderation.ex`'s `## Cursor behaviour` section says is confined to direct adapter calls.
+The failure is silent: a green test suite with the wrong verdicts. Added in the 22.2 fix pass from
+code review finding F3.
 
 So `build_moderate_dispatch_opts/3` **does not** put `:retry_policy` into the adapter opts; following the embeddings convention would leak an unread key into every adapter call. `dispatch_moderate_attempt/3` is the **per-attempt closure** passed to `Retry.run/3` — not the wrap itself — shaped like `dispatch_image_attempt/3` (`lib/allm.ex:1297-1310`, whose own comment reads *"Per-attempt closure for `Retry.run/3`"*), extended with the invariant-2 `raise` clause copied from `embedding_batch.ex:145-152`.
 
@@ -657,7 +671,7 @@ Mirrors `ALLM.Providers.FakeEmbeddings` (`lib/allm/providers/fake_embeddings.ex`
 
 `{:flagged, categories}` is the one entry with no embeddings counterpart: it synthesizes a single flagged result with those category names `true` and score `1.0`, so the overwhelmingly common test ("assert the app rejects flagged content") is a one-liner rather than a hand-built `%ModerationResult{}`.
 
-**Default behaviour with no script:** every input yields an unflagged result with the 13 omni category names present, all `false`, all scores `0.0`. Deterministic — no randomness, no hashing of input text.
+**Default behaviour with no script:** every input yields an unflagged result with the 13 omni category names present, all `false`, all scores `0.0`. Deterministic — no randomness, no hashing of input text. **"No script" means `:moderation_script` absent or `[]` — and only that.** A **non-empty** script whose cursor has run off the end returns `{:error, %ModerationAdapterError{reason: :unknown, metadata: %{cause: :moderation_script_exhausted}}}`, mirroring `FakeEmbeddings`' exhaustion shape. The two are different caller mistakes: "I didn't script anything" is a convenience request; "my script ran out" is almost always an off-by-one in the caller's expectation of the call count, and a clean verdict would make that bug pass green. Split in the 22.2 fix pass from code review finding F4; RECORDS deviation 1 is amended accordingly.
 
 **Cursor:** `adapter_opts[:cursor_key]` (the engine's stable `:id`, injected by the façade via `ALLM.Engine.put_cursor_key/2`, `lib/allm/engine.ex:231-243`), falling back to the script hash. Copy the moduledoc's two-source explanation verbatim from `fake_embeddings.ex:56-67`.
 
@@ -1029,6 +1043,10 @@ grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test
 
 * **Behaviour invariants 5 and 6 require both gates ahead of `ALLM.Keys.fetch!/2`.** Inherited verbatim from Phase 20.2's constraint (`lib/allm/embedding_adapter.ex:39-43`). Binds **22.4**, whose `moderate/2` gate order is `empty-input → batch-size → key → HTTP`, and whose conformance cases 3 and 4 run with **no key in the environment**. A 22.4 implementation resolving the key first passes its own wire tests and fails conformance only in a keyless CI.
 * **`@case_count 10` and the case-to-invariant mapping are frozen here.** Binds **22.5**: case 10 is the multimodal arm, written in 22.2 against `FakeModeration` and re-run unchanged in 22.5. Adding a case without bumping the attribute breaks the harness self-test.
+* **`build_moderate_dispatch_opts/3` must inject `adapter_opts[:cursor_key]` via `ALLM.Engine.put_cursor_key/2`.** Binds **22.3**. `FakeModeration`'s moduledoc (`lib/allm/providers/fake_moderation.ex:70-73`) publishes the engine's `:id` as precedence source 2 for the script cursor *and* (after the 22.2 fix pass) for the `{:retry_until_call, n}` budget; the façade is the only thing that can supply it. Mirror `lib/allm.ex:1433-1450`. Omitting it makes every façade-driven moderation script share one cursor slot across content-equal engines, silently.
+* **Behaviour invariants 9 and 10 (`request_timeout` → `:timeout`; `prepare_request/2` semantics) were appended in the 22.2 fix pass.** Binds **22.4**: the real adapter must honour `opts[:request_timeout]` and convert the expiry to `:timeout`, which is the reason `ALLM.Error.ModerationAdapterError` publishes and 22.3's `@retryable_moderation_reasons` retries. 1–8 stay frozen; anything further is appended at 11.
+* **Invariant 5 measures ITEMS, not raw list elements.** Binds **22.5**: a multimodal `:input` is one item, so the batch gate never rejects it, and conformance case 10's two-element list is deliberately unclamped. Binds **22.4** too — its `moderate/2` gate must not read `length(request.input)`.
+* **Conformance cases 5, 6 and 7 size their input as `min(<wanted>, adapter.max_batch_size())`.** Binds **22.4**: whatever the ladder probe returns — including `1` — the published suite certifies a conforming adapter rather than failing it on its own correct `:batch_too_large`. Before the 22.2 fix pass those cases used literals `4`/`3`/`2` and went red at caps 3/2/1 respectively (measured). Do **not** reintroduce a literal input size in any case.
 * **`FakeModeration.@max_batch_size 32` is the number conformance case 3 crosses; the OpenAI adapter's is independent.** Binds **22.4**, whose `@max_batch_size` comes from the ladder probe and may differ by orders of magnitude. Nothing may assume the two are equal — which is why case 3 derives its oversized input from `adapter.max_batch_size()`.
 
 ---
@@ -1084,7 +1102,7 @@ grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test
 
 - [ ] `ALLM.moderation_request/2` + `@moderation_request_field_opts` allow-list
 - [ ] `ALLM.moderate/3` — `@doc` with the sections named in Decisions #4, #5, #6, #11 plus two doctests (happy path over `FakeModeration`; the `:no_moderation_adapter` gate), `@spec`, head + three clauses
-- [ ] Internals: `@retryable_moderation_reasons`, `drop_moderation_request_opts/1`, `do_moderate/3`, `do_moderate_body/5` (nil-adapter clause **first**; the `Retry.run/3` wrap in its body per the contract's placement table), `build_moderate_dispatch_opts/3` (**no** `:retry_policy` key), `dispatch_moderate_attempt/3` (per-attempt closure + invariant-2 raise), `fill_moderation_request_id/2`, `moderate_stop_extras/1`
+- [ ] Internals: `@retryable_moderation_reasons`, `drop_moderation_request_opts/1`, `do_moderate/3`, `do_moderate_body/5` (nil-adapter clause **first**; the `Retry.run/3` wrap in its body per the contract's placement table), `build_moderate_dispatch_opts/3` (**no** `:retry_policy` key; **must** end with `Engine.put_cursor_key(engine)` — see the Layer C contract), `dispatch_moderate_attempt/3` (per-attempt closure + invariant-2 raise), `fill_moderation_request_id/2`, `moderate_stop_extras/1`
 - [ ] Reuse the existing `augment_retry_policy/2` (`lib/allm.ex:1281-1291`) — **do not add a third variant**
 - [ ] `ALLM.Capability.preflight_moderation/2` + the `# Private — moderation preflight` block + moduledoc bullet (the "Five helpers" list becomes six)
 - [ ] `ALLM.Telemetry` — `:moderate` in both `@type span_name` and `@valid_span_names`, plus the moduledoc table row
