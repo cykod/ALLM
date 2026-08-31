@@ -3,7 +3,7 @@
 > **Goal:** Ship the audio surface as a third pipeline parallel to chat (Layer C `generate/3`/`chat/3`) and image (`generate_image/3`/`edit_image/4`/`image_variations/3`). Add `ALLM.transcribe/3` (speech-to-text — STT) and `ALLM.synthesize/3` (text-to-speech — TTS) on top of a new `ALLM.AudioAdapter` behaviour and an `audio_adapter:` field on `%ALLM.Engine{}`. The first real provider is `ALLM.Providers.OpenAI.Audio` against Whisper (`/v1/audio/transcriptions`, `/v1/audio/translations`) and the OpenAI TTS endpoints (`/v1/audio/speech`).
 > **Outcome:** A caller constructs `engine = ALLM.Engine.new(audio_adapter: ALLM.Providers.OpenAI.Audio, model: "whisper-1")` and calls `{:ok, %ALLM.TranscriptionResponse{text: t}} = ALLM.transcribe(engine, ALLM.Audio.from_file("clip.mp3"))`, or `{:ok, %ALLM.SynthesisResponse{audio: bytes, format: :mp3}} = ALLM.synthesize(engine, "Hello, world.", voice: "alloy", model: "tts-1")`. The audio surface is opt-in per engine — an engine without `audio_adapter:` returns `{:error, %ALLM.Error.EngineError{reason: :no_audio_adapter}}` from audio calls and is otherwise unchanged. Existing chat and image surfaces are unaffected. Two new live examples (`16_transcribe.exs`, `17_synthesize.exs`) ship under `examples/` and run green against OpenAI (Anthropic has no audio APIs — both scripts are OpenAI-only via the `# Provider: openai` header marker, mirroring `10_generate_image.exs`'s pattern). `mix test`, `mix credo --strict`, `mix dialyzer`, `mix format --check-formatted` all green; coverage ≥ 90 % on every new file.
 > **Spec sections:** §32.5 (post-v0.3 candidates — audio listed), §35.10 (out-of-scope items eligible for v0.4+). Phase 19 ALSO amends the spec to add §37 "Audio I/O" (Phase 20's embeddings claims §36; audio takes the next available section); the amendment is part of sub-phase 19.6 alongside the v0.4 release polish.
-> **Layers touched:** A (six new structs) + B (one new behaviour + one new Fake + one new real provider) + C (two new facade functions). Three layers — split into sub-phases 19.1 (A), 19.2 (B-behaviour+Fake), 19.3 (C-facade), 19.4 (B-cross-cutting), 19.5 (B-real provider), 19.6 (release polish + spec amendment) so each is independently shippable per the AGENT_DESIGN_SPEC "one layer per phase" rule. **Audio is sync-only in v0.4** — async/batch is handled by the cross-cutting `ALLM.Batch` surface (see `steering/BATCH_DESIGN.md`) which targets bulk chat/embeddings APIs, not audio.
+> **Layers touched:** A (six new structs) + B (one new behaviour + one new Fake + one new real provider) + C (two new facade functions). Three layers — split into sub-phases 19.1 (A), 19.2 (B-behaviour+Fake), 19.3 (C-facade), 19.4 (B-cross-cutting), 19.5 (B-real provider), 19.6 (release polish + spec amendment) so each is independently shippable per the agent-spec/DESIGN.md "one layer per phase" rule. **Audio is sync-only in v0.4** — async/batch is handled by the cross-cutting `ALLM.Batch` surface (see `steering/BATCH_DESIGN.md`) which targets bulk chat/embeddings APIs, not audio.
 > **Phasing doc:** [`RELEASE_0_3_PHASING.md`](RELEASE_0_3_PHASING.md) "What Comes After" → "Audio input/output". This is a v0.4 candidate; phase numbering continues from Phase 18 (per-tool manual) which is post-v0.3.0.
 
 ## Status
@@ -449,7 +449,7 @@ defp drop_audio_request_opts(opts) when is_list(opts) do
 end
 ```
 
-**Symmetry invariant** (per AGENT_DESIGN_SPEC item 11): the keys dropped here are exactly the call/dispatch-site keys consumed downstream by `Telemetry.span/3`, `Retry.run/3`, `Engine.resolve_*`, and the adapter's `opts` parameter. They MUST NOT collide with any field on `%TranscriptionRequest{}` or `%SynthesisRequest{}` struct (`struct!/2` would `KeyError`). The image-side counterpart at `lib/allm.ex:794-805` drops the same set minus `:on_event` plus `:mask` (image-edit-specific). Audio-side drops `:on_event` because some users wire it through call opts even on non-streaming paths for uniform telemetry plumbing.
+**Symmetry invariant** (per agent-spec/DESIGN.md item 11): the keys dropped here are exactly the call/dispatch-site keys consumed downstream by `Telemetry.span/3`, `Retry.run/3`, `Engine.resolve_*`, and the adapter's `opts` parameter. They MUST NOT collide with any field on `%TranscriptionRequest{}` or `%SynthesisRequest{}` struct (`struct!/2` would `KeyError`). The image-side counterpart at `lib/allm.ex:794-805` drops the same set minus `:on_event` plus `:mask` (image-edit-specific). Audio-side drops `:on_event` because some users wire it through call opts even on non-streaming paths for uniform telemetry plumbing.
 
 ### `ALLM.transcribe/3` and `ALLM.synthesize/3` (Layer C)
 
@@ -854,7 +854,7 @@ GEMINI_API_KEY=...     ALLM_PROVIDER=gemini    mix run examples/run_all.exs   # 
 | `:vtt` STT / `:aac` TTS | 19.5 STT-5 | 19.5 TTS-5 |
 | `:translate` STT / `:pcm` TTS | 19.5 STT-6 | 19.5 TTS-6 |
 
-12 distinct cells × one wire fixture each (six STT + six TTS). Per AGENT_DESIGN_SPEC item 10 (cross-option × cross-path): both surfaces enumerate every legal `response_format` / `format`. Per AGENT_DESIGN_SPEC item 7 (case-count discipline): the count is `2 paths × 6 formats = 12` and matches the row enumeration.
+12 distinct cells × one wire fixture each (six STT + six TTS). Per agent-spec/DESIGN.md item 10 (cross-option × cross-path): both surfaces enumerate every legal `response_format` / `format`. Per agent-spec/DESIGN.md item 7 (case-count discipline): the count is `2 paths × 6 formats = 12` and matches the row enumeration.
 
 ## Error Contract
 
@@ -914,7 +914,7 @@ Non-applicable to Phase 19 — no streaming. Per phasing principle #2 (transferr
 - [ ] CHANGELOG.md updated with six bullets
 - [ ] `test/fixtures/audio/hello_world.mp3` committed alongside `test/fixtures/audio/README.md` documenting provenance
 - [ ] `scripts/record_openai_audio_fixtures.exs` committed and idempotent per CLAUDE.md
-- [ ] Reviewed via `/review` (see `AGENT_REVIEW_SPEC.md` if present)
+- [ ] Reviewed via `/review` (see `agent-spec/REVIEW.md` if present)
 
 ## Live-API cost estimation
 
@@ -928,7 +928,7 @@ Per `examples/16_transcribe.exs` + `examples/17_synthesize.exs`, OpenAI only. As
 | Anthropic arm — audio scripts skipped | — | — | $0 | $0 |
 | Gemini arm — audio scripts skipped | — | — | $0 | $0 |
 
-Adds ~$0.003 to the multi-provider `/review` pass; cumulative `/review` cost rises from ~$0.14 (post-Phase-18) to ~$0.143 per clean run. First-implementation cost uses 4× retry per AGENT_DESIGN_SPEC item 19. `gpt-4o-mini-tts` pricing as of 2026-05-06 (verified via context7 against OpenAI API reference); switch to `tts-1` (~$0.001) if cost-floor matters more than the `instructions:` parameter coverage.
+Adds ~$0.003 to the multi-provider `/review` pass; cumulative `/review` cost rises from ~$0.14 (post-Phase-18) to ~$0.143 per clean run. First-implementation cost uses 4× retry per agent-spec/DESIGN.md item 19. `gpt-4o-mini-tts` pricing as of 2026-05-06 (verified via context7 against OpenAI API reference); switch to `tts-1` (~$0.001) if cost-floor matters more than the `instructions:` parameter coverage.
 
 ## Cross-phase consistency check
 

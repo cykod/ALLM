@@ -3,7 +3,7 @@
 > **Goal:** Add a `manual: boolean()` field to `%ALLM.Tool{}` so individual tools opt out of auto-execution under `mode: :auto`. The chat orchestrator partitions a response's tool calls into auto + manual buckets: auto tools run eagerly via the existing `ToolRunner` path, then the loop halts with the existing `:manual_tool_calls` reason, and the manual ones surface in `metadata.manual_tool_calls` (or `pending_tool_calls` on a `%Session{}`).
 > **Outcome:** A caller declares `ALLM.tool(name: "charge_card", …, manual: true)`; `ALLM.chat/3` runs auto-bucket tools eagerly and halts on the first turn that hits a manual tool, returning `%ChatResult{halted_reason: :manual_tool_calls, metadata: %{manual_tool_calls: [%ToolCall{}, …]}}` with the auto-bucket tool messages already merged into `result.thread`. Session callers see `status: :awaiting_tools, pending_tool_calls: [<manual ones only>]` and resolve via the existing `submit_tool_result/3` flow. The streaming path emits the same partition: `:tool_execution_*` events fire only for the auto bucket; the trailing `:step_completed` payload carries the new `:manual_tool_calls` key (additive — non-breaking per CLAUDE.md "adding a key to an *existing* event's payload map is NOT breaking"). `mix test`, `mix credo --strict`, `mix dialyzer`, `mix format --check-formatted` all green; coverage ≥ 90 % on every new file. Two new live examples (`14_per_tool_manual.exs`, `15_per_tool_manual_session.exs`) ship under `examples/` and run green against both providers.
 > **Spec sections:** §5.2 (Tool struct — field addition), §10.5 (chat halt-reason table — clarification), §12 (manual vs automatic — extends to per-tool), §17 (`ToolRunner` — receives auto bucket only).
-> **Layers touched:** A (Tool struct field) + C (chat orchestrator partition) + D (session projection helper). Three layers — split into sub-phases 18.1 (A), 18.2/18.3 (C), 18.4 (D) so each is independently shippable per the AGENT_DESIGN_SPEC "one layer per phase" rule.
+> **Layers touched:** A (Tool struct field) + C (chat orchestrator partition) + D (session projection helper). Three layers — split into sub-phases 18.1 (A), 18.2/18.3 (C), 18.4 (D) so each is independently shippable per the agent-spec/DESIGN.md "one layer per phase" rule.
 > **Phasing doc:** post-v0.3.0; placed after Phase 17 (image layer) per the project's monotonic phase numbering.
 
 ## Status
@@ -43,7 +43,7 @@ The `:manual_tool_calls` halt has FOUR dispatch sites that must all recognize th
 | 5. Session step_manual | `lib/allm/session.ex:783-788` `step_manual/2` | `pending_tool_calls: response.tool_calls \|\| []` | Read `meta[:manual_tool_calls]` first, fall back to `response.tool_calls`. |
 | 6. Session apply_chat_result manual lifter | `lib/allm/session.ex:660` call site `manual_tool_calls(cr.final_response)` | helper inspects a `%Response{}`-shaped map | Change call site to `manual_tool_calls(cr)`; helper's first clause matches `%ChatResult{metadata: %{manual_tool_calls: tcs}}`, second matches `%ChatResult{final_response: %{tool_calls: tcs}}`. The helper now takes a `%ChatResult{}`, not a `%Response{}`. (Helper now at `session.ex:688-695`.) |
 
-All six sites are listed in the Module Tree as `(MODIFY)` and enumerated as discrete bullets in the Implementation Checklist of their respective sub-phases. AGENT_DESIGN_SPEC checklist item 14 (Layer-C reducer-touch enumeration) is satisfied — every site that absorbs the new metadata key is named.
+All six sites are listed in the Module Tree as `(MODIFY)` and enumerated as discrete bullets in the Implementation Checklist of their respective sub-phases. agent-spec/DESIGN.md checklist item 14 (Layer-C reducer-touch enumeration) is satisfied — every site that absorbs the new metadata key is named.
 
 ### Why reuse `:manual_tool_calls` and not introduce `:partial_manual`?
 
@@ -378,7 +378,7 @@ end
 
 - `start_phase_b_partial/5` (signature: `data, response, assistant_msg, auto_tcs, manual_tcs`) is identical to `start_phase_b/3` except it passes `auto_tcs` (not `response.tool_calls`) to `ToolRunner.stream_tool_calls/3` AND threads `manual_tcs` through the phase data so the eventual `:step_completed` event carries it.
 - `start_phase_c_manual_only/4` skips Phase B entirely (no tool execution events) and emits `:step_completed` with `manual_tool_calls: manual_tcs` directly.
-- The `:tool_execution_started` / `:tool_execution_completed` / `:tool_result_encoded` events fire ONLY for the auto bucket. There is no `:tool_skipped_manual` event (out of scope per Decision #1's reasoning + AGENT_DESIGN_SPEC "Adding a new variant to a closed tagged-tuple union is a breaking change").
+- The `:tool_execution_started` / `:tool_execution_completed` / `:tool_result_encoded` events fire ONLY for the auto bucket. There is no `:tool_skipped_manual` event (out of scope per Decision #1's reasoning + agent-spec/DESIGN.md "Adding a new variant to a closed tagged-tuple union is a breaking change").
 - The trailing `:step_completed` event payload carries `:manual_tool_calls: list(ToolCall.t())` (empty list when no manual tools were called this turn — additive key, default empty).
 
 ### `ALLM.Event.step_completed/4` (extended arity)
@@ -652,7 +652,7 @@ Plus:
 - [ ] Update the `@type t` for `:step_completed` in `lib/allm/event.ex` to include `manual_tool_calls: [ToolCall.t()]` in the payload type
 - [ ] Add `partition_tool_calls/2` invocation inside `transition_a_to_b/1` per the contract above (already authored as a private helper in 18.2 — reuse)
 - [x] Add `start_phase_b_partial/5` (`data, response, assistant_msg, auto_tcs, manual_tcs`) and `start_phase_c_manual_only/4` helpers. **`start_phase_c_manual_only/4` MUST call `Thread.add_message(data.thread, assistant_msg)` before constructing `phase_c_data`** — mirrors the existing whole-loop manual branch at `chat.ex:1351` (streaming) so the assistant message with tool_calls remains in the thread. (18.3 retro N2: design originally listed `/4` arity for `start_phase_b_partial`; actual is `/5`.)
-- [ ] Thread `manual_tool_calls` through THREE state-shape sites (all streaming): (a) `phase_b_data` at `chat.ex:1426` (streaming `start_phase_b/3`; was `chat.ex:1396` pre-18.3) adds a `:manual_tcs` field; (b) `transition_b_to_c/1` at `chat.ex:1673` (streaming; was `chat.ex:1557-1581` pre-18.3) reads `phase_b_data.manual_tcs` and writes it into `phase_c_data`; (c) `emit_step_completed/1` at `chat.ex:1708` (streaming; was `chat.ex:1585` pre-18.3) constructs `Event.step_completed(response, thread, mode, manual_tcs)` using the new `/4` arity. Per Decision #7 (AGENT_DESIGN_SPEC item 14 reducer-touch enumeration). NOTE: 18.3 also extracted a `dispatch_partitioned_stream/3` helper at `chat.ex:1385` (called from `transition_a_to_b/1`) to keep the latter under Credo's cyclomatic-complexity threshold of 9 — pure refactor, no behavior change. NOTE 2: 18.3 also extended `step_result_from_outer_collector/4` → `/5` (streaming chat-loop side, `chat.ex:1944`) to accept the per-tool manual bucket from the `:step_completed` event payload — without this thread-through, `terminal_condition/5`'s `per_tool_manual?/1` clause never fires from the streaming arm and the loop runs an unbounded next turn on a malformed thread (load-bearing for cell 3 of the 18.3 stream-matrix, AGENT_DESIGN_SPEC item 14 reducer-touch enumeration extension).
+- [ ] Thread `manual_tool_calls` through THREE state-shape sites (all streaming): (a) `phase_b_data` at `chat.ex:1426` (streaming `start_phase_b/3`; was `chat.ex:1396` pre-18.3) adds a `:manual_tcs` field; (b) `transition_b_to_c/1` at `chat.ex:1673` (streaming; was `chat.ex:1557-1581` pre-18.3) reads `phase_b_data.manual_tcs` and writes it into `phase_c_data`; (c) `emit_step_completed/1` at `chat.ex:1708` (streaming; was `chat.ex:1585` pre-18.3) constructs `Event.step_completed(response, thread, mode, manual_tcs)` using the new `/4` arity. Per Decision #7 (agent-spec/DESIGN.md item 14 reducer-touch enumeration). NOTE: 18.3 also extracted a `dispatch_partitioned_stream/3` helper at `chat.ex:1385` (called from `transition_a_to_b/1`) to keep the latter under Credo's cyclomatic-complexity threshold of 9 — pure refactor, no behavior change. NOTE 2: 18.3 also extended `step_result_from_outer_collector/4` → `/5` (streaming chat-loop side, `chat.ex:1944`) to accept the per-tool manual bucket from the `:step_completed` event payload — without this thread-through, `terminal_condition/5`'s `per_tool_manual?/1` clause never fires from the streaming arm and the loop runs an unbounded next turn on a malformed thread (load-bearing for cell 3 of the 18.3 stream-matrix, agent-spec/DESIGN.md item 14 reducer-touch enumeration extension).
 - [ ] **Update `StreamCollector.apply_event/2`** (`lib/allm/stream_collector.ex`) — `:step_completed` clause adds `Map.get(payload, :manual_tool_calls, [])` extraction; merges onto `step_result.metadata` IFF the list is non-empty (empty-list-is-absence per Decision #12). This is a BLOCKING requirement for chat-equivalence — without it, the streaming arm's `step_result.metadata` lacks the key and `assert a.metadata == b.metadata` (`test/support/assertions.ex:90`) breaks immediately.
 - [ ] Verify `:on_event` callbacks see the new payload key via the existing pass-through
 
@@ -682,7 +682,7 @@ mix dialyzer
 - `Session.start/3 with mode: :manual and per-tool flags ignores the per-tool flags (whole-loop wins per Decision #5); pending_tool_calls populated from response.tool_calls (full list)`
 - `Session.start/3 with mode: :auto, mixed bucket: pending_tool_calls is the manual subset only; thread already carries auto tool messages`
 - `Session.submit_tool_result/3 against the manual subset flips status to :idle when last submitted; subsequent continue/3 drives the next adapter turn`
-- `Session.submit_tool_result/3 with an AUTO-bucket id returns {:error, %SessionError{reason: :unknown_tool_call_id}}` — the auto bucket already ran; its id is not in pending_tool_calls. (Closes the AGENT_DESIGN_SPEC item 12 dispatch-graph reconciliation gap for the continue/submit cycle.)
+- `Session.submit_tool_result/3 with an AUTO-bucket id returns {:error, %SessionError{reason: :unknown_tool_call_id}}` — the auto bucket already ran; its id is not in pending_tool_calls. (Closes the agent-spec/DESIGN.md item 12 dispatch-graph reconciliation gap for the continue/submit cycle.)
 - `Session.stream_start/3 with mixed bucket: terminal :chat_completed event's result.metadata.manual_tool_calls equals the lifted pending_tool_calls`
 - `Session.stream_start/3 with mode: :auto, pure manual: status: :awaiting_tools, no :tool_execution_* events fired`
 - `Session.stream_start/3 with mode: :manual, mixed: whole-loop wins; status: :awaiting_tools with FULL response.tool_calls (not the manual subset)`
@@ -802,7 +802,7 @@ ANTHROPIC_API_KEY=...  ALLM_PROVIDER=anthropic mix run examples/run_all.exs
 - **Stream-equivalence** — chat-equivalence property covers the partition (18.5); relaxation budget unchanged from Phase 7.
 - **Live examples** — `examples/14_*` + `examples/15_*` against both providers (18.5 BLOCKING).
 
-**Cross-phase × cross-path test matrix** (per AGENT_DESIGN_SPEC checklist item 10):
+**Cross-phase × cross-path test matrix** (per agent-spec/DESIGN.md checklist item 10):
 
 | Mode × tool flags | Non-streaming `chat/3` | Streaming `stream/3` | Session non-streaming | Session streaming |
 |--------------------|-------------------------|----------------------|----------------------|-------------------|
@@ -846,7 +846,7 @@ The pure-manual streaming sub-arm (`start_phase_c_manual_only/4`) skips Phase B 
 - [ ] CHANGELOG.md updated with three bullets
 - [ ] BLOCKING live-validation: `examples/run_all.exs` exit 0 against BOTH providers
 - [ ] `examples/RUN_OUTPUT_OPENAI.md` and `examples/RUN_OUTPUT_ANTHROPIC.md` regenerated in the same commit as the live run (per CLAUDE.md snapshot policy)
-- [ ] Reviewed via `/review` (see `AGENT_REVIEW_SPEC.md` if present)
+- [ ] Reviewed via `/review` (see `agent-spec/REVIEW.md` if present)
 
 ## Live-API cost estimation
 
@@ -858,7 +858,7 @@ Per `examples/14_per_tool_manual.exs` + `examples/15_per_tool_manual_session.exs
 | Anthropic (`claude-sonnet-4-6`) | ~$0.003 | ~$0.006 | ~$0.006 | ~$0.024 |
 | **Combined** | — | — | **~$0.008** | **~$0.032** |
 
-Adds ~$0.008 to the dual-provider `/review` pass; cumulative `/review` cost rises from ~$0.13 (v0.3.0) to ~$0.14 per clean run. First-implementation cost uses 4× retry overhead per AGENT_DESIGN_SPEC item 19 (the project's recent worked examples — Phase 10.5 / 11.4 / 17.x — show 3× being optimistic for new orchestration paths).
+Adds ~$0.008 to the dual-provider `/review` pass; cumulative `/review` cost rises from ~$0.13 (v0.3.0) to ~$0.14 per clean run. First-implementation cost uses 4× retry overhead per agent-spec/DESIGN.md item 19 (the project's recent worked examples — Phase 10.5 / 11.4 / 17.x — show 3× being optimistic for new orchestration paths).
 
 ## Cross-phase consistency check
 

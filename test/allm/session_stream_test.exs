@@ -291,7 +291,7 @@ defmodule ALLM.SessionStreamTest do
     test "stream_start/3 + StreamReducer mode :chat ≡ Session.start/3 (single-turn text)" do
       input = [ALLM.user("hi")]
 
-      # Per AGENT_IMPLEMENTATION_SPEC: isolate Fake's per-process cursor.
+      # Per agent-spec/IMPLEMENTATION.md: isolate Fake's per-process cursor.
       {s_sync, r_sync} =
         Task.async(fn ->
           engine = engine_with_text("hello")

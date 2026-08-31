@@ -353,7 +353,7 @@ For any phase touching Layer C streaming or stream consumption:
 - [ ] Stream-equivalence test passes for any non-streaming wrapper added
 - [ ] Spec section references in commit messages match §-numbers in the Overview
 - [ ] CHANGELOG.md updated with one line per public-API change
-- [ ] Reviewed via `/review` (see `AGENT_REVIEW_SPEC.md`)
+- [ ] Reviewed via `/review` (see `agent-spec/REVIEW.md`)
 
 **Ticked-with-caveats requires a linked finding.** When a DoD item is ticked but has known caveats (assertion relaxations, excluded test cases, partially-implemented contract), the item MUST link to a retro finding or open issue tracking resolution. A bare tick on a caveated item is misleading. Worked example: PHASE_7's `Chat-equivalence property passes with ≥100 StreamData iterations` ticked in batch 4 with three known divergences (F1/F2/F3) — the tick should be accompanied by `Known caveats: see retro/<file>.md F1-F3 → resolved by Phase 7.6 cleanup`.
 

@@ -23,7 +23,7 @@
 
 Phase 1 hardens everything in Layer A so that Phases 2+ can assume well-formed data, structured errors, and guaranteed round-trippability without re-litigating the data layer. The scaffolding today has every Layer A struct defined (except `ALLM.Thread`, which is ~70% implemented with full helpers) but most modules are shallow: no `.new/1` constructors on `Message`, `ToolCall`, `Response`, `StepResult`, `ChatResult`, or `Usage`; no `event?/1` guard or variant constructors on `ALLM.Event`; no validation module at all; no error struct hierarchy; and no tested serialization path through `Jason`. The top-level facade `lib/allm.ex` has the spec §4 constructors (`system/1`, `user/1`, `assistant/1`, `tool_result/2`, `tool/1`, `json_schema/3`, `request/2`) but lacks `@doc` strings and doctests, so there is no executable documentation.
 
-**This design refines spec §20 by introducing a struct-based error hierarchy.** Spec §20 describes the error model using plain atoms (`:missing_adapter`, `:invalid_request`) and tuples (`{:adapter_error, term()}`, `{:tool_error, name, reason}`) — it does not mandate a struct hierarchy. Per `AGENT_DESIGN_SPEC.md §7`, every public function that can fail must return `{:error, %ALLM.Error.XError{}}` where `XError` is a struct with `:reason`, `:message`, `:provider`, `:cause` at minimum. This design reconciles the two by: (a) introducing five `ALLM.Error.*` structs whose `:reason` fields carry the exact atoms named in §20; (b) preserving the spec's `:reason` atom taxonomy verbatim so spec citations remain stable; (c) documenting that legacy `{:error, atom}` / `{:error, {tag, _}}` return shapes are not used — everything uses the struct form. No spec amendment is required because §20 leaves the shape open; the struct form is a *refinement* within the spec's taxonomy, not a contradiction of it.
+**This design refines spec §20 by introducing a struct-based error hierarchy.** Spec §20 describes the error model using plain atoms (`:missing_adapter`, `:invalid_request`) and tuples (`{:adapter_error, term()}`, `{:tool_error, name, reason}`) — it does not mandate a struct hierarchy. Per `agent-spec/DESIGN.md §7`, every public function that can fail must return `{:error, %ALLM.Error.XError{}}` where `XError` is a struct with `:reason`, `:message`, `:provider`, `:cause` at minimum. This design reconciles the two by: (a) introducing five `ALLM.Error.*` structs whose `:reason` fields carry the exact atoms named in §20; (b) preserving the spec's `:reason` atom taxonomy verbatim so spec citations remain stable; (c) documenting that legacy `{:error, atom}` / `{:error, {tag, _}}` return shapes are not used — everything uses the struct form. No spec amendment is required because §20 leaves the shape open; the struct form is a *refinement* within the spec's taxonomy, not a contradiction of it.
 
 ### Deliverables
 
@@ -523,7 +523,7 @@ test/allm/
 mix.exs                                  (MODIFY — add :stream_data to deps in :test env)
 ```
 
-Test files mirror source files 1:1 per `AGENT_DESIGN_SPEC.md §4`. No `test/support/` modules needed in Phase 1 — conformance harnesses land in Phase 3.
+Test files mirror source files 1:1 per `agent-spec/DESIGN.md §4`. No `test/support/` modules needed in Phase 1 — conformance harnesses land in Phase 3.
 
 ## Phases
 
@@ -666,7 +666,7 @@ mix dialyzer
 
 #### 1.4 Field-Error Vocabulary
 
-Exhaustive atom vocabulary per `AGENT_DESIGN_SPEC.md §7`. Implementer must not invent atoms; if a rule produces an error not in this table, amend the table first.
+Exhaustive atom vocabulary per `agent-spec/DESIGN.md §7`. Implementer must not invent atoms; if a rule produces an error not in this table, amend the table first.
 
 | Field path | Reason atom | Hard-reject? | Fires when |
 |------------|-------------|--------------|------------|
@@ -739,7 +739,7 @@ mix dialyzer
 
 #### 1.5 Field-Error Vocabulary
 
-Exhaustive atom vocabulary per `AGENT_DESIGN_SPEC.md §7`. Implementer must not invent atoms; if a decoder branch needs a new atom, amend this table first and add the matching Test Plan entry.
+Exhaustive atom vocabulary per `agent-spec/DESIGN.md §7`. Implementer must not invent atoms; if a decoder branch needs a new atom, amend this table first and add the matching Test Plan entry.
 
 | Field path | Reason atom | Hard-reject? | Fires when |
 |------------|-------------|--------------|------------|
@@ -860,7 +860,7 @@ Consolidated view of what lands in Phase 1 tests. The per-sub-phase tests above 
 - `Serializer.to_json!/1`, `from_json/2` — one doctest each.
 - Every `ALLM.Error.*.new/*` — one doctest each.
 
-Doctests double as living documentation and as the cheapest smoke test. A `@doc` example that doesn't compile is a failing test — per `AGENT_DESIGN_SPEC.md §6` this is a feature, not a defect.
+Doctests double as living documentation and as the cheapest smoke test. A `@doc` example that doesn't compile is a failing test — per `agent-spec/DESIGN.md §6` this is a feature, not a defect.
 
 ### Property tests
 
@@ -898,7 +898,7 @@ N/A for Phase 1 — no streaming wrappers exist yet. First appear in Phase 5.
 | `ALLM.Serializer.from_json/2` | `%ValidationError{reason: :invalid_request, errors: [{:json, :malformed}]}` | JSON is not decodable by `Jason`; fix upstream. |
 | `ALLM.Error.*.new/*` | `ArgumentError` | Programmer error — fix the `.new/*` call at the callsite. |
 
-No function in Phase 1 returns `{:error, term()}`. Every error is a struct per `AGENT_DESIGN_SPEC.md §7`.
+No function in Phase 1 returns `{:error, term()}`. Every error is a struct per `agent-spec/DESIGN.md §7`.
 
 ## Streaming & Backpressure
 

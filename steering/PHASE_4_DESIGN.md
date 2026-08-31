@@ -20,7 +20,7 @@
 
 ## Overview
 
-Phase 4 adds the **user-facing deterministic adapter** that every subsequent orchestration phase (5, 6, 7, 8) tests against. The Phase 3 `StubAdapter` that ships inside the `allm_conformance` package certifies the harness itself against a known-good implementation; it is **not** the adapter users reach for when they write `ALLM.chat/3` tests. `ALLM.Providers.Fake` is. Fake lives in the main `allm` package's `lib/allm/providers/fake.ex` so that users importing `{:allm, "~> 0.2"}` get it on the runtime load path (per `AGENT_DESIGN_SPEC.md` §Guidelines — "the Fake implementation is part of the library, not test-only — users need it for their own tests").
+Phase 4 adds the **user-facing deterministic adapter** that every subsequent orchestration phase (5, 6, 7, 8) tests against. The Phase 3 `StubAdapter` that ships inside the `allm_conformance` package certifies the harness itself against a known-good implementation; it is **not** the adapter users reach for when they write `ALLM.chat/3` tests. `ALLM.Providers.Fake` is. Fake lives in the main `allm` package's `lib/allm/providers/fake.ex` so that users importing `{:allm, "~> 0.2"}` get it on the runtime load path (per `agent-spec/DESIGN.md` §Guidelines — "the Fake implementation is part of the library, not test-only — users need it for their own tests").
 
 This phase implements the **spec §31 script shape** — the one the spec itself samples with `{:text, "Hello "}, {:finish, :stop}` — plus multi-call `scripts: [[...], [...]]` list-of-lists sequencing with an automatic per-process cursor (Non-obvious Decision #1). The same module ALSO passes the Phase 3 conformance harness, whose script shape is different (`{:ok, response_map}` / `{:error, reason, opts}` for `AdapterConformance`, passed on `adapter_opts[:script]`; `{:text_delta, str}` / `{:preflight_error, _, _}` / `{:error_event, _, _}` / `{:stream_error, _, _}` / `{:finish, _}` for `StreamAdapterConformance`, passed on `adapter_opts[:stream_script]`). Shape disambiguation is two-axis (Non-obvious Decision #2):
 
@@ -399,7 +399,7 @@ test/support/
 CHANGELOG.md                                  (MODIFY — one line per new public module)
 ```
 
-No changes to `mix.exs` (the `allm_conformance` path-dep already present from Phase 3), no changes to `ALLM.Application` (cursor is process-local — Non-obvious Decision #1), no changes to `conformance/`. Test files mirror source 1:1; fixture library under `test/support/` per `AGENT_DESIGN_SPEC.md` §Module Tree and Non-obvious Decision #10.
+No changes to `mix.exs` (the `allm_conformance` path-dep already present from Phase 3), no changes to `ALLM.Application` (cursor is process-local — Non-obvious Decision #1), no changes to `conformance/`. Test files mirror source 1:1; fixture library under `test/support/` per `agent-spec/DESIGN.md` §Module Tree and Non-obvious Decision #10.
 
 ## Phases
 
@@ -788,4 +788,4 @@ Fake's `stream/2` does NOT spawn a `Task` or monitor the consumer process. The e
 - [ ] `CHANGELOG.md` has one entry per new public module (`ALLM.Providers.Fake`, `ALLM.Providers.Fake.Script`, `ALLM.Test.FakeFixtures`).
 - [ ] `mix hex.build` + `mix hex.publish --dry-run` succeed (main package includes the three new `lib/` files; does not include `test/support/fake_fixtures.ex`).
 - [ ] Commit messages reference §7.1, §7.2, §8, §20, §30, §31 as appropriate.
-- [ ] Reviewed via `/review` per `AGENT_REVIEW_SPEC.md`.
+- [ ] Reviewed via `/review` per `agent-spec/REVIEW.md`.

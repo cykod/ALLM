@@ -124,7 +124,7 @@ No Layer A struct shape changes; no Layer C execution function exists yet. Phase
 
 9. **Spec §6.4's `{:error, :missing}` shape on `Keys.get/1` is preserved verbatim**, even though Phase 1 established a "no atom-tuple errors" pattern for public returns. This is a deliberate exception: `Keys.get/1` is a primitive lookup whose only failure is "absent" — an `EngineError` struct here is overkill, and the spec types the function this way. `fetch!/2` is the user-facing version and **does** raise the struct. `Docs target: @doc ALLM.Keys.get/1` (one line referencing spec §6.4).
 
-10. **`.env` file load is lazy and cached in the same `ALLM.Keys.Store` Agent that holds runtime keys.** First `Keys.get/1` after app start (when `:load_dotenv` is true) reads the file, parses it, and writes the result into the Agent's state under a `:dotenv_cache` key. Subsequent calls read from the Agent. Reset is a normal `Agent.update/3` call from tests — no `:persistent_term.erase/1` global GC, no separate `__reset__/0` test-only public hook (which would conflict with `AGENT_DESIGN_SPEC.md`'s "no test-only conditional compilation" rule). Sharing the Agent unifies supervision (one child under `ALLM.Application`, one ownership story) and makes test isolation trivial: `start_supervised!(ALLM.Keys.Store)` in a test gives a fresh state including a fresh dotenv cache. The original `:persistent_term` consideration was rejected for the same reasons as Decision #1: write cost is global GC, and we do write (on first call after each test). `Docs target: @moduledoc ALLM.Keys`.
+10. **`.env` file load is lazy and cached in the same `ALLM.Keys.Store` Agent that holds runtime keys.** First `Keys.get/1` after app start (when `:load_dotenv` is true) reads the file, parses it, and writes the result into the Agent's state under a `:dotenv_cache` key. Subsequent calls read from the Agent. Reset is a normal `Agent.update/3` call from tests — no `:persistent_term.erase/1` global GC, no separate `__reset__/0` test-only public hook (which would conflict with `agent-spec/DESIGN.md`'s "no test-only conditional compilation" rule). Sharing the Agent unifies supervision (one child under `ALLM.Application`, one ownership story) and makes test isolation trivial: `start_supervised!(ALLM.Keys.Store)` in a test gives a fresh state including a fresh dotenv cache. The original `:persistent_term` consideration was rejected for the same reasons as Decision #1: write cost is global GC, and we do write (on first call after each test). `Docs target: @moduledoc ALLM.Keys`.
 
 ## Behaviour & Type Contracts
 
@@ -369,7 +369,7 @@ test/test_helper.exs                     (MODIFY — Application.ensure_all_star
                                                   runtime key map and the dotenv cache to :unloaded)
 ```
 
-Test files mirror source files 1:1 per `AGENT_DESIGN_SPEC.md §4`. No test-support modules needed in Phase 2 — conformance harnesses land in Phase 3.
+Test files mirror source files 1:1 per `agent-spec/DESIGN.md §4`. No test-support modules needed in Phase 2 — conformance harnesses land in Phase 3.
 
 ## Phases
 
@@ -632,4 +632,4 @@ Not applicable to Phase 2 — no streaming surface is added or modified. (Phase 
 - [ ] `ALLM.Application` starts cleanly on `iex -S mix`; `ALLM.Keys.Store` is alive and registered.
 - [ ] Spec section references in commit messages match the §-numbers in the Overview (`§6.2`, `§6.3`, `§6.4`).
 - [ ] CHANGELOG.md updated with one-line entries: "Add `ALLM.Engine.{merge_opts,resolve_model,resolve_tools,resolve_params}/2`", "Add `ALLM.Keys` with five-level resolution chain", "Engine round-trips through `:erlang.term_to_binary/1` and `Jason`".
-- [ ] Reviewed via `/review` (see `AGENT_REVIEW_SPEC.md`).
+- [ ] Reviewed via `/review` (see `agent-spec/REVIEW.md`).

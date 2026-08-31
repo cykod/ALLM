@@ -79,7 +79,7 @@ For each phase, in order:
 
 When the design names a rule and trigger but leaves the Elixir-idiom choice — atom naming for a `{field, reason}` tuple, defensive clauses for string-keyed vs. atom-keyed maps, which error atom to pick when "out of range" is unspecified — pick the idiomatic choice and move on. Log it in Implementation Notes as `[tactical] <one-line>` for review-step audit. Don't halt the loop for round-trip on tactical naming.
 
-**Structural inferences are NOT tactical.** `@enforce_keys`, `defexception` fallback clauses, `@derive` vs. `defimpl`, `String.to_existing_atom/1` vs. `String.to_atom/1`, `Stream.resource/3` vs. `Stream.unfold/2`, changes to documented deny-/allow-lists (e.g., adding to `@engine_field_keys`, removing a closed-reason atom), **or changes to a documented `@type state` / `@type t` / `defstruct` field set (rename, drop, add, default change)** — are test-observable invariants belonging in the design's Behaviour & Type Contracts section (`AGENT_DESIGN_SPEC.md §3`). Stop and request a design amendment.
+**Structural inferences are NOT tactical.** `@enforce_keys`, `defexception` fallback clauses, `@derive` vs. `defimpl`, `String.to_existing_atom/1` vs. `String.to_atom/1`, `Stream.resource/3` vs. `Stream.unfold/2`, changes to documented deny-/allow-lists (e.g., adding to `@engine_field_keys`, removing a closed-reason atom), **or changes to a documented `@type state` / `@type t` / `defstruct` field set (rename, drop, add, default change)** — are test-observable invariants belonging in the design's Behaviour & Type Contracts section (`agent-spec/DESIGN.md §3`). Stop and request a design amendment.
 
 **Struct-field changes especially must round-trip** because the design often authors a field for a *future* phase. Dropping it as "unused now" silently forecloses the downstream landing zone. Worked examples: Phase 5's `:steps: [StepResult.t()]` exists for Phase 6's `:step_completed` fold accumulator; Phase 5's `:last_response: Response.t() | nil` exists for Phase 7's `:chat_completed` reference. Dropping either is a decision for Phase 6/7 without flagging.
 
@@ -560,4 +560,4 @@ Three approaches that **don't work** and you'll hit first:
 - **`apply/3`** (`apply(OptionalMod, :some_fun, [arg])`): trips Credo's `Refactor.Apply`.
 - **Bound variable** (`mod = OptionalMod`): same compile warning — the literal atom triggers it.
 
-`Module.concat(["OptionalMod"])` produces the atom at runtime from a compile-time literal. Exactly one atom is ever created, so it's not the atom-table-exhaustion vector that the same call is on untrusted JSON — see `AGENT_DESIGN_SPEC.md` "scope stdlib bans to their threat model."
+`Module.concat(["OptionalMod"])` produces the atom at runtime from a compile-time literal. Exactly one atom is ever created, so it's not the atom-table-exhaustion vector that the same call is on untrusted JSON — see `agent-spec/DESIGN.md` "scope stdlib bans to their threat model."

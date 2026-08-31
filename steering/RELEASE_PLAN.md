@@ -217,7 +217,7 @@ iex -S mix
 In the IEx prompt, run these load checks:
 
 ```elixir
-# Fake ships in lib/ (per AGENT_DESIGN_SPEC: "The Fake is part of the library, not test-only")
+# Fake ships in lib/ (per agent-spec/DESIGN.md: "The Fake is part of the library, not test-only")
 true = Code.ensure_loaded?(ALLM.Providers.Fake)
 true = Code.ensure_loaded?(ALLM.Providers.OpenAI)
 true = Code.ensure_loaded?(ALLM.Providers.Anthropic)
@@ -321,7 +321,7 @@ Add one line under "Common commands" (around `CLAUDE.md:75-95` — see existing 
 
 > Releases run via `mix run scripts/release.exs <patch|minor|major|version>`. The script enforces clean git, runs all quality gates, bumps `mix.exs @version`, calls `mix hex.publish` interactively, and commits + tags locally on success. The script does NOT `git push` — it prints the exact push command for the maintainer to run separately. Future Claude sessions MUST NOT manually edit `mix.exs @version` — use the script.
 
-This is the same convention as the existing CLAUDE.md pointers (`steering/allm_engine_session_streaming_spec_v0_2.md` for spec, `AGENT_DESIGN_SPEC.md` for design docs).
+This is the same convention as the existing CLAUDE.md pointers (`steering/allm_engine_session_streaming_spec_v0_2.md` for spec, `agent-spec/DESIGN.md` for design docs).
 
 ### 3.6 Verification
 

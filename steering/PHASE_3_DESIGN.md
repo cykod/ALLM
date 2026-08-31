@@ -22,7 +22,7 @@
 
 Phase 3 completes Layer B's **contract surface**. Today every behaviour file is three lines: a bare `@callback` with `term()` in every error slot, no `@doc`, no `@optional_callbacks` annotations beyond `ALLM.Adapter`, and no reference implementation that future adapters can pattern-match against. Phase 4 (Fake) and Phases 10/11 (real providers) cannot be built against a behaviour that doesn't document how `{:error, _}` is shaped or what `execute/3` is expected to do when a handler raises. This phase answers both questions in the behaviour module itself (the contract) and in the conformance harness (the executable verification) — so every implementation that ships passes the same test suite, and users writing their own adapters `use` the same harness.
 
-This design **refines spec §7 by replacing `{:error, term()}` in callback return types with the Phase 1 error structs**. The spec was written before the Phase 1 error contract landed; `AGENT_DESIGN_SPEC.md` §7 already calls out `{:error, term()}` as "a code smell that says the error contract isn't designed." Phase 3 tightens the callbacks:
+This design **refines spec §7 by replacing `{:error, term()}` in callback return types with the Phase 1 error structs**. The spec was written before the Phase 1 error contract landed; `agent-spec/DESIGN.md` §7 already calls out `{:error, term()}` as "a code smell that says the error contract isn't designed." Phase 3 tightens the callbacks:
 
 - `ALLM.Adapter.generate/2` returns `{:ok, %Response{}} | {:error, %ALLM.Error.AdapterError{}}` (was `{:error, term()}`).
 - `ALLM.StreamAdapter.stream/2` returns `{:ok, Enumerable.t()} | {:error, %ALLM.Error.AdapterError{}}`. The stream itself may terminate with `{:error, %ALLM.Error.AdapterError{} | %ALLM.Error.StreamError{}}` events per spec §8 — `StreamError` for transport-level failures (truncated SSE, malformed chunk, `Finch` connection drop) and `AdapterError` for HTTP-level failures surfaced mid-stream (e.g. a 429 mid-response). The distinction is declared in the conformance suite so the test matrix is explicit.
@@ -991,4 +991,4 @@ Phase 3 does not ship any Layer C streaming or stream-consumption code. The `Str
 **Both:**
 
 - [ ] Commit messages reference §7, §18, §20, §31 as appropriate.
-- [ ] Reviewed via `/review` per `AGENT_REVIEW_SPEC.md`.
+- [ ] Reviewed via `/review` per `agent-spec/REVIEW.md`.

@@ -376,7 +376,7 @@ This phase adds **zero** new closed-enum atoms. Every error reason fired by the 
 
 - **`Req.Test.stub/1` for non-streaming wire tests** — same canonical Req test seam from Phase 10.2; per-test process-isolated.
 - **`Finch.async_request/3` + `Finch.cancel_async_request/1` for streaming** — same Finch 0.19 API from Phase 10.3.
-- **`Stream.resource/3` (NEVER `Stream.unfold/2`)** — per `AGENT_DESIGN_SPEC.md` § Elixir-specific.
+- **`Stream.resource/3` (NEVER `Stream.unfold/2`)** — per `agent-spec/DESIGN.md` § Elixir-specific.
 - **`receive` blocks with `after` clauses** for the streaming `next_fun` — `:stream_timeout` is the after-value.
 - **`String.to_existing_atom/1`** for stop_reason strings only when the input is in the documented closed set; unknown strings map to `:other` directly via case-clause.
 - **`Jason.encode!/1` + `Jason.decode!/1`** for request/response body and for the structured-output tool-call's `input` map → `output_text` lift.
@@ -770,7 +770,7 @@ Phase 11.2 ships streaming via `Finch.async_request/3` per spec §7.2 — same s
 - [ ] `examples/_helpers.exs` carries both `:openai` and `:anthropic` rows in `@providers`; `ExamplesHelpers.engine/1` validates env-var + adapter loading per the contract.
 - [ ] `examples/` directory is NOT in the published Hex package — verified via `mix hex.build --unpack` returning no `examples/` paths.
 - [ ] CHANGELOG.md updated with one line per public sub-phase (4 lines total); each cites its spec §-number.
-- [ ] Reviewed via `/review` per `AGENT_REVIEW_SPEC.md` AND the additional sub-phase 11.4 validation step: the reviewer runs `ANTHROPIC_API_KEY=… mix run examples/anthropic/run_all.exs` and records the output in the review artifact. The review is BLOCKING on `run_all.exs` exit-status 0.
+- [ ] Reviewed via `/review` per `agent-spec/REVIEW.md` AND the additional sub-phase 11.4 validation step: the reviewer runs `ANTHROPIC_API_KEY=… mix run examples/anthropic/run_all.exs` and records the output in the review artifact. The review is BLOCKING on `run_all.exs` exit-status 0.
 
 ## Examples (sub-phase 11.4 — provider-neutral migration + Anthropic enrollment)
 

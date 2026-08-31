@@ -8,7 +8,7 @@ defmodule ALLM.SessionEquivalenceTest do
   pair equivalent to `ALLM.Session.stream_start/3 |> reduce(StreamReducer)
   |> StreamReducer.finalize/1`.
 
-  Per `AGENT_IMPLEMENTATION_SPEC.md` §Property tests "Fake-per-process
+  Per `agent-spec/IMPLEMENTATION.md` §Property tests "Fake-per-process
   cursor isolation" rule, each call (non-streaming and streaming) is
   wrapped in `Task.async/Task.await` so the Fake's process-dictionary
   cursor doesn't shared-cursor between the two arms.

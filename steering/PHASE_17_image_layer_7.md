@@ -135,7 +135,7 @@ The user-side ImagePart input flows to the wire in the adapter's request builder
     |------------|---------------|------|
     | None added | Vision changes only the wire shape of message *content*; all event-emission paths and StreamCollector folds are byte-identical with vs. without `ImagePart`. The chat-equivalence property at `test/allm/chat_equivalence_test.exs` runs *unchanged* with one new fixture row containing an ImagePart; both arms produce the same `%ChatResult{}`. | Tolerable — verified empirically by reading `StreamCollector.apply_event/2`'s `:content_delta`/`:message_completed` clauses (no per-part-type branching) and the adapter chunk-handlers (no `ImagePart`-conditional emission). |
 
-    No `masking-divergence` rows. If implementation surfaces one, that's a contract bug, not a relaxation — surface as a finding/fix in the same sub-phase per AGENT_DESIGN_SPEC.md §6.
+    No `masking-divergence` rows. If implementation surfaces one, that's a contract bug, not a relaxation — surface as a finding/fix in the same sub-phase per agent-spec/DESIGN.md §6.
 
 ---
 
@@ -185,7 +185,7 @@ defmodule ALLM.Providers.Support.ImageMime do
 end
 ```
 
-**Q3 design lock-in:** the per-image-part fold lives in `ALLM.Providers.Support.ImageMime.validate_request/2` (lifted from per-adapter helpers per AGENT_DESIGN_SPEC.md "consumer/producer symmetry for filter keys" rule §6.B.4). Adapters call `ImageMime.validate_request(request, :openai)` / `(request, :anthropic)`; provider-specific divergence is *only* the accept-set returned by `accept_mimes/1`. The field-error vocabulary atoms (`:unsupported_image_format`, `:image_too_large`, `:missing_mime_type`) are defined here once, not duplicated in each adapter's tests.
+**Q3 design lock-in:** the per-image-part fold lives in `ALLM.Providers.Support.ImageMime.validate_request/2` (lifted from per-adapter helpers per agent-spec/DESIGN.md "consumer/producer symmetry for filter keys" rule §6.B.4). Adapters call `ImageMime.validate_request(request, :openai)` / `(request, :anthropic)`; provider-specific divergence is *only* the accept-set returned by `accept_mimes/1`. The field-error vocabulary atoms (`:unsupported_image_format`, `:image_too_large`, `:missing_mime_type`) are defined here once, not duplicated in each adapter's tests.
 
 **Invariants:**
 - `validate/2` skips `byte_size` check when `image.source` is `{:url, _}` (returns `:ok` if MIME is acceptable per the URL's extension or `nil`-MIME passes through to provider; `:remote_source` is *not* an error here — it means "size unverifiable, defer to provider").
@@ -423,7 +423,7 @@ README.md                                          (MODIFY — 17.3: Generating 
 mix.exs                                            (MODIFY — 17.3: @version bump)
 ```
 
-**Module Tree completeness invariant (AGENT_DESIGN_SPEC.md §4):** every diff file is enumerated above with rationale. The `git diff --stat <pre>..<post>` count for §17.1 will be ~7 lib/test/fixture files; for §17.2, ~6; for §17.3, ~9 (CHANGELOG + README + mix.exs + 3 example scripts + 2 RUN_OUTPUT + _helpers/run_all). No "discovered new file mid-phase" surprises expected — the only candidate would be an extension to `lib/allm/error/adapter_error.ex`, which is NOT needed because `:unsupported_feature` is already in its enum (verified at design time).
+**Module Tree completeness invariant (agent-spec/DESIGN.md §4):** every diff file is enumerated above with rationale. The `git diff --stat <pre>..<post>` count for §17.1 will be ~7 lib/test/fixture files; for §17.2, ~6; for §17.3, ~9 (CHANGELOG + README + mix.exs + 3 example scripts + 2 RUN_OUTPUT + _helpers/run_all). No "discovered new file mid-phase" surprises expected — the only candidate would be an extension to `lib/allm/error/adapter_error.ex`, which is NOT needed because `:unsupported_feature` is already in its enum (verified at design time).
 
 ### 3.6 Wire-field map (rule 15)
 
@@ -697,7 +697,7 @@ For the example scripts, no unit tests — they're integration smoke runs gated 
 - [ ] Update `README.md`: add a "Generating images" section (15-line worked example using Fake) and a "Vision input" section (10-line example showing `[TextPart, ImagePart]`); link to `examples/12_vision_input.exs` and `examples/10_generate_image.exs`
 - [ ] Roll up CHANGELOG into a v0.3.0 section: one bullet per Phase 13–17 deliverable referencing §35.x
 - [ ] Run `mix hex.build` and verify the resulting tarball; commit no artifacts (it's a dry-run)
-- [ ] Run final `/review` per `AGENT_REVIEW_SPEC.md`; record review artifact
+- [ ] Run final `/review` per `agent-spec/REVIEW.md`; record review artifact
 - [ ] §35.10 audit: grep `lib/`, `test/`, `examples/` for any `streaming_image_preview`, `image_to_video`, `ocr`, `upscale`, `batch_image` — should be zero hits
 - [ ] Confirm coverage: `mix test --cover` ≥ 80% global; new code in §17.1+§17.2 ≥ 90%
 
@@ -786,7 +786,7 @@ If a future provider emits an assistant ImagePart output mid-stream, the adapter
 - [ ] `mix.exs @version` is `"0.3.0"`
 - [ ] `mix hex.build` succeeds (dry-run)
 - [ ] §35.10 audit: zero matches for out-of-scope features
-- [ ] `/review` per AGENT_REVIEW_SPEC.md recorded as the phase artifact
+- [ ] `/review` per agent-spec/REVIEW.md recorded as the phase artifact
 
 ---
 

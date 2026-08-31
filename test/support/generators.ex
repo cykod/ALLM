@@ -4,7 +4,7 @@ defmodule ALLM.Test.Generators do
 
   This module is test-only infrastructure (compiled only under
   `Mix.env() == :test` via `elixirc_paths/1` in `mix.exs`). Per
-  `AGENT_IMPLEMENTATION_SPEC.md` "Property tests" subsection, Layer A struct
+  `agent-spec/IMPLEMENTATION.md` "Property tests" subsection, Layer A struct
   generators live here so they can be reused across property test files
   (e.g. `ALLM.ValidateTest`, `ALLM.SerializerTest` round-trip property).
 

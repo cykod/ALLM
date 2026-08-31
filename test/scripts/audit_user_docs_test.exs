@@ -26,7 +26,7 @@ defmodule Scripts.AuditUserDocsTest do
   # Resolve the auditor module via `Module.concat/1` at the call site so
   # the compile-time linker doesn't emit "module is not available"
   # warnings for this `Code.require_file/1`-loaded script (per
-  # AGENT_IMPLEMENTATION_SPEC.md §Optional-dep detection — same idiom).
+  # agent-spec/IMPLEMENTATION.md §Optional-dep detection — same idiom).
   defp auditor, do: Module.concat(["Scripts", "AuditUserDocs"])
 
   describe "banned-token regex coverage" do

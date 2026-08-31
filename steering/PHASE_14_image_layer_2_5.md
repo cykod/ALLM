@@ -231,7 +231,7 @@ end
 
 State management: process-local under `Process.put/2` keyed at `{:allm_fake_images_cursor, :erlang.phash2(scripts)}` — matches the chat-side pattern at `lib/allm/providers/fake.ex:73-78`. The `start_script_cursor/0` Agent escape hatch is also mirrored (`lib/allm/providers/fake.ex:101-106`).
 
-**`@case_count` for the conformance suite — exact target: 9.** Each row is a numbered `test` block in the injected `describe`. Per AGENT_DESIGN_SPEC §3 rule 7, the `@case_count` attribute is an introspection seam tested by a meta-assertion in `conformance/test/allm/test/image_adapter_conformance_test.exs`.
+**`@case_count` for the conformance suite — exact target: 9.** Each row is a numbered `test` block in the injected `describe`. Per agent-spec/DESIGN.md §3 rule 7, the `@case_count` attribute is an introspection seam tested by a meta-assertion in `conformance/test/allm/test/image_adapter_conformance_test.exs`.
 
 | # | Test name | Asserts |
 |---|-----------|---------|
@@ -293,7 +293,7 @@ The conformance suite uses a `ScriptedImageStub` test fixture (defined in the co
 - `:stream` opt is silently dropped (image generation is non-streaming per phasing principle #2). A user who passes `stream: true` via `engine.params` does NOT get an error — the opt is simply ignored.
 - Unknown opts are forwarded to the adapter via `opts` (matches chat-side `Engine.resolve_params/2` pattern at `lib/allm/engine.ex:376-383` — opt keys not in `@engine_field_keys` flow through).
 
-**Cross-function invariant (mirror file:line citation per AGENT_DESIGN_SPEC §3 rule 6a).** `edit_image/4` and `image_variations/3` MUST produce a `%ImageRequest{}` byte-equal to `ALLM.image_request/2 + struct/2`-built equivalent, modulo the `:operation` / `:input_images` / `:mask` / `:prompt` fields they set. Asserted by a Test Plan property in 14.2.1 ("`edit_image/4 |> Map.from_struct() == ImageRequest.new(...) |> Map.from_struct()`").
+**Cross-function invariant (mirror file:line citation per agent-spec/DESIGN.md §3 rule 6a).** `edit_image/4` and `image_variations/3` MUST produce a `%ImageRequest{}` byte-equal to `ALLM.image_request/2 + struct/2`-built equivalent, modulo the `:operation` / `:input_images` / `:mask` / `:prompt` fields they set. Asserted by a Test Plan property in 14.2.1 ("`edit_image/4 |> Map.from_struct() == ImageRequest.new(...) |> Map.from_struct()`").
 
 ### `ALLM.Telemetry` extension (sub-phase 14.3)
 
@@ -339,7 +339,7 @@ def preflight_image(model_ref_or_string, %ALLM.ImageRequest{} = request)
   - `{[:images_enabled], :images_disabled}` — fires when `model_ref.capabilities.images_enabled == false` (or string-key shape `%{"images_enabled" => false}` per the JSON-rehydrated tolerance pattern at `lib/allm/capability.ex:296-303`).
   - `{[:operation], :unsupported_image_operation}` — fires when `request.operation not in model_ref.capabilities.supported_image_operations` (with the same string-key tolerance).
 - Does NOT include a `:structured_finalize`-style rewrite branch — image requests don't have an analogous rewrite need in v0.3. The function returns `:ok | {:error, _}` (two-shape, NOT three-shape).
-- 2-arity by design — symmetric with `populate_costs/2`, NOT with `preflight/3`. `preflight/3`'s third arg exists because it carries a real (`structured_finalize`) rewrite predicate; image-side has no analogous rewrite, so introducing a 3-arity that ignores its third arg is dead API surface (AGENT_DESIGN_SPEC §3 rule 13). If a future image-rewrite predicate lands, widen the arity then.
+- 2-arity by design — symmetric with `populate_costs/2`, NOT with `preflight/3`. `preflight/3`'s third arg exists because it carries a real (`structured_finalize`) rewrite predicate; image-side has no analogous rewrite, so introducing a 3-arity that ignores its third arg is dead API surface (agent-spec/DESIGN.md §3 rule 13). If a future image-rewrite predicate lands, widen the arity then.
 
 ### `ALLM.Retry` integration (sub-phase 14.3)
 
@@ -955,7 +955,7 @@ The v0.2 backward-compat invariant — every test using `Message{content: "strin
 - **Serializability tests:** every new Layer A struct (`TextPart`, `ImagePart`) round-trips through both `:erlang.term_to_binary/1` and `ALLM.Serializer`.
 - **Stream-equivalence tests:** N/A — image generation is non-streaming per phasing principle #2.
 - **Backward-compat tests:** v0.2 chat callers using `Message{content: "string"}` remain green; the v0.2 stream-equivalence properties for chat (`test/allm/chat_equivalence_*`) are NOT extended in this phase (they're chat-only).
-- **Cross-option × cross-path test matrix per AGENT_DESIGN_SPEC §3 rule 10:** N/A — image API is a single non-streaming path.
+- **Cross-option × cross-path test matrix per agent-spec/DESIGN.md §3 rule 10:** N/A — image API is a single non-streaming path.
 
 **Coverage threshold:** 80% global per `mix.exs:19`; ≥90% on new code.
 
@@ -1040,6 +1040,6 @@ The chat-side multimodal additions (TextPart/ImagePart) do NOT change the chat-s
 - [ ] Stream-equivalence tests N/A
 - [ ] Spec section references in commit messages cite §35.3, §35.4, §35.5, §35.6, §35.8, §35.9 per phase
 - [ ] CHANGELOG.md updated with one entry per sub-phase, plus a BREAKING-CHANGE callout for: (a) removal of `:vision_not_in_v0_2` from `ValidationError.@type reason`, (b) removal of the v0.2 `[map(), …]` content shape acceptance in `Validate.message/1`
-- [ ] Reviewed via `/review` per `AGENT_REVIEW_SPEC.md`
+- [ ] Reviewed via `/review` per `agent-spec/REVIEW.md`
 - [ ] v0.2 backward-compat invariant: every chat-side test in the v0.2 suite using `Message{content: "string"}` is green
 - [ ] Upstream `:llm_db` schema-extension PR is filed against the `:llm_db` Hex package adding `images_enabled` and `supported_image_operations` to the model-capability schema (tracking note for v0.3.0 release polish)

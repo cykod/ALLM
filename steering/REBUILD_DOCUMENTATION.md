@@ -4,7 +4,7 @@
 > **Outcome:** Zero references to internal phases (`Phase N`, `Phase N.M`, "Decision #X"), zero references to internal spec sections (`§4`, `§12.3`, `steering/allm_engine_session_streaming_spec_v0_2.md`), expanded worked examples for the seven highest-traffic entry points, and a hexdocs landing page that walks first-time users from install → streaming-tool-call in under five minutes.
 > **Layers touched:** Documentation only — no `lib/` behavioural changes, no `test/` assertion changes (test code comments are out of scope; only `@doc`/`@moduledoc` docstrings change).
 
-This is a **documentation-only** design — the AGENT_DESIGN_SPEC sections that govern code contracts (Behaviour & Type Contracts, Error Contract, Streaming & Backpressure) do not apply. The Test Plan section is repurposed to verify documentation quality (link rot, banned-token grep, doctest compile, hexdocs render).
+This is a **documentation-only** design — the agent-spec/DESIGN.md sections that govern code contracts (Behaviour & Type Contracts, Error Contract, Streaming & Backpressure) do not apply. The Test Plan section is repurposed to verify documentation quality (link rot, banned-token grep, doctest compile, hexdocs render).
 
 ## Status
 

@@ -70,7 +70,7 @@
 
 [DSGN] sun 4/26 6pm - Design phase 12 release polish (examples, docs, audit)
 
-[MILE] sun 4/26 7pm - Applied 11 retros into AGENT_DESIGN_SPEC, AGENT_IMPLEMENTATION_SPEC, and CLAUDE.md (12 changes)
+[MILE] sun 4/26 7pm - Applied 11 retros into agent-spec/DESIGN.md, agent-spec/IMPLEMENTATION.md, and CLAUDE.md (12 changes)
 
 [BUILD] sun 4/26 7pm - Build Phase 12 (v0.2 release polish: §31 freeze, case-study translations, docs, release artifacts) from PHASE_12_DESIGN.md
 
@@ -102,7 +102,7 @@
 
 [FIX] thu 4/30 8pm - Fix issues from Phase 17.3 review and retro
 
-[MILE] fri 5/1 4pm - Applied nine Phase 15.x + 17.x retros via /apply-retro: 11 deduplicated rules landed in CLAUDE.md, AGENT_IMPLEMENTATION_SPEC.md, and AGENT_DESIGN_SPEC.md
+[MILE] fri 5/1 4pm - Applied nine Phase 15.x + 17.x retros via /apply-retro: 11 deduplicated rules landed in CLAUDE.md, agent-spec/IMPLEMENTATION.md, and agent-spec/DESIGN.md
 
 [BUILD] fri 5/1 4pm - Build phases from GEMINI_DESIGN.md steering doc
 
@@ -130,7 +130,7 @@
 
 [MILE] wed 5/6 6pm - Shipped Phase 18 (per-tool manual mode) end-to-end across 5 sub-phases — Tool struct field, chat partition (non-streaming + streaming), Session projection, examples + spec + chat-equivalence
 
-[MILE] wed 5/6 8pm - Applied 18 retro lifts to CLAUDE.md + 3 AGENT_*_SPEC.md docs and tracked 3 previously-untracked steering docs (Phase 19/20 designs + release plan)
+[MILE] wed 5/6 8pm - Applied 18 retro lifts to CLAUDE.md + 3 agent-spec/*.md docs and tracked 3 previously-untracked steering docs (Phase 19/20 designs + release plan)
 
 [BUILD] wed 5/6 9pm - Build all phases from RELEASE_PLAN.md (Hex release tooling)
 
@@ -254,7 +254,7 @@
 
 [ASKS] wed 7/29 2pm - [BUG] Recorder scripts that read System.get_env/1 bare never load the project-root .env, so they report 'KEY not set' in a fully-provisioned checkout and their own diagnostic confirms a false 'no key' premise (this shipped three placeholder fixtures under recorded/ in Phase 20.4); DONE WHEN `grep -L EnvLoader scripts/record_*.exs` comes back empty — port record_openai_embeddings_fixtures.exs's guarded load_dotenv/0 (the is_nil(System.get_env(...)) guard matters: EnvLoader.load/1 calls System.put_env/2 unconditionally, so an unguarded load lets a stale .env override an explicit KEY=... mix run) to every remaining recorder, ideally as a shared scripts/_env.exs that all of them Code.require_file/1. Stated as a grep rather than a count on purpose: Phases 20.4 and 20.5 each fixed one instance and the original 'six of the seven' text rotted silently both times.
 
-[ASKS] wed 7/29 2pm - [REFACTOR] [RE-DATED wed 7/29 7pm — the "BEFORE Phase 20.7" deadline has now EXPIRED: 20.7 shipped with zero `lib/` changes (it could not have actioned this) and the counts below are unchanged at HEAD, so the family IS now a published promise and the old trigger no longer points at anything. NEW TRIGGER, stated as a condition rather than a date so it cannot expire again: **whichever comes first of (a) the next provider adapter of ANY capability landing in `lib/allm/providers/`, or (b) the next minor-version release** — because either one adds copy 9 or freezes 8 into another published shape. Still wants a STAND-ALONE `[REFACTOR]` commit, not a rider on a feature phase. Prior escalation, retained for the record: "ESCALATED wed 7/29 6pm — the deadline in this ticket has now passed UNACTIONED TWICE and the debt got worse exactly as predicted."] Promote byte-identical private helpers duplicated across the provider adapters into lib/allm/providers/support/ before Phases 20.5/20.6 add a seventh copy each: header_value/2, header_value_to_string/1, retry_after_ms/1 and parse_retry_after/1 into a provider-neutral Headers module (ALLM.Providers.Support.Headers), maybe_apply_req_test_stub/2 and maybe_apply_request_timeout/2 into a ReqOpts module (ALLM.Providers.Support.ReqOpts); then point the adapters' naming-parity blocks at the shared modules. CURRENT COUNTS at HEAD, both 20.5 and 20.6 having landed without the promotion: maybe_apply_req_test_stub/2 = 8 copies in lib/, maybe_apply_request_timeout/2 = 8, header_value/2 + header_value_to_string/1 = 6 each, retry_after_ms/1 + parse_retry_after/1 = 6 each. SCOPE ADDITION so the promotion is scoped once rather than twice: 18 helpers are now byte-identical across all three embeddings adapters, and the newly-3-copy set that also belongs in the same commit is fetch_embedding_script/1, sanitize_cause/1, non_neg_int/2, decode_error_body/1, build_metadata/2 and classify_http_error/4 (byte-identity verified by line-range diff, character for character, modulo the provider atom). The directory and the pattern already exist — lib/allm/providers/support/ hosts OpenAIHeaders and GeminiHeaders. AGENT_IMPLEMENTATION_SPEC.md:68 says 'Two implementations IS the trigger — don't wait for three.' DONE WHEN: `grep -rlc 'defp maybe_apply_req_test_stub(' lib/` returns at most one file, and the same for each of the five other Headers/ReqOpts helpers. NOT in scope: Voyage's headers/1, which is deliberately inline at n=1 (see the naming-parity block in lib/allm/providers/voyage/embeddings.ex) — reusing Support.OpenAIHeaders there would inherit its openai-organization branch, which Voyage rejects with a 400.
+[ASKS] wed 7/29 2pm - [REFACTOR] [RE-DATED wed 7/29 7pm — the "BEFORE Phase 20.7" deadline has now EXPIRED: 20.7 shipped with zero `lib/` changes (it could not have actioned this) and the counts below are unchanged at HEAD, so the family IS now a published promise and the old trigger no longer points at anything. NEW TRIGGER, stated as a condition rather than a date so it cannot expire again: **whichever comes first of (a) the next provider adapter of ANY capability landing in `lib/allm/providers/`, or (b) the next minor-version release** — because either one adds copy 9 or freezes 8 into another published shape. Still wants a STAND-ALONE `[REFACTOR]` commit, not a rider on a feature phase. Prior escalation, retained for the record: "ESCALATED wed 7/29 6pm — the deadline in this ticket has now passed UNACTIONED TWICE and the debt got worse exactly as predicted."] Promote byte-identical private helpers duplicated across the provider adapters into lib/allm/providers/support/ before Phases 20.5/20.6 add a seventh copy each: header_value/2, header_value_to_string/1, retry_after_ms/1 and parse_retry_after/1 into a provider-neutral Headers module (ALLM.Providers.Support.Headers), maybe_apply_req_test_stub/2 and maybe_apply_request_timeout/2 into a ReqOpts module (ALLM.Providers.Support.ReqOpts); then point the adapters' naming-parity blocks at the shared modules. CURRENT COUNTS at HEAD, both 20.5 and 20.6 having landed without the promotion: maybe_apply_req_test_stub/2 = 8 copies in lib/, maybe_apply_request_timeout/2 = 8, header_value/2 + header_value_to_string/1 = 6 each, retry_after_ms/1 + parse_retry_after/1 = 6 each. SCOPE ADDITION so the promotion is scoped once rather than twice: 18 helpers are now byte-identical across all three embeddings adapters, and the newly-3-copy set that also belongs in the same commit is fetch_embedding_script/1, sanitize_cause/1, non_neg_int/2, decode_error_body/1, build_metadata/2 and classify_http_error/4 (byte-identity verified by line-range diff, character for character, modulo the provider atom). The directory and the pattern already exist — lib/allm/providers/support/ hosts OpenAIHeaders and GeminiHeaders. agent-spec/IMPLEMENTATION.md:68 says 'Two implementations IS the trigger — don't wait for three.' DONE WHEN: `grep -rlc 'defp maybe_apply_req_test_stub(' lib/` returns at most one file, and the same for each of the five other Headers/ReqOpts helpers. NOT in scope: Voyage's headers/1, which is deliberately inline at n=1 (see the naming-parity block in lib/allm/providers/voyage/embeddings.ex) — reusing Support.OpenAIHeaders there would inherit its openai-organization branch, which Voyage rejects with a 400.
 
 [ASKS] wed 7/29 2pm - [REFACTOR] ALLM.Providers.OpenAI.ImagesTestHelpers' respond_json/3 and respond_with/4 are now imported by the embeddings test files too — four consumers, half of them non-images — so move them to a capability-neutral test-support module (defdelegate from ImagesTestHelpers keeps the three image test files untouched) before Phase 20.5's Gemini embeddings tests need the same thing
 
@@ -328,7 +328,7 @@
 
 [MILE] wed 7/29 6pm - Added embeddings spec section 36, the embeddings guide with a pgvector worked example, and live-verified examples 16-18 across all three provider arms (Phase 20.7)
 
-[ASKS] thu 7/30 2am - Applied 16 unapplied retros into CLAUDE.md, AGENT_DESIGN_SPEC.md and AGENT_IMPLEMENTATION_SPEC.md — async-global foot-gun class, provider wire probe, live-gate discipline, fail-open audit literals, and two approved cross-phase carve-outs
+[ASKS] thu 7/30 2am - Applied 16 unapplied retros into CLAUDE.md, agent-spec/DESIGN.md and agent-spec/IMPLEMENTATION.md — async-global foot-gun class, provider wire probe, live-gate discipline, fail-open audit literals, and two approved cross-phase carve-outs
 
 [MILE] thu 7/30 1pm - Applied sixteen backlogged retros to CLAUDE.md and the two agent specs, generalizing the async-global foot-gun, mandating a live provider wire probe, and adding two approved cross-phase carve-outs
 
@@ -339,3 +339,5 @@
 [MILE] sat 8/22 1am - Cleaned all compile, test, docs, and conformance warnings — EnvLoader guard, ExUnit capture_log, ExDoc autolink skips, and the long-standing conformance format failure
 
 [MILE] tue 8/25 8pm - Committed the Elixir 1.19 lib fixes from the downstream session and added the repo's first CI workflow, with a non-blocking 1.19 matrix leg and a conformance job
+
+[MILE] sat 8/29 8pm - Committed the dev container GIT_OPTIONAL_LOCKS=0 fix that had been carried unstaged all session, leaving the working tree fully clean

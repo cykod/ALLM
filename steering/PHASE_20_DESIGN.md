@@ -831,7 +831,7 @@ mix test test/allm/providers/openai/embeddings_test.exs --only conformance
 - [ ] If cutting a release: `mix.exs` version bump (`0.3.0 → 0.4.0` if going semver-major-feature, OR `0.3.0 → 0.3.1` if patch-bundling the embeddings as additive — defer the choice to release-cut time)
 - [ ] `mix hex.build` dry-run; verify `tar -tzf allm-<version>.tar` includes new lib files but excludes `scripts/`, `test/`, `conformance/`, `examples/`
 - [ ] If live gate fires (i.e., implementer has keys): regenerate `examples/RUN_OUTPUT_openai.md` snapshot in same commit (per CLAUDE.md "Snapshot files MUST be regenerated in the same commit as the live run that produced them, OR not modified at all")
-- [ ] Final `/review` per `AGENT_REVIEW_SPEC.md`
+- [ ] Final `/review` per `agent-spec/REVIEW.md`
 
 #### 20.5.3 Verification
 
@@ -961,5 +961,5 @@ No hard-reject errors in this phase — embeddings has no analogue of image's `:
 - [ ] `README.md` "Embeddings" section under 15 lines, runs against `FakeEmbeddings` without an API key
 - [ ] `CHANGELOG.md` updated with one entry per public-API change; honest about live-gate deferral if it fires
 - [ ] `mix.exs` `package.files` MUST include all new `lib/allm/embedding*.ex` and `lib/allm/providers/openai/embeddings.ex` files (verified via `tar -tzf allm-*.tar | grep embedding`); `docs.extras` unchanged (CHANGELOG already present per CLAUDE.md `mix.exs` `package[:files]` invariant)
-- [ ] Reviewed via `/review` per `AGENT_REVIEW_SPEC.md`
+- [ ] Reviewed via `/review` per `agent-spec/REVIEW.md`
 - [ ] If cutting a release: version bump in `mix.exs`; `mix hex.build` dry-run clean; `mix hex.publish` is a separate release event

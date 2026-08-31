@@ -21,7 +21,7 @@ defmodule ALLM.Providers.OpenAI.ImagesLiveTest do
   cells together verify the request-shape contract end-to-end against
   real OpenAI — neither wire-stub fixtures nor synthesized fixtures
   catch per-model rejection or request-side wire-shape divergences
-  (per AGENT_DESIGN_SPEC.md rule 16).
+  (per agent-spec/DESIGN.md rule 16).
 
   ## Skip path
 

@@ -1,3 +1,21 @@
+## [OTHR] Move agent specs into agent-spec/ and rewrite references
+*Monday, August 31st at 2pm*
+Migrated the three root-level AGENT_*_SPEC.md files to the agent-spec/ layout 
+the pipeline skills now read from: AGENT_DESIGN_SPEC.md, 
+AGENT_IMPLEMENTATION_SPEC.md and AGENT_REVIEW_SPEC.md became 
+agent-spec/DESIGN.md, agent-spec/IMPLEMENTATION.md and agent-spec/REVIEW.md, 
+moved via git mv so history follows. The scripted pass then rewrote every 
+reference to the old filenames and to the AGENT_*_SPEC.md glob form across 144 
+files — CLAUDE.md, HISTORY.md, ASKS.md, 27 steering docs, roughly 110 .work/ 
+retros and reviews, and six test/support files. Three bare extension-less 
+mentions in test comments were deliberately left by the script (they could have 
+been identifiers rather than paths) and were rewritten by hand after confirming 
+all three are genuine file references. A repo-wide grep for AGENT_*_SPEC now 
+comes back empty, mix format passes on the eight touched code files, and the 
+full suite runs green at 3089 tests with no failures.
+
+---
+
 ## [OTHR] Set GIT_OPTIONAL_LOCKS=0 in the dev container
 *Saturday, August 29th at 8pm*
 Sweeps up the last two uncommitted files in the tree. The substantive change is 
@@ -98,8 +116,8 @@ balance is too low'), so only the OpenAI examples arm was exercised.
 ## [DOC] Apply 16 backlogged retros to the agent instruction files
 *Thursday, July 30th at 1pm*
 Folds sixteen unapplied retrospectives — nine dating back to May and all 
-seven from the embeddings build — into CLAUDE.md, AGENT_DESIGN_SPEC.md and 
-AGENT_IMPLEMENTATION_SPEC.md, which had not been touched since early May. The 
+seven from the embeddings build — into CLAUDE.md, agent-spec/DESIGN.md and 
+agent-spec/IMPLEMENTATION.md, which had not been touched since early May. The 
 highest-value entries generalize rules that were previously written 
 per-mechanism: any process-global mutation from an async test module is now 
 documented as one foot-gun class with a static grep as the gate, rather than 
@@ -399,12 +417,12 @@ streaming/non-streaming dual-path file:line disambiguation; SSE-chunk-mapper
 rule generalized to dispatch trees; Layer-A constructors are struct!/2 
 pass-throughs by default; cross-provider helper-name alignment refinement; and 
 two sub-bullets under Decision text drift (type-contract vs test-plan, 
-test-bullet vs test-vehicle). AGENT_DESIGN_SPEC.md gains 4 items: reducer-touch 
+test-bullet vs test-vehicle). agent-spec/DESIGN.md gains 4 items: reducer-touch 
 enumeration extends to event-payload keys, helper-name + arm-description 
 anchoring over bare line cites, file structural-stability predicts 
 cite-stability across sub-phases, and spec-amendment commit-range provenance. 
-AGENT_REVIEW_SPEC.md gains the full-suite mix test exit-0 phase-commit gate. 
-AGENT_IMPLEMENTATION_SPEC.md gains four §4 items (4j bounded max_turns on 
+agent-spec/REVIEW.md gains the full-suite mix test exit-0 phase-commit gate. 
+agent-spec/IMPLEMENTATION.md gains four §4 items (4j bounded max_turns on 
 streaming-chat-loop tests, 4k Layer-D session tests through Session public 
 seam, 4l relaxation/strip-set tables co-locate with the property, 4m 
 equivalence properties paired with absolute-shape tests). 11 retro files 
@@ -719,8 +737,8 @@ bug. Test suite: 1975 tests, 0 failures.
 ## [DOC] Apply Phase 15.x + 17.x retros: 11 steering-doc lifts
 *Friday, May 1st at 4pm*
 Reviewed nine unapplied retros (Phase 15.1–15.6, 17.1–17.3) and applied 11
-deduplicated rules to CLAUDE.md, AGENT_IMPLEMENTATION_SPEC.md, and
-AGENT_DESIGN_SPEC.md. Highlights: synthesized-fixture + recorder + deferred-
+deduplicated rules to CLAUDE.md, agent-spec/IMPLEMENTATION.md, and
+agent-spec/DESIGN.md. Highlights: synthesized-fixture + recorder + deferred-
 record convention (5x recurrence, finally landed); capability pre-flight runs
 in StreamRunner not adapter; cross-provider helper-name parity (extending
 the OpenAI dual-translator bullet); wire fixtures are .json; mix.exs
@@ -1380,7 +1398,7 @@ types/Runtime/Internals/Errors) + extended extras: with CHANGELOG.md; rewrote
 README with copy-paste Getting Started snippet against ALLM.Providers.Fake plus 
 parallel iex-prompt doctest in lib/allm.ex's @moduledoc (Decision #3). Added 
 §31 audit-gate meta-test (frozen at 18 test-blocks via @case_count 
-introspection per AGENT_DESIGN_SPEC §3 rule 7). Translated 4 
+introspection per agent-spec/DESIGN.md §3 rule 7). Translated 4 
 steering/examples/ case studies (Amesbury, Garden, meal, unllmtd) into 
 deterministic Fake-driven integration tests under test/examples/ — 21 new 
 tests via shared ALLM.Test.ExampleFixtures helper at test/support/. Added audit 
@@ -1450,12 +1468,12 @@ entries below remain verbatim; this rollup is the elevator pitch.
 ## [DOC] Apply 11 retros into design + implementation spec docs
 *Sunday, April 26th at 7pm*
 Lifted 12 high-priority findings from 11 unapplied retros (Phase 9 through 
-Phase 11.4) into the canonical agent docs. AGENT_DESIGN_SPEC.md gains six new 
+Phase 11.4) into the canonical agent docs. agent-spec/DESIGN.md gains six new 
 Behaviour design-doc checklist rules (14-19) covering Layer-C reducer-touch 
 enumeration, per-provider wire-field maps, synthesized-vs-recorded fixture 
 policy, detection-mechanism for state-conditioned behavioural deltas, the 
 provider-neutral examples _helpers.exs template, and live-API cost estimation. 
-AGENT_IMPLEMENTATION_SPEC.md adds wall-clock timing assertion guidance under 
+agent-spec/IMPLEMENTATION.md adds wall-clock timing assertion guidance under 
 Layer C tests and a new sub-section 4i on closed-enum dual-validation (protocol 
 vs provider acceptance). CLAUDE.md gains an 
 adapter-default-for-required-wire-field invariant plus four 
@@ -1595,8 +1613,8 @@ stream_step/3 facade, and a 100-iteration step-equivalence property proving
 step ≡ stream_step |> collect. Extends StreamCollector with :tool_results and 
 :halt fields plus three fold clauses, activates three §31 scenarios (single 
 tool call auto, parallel tool calls, handler raises), and renames @phase_7_opts 
-to @orchestration_opts. Folds nine retro findings into AGENT_DESIGN_SPEC, 
-AGENT_IMPLEMENTATION_SPEC, and CLAUDE.md (sub-phase retro cadence, shared test 
+to @orchestration_opts. Folds nine retro findings into agent-spec/DESIGN.md, 
+agent-spec/IMPLEMENTATION.md, and CLAUDE.md (sub-phase retro cadence, shared test 
 helpers threshold, primitive-vs-composition verification, struct-field 
 structural rule, mid-stream error contract, and others). Test suite: 140 
 doctests, 17 properties, 726 tests, 0 failures.
@@ -1633,7 +1651,7 @@ ExUnit.CaseTemplate harnesses (47 injected cases across
 Adapter/StreamAdapter/ToolExecutor/ToolResultEncoder), a permanent StubAdapter 
 fixture implementing both adapter behaviours, and harness self-tests; main 
 project certifies its defaults via a path-dep on the sibling. Three accumulated 
-retros drove AGENT_DESIGN_SPEC and AGENT_IMPLEMENTATION_SPEC refinements: §3 
+retros drove agent-spec/DESIGN.md and agent-spec/IMPLEMENTATION.md refinements: §3 
 consolidated into a five-class empirical-verification rule (stdlib exceptions, 
 project closed-atom enums, stdlib function failure modes on OTP floor, 
 macro-expansion-wrapped raises, opaque-term returns) plus hedge-word guidance, 
@@ -1656,7 +1674,7 @@ serializability via __from_tagged__/1 + Jason.Encoder, the five-level ALLM.Keys
 resolution chain (opts -> runtime Agent -> app_config -> env -> .env), and 
 ALLM.Application supervising ALLM.Keys.Store. Suite stands at 323 tests, 96 
 doctests, 12 properties, 0 failures, global coverage 96.59%. Also captures the 
-process artifacts (AGENT_*_SPEC.md, steering design docs, retros, reviews, 
+process artifacts (agent-spec/*.md, steering design docs, retros, reviews, 
 CHANGELOG) built via the retro-driven build discipline across both phases.
 
 ---
@@ -1711,7 +1729,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Phase 8.4 — Cross-cutting tests + §31 session round-trip activation
 
 #### Added
-- `test/allm/session_equivalence_test.exs` — new `StreamData` property test (`@moduletag :property`) asserting `ALLM.Session.start/3 ≡ ALLM.Session.stream_start/3 |> StreamReducer.finalize/1` across 100 iterations over a multi-turn fixture generator (0–2 tool-calls turns + a terminating text turn against the `echo` tool). Each iteration isolates Fake's per-process cursor via `Task.async/Task.await` per `AGENT_IMPLEMENTATION_SPEC.md` §Property tests. Uses the new `assert_equivalent_session_result/2` helper.
+- `test/allm/session_equivalence_test.exs` — new `StreamData` property test (`@moduletag :property`) asserting `ALLM.Session.start/3 ≡ ALLM.Session.stream_start/3 |> StreamReducer.finalize/1` across 100 iterations over a multi-turn fixture generator (0–2 tool-calls turns + a terminating text turn against the `echo` tool). Each iteration isolates Fake's per-process cursor via `Task.async/Task.await` per `agent-spec/IMPLEMENTATION.md` §Property tests. Uses the new `assert_equivalent_session_result/2` helper.
 - `test/allm/session_status_transition_test.exs` — exhaustive 25-row status-transition matrix test covering every `(status, op)` cell from `PHASE_8_DESIGN.md` §Overview: legal arrows assert post-status; illegal status mismatches assert `ArgumentError` raise; `:error`-state cells assert `{:error, %SessionError{reason: :session_in_error_state}}`; the data-mismatch row asserts `{:error, %SessionError{reason: :unknown_tool_call_id}}` for `submit_tool_result/3` with a stale id.
 - `ALLM.Test.Assertions.assert_equivalent_session_result/2` — new test-support helper. Extends `assert_equivalent_chat_result/2` with `s1.status == s2.status`, thread equality (modulo Phase 6 tool-result `tool_call_id` sort), and `pending_*` field equality. `:metadata` is asserted unconditionally — no silent skip. `:id` and `:context` are excluded as identical-by-construction. Accepts both `{Session, ChatResult}` and `{Session, StepResult}` tuple shapes.
 - `ALLM.Test.Assertions.assert_session_round_trip/2` — new test-support helper. ETF round-trip asserted unconditionally; Jason round-trip asserted on every `%Session{}` field except those listed in `opts[:exclude]`. `:exclude` defaults to `[]` (full Jason equality) per `PHASE_8_DESIGN.md` §8.4.1 Invariants 1.
@@ -1848,7 +1866,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LICENSE` files at the repo root and in `conformance/` (MIT, Pascal Rettig) — prerequisite for `mix hex.build`.
 
 #### Notes
-- The design doc's `StreamError` mid-stream reason table named `:truncated | :malformed_chunk | :connection_dropped`, but the Phase 1 committed `ALLM.Error.StreamError` enum is `:adapter_error | :cancelled | :timeout | :malformed_event | :unknown`. The conformance suite uses the committed atoms (`:cancelled` in the self-test case) per `AGENT_DESIGN_SPEC.md §3`'s empirical-verification rule.
+- The design doc's `StreamError` mid-stream reason table named `:truncated | :malformed_chunk | :connection_dropped`, but the Phase 1 committed `ALLM.Error.StreamError` enum is `:adapter_error | :cancelled | :timeout | :malformed_event | :unknown`. The conformance suite uses the committed atoms (`:cancelled` in the self-test case) per `agent-spec/DESIGN.md §3`'s empirical-verification rule.
 
 ### Phase 2.4 — Engine Integration Test
 

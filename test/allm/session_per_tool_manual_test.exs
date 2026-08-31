@@ -14,7 +14,7 @@ defmodule ALLM.SessionPerToolManualTest do
       `:idle` once the manual subset is resolved; an AUTO-bucket id
       returns `{:error, %SessionError{reason: :unknown_tool_call_id}}`
       because that id already ran (its message lives in `session.thread`,
-      not `pending_tool_calls`). Closes the AGENT_DESIGN_SPEC item 12
+      not `pending_tool_calls`). Closes the agent-spec/DESIGN.md item 12
       dispatch-graph reconciliation gap.
     * `Session.stream_start/3` produces the same projection through
       `StreamReducer.finalize/1`; no `:tool_execution_*` events fire when

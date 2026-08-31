@@ -269,7 +269,7 @@ defmodule ALLM.Chat.PerToolManualStreamTest do
 
       tools = [weather_tool(), manual_charge_tool()]
 
-      # Per CLAUDE-md / AGENT_IMPLEMENTATION_SPEC: isolate Fake's per-process
+      # Per CLAUDE-md / agent-spec/IMPLEMENTATION.md: isolate Fake's per-process
       # cursor between calls in equivalence smokes.
       task1 =
         Task.async(fn ->

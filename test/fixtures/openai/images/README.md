@@ -1,12 +1,12 @@
 # OpenAI Images fixtures
 
 Wire-shape fixtures for `ALLM.Providers.OpenAI.Images` — see Phase 15
-(`steering/PHASE_15_image_layer_6.md`) and AGENT_DESIGN_SPEC.md rule 16.
+(`steering/PHASE_15_image_layer_6.md`) and agent-spec/DESIGN.md rule 16.
 
 ## Layout
 
 - `recorded/` — live-recorded happy-path response bodies. Hand-synthesized
-  initially per AGENT_DESIGN_SPEC.md rule 16 (recorded shapes verify decode
+  initially per agent-spec/DESIGN.md rule 16 (recorded shapes verify decode
   correctness; request-shape contracts are validated separately via live
   smoke tests in Phase 15.5). Run `scripts/record_openai_image_fixtures.exs`
   with `OPENAI_API_KEY` to replace each synthesized body with a real one;

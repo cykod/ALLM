@@ -54,7 +54,7 @@ defmodule ALLM.Providers.OpenAI.ImagesTestHelpers do
 
   # Consolidated in the Phase 20.4 fix step: this reached a third
   # implementation on `ALLM.Providers.OpenAITestFixtures` and
-  # `AGENT_IMPLEMENTATION_SPEC.md:68` makes TWO the promotion trigger. The
+  # `agent-spec/IMPLEMENTATION.md:68` makes TWO the promotion trigger. The
   # delegation keeps the `import ..., only: [drop_comment: 1]` call sites in
   # the three image test files working unchanged.
   # (`ALLM.Providers.GeminiTestFixtures` keeps its own private two-clause
