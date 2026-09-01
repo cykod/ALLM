@@ -16,12 +16,12 @@
 | 22.1 | Layer A data: `ModerationRequest`, `ModerationResult`, `ModerationResponse`, `ModerationAdapterError`, validator, serializer registry, enum extensions | A | Completed |
 | 22.2 | Layer B runtime: `ALLM.ModerationAdapter` behaviour, `Engine.moderation_adapter`, `FakeModeration`, conformance suite | B | Completed |
 | 22.3 | Layer C façade: `ALLM.moderate/3`, `ALLM.moderation_request/2`, `:moderate` telemetry span, `Capability.preflight_moderation/2` | C | Completed |
-| 22.4 | `ALLM.Providers.OpenAI.Moderation` — text input, recorder + wire probe + fixtures | B | Not Started |
+| 22.4 | `ALLM.Providers.OpenAI.Moderation` — text input, recorder + wire probe + fixtures | B | Completed |
 | 22.5 | Image input: `%ALLM.ImagePart{}` items, MIME/size gate, multimodal cardinality | B | Not Started |
 | 22.6 | Spec §39, `guides/moderation.md`, examples 19–20, `mix.exs` wiring, `CHANGELOG` | — | Not Started |
 | 22.7 | `[CHORE]` sweep: CLAUDE.md stale claim, `@guides` parity meta-test, images.ex redaction `[CARRY]` | — | Not Started |
 
-**Overall Progress:** 2/7 sub-phases complete (22.3 built, gates pending)
+**Overall Progress:** 4/7 sub-phases complete
 
 ---
 
@@ -594,17 +594,17 @@ Each row is marked **confirmed** (quoted from OpenAI documentation in this desig
 |---------|------|--------|
 | Request: text batch | `{"input": ["a", "b"], "model": "omni-moderation-latest"}` | **confirmed** — API reference, `input` typed *"string, array of strings, or array of multi-modal objects"* |
 | Request: multimodal | `{"input": [{"type":"text","text":…},{"type":"image_url","image_url":{"url":…}}]}` | **confirmed** — quoted verbatim in Alternative C |
-| Request: `model` omitted | server default applies | **inferred** — the reference marks `model` `Required: No` with no stated default |
+| Request: `model` omitted | server default applies | **CONFIRMED 2026-08-31** — response echoed `omni-moderation-latest` |
 | Response: envelope | `{"id": "modr-…", "model": …, "results": [...]}` | **confirmed** — quoted in Alternative C |
 | Response: `results[].flagged` | boolean | **confirmed** |
 | Response: `categories` | 13 slash-named keys; `illicit` / `illicit/violent` typed **`"boolean or null"`** | **confirmed** — API reference response schema |
 | Response: `category_scores` | 13 float keys | **confirmed** |
-| Response: `category_applied_input_types` | 13 keys → array of `"text"` / `"image"`, possibly `[]` | **confirmed** on omni; **inferred** that it is always present on omni |
-| Response: usage | **absent** | **inferred** — no usage object appears in any documented example; Assumption 6 |
-| Error envelope | `{"error": {"message", "type", "param", "code"}}` | **inferred** — OpenAI-wide shape, already consumed by `classify_reason/4` (`lib/allm/providers/openai.ex:676-695`) |
-| Correlation header | `x-request-id` | **inferred** — present on other OpenAI endpoints (`lib/allm/providers/openai/embeddings.ex:392`) |
-| `max_batch_size` | **undocumented** | **inferred** — Alternative D; the probe's ladder arm determines it |
-| `detail` on `image_url` | not accepted | **inferred** — Decision #8; the probe's negative-control arm tests it |
+| Response: `category_applied_input_types` | 13 keys → array of `"text"` / `"image"`, possibly `[]` | **CONFIRMED 2026-08-31** — present on every recorded omni 200 |
+| Response: usage | **absent** | **CONFIRMED 2026-08-31** — no `usage` key in any recorded body; Assumption 6 holds |
+| Error envelope | `{"error": {"message", "type", "param", "code"}}` | **CONFIRMED 2026-08-31** — `recorded/error_400_bad_model.json` |
+| Correlation header | `x-request-id` | **CONFIRMED 2026-08-31** — observed on a 200 |
+| `max_batch_size` | **undocumented by OpenAI** | **MEASURED 2026-08-31 — 1000 is a FLOOR, not a cap.** Ladder `[1, 32, 100, 128, 1000]` all returned 200 with `length(results) == n`; no upper bound was found |
+| `detail` on `image_url` | not accepted | **STILL INFERRED** — Decision #8. 22.5 owns it, but see the control result in 22.4.5: this endpoint **ignores** unknown fields, so a 200 on a `detail`-bearing request would prove nothing either way |
 | Image limit | 20 MB | **confirmed** — *"image files can be up to 20 MB"* |
 | Pricing | free | **confirmed** — *"The moderation endpoint is free to use"* |
 
@@ -625,7 +625,7 @@ Public/`@doc false` seams, each carrying `@spec` so Dialyzer binds them and test
 | Function | Purpose | Sub-phase |
 |----------|---------|-----------|
 | `moderate/2` | `@impl`; script short-circuit → gates → key → HTTP → decode | 22.4 |
-| `max_batch_size/0` | `@impl`; returns `@max_batch_size` | 22.4 |
+| `max_batch_size/0` | `@impl`; returns `@adapter_max_batch_size` | 22.4 |
 | `prepare_request/2` | `@impl`; unfired `%Req.Request{}` | 22.4 |
 | `to_json_body/2` `@doc false` | `(request, opts)` → wire map; returns bare `map()` | 22.4 |
 | `decode_response/4` `@doc false` | `(body, headers, request, opts)` → `{:ok, ModerationResponse.t()}` \| `{:error, …}` | 22.4 |
@@ -677,7 +677,7 @@ Mirrors `ALLM.Providers.FakeEmbeddings` (`lib/allm/providers/fake_embeddings.ex`
 
 **Pre-flight gates fire before the script**, matching `FakeEmbeddings` (`fake_embeddings.ex:130-139`): `input: []` → `:invalid_request`; over `max_batch_size/0` → `:batch_too_large` with `metadata` carrying `:count` and `:max`.
 
-**`@max_batch_size 32`** — deliberately NOT the sibling's provider-shaped number. `FakeEmbeddings` mirrors OpenAI's real 2048 (`lib/allm/providers/fake_embeddings.ex:101`), which forces conformance case 3 to build a 2049-element list on every run. Moderation's real cap is not even known until the 22.4 ladder probe and could land at 1000, so a mirrored constant would be both expensive and a guess. 32 is large enough to be plausible and small enough that the `:batch_too_large` boundary is cheap to cross. **Conformance case 3 must build its oversized input from the callback** — `List.duplicate("x", adapter.max_batch_size() + 1)` — never from a literal, so the case stays correct for a third-party adapter whose cap is 1 or 100_000. `ScriptedModerationStub` keeps its own `@max_batch_size 4` for the harness's self-test.
+**`@adapter_max_batch_size 32`** — deliberately NOT the sibling's provider-shaped number. `FakeEmbeddings` mirrors OpenAI's real 2048 (`lib/allm/providers/fake_embeddings.ex:101`), which forces conformance case 3 to build a 2049-element list on every run. Moderation's real cap is not even known until the 22.4 ladder probe and could land at 1000, so a mirrored constant would be both expensive and a guess. 32 is large enough to be plausible and small enough that the `:batch_too_large` boundary is cheap to cross. **Conformance case 3 must build its oversized input from the callback** — `List.duplicate("x", adapter.max_batch_size() + 1)` — never from a literal, so the case stays correct for a third-party adapter whose cap is 1 or 100_000. `ScriptedModerationStub` keeps its own `@max_batch_size 4` for the harness's self-test.
 
 ### Layer B — `ALLM.Test.ModerationAdapterConformance`
 
@@ -1047,7 +1047,7 @@ grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test
 * **Behaviour invariants 9 and 10 (`request_timeout` → `:timeout`; `prepare_request/2` semantics) were appended in the 22.2 fix pass.** Binds **22.4**: the real adapter must honour `opts[:request_timeout]` and convert the expiry to `:timeout`, which is the reason `ALLM.Error.ModerationAdapterError` publishes and 22.3's `@retryable_moderation_reasons` retries. 1–8 stay frozen; anything further is appended at 11.
 * **Invariant 5 measures ITEMS, not raw list elements.** Binds **22.5**: a multimodal `:input` is one item, so the batch gate never rejects it, and conformance case 10's two-element list is deliberately unclamped. Binds **22.4** too — its `moderate/2` gate must not read `length(request.input)`.
 * **Conformance cases 5, 6 and 7 size their input as `min(<wanted>, adapter.max_batch_size())`.** Binds **22.4**: whatever the ladder probe returns — including `1` — the published suite certifies a conforming adapter rather than failing it on its own correct `:batch_too_large`. Before the 22.2 fix pass those cases used literals `4`/`3`/`2` and went red at caps 3/2/1 respectively (measured). Do **not** reintroduce a literal input size in any case.
-* **`FakeModeration.@max_batch_size 32` is the number conformance case 3 crosses; the OpenAI adapter's is independent.** Binds **22.4**, whose `@max_batch_size` comes from the ladder probe and may differ by orders of magnitude. Nothing may assume the two are equal — which is why case 3 derives its oversized input from `adapter.max_batch_size()`.
+* **`FakeModeration.@adapter_max_batch_size 32` is the number conformance case 3 crosses; the OpenAI adapter's is independent.** Binds **22.4**, whose `@adapter_max_batch_size` comes from the ladder probe and may differ by orders of magnitude. Nothing may assume the two are equal — which is why case 3 derives its oversized input from `adapter.max_batch_size()`.
 
 ---
 
@@ -1164,7 +1164,9 @@ mix format --check-formatted && mix credo --strict && mix dialyzer
 
 `scripts/record_openai_moderation_fixtures.exs`, modelled on `scripts/record_voyage_embeddings_fixtures.exs` (the canonical four-part implementation).
 
-1. **Negative control.** Every "the API accepts X" arm is paired, in the same run, with an invented-field arm (`{"input": "hi", "not_a_real_field": true}`). Acceptance is evidence of schema membership only once the API is shown to reject unknown fields. If the invented field is *accepted*, every acceptance arm in the run is void and the script halts saying so.
+1. **Negative control.** Every "the API accepts X" arm is paired, in the same run, with an invented-field arm (`{"input": "hi", "not_a_real_field": true}`). Acceptance is evidence of schema membership only once the API is shown to reject unknown fields.
+
+> **CORRECTED 2026-08-31 (22.4 probe).** This clause said "If the invented field is *accepted*, every acceptance arm in the run is void and the script halts saying so." The probe ran and **the invented field IS accepted** — `/v1/moderations` returns 200 and silently ignores unknown top-level fields. Halting would make the recorder permanently unrunnable against a permissive-by-design endpoint, so the arm's expectation was inverted to the observed truth (`expect: 200`) and it now guards the *opposite* transition: the day OpenAI starts validating unknown arguments, the recorder fails. The substantive consequence stands and is stronger than the original wording — at this endpoint, **request acceptance can never confirm a wire-field-map row**; only an observable in the *response* can. See 22.4.5.
 2. **Assert, don't narrate.** Each arm declares an expected status; any mismatch prints a want/got table to stderr and `System.halt(1)`s **before a single fixture is written**. `Req.Test`-stubbed wire tests assert what the *adapter* emits and stay green forever when the provider changes.
 3. **Record the body, not the status.** Every arm whose response shape a fixture asserts writes that body to `recorded/` — error envelopes included.
 4. **Run behind the overwrite guard.** Check every target path first; a fully-recorded tree costs zero live calls. Refuse to overwrite any file lacking the `_comment` marker.
@@ -1183,7 +1185,7 @@ mix format --check-formatted && mix credo --strict && mix dialyzer
 | **`max_batch_size` ladder** | `n ∈ [1, 32, 100, 128, 1000]`; record the largest accepted `n` and the status of the first rejected one |
 | bad key | 401; record whether the message echoes key material |
 
-**`@max_batch_size` is determined by the ladder, not by this design.** The design deliberately does not state a number — Alternative D's reason 3. 22.4's Implementation Notes record the observed value and the moduledoc states it with the observation date. If the ladder's top rung (1000) is accepted, cap at 1000 and note that no upper bound was found.
+**`@adapter_max_batch_size` is determined by the ladder, not by this design.** The design deliberately does not state a number — Alternative D's reason 3. 22.4's Implementation Notes record the observed value and the moduledoc states it with the observation date. If the ladder's top rung (1000) is accepted, cap at 1000 and note that no upper bound was found.
 
 #### 22.4.3 Implementation Checklist
 
@@ -1214,17 +1216,53 @@ set -a; . ./.env; set +a; mix run scripts/record_openai_moderation_fixtures.exs
 
 **Cost: $0.00** — the endpoint is free (Assumption 6, Decision #10). There is no budget reason to skip or narrow the probe.
 
-**Success criterion:** the recorder exits 0 with every arm's expected status matched; all **four** of 22.4's `recorded/` fixtures exist and contain no `_comment` key; the per-file provenance tests pass; `@max_batch_size` is set from the observed ladder result and both the moduledoc and 22.4.5 Implementation Notes state it with the observation date.
+**Success criterion:** the recorder exits 0 with every arm's expected status matched; all **four** of 22.4's `recorded/` fixtures exist and contain no `_comment` key; the per-file provenance tests pass; `@adapter_max_batch_size` is set from the observed ladder result and both the moduledoc and 22.4.5 Implementation Notes state it with the observation date.
 
 #### 22.4.5 Implementation Notes
 
-*(Written by the implementer. Must record: the observed `max_batch_size` ladder result; whether the negative control rejected the invented field; whether `x-request-id` was present; whether any `usage` key appeared; and the exact wire-field-map rows the probe moved from **inferred** to **confirmed** or falsified. Any falsified row is amended in the wire-field map in the same commit, per CLAUDE.md's decision-drift rule.)*
+**Live probe ran 2026-08-31 against `POST https://api.openai.com/v1/moderations`. Cost $0.00** (the endpoint is free). All four `recorded/` fixtures are genuine live bodies — verified by raw-byte read: none carries a `_comment` key.
+
+**1. The negative control came back POSITIVE, and that is the most important result of this batch.** `{"model": …, "input": "hi", "not_a_real_field": true}` returns **200**, not 400 — `/v1/moderations` **silently ignores unknown top-level fields**. The arm was kept and its expectation inverted to the observed truth, so the day OpenAI starts validating unknown arguments the recorder fails loudly.
+
+> **Consequence, and it propagates:** acceptance is **not** evidence of schema membership at this endpoint. The design's probe rule ("every 'the provider accepts X' arm is paired with an invented-field arm, because acceptance is evidence of schema membership only once the API is shown to reject unknown fields") assumed a rejecting API. It does not reject. Therefore **no wire-field-map row may be promoted from `inferred` to `confirmed` on the strength of a 200 alone** — only rows confirmed by an observable in the *response* qualify. Rows resting on request acceptance stay `inferred` and are marked so.
+
+**2. `max_batch_size` ladder — no upper bound found.** All five rungs (`n ∈ [1, 32, 100, 128, 1000]`) returned 200 with `length(results) == n`. `@adapter_max_batch_size` is therefore **1000**, documented in the moduledoc as *a floor, not a cap*: it is the largest value observed to work, not a provider-stated maximum. Per 22.4.6 this number binds 22.6's guide, which must read it from `max_batch_size/0` rather than hard-code it.
+
+> **CORRECTED 2026-09-01 (22.4 fix pass; code review F2).** As first written, this note was **unbacked at the time it was written**. The ladder's verdict function was `verify_result_count_matches_input(%{body: body})`, which never received `n` and asserted only `is_list(Map.get(body, "results"))` — a response returning one result for a 1000-input batch would have passed every rung. The `length(results) == n` half of the sentence above described a comparison the recorder did not perform, and the same unbacked claim sits in the wire-field map row for `max_batch_size`.
+>
+> The verifier now closes over the rung's `n` and compares (`scripts/record_openai_moderation_fixtures.exs`, `verify_result_count_matches_input/1` returning a closure), and **the ladder was re-run live on 2026-09-01 with the corrected verifier**: all five rungs returned 200 **and** `length(results) == n` for each, `largest accepted n: 1000`, `rejected rungs: (none)`, "Schema holds: every asserted arm matched". `@adapter_max_batch_size 1000` therefore stands, and the claim above is now true **and** measured rather than asserted.
+>
+> The corrected verifier was itself proven load-bearing by mutation: flipping the comparison to `length(results) == n + 1` on a single-rung ladder turned the arm red and fired `halt_unless_schema_holds/1` (diagnostic line `ladder n=1  <- 1 results for 1 inputs`) before any fixture was written. Under the pre-fix verifier that mutation was not expressible, because `n` was never in scope.
+
+**3. Row-by-row disposition:**
+
+| Row | Before | After | Evidence |
+|-----|--------|-------|----------|
+| No `usage` object | inferred | **confirmed** | absent from every recorded 200 body |
+| Response envelope `{id, model, results}` | confirmed | confirmed | `recorded/single_clean.json` |
+| `category_applied_input_types` present on omni | inferred | **confirmed** | present in `recorded/flagged_violence.json` |
+| Error envelope `{error: {message, type, param, code}}` | inferred | **confirmed** | `recorded/error_400_bad_model.json` |
+| `x-request-id` correlation header | inferred | **confirmed** | observed on a 200 |
+| `model` omitted → server default | inferred | **confirmed** | response echoed `omni-moderation-latest` |
+| `max_batch_size` | inferred | **measured (floor)** | the ladder above |
+| `detail` inside `image_url` not accepted | inferred | **still inferred** — 22.5 owns it, and note the control result above means a 200 on a `detail`-bearing request would prove nothing | — |
+
+**4. `text-moderation-latest` is dead — confirmed on the wire, not just in the deprecations table.** The request returns **400**:
+
+```json
+{"error": {"code": null, "param": "model", "type": "invalid_request_error",
+  "message": "Invalid value for 'model' = text-moderation-latest. Please check the OpenAI documentation and try again."}}
+```
+
+Recorded at `test/fixtures/openai/moderations/recorded/error_400_bad_model.json`. **Assumption 1 and Alternative A are now empirically settled** — the phase's most contentious decision, which deliberately contradicted the literal request, is correct against the live API.
+
+**5. Security answer to the carried-forward `response.raw` question: benign for this endpoint.** The response body contains **no free-text echo of the submitted input** — a recursive walk of `recorded/single_clean.json` finds no string value longer than the `"modr-…"` id and the model name. Only `id`, `model`, and per-category booleans/floats/arrays. So `response.raw` riding into `:stop` telemetry metadata does not leak moderated user content. **Re-check if OpenAI ever adds an input echo.**
 
 #### 22.4.6 Binding on later sub-phases
 
 * **The observed `max_batch_size` from the ladder arm is the number every later artifact quotes.** Binds **22.6**'s `guides/moderation.md` chunk-loop example and its provider table, and the `@moduledoc`'s stated cap. Quote it from `ALLM.Providers.OpenAI.Moderation.max_batch_size/0` in an `iex>` block rather than hard-coding a literal, exactly as `guides/embeddings.md:117-124` does for all three embeddings adapters.
 * **`to_json_body/2`'s all-strings shape is the branch 22.5 adds an arm to, not one it replaces.** Binds **22.5**: the `input` value becomes `to_openai_content_blocks/1`'s output only when `ModerationRequest.multimodal?/1` is true; the all-strings path must stay byte-identical, pinned by 22.4's `to_json_body/2` tests still passing unchanged.
-* **The recorder's four-part structure (control arm, assert-don't-narrate halt, body recording, overwrite guard) is extended, never rewritten.** Binds **22.5**, which adds a multimodal arm *and* its own negative control (a `detail` key inside `image_url`). A multimodal arm without a paired control proves nothing about `detail`'s disposition.
+* **The recorder's four-part structure (control arm, assert-don't-narrate halt, body recording, overwrite guard) is extended, never rewritten.** Binds **22.5**, which adds a multimodal arm. **But note what 22.4's probe established: this endpoint ignores unknown fields, so a paired control cannot settle `detail`'s disposition either** — a 200 on a `detail`-bearing `image_url` proves nothing. 22.5 must decide `detail` on the documented request shape (OpenAI's own multimodal example carries no `detail` key) and record it as *inferred*, not confirm it by acceptance.
 
 ---
 

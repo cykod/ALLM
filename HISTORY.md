@@ -1,3 +1,41 @@
+## [FEAT] Add OpenAI /v1/moderations adapter with a live wire probe (Phase 22.4)
+*Tuesday, September 1st at 12am*
+Fourth batch of the Phase 22 moderation family: the real provider adapter,
+a self-asserting live wire probe, and eight fixtures. Text input only —
+image input is 22.5.
+
+- Add `ALLM.Providers.OpenAI.Moderation` against `POST /v1/moderations`,
+  targeting `omni-moderation-latest`. Gates fire in behaviour-invariant
+  order — empty input, then batch size, then key resolution — so a keyless
+  environment observes a clean rejection rather than a missing-key error
+- Add `scripts/record_openai_moderation_fixtures.exs`, a four-part probe
+  (negative control, assert-don't-narrate halt, body recording, overwrite
+  guard). It ran live at $0.00: the endpoint is free
+- Settle `max_batch_size` empirically. A ladder over 1, 32, 100, 128 and
+  1000 inputs returns 200 with a matching result count at every rung, so the
+  constant is 1000 and is documented as a FLOOR, not a provider-stated cap —
+  no upper bound was found
+- Confirm on the wire that `text-moderation-latest` is gone: it answers
+  "Invalid value for 'model'", recorded as a fixture. The design's decision
+  to ship omni-only, which contradicted the literal request, is now backed by
+  the live API rather than only by the deprecations table
+- Record that the negative control came back POSITIVE — the endpoint ignores
+  unknown top-level fields rather than rejecting them. The consequence is
+  propagated through the wire-field map: at this endpoint request acceptance
+  can never confirm a field's membership, only a response observable can.
+  The probe arm was inverted to guard the opposite transition
+- Fix two recorder defects found in review: the ladder's verifier never
+  compared the result count it was named for, and `--probe-only` wrote
+  fixtures while printing that it had written nothing
+- Bind the gate-ordering proof against a false pass. The keyless test was
+  silently vacuous when OPENAI_API_KEY was exported — which is the shell the
+  Verification block prescribes — so a positive control was added, mirroring
+  the Voyage sibling
+
+Review artifacts live under `.work/`, which is gitignored.
+
+---
+
 ## [FEAT] Add ALLM.moderate/3 facade with telemetry and capability gate (Phase 22.3)
 *Monday, August 31st at 9pm*
 Third batch of the Phase 22 moderation family, and the one that makes

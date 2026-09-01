@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": null,
+    "message": "Invalid value for 'model' = text-moderation-latest. Please check the OpenAI documentation and try again.",
+    "param": "model",
+    "type": "invalid_request_error"
+  }
+}

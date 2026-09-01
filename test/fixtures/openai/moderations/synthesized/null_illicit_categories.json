@@ -1,0 +1,81 @@
+{
+  "_comment": "Synthesized (Phase 22.4). OpenAI's API reference types `illicit` and `illicit/violent` as \"boolean or null\" on the omni-moderation response schema, but the live 2026-08-31 recording under recorded/ returned `false` for both \u2014 no live body in this tree carries a null. This fixture plants them so `decode_response/4`'s drop-null-valued-category rule has a target: `ALLM.ModerationResult.categories` is typed %{String.t() => boolean()} and a null must be DROPPED rather than propagated as nil into a typed map.",
+  "id": "modr-synth-null-illicit",
+  "model": "omni-moderation-latest",
+  "results": [
+    {
+      "categories": {
+        "harassment": false,
+        "harassment/threatening": false,
+        "hate": false,
+        "hate/threatening": false,
+        "illicit": null,
+        "illicit/violent": null,
+        "self-harm": false,
+        "self-harm/instructions": false,
+        "self-harm/intent": false,
+        "sexual": false,
+        "sexual/minors": false,
+        "violence": false,
+        "violence/graphic": false
+      },
+      "category_applied_input_types": {
+        "harassment": [
+          "text"
+        ],
+        "harassment/threatening": [
+          "text"
+        ],
+        "hate": [
+          "text"
+        ],
+        "hate/threatening": [
+          "text"
+        ],
+        "illicit": [
+          "text"
+        ],
+        "illicit/violent": [
+          "text"
+        ],
+        "self-harm": [
+          "text"
+        ],
+        "self-harm/instructions": [
+          "text"
+        ],
+        "self-harm/intent": [
+          "text"
+        ],
+        "sexual": [
+          "text"
+        ],
+        "sexual/minors": [
+          "text"
+        ],
+        "violence": [
+          "text"
+        ],
+        "violence/graphic": [
+          "text"
+        ]
+      },
+      "category_scores": {
+        "harassment": 0.0001,
+        "harassment/threatening": 0.0001,
+        "hate": 0.0001,
+        "hate/threatening": 0.0001,
+        "illicit": 0.0001,
+        "illicit/violent": 0.0001,
+        "self-harm": 0.0001,
+        "self-harm/instructions": 0.0001,
+        "self-harm/intent": 0.0001,
+        "sexual": 0.0001,
+        "sexual/minors": 0.0001,
+        "violence": 0.0001,
+        "violence/graphic": 0.0001
+      },
+      "flagged": false
+    }
+  ]
+}

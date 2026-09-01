@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized (Phase 22.4). OpenAI's 401 envelope. The `message` deliberately embeds an UNMASKED key-shaped string so the redaction test has a target — the live 2026-08-31 probe observed OpenAI MASKING the key in its real moderation 401 text (`sk-proj-*****************************9900`), so no provider-authored moderation message in this tree reaches `redact_key_material/1` with key material in it. The planted token is defence in depth, not evidence that provider text leaks; the companion test asserts the Gemini and Voyage patterns match nothing here so an inherited-verbatim regex fails loudly instead of redacting nothing.",
+  "error": {
+    "message": "Incorrect API key provided: sk-proj-FAKEKEY000111222333444555. You can find your API key at https://platform.openai.com/account/api-keys.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "invalid_api_key"
+  }
+}

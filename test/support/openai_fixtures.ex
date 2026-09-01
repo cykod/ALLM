@@ -146,6 +146,52 @@ defmodule ALLM.Providers.OpenAITestFixtures do
   end
 
   @doc """
+  Load a recorded moderations fixture by name (Phase 22.4).
+
+  Names map to files under `test/fixtures/openai/moderations/recorded/<name>.json`.
+  These are genuine live OpenAI `/v1/moderations` responses recorded on
+  2026-08-31 and therefore carry NO `_comment` marker; the `drop_comment/1` call
+  is defensive, so the loader keeps working if a fixture is ever temporarily
+  replaced by a placeholder awaiting a re-record. Because it strips
+  unconditionally, an assertion made through this loader cannot bind provenance —
+  `moderation_wire_test.exs` reads the raw file bytes for that.
+
+  ## Examples
+
+      iex> body = ALLM.Providers.OpenAITestFixtures.moderation_recorded(:single_clean)
+      iex> length(body["results"])
+      1
+  """
+  @spec moderation_recorded(atom()) :: body()
+  def moderation_recorded(name) when is_atom(name) do
+    @fixtures_root
+    |> Path.join(["moderations/recorded/", "#{name}.json"])
+    |> load_json()
+    |> drop_comment()
+  end
+
+  @doc """
+  Load a synthesized moderations fixture by name (Phase 22.4).
+
+  Names map to files under
+  `test/fixtures/openai/moderations/synthesized/<name>.json`. The leading
+  `_comment` marker every synthesized fixture carries is stripped.
+
+  ## Examples
+
+      iex> body = ALLM.Providers.OpenAITestFixtures.moderation_synthesized(:error_401)
+      iex> body["error"]["code"]
+      "invalid_api_key"
+  """
+  @spec moderation_synthesized(atom()) :: body()
+  def moderation_synthesized(name) when is_atom(name) do
+    @fixtures_root
+    |> Path.join(["moderations/synthesized/", "#{name}.json"])
+    |> load_json()
+    |> drop_comment()
+  end
+
+  @doc """
   Strip the leading `_comment` provenance marker from a decoded fixture map.
 
   Every synthesized fixture carries one; recorded fixtures do not (which is

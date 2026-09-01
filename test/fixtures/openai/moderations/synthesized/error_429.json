@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthesized (Phase 22.4). OpenAI's 429 envelope. Provoking a real one would need sustained abuse of a free endpoint, so this stays hand-written. Paired with a `retry-after: 7` response header in the wire test so `:retry_after_ms` decodes to 7000.",
+  "error": {
+    "message": "Rate limit reached for omni-moderation-latest in organization org-example on requests per min (RPM): Limit 1000, Used 1000, Requested 1. Please try again in 60ms.",
+    "type": "requests",
+    "param": null,
+    "code": "rate_limit_exceeded"
+  }
+}

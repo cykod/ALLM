@@ -1212,3 +1212,75 @@ gate-wiring tests), 0 doctest delta, 0 failures. `credo` mods/funs went
 
 Un-mutated, the five capability test files run **11 doctests, 75 tests,
 0 failures** — the behaviour-equivalence pin for the four-site extraction.
+
+---
+
+## Phase 22.4 — `ALLM.Providers.OpenAI.Moderation`, text input (Layer B)
+
+**Status: Completed** (2026-09-01). All four review gates ran; artifacts present and non-empty: `.work/reviews/2026-08-31-phase22-4-openai-adapter/overview.md` (functional, PASS — 12 live probe arms re-run independently at $0.00), `.work/code-reviews/2026-08-31-phase22-4-openai-adapter.md` (9 findings, 2 High, both in the recorder), `.work/security-reviews/2026-08-31-phase22-4-openai-adapter.md` (no issues, two independent passes), `.work/design-reviews/2026-08-31-phase22-4-openai-adapter.md` (N/A — backend-only). Fix pass applied 8 items, escalated 0. **Both reviewers independently found the adapter logic itself clean** — a token-normalized diff against the `embeddings.ex` template is superimposable section for section. Every finding was in the recorder, the tests, or the bookkeeping, including three false claims the orchestrator wrote while reconstructing after the implement agent died.
+
+> **Provenance note.** The 22.4 implement agent terminated mid-run on an API session rate limit, before its bookkeeping pass.
+>
+> **CORRECTED 2026-09-01 (22.4 fix pass; code review F7, functional review Finding 3).** This note previously read "*immediately after writing the `ASKS.md` `[CARRY]` entry*". **No 22.4 `[CARRY]` entry was ever written.** `git diff c15f2c7 wip/22-4-checkpoint -- ASKS.md` adds exactly one line, a `[MILE]` entry describing Phase **22.3**; the agent announced the intent and died before acting on it. The checklist item it refers to (`22.4.3`: *"File the `[CARRY]` ticket in `ASKS.md` naming `lib/allm/providers/openai/images.ex`'s `body_preview` + un-redacted message"*) is **deliberately not being filed now**: the standing Phase-20.4-origin `[BUG]` ticket at `ASKS.md:249` already names `openai/images.ex:1069-1070` (raw 401 text carrying an `sk-proj-` prefix), `:1109-1114` (`inspect(cause)` interpolated into `:message`), and `:1229-1241` + `gemini/images.ex:660` (200-char `body_preview`) — verified still live in `lib/` at HEAD. Both reviewers independently confirmed a new entry would be a duplicate, so the checklist's *purpose* is served by the pre-existing ticket and only the records' claim was wrong. The orchestrator completed the remainder directly: three credo alias-ordering violations and two `mix format` violations (both introduced by the interrupted run and both left unverified because the agent never reached its own gate block), plus this section and the design's `22.4.5 Implementation Notes`. **No implementation logic was written or altered by the orchestrator** — only alias order, formatter output, and documentation.
+
+### What shipped
+
+`lib/allm/providers/openai/moderation.ex` (behaviour impl + **three** `@doc false` test seams — `to_json_body/2`, `to_moderation_adapter_error/4`, `decode_response/4` — alongside the three `@impl` callbacks `max_batch_size/0`, `moderate/2`, `prepare_request/2`; this line said "nine", which is `openai/images.ex`'s count as quoted in `CLAUDE.md`, corrected 2026-09-01 per code review F7), `scripts/record_openai_moderation_fixtures.exs` (four-part probe), eight fixtures (four `recorded/` live, four `synthesized/` with `_comment` markers), three test files, `test/support/openai_fixtures.ex` (moderation loaders delegating to the single `drop_comment/1`), `test/fixtures/openai/README.md` (moderations section — the embeddings gap deliberately not replicated), and `mix.exs` (`ALLM.Providers.OpenAI.Moderation` → `Providers`).
+
+### Verification (orchestrator-run, 2026-08-31, post-repair)
+
+```
+mix test                       420 doctests, 31 properties, 3379 tests, 0 failures, 14 excluded
+mix format --check-formatted   exit 0
+mix credo --strict             3135 mods/funs, found no issues
+mix dialyzer                   Total errors: 0, Skipped: 0
+mix docs                       0 warnings
+audit_user_docs | grep moderation    empty
+git diff --stat HEAD -- README.md    empty
+```
+
+Baseline after 22.3 was 416 doctests / 3299 tests → **+4 doctests, +80 tests**.
+
+### The probe result that matters
+
+The negative control **came back positive**: `/v1/moderations` returns 200 for an unknown top-level field. Full disposition, the row-by-row `inferred → confirmed` table, the `max_batch_size` ladder, and the `response.raw` security answer are in the design's **22.4.5 Implementation Notes** — recorded there rather than duplicated here because 22.4.5 is a designated slot the design reserves for exactly this.
+
+Three design amendments landed with it, per CLAUDE.md's decision-drift rule: the wire-field map's seven rows were re-marked from the probe; the four-part probe's clause (1) was `CORRECTED` (halting on an accepted invented field would make the recorder permanently unrunnable against a permissive endpoint); and 22.4.6's forward-binding bullet for 22.5 was rewritten, because a paired control cannot settle `detail`'s disposition at an endpoint that ignores unknown fields.
+
+### Deviations
+
+1. **[orchestrator repair, documented]** Alias groups in `moderation.ex`, `moderation_test.exs` and `moderation_wire_test.exs` were reordered to satisfy `Credo.Check.Readability.AliasOrder`, which sorts a `ALLM.{A, B}` brace-group by its **first member**. The credo-clean order is `ALLM.Error.…` → `ALLM.{Keys, Moderation…}` → `ALLM.Providers.…`. The `embeddings.ex` sibling looks different only because its brace group starts with `Embedding`, which sorts before `Error`.
+2. **[orchestrator repair]** `mix format` applied to `moderation.ex` (a `defp decode_result_entry/3` head over the line limit) and `moderation_conformance_test.exs` (missing blank line between two `use` calls).
+
+### Binding on later sub-phases
+
+* **`@adapter_max_batch_size 1000` is a FLOOR, not a provider-stated cap** — the ladder found no upper bound. Binds **22.6**: `guides/moderation.md` must read it from `max_batch_size/0` in an `iex>` block, never hard-code `1000`.
+* **Acceptance proves nothing at this endpoint.** Binds **22.5**: do not confirm `detail`'s disposition with a 200.
+* **`response.raw` carries no echo of submitted input** (verified by recursive walk of the recorded body). Binds any future sub-phase touching telemetry: re-check if OpenAI adds an input echo.
+
+### 22.4 fix pass (2026-09-01)
+
+Applied against the four review docs for `wip/22-4-checkpoint`. **Both reviewers independently confirmed the shipped adapter logic is clean** — a token-normalized diff against the `embeddings.ex` template is superimposable section for section — so every fix below lands in the recorder, the tests, or the bookkeeping. No adapter logic was changed; `moderation.ex`'s only edits are two `@moduledoc`/comment corrections.
+
+**Fixed:**
+
+1. **Code review F2 (High) — the `max_batch_size` ladder verified nothing it claimed to.** `verify_result_count_matches_input/1` asserted only `is_list(Map.get(body, "results"))`; it never received `n`. It is now a closure over the rung's `n` comparing `length(results) == n`. **Re-run live 2026-09-01** — all five rungs 200 with the count matching, `largest accepted n: 1000`, no rejected rungs; `@adapter_max_batch_size 1000` stands and is now *measured*. Proven load-bearing by mutating the comparison to `n + 1`, which turned the rung red and fired `halt_unless_schema_holds/1` before any write. The design's `22.4.5` note carries the full correction.
+2. **Code review F1 (High) — `--probe-only` wrote fixtures while printing "nothing written."** `Enum.each(results, &record_probe_body/1)` moved out of `probe_wire_schema/0` into `run/1`'s `true ->` branch, so the contract is enforced by the call graph rather than absorbed by the `overwritable?/1` guard. The header and `test/fixtures/openai/README.md` claims became true without editing them. Verified: the two live `--probe-only` runs above left all four `recorded/` mtimes untouched.
+3. **Functional review Finding 1 (Medium) — the invariant-5/6 gate-ordering proof failed open with `OPENAI_API_KEY` exported.** Added the Voyage-style positive control (`test/allm/providers/openai/moderation_test.exs`, `"positive control: a request that passes every gate DOES reach key resolution"`, mirroring `test/allm/providers/voyage/embeddings_test.exs:249-253`). **Measured, not asserted:** with `Keys.fetch!/2` hoisted ahead of `run_gates/2` in `do_moderate/2`, the two files go **6 failures keyless** and — the property this fix creates — **1 failure keyed**, where before the fix a keyed run over the same broken gate was **0 failures / fully green**.
+4. **Code review F3 (Medium) — the test-seam banner claimed byte-identity that does not hold.** `redact_key_material/1` and `sanitize_cause/1` do **not exist** in `openai/images.ex` (`grep -cE 'def[p]? redact_key_material' lib/allm/providers/openai/images.ex` → `0`; same for `sanitize_cause`), and `parse_retry_after/1` diverges (`images.ex:1159-1172` falls through to a `parse_http_date/1` stub). All three moved out of the IDENTICAL list; the first two into a new "identical to `embeddings.ex` ONLY" block citing `ASKS.md:249`, the third into DIVERGENT with the template's explanation restored.
+5. **Code review F4 (Medium) — `## Retry integration` read backwards from its own test.** Restored the template's disambiguating sentence (`embeddings.ex:131-135`, adapted): the closure returns reason atoms, none of which is in the adapter's own `:default` `retry_on`, so a 500 is *not* retried by the inner loop — cited to `moderation_wire_test.exs:373-381`. Also closes functional review Finding 6 (the direct-call sentence now says "3 for `:timeout`; a reason the adapter's own policy does not retry costs 1").
+6. **Code review F6 (Medium) — the fixture-provenance gate's subject set was a hand-maintained literal.** Added two discovered-set meta-tests to `moderation_wire_test.exs`'s `"fixture provenance"` block asserting `@recorded` and `@synthesized` each equal `Path.wildcard/1` over their directory. **Binding on 22.5:** `recorded/multimodal_text_image.json` must be added to `@recorded` or the suite goes red.
+7. **Code review F7 / functional review Finding 3 (bookkeeping) — three false claims corrected**, all written by the orchestrator while reconstructing after the implement agent died: the ladder claim in `22.4.5` (item 1 above), "the nine `@doc false` test seams" (there are **three**), and the provenance note's `[CARRY]` claim (no such entry exists; `ASKS.md:249` already covers the risk, so filing a duplicate would be wrong).
+
+**Deferred, recorded not fixed:**
+
+* **Code review F5 (Medium) — recorder scaffolding past the Rule of 3.** `load_dotenv/0` and `overwritable?/1` now stand at **four** byte-identical copies each; three of the four copies are outside 22.4's Module Tree, and `overwritable?/1` is the refuse-to-overwrite guard the whole provenance discipline rests on. (Re-measured during this pass: `scripts/` holds **ten** `record_*.exs` files, not the seven the review states; `grep -l 'defp load_dotenv' scripts/record_*.exs | wc -l` and the same for `defp overwritable?` each return **4**.) Filed as a `[CHORE]` in `ASKS.md` and slotted as a **22.7** candidate. **DONE WHEN** `grep -l 'defp load_dotenv\|defp overwritable?' scripts/record_*.exs` is empty — i.e. no recorder defines its own copy. Extraction shape (from the review): `scripts/support/fixture_recorder.exs` exposing `load_dotenv/1`, `overwritable?/1`, `write!/2`, `pending_paths/1`, `verdict/2`, `record_probe_body/2`; `halt_unless_schema_holds/1` stays per-script because its body is the provider-specific diagnostic and that is the part worth diverging. Migrate all copies in one commit per `agent-spec/IMPLEMENTATION.md`'s "Migration on extraction" rule.
+* **Code review F9 and the functional review's Lows/Nits** — left for the phase-end polish pass. (Functional review Finding 6, the `:timeout`-specific direct-call retry sentence, was closed incidentally by fix 5 above.)
+
+**Fixed out of the severity floor, under CLAUDE.md's governed-document carve-out** (a false sentence in a steering register lands in the discovering commit at any severity, because every later reader and agent loads it as truth):
+
+8. **Code review F8 (Low) — prose named `@max_batch_size`, an attribute that does not exist.** The constant is `@adapter_max_batch_size` (`lib/allm/providers/openai/moderation.ex:21`). Corrected at three recorder sites (`:142`, `:308`, and the `halt_unless_schema_holds/1` stderr text — the instruction printed at the exact moment someone needs it) and five design sites. **Re-measured during this pass and F8's census was short by two:** the review listed six sites, but `ALLM.Providers.FakeModeration` also uses `@adapter_max_batch_size` (`lib/allm/providers/fake_moderation.ex:127`), so the design's `:680` and `:1050` were false about the *Fake* adapter too and were corrected with the rest. `conformance/test/support/fixtures/scripted_moderation_stub.ex` genuinely does use `@max_batch_size 4`, so the design's `:709`, `:746` and `:1018` are correct as written and were left alone.
+
+### Security carry for the retro — `adapter_opts[:moderation_script]` is a *safety-control* bypass
+
+Security review informational note **B**, recorded here because the blast radius is novel even though the seam is not. `moderate/2` honours `opts[:adapter_opts][:moderation_script]` unconditionally (no `Mix.env` gate), delegating to `ALLM.Providers.FakeModeration`, which lives in `lib/` and therefore ships. That is byte-identical to the established released pattern (`openai/embeddings.ex:550` and `:244`, `openai/images.ex:489`, `voyage/embeddings.ex:792`) and keys on developer-supplied `adapter_opts` that no request data flows into — an attacker who controls the caller's opts already controls the call. **But this adapter's entire job is to answer "is this unsafe?", so the same seam that stubs an embedding vector here forces a clean verdict.** Pre-existing family surface, not a 22.4 defect, and out of scope for a fix pass. Worth a decision in the Phase 22 retro: either accept it explicitly in the family's docs, or gate the seam behind `Mix.env() != :prod` across all four adapters as one `[CHORE]`.
