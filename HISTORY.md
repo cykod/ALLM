@@ -1,3 +1,35 @@
+## [FEAT] Add image input to the OpenAI moderations adapter (Phase 22.5)
+*Wednesday, September 2nd at 2pm*
+Fifth batch of the Phase 22 moderation family: `%ALLM.ImagePart{}` items reach 
+`/v1/moderations` as multimodal content blocks. The cardinality rule the design 
+rests on was confirmed on the live wire and recorded.
+
+- Translate an image-bearing `:input` into OpenAI's content-block array via 
+`to_openai_content_blocks/1` + `part_to_block/1`; an all-strings `:input` still 
+emits the bare string array, so the 22.4 path is untouched. A `{:url, _}` 
+source forwards its URL verbatim and is never fetched locally; every other 
+source is inlined as a `data:` URI.
+- Add gate 3 (`gate_images/2`), which fires ahead of `ALLM.Keys.fetch!/2` like 
+its siblings and converts all five ways an item can fail to reach the wire into 
+`:invalid_request` with the offending index on `metadata` — never widening 
+the callback's error union (§39).
+- Confirm the multimodal cardinality rule live: two content blocks in, exactly 
+one `results` entry back, with six of thirteen categories listing `"image"` in 
+`category_applied_input_types` — so the image was classified rather than 
+ignored. Recorded at `recorded/multimodal_text_image.json`; the recorder now 
+asserts the count and halts the pass if it ever changes.
+- Record `ALLM.ImagePart.detail` as dropped and, after a paired live companion 
+arm, as unresolvable at this endpoint: it 200s unknown fields, so acceptance is 
+not evidence. A six-assertion contract test, not the wire, is what holds the 
+decision.
+- Fix-pass corrections after the four review gates: a `{:file, path}` image 
+whose file is unreadable raised `MatchError` through the façade, and an 
+off-shape item beside an image raised `FunctionClauseError` on a direct adapter 
+call — both invariant-2 violations, both now gated. Stop logging the `detail` 
+drop for the default `:auto`, matching Gemini. Each fix verified by mutation.
+
+---
+
 ## [FEAT] Add OpenAI /v1/moderations adapter with a live wire probe (Phase 22.4)
 *Tuesday, September 1st at 12am*
 Fourth batch of the Phase 22 moderation family: the real provider adapter,

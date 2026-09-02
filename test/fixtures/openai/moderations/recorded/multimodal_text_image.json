@@ -1,0 +1,86 @@
+{
+  "id": "modr-4965",
+  "model": "omni-moderation-latest",
+  "results": [
+    {
+      "categories": {
+        "harassment": false,
+        "harassment/threatening": false,
+        "hate": false,
+        "hate/threatening": false,
+        "illicit": false,
+        "illicit/violent": false,
+        "self-harm": false,
+        "self-harm/instructions": false,
+        "self-harm/intent": false,
+        "sexual": false,
+        "sexual/minors": false,
+        "violence": false,
+        "violence/graphic": false
+      },
+      "category_applied_input_types": {
+        "harassment": [
+          "text"
+        ],
+        "harassment/threatening": [
+          "text"
+        ],
+        "hate": [
+          "text"
+        ],
+        "hate/threatening": [
+          "text"
+        ],
+        "illicit": [
+          "text"
+        ],
+        "illicit/violent": [
+          "text"
+        ],
+        "self-harm": [
+          "text",
+          "image"
+        ],
+        "self-harm/instructions": [
+          "text",
+          "image"
+        ],
+        "self-harm/intent": [
+          "text",
+          "image"
+        ],
+        "sexual": [
+          "text",
+          "image"
+        ],
+        "sexual/minors": [
+          "text"
+        ],
+        "violence": [
+          "text",
+          "image"
+        ],
+        "violence/graphic": [
+          "text",
+          "image"
+        ]
+      },
+      "category_scores": {
+        "harassment": 1.0071400221737608e-5,
+        "harassment/threatening": 3.7636447180974406e-6,
+        "hate": 4.683888424952456e-6,
+        "hate/threatening": 4.78509449489012e-7,
+        "illicit": 7.722191834067996e-6,
+        "illicit/violent": 3.822911232549001e-6,
+        "self-harm": 1.4313738600443556e-5,
+        "self-harm/instructions": 1.1125607488784412e-6,
+        "self-harm/intent": 2.1411253592723288e-4,
+        "sexual": 1.9525885208642222e-6,
+        "sexual/minors": 8.059446204294678e-8,
+        "violence": 6.166373412799071e-4,
+        "violence/graphic": 2.305067219931397e-5
+      },
+      "flagged": false
+    }
+  ]
+}

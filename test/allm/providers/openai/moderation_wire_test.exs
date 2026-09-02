@@ -1,17 +1,19 @@
 defmodule ALLM.Providers.OpenAI.ModerationWireTest do
   @moduledoc """
-  Wire-fixture tests for `ALLM.Providers.OpenAI.Moderation` — eight fixtures
+  Wire-fixture tests for `ALLM.Providers.OpenAI.Moderation` — nine fixtures
   driven end-to-end through `moderate/2` behind a `Req.Test` stub.
 
-  Four live under `test/fixtures/openai/moderations/recorded/` and four under
+  Five live under `test/fixtures/openai/moderations/recorded/` and four under
   `.../synthesized/`.
 
   **Provenance.** The four `synthesized/` fixtures are hand-written and each
   carries a leading `_comment` marker naming the originating phase, stripped by
   `ALLM.Providers.OpenAITestFixtures.drop_comment/1` before the body reaches the
-  adapter. The four `recorded/` fixtures are **genuine live OpenAI
-  `/v1/moderations` responses** (`omni-moderation-latest`, recorded 2026-08-31)
-  and carry no marker — which is precisely what
+  adapter. The five `recorded/` fixtures are **genuine live OpenAI
+  `/v1/moderations` responses** (`omni-moderation-latest`) and carry no marker —
+  four recorded 2026-08-31 with the text adapter (Phase 22.4) and
+  `multimodal_text_image` recorded 2026-09-01 with the image path (Phase 22.5).
+  Carrying no marker is precisely what
   `scripts/record_openai_moderation_fixtures.exs` keys its refuse-to-overwrite
   check on. Both halves are gated below by tests that read the raw file bytes,
   because `moderation_recorded/1` and `moderation_synthesized/1` both call
@@ -62,7 +64,7 @@ defmodule ALLM.Providers.OpenAI.ModerationWireTest do
 
   describe "fixture provenance" do
     @synthesized ~w(null_illicit_categories missing_applied_input_types error_401 error_429)
-    @recorded ~w(single_clean batch_mixed flagged_violence error_400_bad_model)
+    @recorded ~w(single_clean batch_mixed flagged_violence error_400_bad_model multimodal_text_image)
 
     defp raw_fixture(kind, name) do
       [@fixtures_root, kind, name <> ".json"] |> Path.join() |> File.read!() |> Jason.decode!()

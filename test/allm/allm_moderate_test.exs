@@ -30,6 +30,8 @@ defmodule ALLM.ALLMModerateTest do
   alias ALLM.{Engine, ModelRef, ModerationRequest, ModerationResponse, ModerationResult}
   alias ALLM.Error.{EngineError, ModerationAdapterError, ValidationError}
   alias ALLM.Providers.FakeModeration
+  alias ALLM.Providers.OpenAI.ImagesTestHelpers
+  alias ALLM.Providers.OpenAITestFixtures
   alias ALLM.Test.{FakeModerationFixtures, TelemetryCapture}
 
   # ---------------------------------------------------------------------------
@@ -285,6 +287,40 @@ defmodule ALLM.ALLMModerateTest do
 
       assert {:ok, %ModerationResponse{results: [%ModerationResult{index: 0}]}} =
                ALLM.moderate(engine, ["look at this", part])
+    end
+
+    # Phase 22.5. The two assertions above hold the cardinality rule against
+    # `FakeModeration`, which synthesises its own results — so on that path
+    # ALLM is agreeing with itself. This one drives the SAME rule end-to-end
+    # through the real `ALLM.Providers.OpenAI.Moderation` against the live
+    # recording at `recorded/multimodal_text_image.json`, where the single
+    # result is the PROVIDER's, and additionally pins that the façade hands the
+    # adapter a `:input` it can translate: before 22.5 the `%ImagePart{}` would
+    # have reached `Jason.encode!/1` as a bare struct.
+    test "the cardinality rule holds through the real OpenAI adapter, not just the Fake" do
+      stub = String.to_atom("allm_moderate_multimodal_#{System.unique_integer([:positive])}")
+      body = OpenAITestFixtures.moderation_recorded(:multimodal_text_image)
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(self(), {:input, Jason.decode!(raw)["input"]})
+        ImagesTestHelpers.respond_json(conn, 200, body)
+      end)
+
+      engine =
+        Engine.new(
+          moderation_adapter: ALLM.Providers.OpenAI.Moderation,
+          model: "omni-moderation-latest",
+          adapter_opts: [plug: {Req.Test, stub}],
+          retry: false
+        )
+
+      part = ALLM.ImagePart.new(ALLM.Image.from_binary(<<137, 80, 78, 71>>, "image/png"))
+
+      assert {:ok, %ModerationResponse{results: [%ModerationResult{index: 0}]}} =
+               ALLM.moderate(engine, ["is this ok?", part], api_key: "sk-facade-test")
+
+      assert_received {:input, [%{"type" => "text"}, %{"type" => "image_url"}]}
     end
   end
 

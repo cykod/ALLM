@@ -44,7 +44,10 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   |---------|--------|
   | Endpoint | `POST https://api.openai.com/v1/moderations` (not overridable) |
   | Auth | `authorization: Bearer <key>` |
-  | Input | `input` — always sent as an **array**, even for one string |
+  | Input (text) | `input` — always sent as an **array**, even for one string |
+  | Input (multimodal) | `input` — an array of content blocks: `{"type":"text","text":…}` and `{"type":"image_url","image_url":{"url":…}}`. Sent when `ALLM.ModerationRequest.multimodal?/1` is true |
+  | Image source | a `{:url, _}` `ALLM.Image` forwards its URL verbatim; every other source is inlined as a `data:` URI |
+  | `detail` | **never sent.** `ALLM.ImagePart.detail` is dropped with a one-per-process `Logger.debug/1` — see below |
   | Model | `model` — **omitted** when `nil`; OpenAI's own server default resolved to `#{@default_model}` |
   | Options | `ALLM.ModerationRequest.options` is merged onto the body under the structural fields |
   | Verdict | `results[].flagged` |
@@ -114,6 +117,35 @@ defmodule ALLM.Providers.OpenAI.Moderation do
        `:input` carrying any `ALLM.ImagePart` is exactly **one** multimodal
        item. An `:input` that is not a list at all is rejected here as
        `:invalid_request` with `metadata: %{field: :input}` rather than raising.
+    3. **Images.** Every `ALLM.ImagePart` in `:input` is validated by
+       `ALLM.Providers.Support.ImageMime.validate/2` against
+       `ALLM.Providers.Support.ImageMime.accept_mimes/1` for `:openai` and the
+       shared 20 MB ceiling — which is exactly OpenAI's documented moderation
+       image limit — and then for whether its bytes can actually be produced.
+       Every failure shape converts to `:invalid_request` rather than widening
+       this callback's error union to include `ALLM.Error.ValidationError` —
+       `moderate/2` returns `%ALLM.Error.ModerationAdapterError{}` and nothing
+       else. Each carries the offending item's position on `metadata.index`:
+
+       | Failure | `metadata` adds |
+       |---|---|
+       | MIME outside OpenAI's accept set | `%{image_error: :unsupported_image_format, mime_type: mime}` |
+       | image over 20 MB | `%{image_error: :image_too_large, byte_size: bytes}` |
+       | `%ALLM.Image{}` with no `:mime_type` | `%{image_error: :missing_mime_type}` |
+       | image bytes unresolvable (missing file, bad base64) | `%{image_error: :unresolvable_image, cause: reason}` |
+       | item is neither a string nor an `ALLM.ImagePart`, in a multimodal request | `%{image_error: :untranslatable_item}` |
+
+       The last two rows exist because the translator is total only over
+       resolvable images and known item types: without them a missing file
+       raises `MatchError` and an off-shape item raises `FunctionClauseError`
+       from inside `moderate/2`, violating `ALLM.ModerationAdapter`
+       invariant 2. An off-shape item in an **all-strings** `:input` is still
+       forwarded to the provider untouched — it reaches the wire there, and
+       OpenAI answers the 400.
+
+       The gate is fail-fast: the first failing item is reported, not all of
+       them. A URL-sourced image is not fetched, so its bytes are never
+       weighed here — OpenAI does that itself and answers a 400.
 
   Capability pre-flight against a model catalog is NOT performed here — it lives
   in `ALLM.moderate/3`. A direct adapter call bypasses it by design.
@@ -125,6 +157,28 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   invariant 4 this adapter's responsibility rather than the provider's. For an
   all-strings `:input` that yields `length(input)` results with indices
   `0..n-1`, matching `ALLM.ModerationRequest`'s cardinality rule.
+
+  An `:input` carrying any `ALLM.ImagePart` is a **single multimodal item** —
+  the text and the images are judged together — so the provider answers with
+  exactly **one** `results` entry and `:index` is `0`, however many elements the
+  list had. This is a property of OpenAI's wire, not an ALLM choice: the
+  documented multimodal example posts a text block plus an image block and gets
+  one verdict back. `ALLM.ModerationRequest.multimodal?/1` makes the cardinality
+  derivable before the call. Recorded at
+  `test/fixtures/openai/moderations/recorded/multimodal_text_image.json`.
+
+  ## `ALLM.ImagePart.detail` is dropped
+
+  OpenAI's documented moderation request shape carries no `detail` key inside
+  `image_url`, and no OpenAI documentation mentions detail control on this
+  endpoint, so the translator omits it and fires a single deferred-form
+  `Logger.debug/1` per process when a part carries one.
+
+  The disposition is **inferred from the documented request shape, not
+  confirmed on the wire**, and it cannot be confirmed here: this endpoint
+  ignores unknown fields (see above), so a `detail`-bearing request coming back
+  200 is evidence of nothing. Only a response-observable difference could
+  promote the row, and the recorder's paired arm found none.
 
   ## Decoding the category maps
 
@@ -218,9 +272,22 @@ defmodule ALLM.Providers.OpenAI.Moderation do
 
   @behaviour ALLM.ModerationAdapter
 
+  require Logger
+
   alias ALLM.Error.ModerationAdapterError
-  alias ALLM.{Keys, ModerationRequest, ModerationResponse, ModerationResult, Retry}
+
+  alias ALLM.{
+    Image,
+    ImagePart,
+    Keys,
+    ModerationRequest,
+    ModerationResponse,
+    ModerationResult,
+    Retry
+  }
+
   alias ALLM.Providers.FakeModeration
+  alias ALLM.Providers.Support.ImageMime
   alias ALLM.Providers.Support.OpenAIHeaders
 
   # OpenAI carries the per-request token-budget discriminator on `type` and the
@@ -379,9 +446,33 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   #   * `decode_response/4` assigns `:index` from array position — the wire
   #     carries none, where `/v1/embeddings` carries `data[].index` and its
   #     sibling therefore sorts on it.
-  #   * `to_openai_content_blocks/1`, `part_to_block/1` and
-  #     `reject_oversized_images/1` are 22.5 deliverables and are deliberately
-  #     absent here: 22.4 is text-only.
+  #   * `to_openai_content_blocks/1` and `part_to_block/1` (22.5) are named for
+  #     the CHAT translator's pair at `lib/allm/providers/openai.ex:1839-1893`,
+  #     modulo arity: chat's are `/2` because Chat Completions and the Responses
+  #     API disagree on the block shape, and moderation has one endpoint. Per
+  #     CLAUDE.md's cross-provider alignment rule the names align byte-for-byte
+  #     and the arity difference is driven by that invariant, exactly as
+  #     `ALLM.Providers.Anthropic`'s `/1` forms align with the OpenAI `/2` ones.
+  #     This is NOT a second-caller promotion trigger: the bodies differ (no
+  #     `detail`, no `:responses` arm, and a bare binary rather than a
+  #     `%ALLM.TextPart{}` on the text arm, because moderation's item union is
+  #     `String.t() | ALLM.ImagePart.t()`), so the semantic-clone test in
+  #     `agent-spec/IMPLEMENTATION.md` fails and no extraction is owed. Design
+  #     Decision #9 records this so it is not re-litigated.
+  #   * `gate_images/2` (22.5) takes `opts` where the design's seam table wrote
+  #     `reject_oversized_images/1`: every error this adapter surfaces carries
+  #     `opts[:request_id]` via `build_metadata/2`, which the sibling gates
+  #     `gate_empty_input/2` and `gate_batch_size/2` also need `opts` for. Both
+  #     the arity and the name were corrected in the design's table in the same
+  #     commit as the change — size is one of five things the gate rejects.
+  #   * `detail_drop_check/1` / `warn_detail_dropped_once/0` are the THIRD copy
+  #     of this pair, after `lib/allm/providers/anthropic.ex:883-899` and
+  #     `lib/allm/providers/gemini.ex:755-773` — same one-shot-per-process
+  #     shape, different process-dictionary key and log string.
+  #     `agent-spec/IMPLEMENTATION.md:68` sets the extraction trigger at TWO
+  #     implementations; consolidation is deferred because it would edit two
+  #     released adapters outside this sub-phase's Module Tree, and is filed as
+  #     a `[DEFERRED-DRY]` ticket in `ASKS.md`.
   # ---------------------------------------------------------------------------
 
   @doc false
@@ -391,13 +482,106 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   @spec to_json_body(ModerationRequest.t(), keyword()) :: map()
   def to_json_body(%ModerationRequest{} = request, _opts) do
     body =
-      %{"input" => request.input}
+      %{"input" => wire_input(request)}
       |> put_pair(model_pair(request))
 
     request.options
     |> stringify_option_keys()
     |> Map.merge(body)
   end
+
+  @doc false
+  # `[item()] -> [map()]`. Called ONLY when `ModerationRequest.multimodal?/1` is
+  # true — an all-strings `:input` goes to the wire as the bare string array
+  # OpenAI documents for the batch shape, which is why the 22.4 `to_json_body/2`
+  # tests still pass unchanged. See the seam banner above for why this pair is
+  # local to the moderation adapter rather than extracted from the chat
+  # translator.
+  @spec to_openai_content_blocks([String.t() | ImagePart.t()]) :: [map()]
+  def to_openai_content_blocks(items) when is_list(items) do
+    Enum.map(items, &part_to_block/1)
+  end
+
+  @doc false
+  # One item -> one wire block. `ALLM.ImagePart.detail` is read but NEVER
+  # emitted (Decision #8); `detail_drop_check/1` surfaces the drop once per
+  # process at `:debug`.
+  @spec part_to_block(String.t() | ImagePart.t()) :: map()
+  def part_to_block(text) when is_binary(text) do
+    %{"type" => "text", "text" => text}
+  end
+
+  # URL fast-path: forward the URL string. Never call `ALLM.Image.to_data_uri/1`
+  # here — it returns `{:error, :remote_source}` for a `{:url, _}` source
+  # (`lib/allm/image.ex:297`), so the `{:ok, uri}` match below would raise.
+  def part_to_block(%ImagePart{image: %Image{source: {:url, u}}, detail: d}) do
+    detail_drop_check(d)
+    %{"type" => "image_url", "image_url" => %{"url" => u}}
+  end
+
+  def part_to_block(%ImagePart{image: %Image{} = img, detail: d}) do
+    detail_drop_check(d)
+    {:ok, uri} = Image.to_data_uri(img)
+    %{"type" => "image_url", "image_url" => %{"url" => uri}}
+  end
+
+  @doc false
+  # Gate 3. Walks `:input` and converts every way an item can fail to reach the
+  # wire into `%ModerationAdapterError{reason: :invalid_request}` — Decision #7:
+  # this callback's error union is never widened to `%ValidationError{}`.
+  #
+  # Named `gate_images/2` rather than the design's original
+  # `reject_oversized_images/2` (corrected in the same commit as this rename):
+  # size is one of FIVE things it rejects, and the name now matches its
+  # `gate_empty_input/2` / `gate_batch_size/2` siblings in `run_gates/2`.
+  #
+  # Five failure shapes, three from `ImageMime.validate/2` and two this gate
+  # adds:
+  #
+  #   * `{:unsupported_image_format, mime}` / `{:image_too_large, bytes}` —
+  #     ImageMime's accept-set and shared 20 MB ceiling.
+  #   * `:missing_mime_type` — reachable via `ALLM.Image.from_file/1` on an
+  #     unrecognised extension (`lib/allm/image.ex:98-101` leaves `:mime_type`
+  #     `nil`), or a hand-built `%ALLM.Image{}`. NOT reachable via
+  #     `ALLM.Image.from_url/1`, whose `{:url, _}` source takes `validate/2`'s
+  #     first clause and returns `:ok` with a `nil` mime.
+  #   * `{:unresolvable_image, reason}` — the image's BYTES cannot be produced.
+  #     `ImageMime.check_byte_size/1` deliberately returns `:ok` when
+  #     `Image.to_binary/1` fails (`image_mime.ex:126-129`: it cannot prove the
+  #     image is oversized without bytes), so a `{:file, path}` whose file is
+  #     missing sails through MIME and size validation and would then reach
+  #     `part_to_block/1`'s `{:ok, uri} = Image.to_data_uri(img)` and raise a
+  #     `MatchError`. Checked HERE, where the item's index is in hand.
+  #   * `{:untranslatable_item, item}` — an element that is neither a binary nor
+  #     an `%ImagePart{}`, in a request that is multimodal and therefore routes
+  #     through `part_to_block/1`, which has no catch-all clause.
+  #
+  # The last two exist because `moderate/2` must return
+  # `{:ok, _} | {:error, %ModerationAdapterError{}}` and nothing else
+  # (`ALLM.ModerationAdapter` invariant 2). Letting either reach the translator
+  # surfaces a raised exception from inside `moderate/2`, i.e. ALLM's own
+  # bundled adapter violating the behaviour it ships the conformance suite for.
+  #
+  # Fail-fast on the first offending item; `metadata.index` names its position
+  # in `:input`.
+  @spec gate_images(ModerationRequest.t(), keyword()) ::
+          :ok | {:error, ModerationAdapterError.t()}
+  def gate_images(%ModerationRequest{input: input} = request, opts)
+      when is_list(input) and is_list(opts) do
+    accept = ImageMime.accept_mimes(:openai)
+    multimodal? = ModerationRequest.multimodal?(request)
+
+    input
+    |> Enum.with_index()
+    |> Enum.find_value(:ok, fn {item, index} ->
+      case validate_item(item, accept, multimodal?) do
+        :ok -> nil
+        {:error, reason} -> {:error, image_gate_error(reason, index, opts)}
+      end
+    end)
+  end
+
+  def gate_images(%ModerationRequest{}, opts) when is_list(opts), do: :ok
 
   @doc false
   @spec to_moderation_adapter_error(
@@ -480,8 +664,9 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   # `Keys.fetch!/2`. Key resolution happening after the gates is what keeps the
   # two unscripted conformance cases green in a keyless environment.
   defp run_gates(%ModerationRequest{} = request, opts) do
-    with :ok <- gate_empty_input(request, opts) do
-      gate_batch_size(request, opts)
+    with :ok <- gate_empty_input(request, opts),
+         :ok <- gate_batch_size(request, opts) do
+      gate_images(request, opts)
     end
   end
 
@@ -534,6 +719,76 @@ defmodule ALLM.Providers.OpenAI.Moderation do
 
   defp item_count(%ModerationRequest{} = request) do
     if ModerationRequest.multimodal?(request), do: 1, else: length(request.input)
+  end
+
+  # An `%ImagePart{}` is validated by `ImageMime.validate/2` and then, because
+  # that function passes an unresolvable image (see `gate_images/2`), for
+  # byte-resolvability — the exact question `part_to_block/1` asks next.
+  defp validate_item(%ImagePart{} = part, accept, _multimodal?) do
+    with :ok <- ImageMime.validate(part, accept), do: resolvable?(part)
+  end
+
+  # A bare string carries nothing to validate.
+  defp validate_item(item, _accept, _multimodal?) when is_binary(item), do: :ok
+
+  # Anything else is `Validate.moderation_request/1`'s business and the adapter
+  # passes it through to the provider rather than inventing a second opinion —
+  # but ONLY on the all-strings path, where `wire_input/1` forwards `:input`
+  # verbatim and OpenAI answers the 400. In a MULTIMODAL request every element
+  # goes through `part_to_block/1`, which has two heads and no catch-all, so
+  # passing it through raises `FunctionClauseError` from inside `moderate/2`
+  # instead of reaching any provider. Reject it here so invariant 2 holds.
+  defp validate_item(_item, _accept, false), do: :ok
+  defp validate_item(item, _accept, true), do: {:error, {:untranslatable_item, item}}
+
+  # `part_to_block/1` forwards a `{:url, _}` source verbatim and never resolves
+  # bytes, so only the inlined sources are asked this question.
+  defp resolvable?(%ImagePart{image: %Image{source: {:url, _}}}), do: :ok
+
+  defp resolvable?(%ImagePart{image: %Image{} = image}) do
+    case Image.to_data_uri(image) do
+      {:ok, _uri} -> :ok
+      {:error, reason} -> {:error, {:unresolvable_image, reason}}
+    end
+  end
+
+  defp image_gate_error(reason, index, opts) do
+    {message, metadata} = image_gate_detail(reason, index)
+
+    ModerationAdapterError.new(:invalid_request,
+      provider: :openai,
+      message: message,
+      metadata: build_metadata(metadata, opts)
+    )
+  end
+
+  # One clause per failure shape, returning BOTH the message and the metadata —
+  # a single table rather than two parallel ones, so a new shape costs one
+  # clause and cannot be added to one table and forgotten in the other.
+  defp image_gate_detail({:unsupported_image_format, mime}, index) do
+    {"input[#{index}]: unsupported image MIME type #{inspect(mime)}",
+     %{field: :input, index: index, image_error: :unsupported_image_format, mime_type: mime}}
+  end
+
+  defp image_gate_detail({:image_too_large, bytes}, index) do
+    {"input[#{index}]: image of #{bytes} bytes exceeds OpenAI's 20 MB moderation limit",
+     %{field: :input, index: index, image_error: :image_too_large, byte_size: bytes}}
+  end
+
+  defp image_gate_detail(:missing_mime_type, index) do
+    {"input[#{index}]: image has no :mime_type",
+     %{field: :input, index: index, image_error: :missing_mime_type}}
+  end
+
+  defp image_gate_detail({:unresolvable_image, reason}, index) do
+    {"input[#{index}]: image bytes could not be resolved (#{inspect(reason)})",
+     %{field: :input, index: index, image_error: :unresolvable_image, cause: reason}}
+  end
+
+  defp image_gate_detail({:untranslatable_item, item}, index) do
+    {"input[#{index}]: #{inspect(item, limit: 5)} is neither a string nor an %ALLM.ImagePart{} " <>
+       "and cannot be translated into a multimodal content block",
+     %{field: :input, index: index, image_error: :untranslatable_item}}
   end
 
   defp stub_error(opts) do
@@ -607,6 +862,66 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   # ---------------------------------------------------------------------------
   # Internals — JSON body builder
   # ---------------------------------------------------------------------------
+
+  # The all-strings shape is the 22.4 branch and stays byte-identical: only a
+  # request `ModerationRequest.multimodal?/1` calls true routes through the
+  # content-block translator.
+  #
+  # The predicate is INLINED rather than delegated, which is a deliberate clone
+  # of `ALLM.ModerationRequest.multimodal?/1`'s one-line body and needs its
+  # reason recorded. That function is specced `t() :: boolean()`, so calling it
+  # on `to_json_body/2`'s binding refines that binding to the FULL declared
+  # `ModerationRequest.t()` — which in turn makes `model_pair/1`'s and
+  # `stringify_option_keys/1`'s catch-all clauses provably dead and turns
+  # `mix dialyzer` red with two `pattern_match_cov` errors. Those clauses are
+  # dead by type but alive by test: `to_json_body/2` is a public `@doc false`
+  # seam, and `test/allm/providers/openai/moderation_test.exs`'s "an off-shape
+  # :options is ignored rather than raising" drives exactly the shape the type
+  # says cannot exist. Deleting them to satisfy dialyzer would break a released
+  # test and remove a real defence at a public entry point, so the clone stays
+  # and `moderation_vision_test.exs`'s "to_json_body/2 branches on exactly what
+  # multimodal?/1 reports" pins the two against drift.
+  defp wire_input(%ModerationRequest{input: input}) when is_list(input) do
+    if Enum.any?(input, &match?(%ImagePart{}, &1)) do
+      to_openai_content_blocks(input)
+    else
+      input
+    end
+  end
+
+  defp wire_input(%ModerationRequest{input: input}), do: input
+
+  # Decision #8: `ALLM.ImagePart.detail` has no place in OpenAI's documented
+  # moderation request shape, so it is dropped. A single deferred-form
+  # `Logger.debug/1` per process surfaces the drop — the deferred form skips
+  # the interpolation entirely when the level is above `:debug`. Mirrors
+  # `lib/allm/providers/anthropic.ex:883-899`.
+  # `:auto` is `ALLM.ImagePart`'s DEFAULT (`lib/allm/image_part.ex:39`), so it
+  # means "the caller expressed no preference" — nothing was really dropped and
+  # logging it would fire on every plainly-constructed `ImagePart.new/1`.
+  # Matches `lib/allm/providers/gemini.ex:755`, which excludes `:auto` for the
+  # same reason. (`lib/allm/providers/anthropic.ex:883` does NOT, and is the
+  # noisier outlier — see the `[DEFERRED-DRY]` ticket in `ASKS.md`.)
+  defp detail_drop_check(:auto), do: :ok
+  defp detail_drop_check(nil), do: :ok
+
+  defp detail_drop_check(_detail) do
+    warn_detail_dropped_once()
+    :ok
+  end
+
+  defp warn_detail_dropped_once do
+    if !Process.get(:allm_openai_moderation_detail_warned, false) do
+      Logger.debug(fn ->
+        "ALLM.Providers.OpenAI.Moderation: ImagePart.detail is not part of the " <>
+          "/v1/moderations request shape; dropping. This message fires once per process."
+      end)
+
+      Process.put(:allm_openai_moderation_detail_warned, true)
+    end
+
+    :ok
+  end
 
   defp put_pair(body, nil), do: body
   defp put_pair(body, {key, value}), do: Map.put(body, key, value)

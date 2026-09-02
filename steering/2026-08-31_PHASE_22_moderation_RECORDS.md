@@ -1284,3 +1284,188 @@ Applied against the four review docs for `wip/22-4-checkpoint`. **Both reviewers
 ### Security carry for the retro — `adapter_opts[:moderation_script]` is a *safety-control* bypass
 
 Security review informational note **B**, recorded here because the blast radius is novel even though the seam is not. `moderate/2` honours `opts[:adapter_opts][:moderation_script]` unconditionally (no `Mix.env` gate), delegating to `ALLM.Providers.FakeModeration`, which lives in `lib/` and therefore ships. That is byte-identical to the established released pattern (`openai/embeddings.ex:550` and `:244`, `openai/images.ex:489`, `voyage/embeddings.ex:792`) and keys on developer-supplied `adapter_opts` that no request data flows into — an attacker who controls the caller's opts already controls the call. **But this adapter's entire job is to answer "is this unsafe?", so the same seam that stubs an embedding vector here forces a clean verdict.** Pre-existing family surface, not a 22.4 defect, and out of scope for a fix pass. Worth a decision in the Phase 22 retro: either accept it explicitly in the family's docs, or gate the seam behind `Mix.env() != :prod` across all four adapters as one `[CHORE]`.
+
+---
+
+## Phase 22.5 — Image input (Layer B)
+
+**Status: Complete** (2026-09-01). All four review gates ran and a fix pass landed. `/design-review` returned N/A (no front-end), `/security-review` found no issues, and `/functional-review` + `/code-review` between them found three real defects — two of them exceptions escaping `moderate/2`, both reproduced by running the code rather than reading it. See "Fix pass" below.
+
+*Sequencing note: `/security-review` and `/design-review` ran on 2026-09-01 before the session's container died mid-`/code-review`; `/functional-review`, `/code-review` and this fix pass ran after recovery, against a working tree byte-identical to the `wip/22-5-checkpoint` tag the earlier two reviewed.*
+
+### What shipped
+
+| File | Change |
+|------|--------|
+| `lib/allm/providers/openai/moderation.ex` | MODIFY — three new `@doc false` seams (`to_openai_content_blocks/1`, `part_to_block/1`, `gate_images/2`), `wire_input/1` + `detail_drop_check/1` + `warn_detail_dropped_once/0` + the `image_gate_*` / `validate_item/3` / `resolvable?/1` privates, gate 3 wired into `run_gates/2`, moduledoc grown by four sections |
+| `test/allm/providers/openai/moderation_vision_test.exs` | NEW — 26 tests across five describes |
+| `test/allm/allm_moderate_test.exs` | MODIFY — one test (real-adapter cardinality) + two aliases |
+| `test/allm/providers/openai/moderation_wire_test.exs` | MODIFY — `multimodal_text_image` added to `@recorded`; moduledoc counts 8→9 / 4→5 |
+| `scripts/record_openai_moderation_fixtures.exs` | MODIFY — multimodal arm, `detail` companion arm, `print_detail_disposition/1`, `multimodal_input/1`, `verify_multimodal/1`, `image_typed/1`, header note |
+| `test/fixtures/openai/moderations/recorded/multimodal_text_image.json` | NEW — **live recording, 2026-09-01** |
+
+Seam count on the adapter: **three → six** `@doc false` seams.
+
+### The live result the whole design rests on
+
+**The cardinality claim is CONFIRMED on the wire.** The multimodal arm posted OpenAI's documented two-block shape — one `{"type":"text"}` block plus one `{"type":"image_url"}` block carrying an inlined 1x1 PNG as a `data:` URI — in a single `input` array, and the response carried **exactly one** `results` entry:
+
+```
+ok   200     (want 200)  multimodal text+image (ONE result for a two-block input)
+  (one result; applied types mentioning "image": self-harm, self-harm/instructions,
+   self-harm/intent, sexual, violence, violence/graphic)
+```
+
+The recorded body has `len(results) == 1`, `results[0].flagged == false`, and a `category_applied_input_types` map in which six of the thirteen categories list `"image"` — so the image was genuinely classified rather than silently dropped, which a bare "one result" count alone would not have distinguished from the provider ignoring the image block. That distinction is what makes the arm evidence for **`ALLM.ModerationRequest`'s cardinality rule** rather than merely consistent with it. A two-element string array returns two results (22.4's `batch_mixed` arm); the same two-element array with an `%ImagePart{}` in it returns one.
+
+`verify_multimodal/1` asserts `length(results) == 1` and halts the recording pass on anything else, so the day OpenAI starts returning one result per block this script goes red rather than the library quietly disagreeing with its own `@doc`.
+
+**Data URIs are accepted** by `/v1/moderations`, so the arm depends on no third-party image host and re-records identically. This was not documented and is now observed.
+
+### `detail`: still inferred, and now known to be unresolvable here
+
+The design's checklist called for a negative control sending `detail` inside `image_url` and reading the disposition off the status. 22.4's own control had already falsified the premise (this endpoint 200s unknown top-level fields), and 22.4.6's forward-binding block superseded the checklist line. 22.5 shipped a **paired companion** instead: the identical multimodal body with `detail: "low"` added.
+
+```
+ok   200     (want 200)  detail: "low" inside image_url (disposition is response-observable only)
+-- `detail` disposition (response-observable evidence only) --
+  IDENTICAL category_scores
+```
+
+Neither observation promotes the row, and the recorder prints exactly that: acceptance is not evidence at a permissive endpoint, and score equality is not evidence either (a `detail` that *were* honoured need not move the scores for a 1x1 PNG). The wire-field map row now reads **INFERRED, and confirmed unresolvable 2026-09-01**. Decision #8 stands on OpenAI's documented request shape, which carries no `detail` key.
+
+**Consequence for the suite:** because the wire cannot hold this decision, `moderation_vision_test.exs`'s *"emits NO detail key, at any `:detail` value, for either image source"* — six assertions across `{:auto, :low, :high} × {binary-source, url-source}`, checking both the nested and the sibling position — is the **only** thing binding it. Treat it as a contract test, not a unit test.
+
+### Deviations
+
+1. **[contract, documented] `gate_images/2`, not `reject_oversized_images/1`.** The seam table specified `reject_oversized_images/1`; both halves were corrected, the arity during implementation and the name in the fix pass. Arity: every error this adapter surfaces carries `opts[:request_id]` through `build_metadata/2` — its sibling gates `gate_empty_input/2` and `gate_batch_size/2` both take `opts` for exactly that reason, and a `/1` gate could not. Name: *oversized* described one of the FIVE shapes the gate rejects, and the `gate_*` prefix matches the siblings it sits beside in `run_gates/2`. Both corrections landed in the design's seam table and its 22.5.2 checklist in the same commit as the code; a test pins the arity (*"errors carry `opts[:request_id]` like every other error this adapter surfaces"*).
+
+2. **[design claim corrected] `:missing_mime_type` is NOT reachable via `ALLM.Image.from_url/1`.** The design's checklist justified the third `ImageMime.validate/2` arm with "`ALLM.Image.from_url/1` infers no MIME type". It does not infer one — but a `{:url, _}` source takes `validate/2`'s **first** clause (`lib/allm/providers/support/image_mime.ex:94-103`), which explicitly accepts a `nil` mime because URL sources defer size and type to the provider. The arm is reachable via `ALLM.Image.from_file/1` on an extension absent from `@ext_to_mime` (`lib/allm/image.ex:98-101`), or a hand-built `%ALLM.Image{}`. The conclusion — handle the arm or ship a `CaseClauseError` from inside `moderate/2` — is unchanged; only the reason was wrong. Both the reachable path and the URL non-path now have tests.
+
+3. **[structural, documented] `wire_input/1` inlines `ModerationRequest.multimodal?/1`'s predicate rather than calling it.** Measured, not preferred: `multimodal?/1` is specced `t() :: boolean()`, so calling it on `to_json_body/2`'s binding refines that binding to the full declared `ModerationRequest.t()`, which makes the **released 22.4** catch-all clauses `model_pair(_request)` and `stringify_option_keys(_options)` provably dead and turns `mix dialyzer` red with two `pattern_match_cov` errors. Verified by experiment: with `multimodal?/1` called → `Total errors: 2`; with the predicate inlined → `Total errors: 0`, nothing else changed. Those clauses are dead by type but **alive by test** — `to_json_body/2` is a public `@doc false` seam and `moderation_test.exs`'s *"an off-shape `:options` is ignored rather than raising"* drives exactly the shape the type says cannot exist — so deleting them to satisfy dialyzer would break a released test, remove a real defence at a public entry point, and edit released code outside this sub-phase's tree. The clone is one `Enum.any?/2` line (two instances, Rule of 3 not tripped), its reason is recorded in a comment block on `wire_input/1`, and *"to_json_body/2 branches on exactly what multimodal?/1 reports"* pins the two implementations against drift across seven `:input` shapes.
+
+4. **[scope] The two `test/allm/allm_moderate_test.exs` Test Plan bullets were already green at 22.5's parent** — 22.3 shipped both against `FakeModeration` (`:282`, `:690`). Rather than duplicate them, 22.5 added the test they cannot be: the same cardinality rule through the **real** adapter against the live recording, where the single result is the provider's rather than ALLM's own synthesis. The Test Plan bullets are struck in-line in the design with that reasoning.
+
+5. **[doc]** `## Pre-flight gates` gate 3's prose originally cited "(Decision #7)". `mix run scripts/audit_user_docs.exs` flags `\bdecision\s*#?\s*\d+` in user-facing docs, and the gate's predicate is `| grep moderation` → empty. Reworded to state the rule instead of citing its number.
+
+### Verification (2026-09-01)
+
+```
+mix test                                   420 doctests, 31 properties, 3410 tests, 0 failures, 14 excluded
+mix test --seed 0                          420 doctests, 31 properties, 3410 tests, 0 failures, 14 excluded
+mix format --check-formatted               exit 0
+mix credo --strict                         3160 mods/funs, found no issues
+mix dialyzer                               Total errors: 0, Skipped: 0, Unnecessary Skips: 0
+mix docs                                   0 warnings
+mix run scripts/audit_user_docs.exs | grep moderation      empty
+git --no-optional-locks diff --stat HEAD -- README.md      empty
+cd conformance && mix test                 103 tests, 0 failures   (case 10 included)
+cd conformance && mix credo --strict       103 mods/funs, found no issues
+cd conformance && mix format --check-formatted             exit 0
+
+env -u OPENAI_API_KEY mix test \
+  test/allm/providers/openai/moderation_test.exs \
+  test/allm/providers/openai/moderation_vision_test.exs \
+  test/allm/providers/openai/moderation_conformance_test.exs
+                                           4 doctests, 78 tests, 0 failures
+```
+
+Baseline after 22.4 was 420 doctests / 3382 tests → **+28 tests, +0 doctests** (the new seams are `@doc false`, so they add no doctest).
+
+**BLOCKING live gate — ran, green, $0.00.**
+
+```
+set -a; . ./.env; set +a; mix run scripts/record_openai_moderation_fixtures.exs
+
+-- OpenAI moderations wire probe (live, 9 requests) --
+  ok   200  CONTROL: not_a_real_field is IGNORED, not rejected (permissive endpoint)
+  ok   200  model omitted (server default applies)            (server default: "omni-moderation-latest")
+  ok   200  clean single string                               (usage absent; x-request-id present; no input echo)
+  ok   200  flagged string
+  ok   200  batch of 3 strings
+  ok   400  shut-down model name text-moderation-latest
+  ok   200  multimodal text+image (ONE result for a two-block input)
+  ok   200  detail: "low" inside image_url
+  ok   401  BAD KEY                                            (echoes submitted key material: false)
+-- `detail` disposition --   IDENTICAL category_scores
+-- max_batch_size ladder --  1, 32, 100, 128, 1000 all 200; largest accepted n: 1000; rejected rungs: (none)
+  ✓ recorded test/fixtures/openai/moderations/recorded/multimodal_text_image.json
+```
+
+Every 22.4 arm was re-run and re-passed; `@adapter_max_batch_size 1000` re-measured and unchanged.
+
+### Gate-binding verification (mutation checks)
+
+Prose is not evidence. Three claims were checked by mutation rather than asserted:
+
+1. **The image gates really do fire ahead of `ALLM.Keys.fetch!/2`.** Hoisting `Keys.fetch!(:openai, opts)` to the top of `do_moderate/2` turns `moderation_vision_test.exs` **5 failures / 25 tests** in a keyless shell. The positive control (*"a multimodal request that passes every gate DOES reach key resolution"*) is what stops the ordering proof passing vacuously in a shell that has sourced `.env`, exactly as 22.4's fix pass established for gates 1 and 2.
+2. **`@recorded`'s discovered-set meta-test bound the new fixture.** Adding `multimodal_text_image.json` without adding it to the literal is red by construction — the 22.4 fix pass's meta-test compares the literal against `Path.wildcard/1`. The literal was updated in the same commit as the fixture, as the handoff item required.
+3. **`--probe-only` still writes nothing.** `stat` on all five `recorded/` mtimes before and after a full `--probe-only` run: identical. 22.4's fix 2 (moving `record_probe_body/1` into `run/1`'s `true ->` branch) is preserved — `print_detail_disposition/1` was added *inside* `probe_wire_schema/0` and only prints.
+
+A fourth was checked by re-run rather than mutation: the recorder is idempotent. A second full invocation against the now-complete tree made **zero HTTP requests** and printed the "nothing to record" message.
+
+### `[CARRY]` entries
+
+**One new, filed in the fix pass.** `lib/allm/providers/openai.ex:1864` — the released Chat Completions vision translator carries the identical `{:ok, uri} = Image.to_data_uri(img)` hard match that fix 1 below removed here, and raises the identical `MatchError` for a `{:file, path}` whose file is missing. Verified directly, not inferred from similarity. Released code outside 22.5's Module Tree, so fixing it here would violate CLAUDE.md's cross-phase discipline; shipping the moderation adapter safer than its released sibling is the documented correctly-scoped deviation, and this is the ticket that rule requires in the same pass. Filed in `ASKS.md`.
+
+The standing `ASKS.md:249` `[BUG]` (raw provider text and `body_preview` in `openai/images.ex` / `gemini/images.ex`) is unchanged and still covers the family's redaction gap; 22.5 added no error path that copies provider text — every image-gate error message is composed from ALLM-side values (an index, a MIME string the caller supplied, a byte count, and now an `Image.to_data_uri/1` failure reason such as `:enoent`, which is a POSIX atom rather than provider text).
+
+### `[DEFERRED-DRY]` entries
+
+* **`detail_drop_check/1` + `warn_detail_dropped_once/0` — three copies.** `lib/allm/providers/gemini.ex:755-773`, `lib/allm/providers/anthropic.ex:883-899`, and now `lib/allm/providers/openai/moderation.ex`. Identical modulo the process-dictionary key atom and the log string. `agent-spec/IMPLEMENTATION.md:68` sets the trigger at **two** implementations and is explicit that it is semantic rather than byte-level, so it fired at copy two (Gemini, Phase 16.4) and was missed then; 22.5 shipped copy three. Extraction is correctly deferred — it would edit two released adapters outside this sub-phase's Module Tree — and this entry plus the `ASKS.md` ticket is exactly what IMPLEMENTATION.md:68 requires in that case. The original 22.5 entry claimed no `[DEFERRED-DRY]` and no new `[CARRY]`; both were wrong and are corrected here. **DONE WHEN** `grep -l 'defp warn_detail_dropped_once' lib/allm/providers/*.ex lib/allm/providers/*/*.ex` is empty (today: three files).
+
+### Fix pass (2026-09-01, after the four review gates)
+
+Six findings landed; the two Highs were reproduced by running the code, not by reading it.
+
+1. **[High, F1] An image whose bytes cannot be resolved raised `MatchError` through the public façade.** `ImageMime.check_byte_size/1` deliberately returns `:ok` when `Image.to_binary/1` fails (`image_mime.ex:126-129` — it cannot prove an image is oversized without bytes), so a `{:file, path}` whose file is missing passed BOTH the MIME and the size gate and then hit `part_to_block/1`'s `{:ok, uri} = Image.to_data_uri(img)`. Measured: `ALLM.moderate(engine, ["is this ok?", part])` → `** (MatchError) no match of right hand side value: {:error, :enoent}`. That is `ALLM.ModerationAdapter` invariant 2 violated by ALLM's own bundled adapter, on the mundane input of a path deleted between construction and the call. Fixed by adding a `{:unresolvable_image, reason}` arm to gate 3, where the item's index is already in hand, rather than by adding error handling to the translator — which keeps `part_to_block/1` total by construction.
+
+2. **[Medium, F2] An off-shape item alongside an image raised `FunctionClauseError` on a direct adapter call.** `part_to_block/1` has two heads and no catch-all. `validate_item/2`'s comment claimed the adapter "passes it through to the provider rather than inventing a second opinion" — true on 22.4's all-strings path, false on 22.5's multimodal path, where nothing reaches any provider. Not reachable through `ALLM.moderate/3` (the façade's validator rejects `42` and `nil` first, which is why this is Medium and F1 is High) but `moderate/2` is a public `@behaviour` callback and `agent-spec/IMPLEMENTATION.md:243` is explicit that a defensive arm at a public extension point is not optional. Fixed with a `{:untranslatable_item, item}` arm gated on multimodality, so the all-strings pass-through is preserved verbatim; the false comment was corrected.
+
+3. **[Medium, F4] The `detail`-drop debug log fired on `ImagePart`'s DEFAULT `detail: :auto`.** So every plainly-constructed `ImagePart.new(img)` logged that a field the caller never set was being dropped. `lib/allm/providers/gemini.ex:755` excludes `:auto` explicitly for this reason; `anthropic.ex:883` does not. The family was split and 22.5 had silently taken the noisier arm. Resolved toward Gemini (user decision) with `defp detail_drop_check(:auto), do: :ok`, plus a test and a premise guard asserting the default really is `:auto` — so if that default ever changes, the exclusion stops silently describing an uncommon case.
+
+4. **[Medium, F3] The missing `[DEFERRED-DRY]` record** — see the section above. The seam banner also cited only `anthropic.ex:883` as the mirror and missed `gemini.ex:755`, so a reader auditing the clone from the code found two sites rather than three; corrected.
+
+5. **[Low, F7] `image_gate_message/2` and `image_gate_metadata/2` were parallel dispatch tables** over the identical shapes, called only together. Fix 1 and fix 2 each add a shape, which would have made a 2-place edit a 4-place one. Collapsed into a single `image_gate_detail/2` returning `{message, metadata}` — one clause per shape, and a new shape can no longer be added to one table and forgotten in the other.
+
+6. **[Low, F6] The wire test's moduledoc dated all five recorded fixtures to 2026-08-31.** `multimodal_text_image.json` was recorded 2026-09-01. Fixture-provenance claims are load-bearing in this repo; corrected to name both dates and the phase each belongs to.
+
+**Test-count delta:** `moderation_vision_test.exs` 26 → 33 (five behaviour tests, two premise guards). Full suite 3410 → 3417, 0 failures.
+
+**Premise guards, per `agent-spec/IMPLEMENTATION.md:241`.** Both new gate arms are only non-trivial if the upstream validator does NOT already reject their inputs, so a test asserts exactly that: `ImageMime.validate/2` returns `:ok` for the unresolvable image, with a failure message naming what goes vacuous if it ever stops doing so.
+
+**Premise guards, per `agent-spec/IMPLEMENTATION.md:241`.** Both new gate arms are only non-trivial if the upstream validator does NOT already reject their inputs, so a test asserts exactly that: `ImageMime.validate/2` returns `:ok` for the unresolvable image, with a failure message naming what goes vacuous if it ever stops doing so. The `:auto` exclusion carries the analogous guard — a test asserting `ImagePart.new/1`'s default really is `:auto`, so the exclusion cannot quietly stop describing the common case.
+
+**Every fix was verified by mutation, not asserted.** Each mutant was applied to `lib/` and the focused suite re-run; all three go red, and the tree was restored and re-verified green (33 tests, 0 failures) after each:
+
+| Mutant | Result |
+|---|---|
+| `validate_item/3`'s `with :ok <- ImageMime.validate(...), do: resolvable?(part)` collapsed back to a bare `ImageMime.validate/2` | **2 failures**, one of them the raw `** (MatchError) no match of right hand side value: {:error, :enoent}` through `ALLM.moderate/3` — i.e. the mutant reproduces the original defect exactly |
+| the `{:untranslatable_item, item}` clause replaced by the original catch-all `validate_item(_item, _accept, _multimodal?), do: :ok` | **1 failure** |
+| `defp detail_drop_check(:auto), do: :ok` deleted | **1 failure** |
+
+### Verification after the fix pass (2026-09-01)
+
+```
+mix format --check-formatted            exit 0
+mix compile --warnings-as-errors        exit 0
+mix test                                420 doctests, 31 properties, 3417 tests, 0 failures, 14 excluded
+mix test --seed 0                       420 doctests, 31 properties, 3417 tests, 0 failures, 14 excluded
+mix credo --strict                      3164 mods/funs, found no issues
+mix dialyzer                            exit 0
+mix docs                                0 warnings
+mix run scripts/audit_user_docs.exs | grep -c moderation     0
+git --no-optional-locks diff --stat HEAD -- README.md        empty
+cd conformance && mix test              103 tests, 0 failures
+cd conformance && mix credo --strict    103 mods/funs, found no issues
+cd conformance && mix format --check-formatted               exit 0
+```
+
+Baseline before the fix pass was 3410 tests → **+7**. Coverage on `ALLM.Providers.OpenAI.Moderation` measured 94.27% before the pass (`mix test --cover`); the pass added code and tests together. The live recorder gate was **not** re-run and did not need to be: no probe arm, request body, or fixture changed, and the overwrite guard confirms the five `recorded/` files are untouched genuine recordings.
+
+### Notes for later sub-phases
+
+* **The `detail` row can never be promoted from this endpoint.** Binds **22.6**: `guides/moderation.md` must say `ALLM.ImagePart.detail` is dropped and must not imply the wire confirmed it. The evidence is the documented request shape plus an in-code assertion, and that is the strongest evidence available.
+* **`recorded/multimodal_text_image.json` is the only fixture in the tree whose `results` length is `1` for a two-element `:input`.** Binds **22.6**: the guide's image section should read the result count from the response rather than stating a number, and should show `ModerationRequest.multimodal?/1` as the pre-call derivation.
+* **The adapter now has six `@doc false` seams**, not three: `to_json_body/2`, `to_moderation_adapter_error/4`, `decode_response/4`, `to_openai_content_blocks/1`, `part_to_block/1`, `gate_images/2`. Binds any later doc that quotes the count OR the names (22.4's RECORDS entry was corrected once already for the count, and the fix pass renamed the last one).
+* **Data URIs work on `/v1/moderations`.** Binds **22.6**'s `examples/20_moderate_image.exs`: it can inline a small PNG and needs no hosted image, so the script is hermetic and costs $0.00.

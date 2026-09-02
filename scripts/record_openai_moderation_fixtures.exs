@@ -91,6 +91,36 @@
 #   * flagged string       -> recorded/flagged_violence.json
 #   * batch of three       -> recorded/batch_mixed.json
 #   * shut-down model name -> recorded/error_400_bad_model.json
+#   * text + image         -> recorded/multimodal_text_image.json   (Phase 22.5)
+#
+# The MULTIMODAL arm (Phase 22.5) is the only live observation of the design's
+# central cardinality claim: a text block plus an image block in one `input`
+# array is ONE item and comes back as exactly ONE `results` entry, where an
+# array of N strings comes back as N. Its verdict asserts `length(results) == 1`
+# for a two-element input, so a provider that started returning one result per
+# block would halt this script rather than quietly falsifying
+# `ALLM.ModerationRequest`'s cardinality rule, `ALLM.moderate/3`'s `@doc`, and
+# `ALLM.Test.ModerationAdapterConformance` case 10 together.
+#
+# The image is a real 1x1 PNG inlined as a `data:` URI rather than a URL, so the
+# arm depends on no third-party host and re-records identically years from now.
+#
+# The DETAIL arm is a paired companion, NOT a control, and the difference
+# matters. The design planned a negative control sending `detail` inside
+# `image_url` and reading its disposition off the status — but the 22.4 control
+# above established that this endpoint returns 200 for fields it does not know,
+# so no status can settle the question and a control expecting a 400 would be a
+# test written against a rejection that will not come. Only a RESPONSE-observable
+# difference could promote the row. The arm therefore posts the identical
+# multimodal body with `detail: "low"` added and prints whether the returned
+# `category_scores` differ from the plain arm's. It asserts only the 200 and the
+# single result — the part that is stable — because moderation scores are the
+# provider's own model output and a strict equality assertion on them would
+# flake. Whatever it prints, `detail` stays **inferred** in the wire-field map:
+# an identical result set is consistent with "ignored" and also with "honoured
+# but not score-changing for this image", and a differing one is consistent with
+# ordinary model non-determinism. Decision #8 drops the field on the strength of
+# OpenAI's documented request shape, which carries no `detail` key.
 #
 # The BAD-KEY arm deliberately records nothing. Its whole purpose is to observe
 # whether OpenAI's 401 text echoes the submitted key back, and writing that body
@@ -137,6 +167,16 @@ defmodule RecordOpenAIModerationFixtures do
   @flagged_violence "flagged_violence"
   @batch_mixed "batch_mixed"
   @error_400_bad_model "error_400_bad_model"
+  @multimodal_text_image "multimodal_text_image"
+
+  # A real 1x1 transparent PNG, inlined so the multimodal arm depends on no
+  # third-party host. `ALLM.Image.from_binary/2` + `ALLM.Image.to_data_uri/1`
+  # produce exactly this `data:` URI shape from the same bytes, which is what
+  # `ALLM.Providers.OpenAI.Moderation.part_to_block/1` puts on the wire.
+  @png_base64 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+  @multimodal_text "a kestrel on a cedar branch at dusk"
+  @multimodal_sentinel "kestrel"
 
   # The `max_batch_size` ladder. The design deliberately states no number —
   # `ALLM.Providers.OpenAI.Moderation`'s `@adapter_max_batch_size` is set FROM this
@@ -189,11 +229,17 @@ defmodule RecordOpenAIModerationFixtures do
     end
   end
 
-  # Every `recorded/` file this script owns. All four are paid for by probe arms:
+  # Every `recorded/` file this script owns. All five are paid for by probe arms:
   # a status code is the cheapest field in a response and almost never the thing
   # under test.
   defp target_paths do
-    [@single_clean, @flagged_violence, @batch_mixed, @error_400_bad_model]
+    [
+      @single_clean,
+      @flagged_violence,
+      @batch_mixed,
+      @error_400_bad_model,
+      @multimodal_text_image
+    ]
     |> Enum.map(&Path.join(@recorded_dir, "#{&1}.json"))
   end
 
@@ -276,6 +322,28 @@ defmodule RecordOpenAIModerationFixtures do
         body: %{"model" => @dead_model, "input" => ["hi"]}
       },
       %{
+        # Phase 22.5. THE cardinality observation: two content blocks in one
+        # `input` array is ONE item, so exactly ONE result comes back.
+        label: "multimodal text+image (ONE result for a two-block input)",
+        expect: 200,
+        record_as: @multimodal_text_image,
+        key: :live,
+        verify: &verify_multimodal/1,
+        body: %{"model" => @model, "input" => multimodal_input(nil)}
+      },
+      %{
+        # Phase 22.5 — a paired COMPANION, not a control (see the header note):
+        # this endpoint 200s unknown fields, so no status settles `detail`. The
+        # verdict asserts only what is stable; `print_detail_disposition/1`
+        # reports the response-observable comparison.
+        label: "detail: \"low\" inside image_url (disposition is response-observable only)",
+        expect: 200,
+        record_as: nil,
+        key: :live,
+        verify: &verify_multimodal/1,
+        body: %{"model" => @model, "input" => multimodal_input("low")}
+      },
+      %{
         label: "BAD KEY: 401 (does the message echo key material?) — NOT recorded",
         expect: 401,
         record_as: nil,
@@ -295,6 +363,8 @@ defmodule RecordOpenAIModerationFixtures do
 
     results = Enum.map(probe_arms(), &probe_arm/1)
     Enum.each(results, &print_result/1)
+
+    print_detail_disposition(results)
 
     ladder_results = probe_ladder()
 
@@ -454,6 +524,99 @@ defmodule RecordOpenAIModerationFixtures do
          "#{length(List.wrap(results))} results for #{n} inputs"}
       ])
     end
+  end
+
+  # OpenAI's documented multimodal shape (design Alternative C), with `detail`
+  # optionally spliced into `image_url` for the companion arm. `nil` means the
+  # key is absent entirely — which is what
+  # `ALLM.Providers.OpenAI.Moderation.part_to_block/1` emits.
+  defp multimodal_input(detail) do
+    image_url =
+      %{"url" => "data:image/png;base64," <> @png_base64}
+      |> then(fn m -> if detail, do: Map.put(m, "detail", detail), else: m end)
+
+    [
+      %{"type" => "text", "text" => @multimodal_text},
+      %{"type" => "image_url", "image_url" => image_url}
+    ]
+  end
+
+  # The design's central claim, asserted rather than narrated: a TWO-element
+  # multimodal `input` yields exactly ONE result. A provider returning two
+  # would falsify `ALLM.ModerationRequest`'s cardinality rule and conformance
+  # case 10 together, and must halt the recording pass.
+  defp verify_multimodal(%{body: body}) do
+    results = Map.get(body, "results", [])
+    first = List.first(results) || %{}
+    applied = Map.get(first, "category_applied_input_types", %{})
+
+    checks = [
+      {is_list(results) and length(results) == 1,
+       "#{length(List.wrap(results))} results for a ONE-item multimodal input"},
+      {is_boolean(Map.get(first, "flagged")), "results[0].flagged is not a boolean"},
+      {Map.has_key?(first, "category_applied_input_types"), "category_applied_input_types absent"},
+      {not usage_key_anywhere?(body), "a `usage` key appeared in the body"},
+      {not echoes?(body, @multimodal_sentinel), "the response ECHOES the submitted input"}
+    ]
+
+    verdict(checks,
+      extra_note: "  (one result; applied types mentioning \"image\": #{image_typed(applied)})"
+    )
+  end
+
+  defp image_typed(applied) when is_map(applied) do
+    applied
+    |> Enum.filter(fn {_k, v} -> is_list(v) and "image" in v end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.sort()
+    |> then(fn
+      [] -> "(none)"
+      names -> Enum.join(names, ", ")
+    end)
+  end
+
+  defp image_typed(_applied), do: "(absent)"
+
+  # The `detail` disposition report. NOT a verdict: moderation scores are model
+  # output, so neither equality nor inequality is assertable across two calls.
+  # Printed so a human re-running the probe sees the only evidence this endpoint
+  # can offer — the row stays `inferred` either way (header note).
+  defp print_detail_disposition(results) do
+    scores = fn label ->
+      results
+      |> Enum.find(&String.starts_with?(&1.label, label))
+      |> case do
+        %{body: body} when is_map(body) ->
+          body
+          |> Map.get("results", [])
+          |> List.first()
+          |> Kernel.||(%{})
+          |> Map.get("category_scores")
+
+        _ ->
+          nil
+      end
+    end
+
+    plain = scores.("multimodal text+image")
+    with_detail = scores.("detail: ")
+
+    verdict =
+      cond do
+        is_nil(plain) or is_nil(with_detail) -> "one arm produced no scores"
+        plain == with_detail -> "IDENTICAL category_scores"
+        true -> "category_scores DIFFER"
+      end
+
+    IO.puts("\n-- `detail` disposition (response-observable evidence only) --")
+    IO.puts("  #{verdict}")
+
+    IO.puts(
+      "  Either way the wire-field-map row stays INFERRED: this endpoint 200s unknown " <>
+        "fields, so acceptance is not evidence, and scores are model output, so a " <>
+        "difference is not evidence either. Decision #8 drops `detail` on the strength " <>
+        "of OpenAI's documented request shape."
+    )
   end
 
   defp verify_model_echoed(%{body: body}) do
