@@ -545,13 +545,14 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   #     `nil`), or a hand-built `%ALLM.Image{}`. NOT reachable via
   #     `ALLM.Image.from_url/1`, whose `{:url, _}` source takes `validate/2`'s
   #     first clause and returns `:ok` with a `nil` mime.
-  #   * `{:unresolvable_image, reason}` — the image's BYTES cannot be produced.
-  #     `ImageMime.check_byte_size/1` deliberately returns `:ok` when
-  #     `Image.to_binary/1` fails (`image_mime.ex:126-129`: it cannot prove the
-  #     image is oversized without bytes), so a `{:file, path}` whose file is
-  #     missing sails through MIME and size validation and would then reach
-  #     `part_to_block/1`'s `{:ok, uri} = Image.to_data_uri(img)` and raise a
-  #     `MatchError`. Checked HERE, where the item's index is in hand.
+  #   * `{:unresolvable_image, reason}` — the image's BYTES cannot be produced
+  #     (a missing `{:file, path}`, an undecodable `{:base64, _}`). Comes from
+  #     `ImageMime.validate/2` like the three above; it originated as a local
+  #     check here, after a `{:file, path}` whose file was missing was found to
+  #     sail through MIME and size validation and raise a `MatchError` at
+  #     `part_to_block/1`'s `{:ok, uri} = Image.to_data_uri(img)`. The same
+  #     defect was then confirmed on four other translators, so the check was
+  #     promoted into the shared helper.
   #   * `{:untranslatable_item, item}` — an element that is neither a binary nor
   #     an `%ImagePart{}`, in a request that is multimodal and therefore routes
   #     through `part_to_block/1`, which has no catch-all clause.
@@ -721,11 +722,14 @@ defmodule ALLM.Providers.OpenAI.Moderation do
     if ModerationRequest.multimodal?(request), do: 1, else: length(request.input)
   end
 
-  # An `%ImagePart{}` is validated by `ImageMime.validate/2` and then, because
-  # that function passes an unresolvable image (see `gate_images/2`), for
-  # byte-resolvability — the exact question `part_to_block/1` asks next.
+  # `ImageMime.validate/2` covers MIME, size AND byte-resolvability. The last
+  # of those used to live here as a local `resolvable?/1`, because `validate/2`
+  # returned `:ok` for an image whose bytes could not be produced; it was
+  # promoted into the shared helper once the same defect was confirmed on the
+  # OpenAI chat, Responses, Anthropic and Gemini translators, so all five
+  # translators are covered by one check rather than five copies.
   defp validate_item(%ImagePart{} = part, accept, _multimodal?) do
-    with :ok <- ImageMime.validate(part, accept), do: resolvable?(part)
+    ImageMime.validate(part, accept)
   end
 
   # A bare string carries nothing to validate.
@@ -740,17 +744,6 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   # instead of reaching any provider. Reject it here so invariant 2 holds.
   defp validate_item(_item, _accept, false), do: :ok
   defp validate_item(item, _accept, true), do: {:error, {:untranslatable_item, item}}
-
-  # `part_to_block/1` forwards a `{:url, _}` source verbatim and never resolves
-  # bytes, so only the inlined sources are asked this question.
-  defp resolvable?(%ImagePart{image: %Image{source: {:url, _}}}), do: :ok
-
-  defp resolvable?(%ImagePart{image: %Image{} = image}) do
-    case Image.to_data_uri(image) do
-      {:ok, _uri} -> :ok
-      {:error, reason} -> {:error, {:unresolvable_image, reason}}
-    end
-  end
 
   defp image_gate_error(reason, index, opts) do
     {message, metadata} = image_gate_detail(reason, index)

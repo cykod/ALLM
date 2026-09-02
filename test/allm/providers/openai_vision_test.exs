@@ -480,6 +480,65 @@ defmodule ALLM.Providers.OpenAIVisionTest do
       assert {[:content, 0, 1], :image_too_large} in errors
     end
 
+    # An unreadable `{:file, path}` used to pass BOTH the MIME and the size gate
+    # — `ImageMime.check_byte_size/1` folded "cannot read the bytes" into "no
+    # size objection" — and then raise `MatchError` from `part_to_block/2`'s
+    # `{:ok, uri} = Image.to_data_uri(img)`, escaping `generate/2`'s documented
+    # `{:ok, _} | {:error, _}` contract. Reproduced on this translator, the
+    # Responses one, Anthropic and Gemini before the fix.
+    test "ImageMime: an unreadable file returns :unresolvable_image, never a raise" do
+      img = %Image{source: {:file, "/nonexistent/gone.png"}, mime_type: "image/png"}
+
+      request =
+        Request.new(
+          [user_text_image("look", img)],
+          model: "gpt-4o-mini"
+        )
+
+      assert {:error, %ValidationError{reason: :invalid_message, errors: errors}} =
+               OpenAI.generate(request, api_key: "sk-x")
+
+      assert {[:content, 0, 1], :unresolvable_image} in errors
+    end
+
+    # `ImageMime.validate_request/2` is wired at BOTH of this adapter's entry
+    # points — `generate/2` and `stream/2` — and each needs its own case: the
+    # `with` chains are separate and deleting the clause from one leaves the
+    # other green. (Both OpenAI endpoints, Chat Completions and Responses, are
+    # covered by these two: the gate runs ahead of endpoint dispatch, so a
+    # request carrying `endpoint: :responses` is rejected by the same clause and
+    # a separate case for it would pass without exercising anything new.)
+    test "ImageMime: stream/2 carries the same gate as generate/2" do
+      img = %Image{source: {:file, "/nonexistent/gone.png"}, mime_type: "image/png"}
+
+      request =
+        Request.new(
+          [user_text_image("look", img)],
+          model: "gpt-4o-mini"
+        )
+
+      assert {:error, %ValidationError{reason: :invalid_message, errors: errors}} =
+               OpenAI.stream(request, api_key: "sk-x")
+
+      assert {[:content, 0, 1], :unresolvable_image} in errors
+    end
+
+    # The gate, NOT the translator, is what holds this — `to_openai_messages/1`
+    # and `to_responses_input/1` still resolve bytes with a hard match and still
+    # raise if called directly on an unresolvable image. That is the same
+    # position `ALLM.Providers.OpenAI.Moderation` takes and it is deliberate:
+    # the translators are total over what the gate admits, and pushing
+    # `{:ok, _} | {:error, _}` through them would change every caller's shape.
+    # Recorded so the gate is not "simplified" away on the belief that the
+    # translator is safe on its own.
+    test "the translators are total only over what the gate admits" do
+      img = %Image{source: {:file, "/nonexistent/gone.png"}, mime_type: "image/png"}
+      messages = [user_text_image("look", img)]
+
+      assert_raise MatchError, fn -> OpenAI.to_openai_messages(messages) end
+      assert_raise MatchError, fn -> OpenAI.to_responses_input(messages) end
+    end
+
     test "pre-flight order: system-msg-rejection fires before MIME validation" do
       # Fixture violates two rules:
       #   - msg 0 system role with an unsupported-MIME ImagePart

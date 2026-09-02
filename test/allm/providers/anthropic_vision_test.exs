@@ -442,6 +442,42 @@ defmodule ALLM.Providers.AnthropicVisionTest do
       assert {[:content, 0, 1], :unsupported_image_format} in errors
     end
 
+    # An unreadable `{:file, path}` used to pass BOTH the MIME and the size gate
+    # and then raise `MatchError` from `part_to_block/1`'s
+    # `{:ok, bytes} = Image.to_binary(img)`, escaping `generate/2`'s documented
+    # `{:ok, _} | {:error, _}` contract. Fixed in the shared
+    # `ALLM.Providers.Support.ImageMime`, which covers this adapter's
+    # `generate/2` and `stream/2` gates and both OpenAI endpoints at once.
+    test "ImageMime: an unreadable file returns :unresolvable_image, never a raise" do
+      img = %Image{source: {:file, "/nonexistent/gone.png"}, mime_type: "image/png"}
+
+      request =
+        Request.new(
+          [user_text_image("look", img)],
+          model: "claude-haiku-4-5-20251001"
+        )
+
+      assert {:error, %ValidationError{reason: :invalid_message, errors: errors}} =
+               Anthropic.generate(request, api_key: "sk-x")
+
+      assert {[:content, 0, 1], :unresolvable_image} in errors
+    end
+
+    test "ImageMime: stream/2 carries the same unresolvable-image gate" do
+      img = %Image{source: {:file, "/nonexistent/gone.png"}, mime_type: "image/png"}
+
+      request =
+        Request.new(
+          [user_text_image("look", img)],
+          model: "claude-haiku-4-5-20251001"
+        )
+
+      assert {:error, %ValidationError{reason: :invalid_message, errors: errors}} =
+               Anthropic.stream(request, api_key: "sk-x")
+
+      assert {[:content, 0, 1], :unresolvable_image} in errors
+    end
+
     test "ImageMime: 21 MB image returns :image_too_large" do
       bytes = :binary.copy(<<0>>, 21 * 1024 * 1024)
       img = Image.from_binary(bytes, "image/png")

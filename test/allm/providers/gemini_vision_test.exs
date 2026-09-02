@@ -340,6 +340,62 @@ defmodule ALLM.Providers.GeminiVisionTest do
       end
     end
 
+    # An extension-bearing path whose file is missing used to reach
+    # `part_to_block/1`'s `File.read!(path)` and raise `File.Error` from inside
+    # `generate/2`, escaping the adapter's documented `{:ok, _} | {:error, _}`
+    # contract. `:invalid_request`, not the siblings' `:unsupported_feature`:
+    # the `{:file, _}` source shape IS supported, this particular file is not
+    # there. (Gemini keeps its own gate — `ImageMime.validate_request/2` accepts
+    # only `:openai | :anthropic` — so the shared-helper fix does not reach it.)
+    test "{:file, path} that cannot be read returns AdapterError :invalid_request, never a raise" do
+      img = %Image{source: {:file, "/nonexistent/gone.png"}, mime_type: "image/png"}
+      request = Request.new([user_text_image("d", img)], model: "gemini-2.5-flash")
+
+      assert {:error, %AdapterError{reason: :invalid_request, message: msg}} =
+               Gemini.generate(request, [])
+
+      assert msg =~ "/nonexistent/gone.png"
+      assert msg =~ "enoent"
+    end
+
+    test "a readable file still passes the gate — the check is not a blanket rejection", %{
+      stub: stub
+    } do
+      tmp =
+        Path.join(
+          System.tmp_dir!(),
+          "gemini_vision_readable_#{System.unique_integer([:positive])}.png"
+        )
+
+      File.write!(tmp, "raw-bytes")
+
+      Req.Test.stub(stub, fn conn ->
+        respond_json(conn, 200, %{
+          "candidates" => [
+            %{
+              "content" => %{"parts" => [%{"text" => "ok"}], "role" => "model"},
+              "finishReason" => "STOP"
+            }
+          ]
+        })
+      end)
+
+      try do
+        img = Image.from_file(tmp)
+        assert img.mime_type == "image/png"
+
+        request = Request.new([user_text_image("d", img)], model: "gemini-2.5-flash")
+
+        # Reaches the wire rather than tripping the gate — the positive control
+        # that stops the test above passing for the wrong reason. A gate that
+        # rejected every `{:file, _}` source would return
+        # `{:error, %AdapterError{reason: :invalid_request}}` and never get here.
+        assert {:ok, _response} = call(stub, request)
+      after
+        File.rm!(tmp)
+      end
+    end
+
     test "{:url, _} returns AdapterError :unsupported_feature with pre-fetch guidance" do
       img = Image.from_url("https://example.com/cat.png")
       request = Request.new([user_text_image("d", img)], model: "gemini-2.5-flash")

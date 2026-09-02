@@ -709,6 +709,28 @@ defmodule ALLM.Providers.Gemini do
      )}
   end
 
+  # An extension-bearing path whose file cannot actually be read. `part_to_block/1`
+  # resolves it with `File.read!/1`, so without this clause a missing or
+  # unreadable file raises `File.Error` from inside `generate/2` — escaping the
+  # adapter's documented `{:ok, _} | {:error, _}` contract rather than
+  # surfacing as an error struct. `:invalid_request` rather than the siblings'
+  # `:unsupported_feature`: the source shape IS supported, this particular file
+  # just is not there.
+  defp check_part_source(%ImagePart{image: %Image{source: {:file, path}} = image})
+       when is_binary(path) do
+    case Image.to_binary(image) do
+      {:ok, _bytes} ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         AdapterError.new(:invalid_request,
+           provider: :gemini,
+           message: "Gemini adapter cannot read image file #{inspect(path)}: #{inspect(reason)}"
+         )}
+    end
+  end
+
   defp check_part_source(_other), do: :ok
 
   # Phase 16.4 — content-block translator. Routes a `[TextPart | ImagePart]`

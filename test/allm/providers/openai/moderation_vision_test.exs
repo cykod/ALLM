@@ -314,19 +314,39 @@ defmodule ALLM.Providers.OpenAI.ModerationVisionTest do
       assert Moderation.to_json_body(req([42, "ok"]), [])["input"] == [42, "ok"]
     end
 
-    # The premise guard for the two tests above: neither would be non-trivial if
-    # `ImageMime.validate/2` already rejected these inputs. It does not — it
-    # returns `:ok` for both — so the gate arms added in the fix pass are load
-    # bearing rather than duplicating an upstream check.
-    test "premise: ImageMime.validate/2 accepts BOTH shapes the new arms reject" do
+    # Premise guard for the four tests above, and a record of a premise that
+    # CHANGED. When the two arms first landed, `ImageMime.validate/2` returned
+    # `:ok` for an unresolvable image — it folded "cannot read the bytes" into
+    # "no size objection" — so this adapter carried its own local
+    # resolvability check and this guard asserted that `:ok`.
+    #
+    # The same defect was then confirmed on four other translators (OpenAI chat
+    # + Responses, Anthropic, Gemini) and the check was promoted into the shared
+    # helper, which flipped the premise. This guard going red is what caught the
+    # flip, which is the whole reason it exists — so it now asserts the NEW
+    # premise from the other side: resolvability arrives from `validate/2`, and
+    # the local check is gone rather than silently duplicated.
+    test "premise: ImageMime.validate/2 is what rejects an unresolvable image" do
       unresolvable = %ImagePart{
         image: %Image{source: {:file, "/nonexistent/gone.png"}, mime_type: "image/png"}
       }
 
       accept = ImageMime.accept_mimes(:openai)
 
-      assert ImageMime.validate(unresolvable, accept) == :ok,
-             "if this ever fails, the :unresolvable_image arm is dead and its tests are vacuous"
+      assert ImageMime.validate(unresolvable, accept) == {:error, {:unresolvable_image, :enoent}},
+             "the shared helper stopped rejecting unresolvable images; this adapter no longer " <>
+               "carries a local check, so `moderate/2` would raise a MatchError again"
+    end
+
+    # `validate/2` never sees a non-`%ImagePart{}` item — `validate_item/3`
+    # dispatches on the struct before it is reached — so the untranslatable-item
+    # arm cannot be delegated upstream the way resolvability was, and stays this
+    # adapter's own. Recorded so it is not "consolidated" later by analogy.
+    test "premise: the untranslatable-item arm is NOT delegable to ImageMime" do
+      assert Moderation.gate_images(req([42, png_part()]), []) != :ok
+
+      refute function_exported?(ImageMime, :validate, 1),
+             "ImageMime validates a %ImagePart{}, not an arbitrary :input item"
     end
 
     # Decision #7: the union is `{:ok, _} | {:error, %ModerationAdapterError{}}`

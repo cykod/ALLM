@@ -1,3 +1,37 @@
+## [BUG] Stop unreadable image files crashing every vision adapter
+*Wednesday, September 2nd at 2pm*
+An `%ALLM.Image{source: {:file, path}}` whose file cannot be read raised out of 
+`generate/2` and `stream/2` on all four vision translators instead of returning 
+an error tuple — a missing file passed both the MIME and the size gate and 
+then died in the translator. All four were reproduced before any code changed.
+
+- Fix at the shared gate: `ImageMime.check_byte_size/1` no longer folds "cannot 
+read the bytes" into "no size objection". It returned `:ok` on a resolution 
+failure, which answers the size question honestly but was read downstream as 
+"the bytes exist"; it now returns `{:error, {:unresolvable_image, reason}}`. 
+One edit covers OpenAI's and Anthropic's `generate/2` and `stream/2` via 
+`validate_request/2`, and both OpenAI endpoints, since the gate runs ahead of 
+endpoint dispatch.
+- Gemini keeps its own gate — `validate_request/2` accepts only `:openai | 
+:anthropic` — so `check_part_source/1` gained a readability clause returning 
+`AdapterError` `:invalid_request`, distinct from its siblings' 
+`:unsupported_feature` because the `{:file, _}` shape is supported and this 
+file just is not there.
+- Drop `ALLM.Providers.OpenAI.Moderation`'s local `resolvable?/1`, added days 
+earlier for the same defect, now that the shared helper covers it. Its premise 
+guard went red on the change — which is what a premise guard is for — and 
+was rewritten to assert the new premise.
+- Deliberate widening beyond the crash fix: an undecodable `{:base64, _}` 
+source is now rejected locally rather than forwarded for the provider to 400 on.
+- The translators stay total only over what the gate admits and still raise on 
+a direct call. That is the position the moderation adapter already took, and it 
+is now asserted on purpose so the gate is not "simplified" away on the belief 
+the translator is safe alone.
+
+Eight tests across the four vision suites, each verified by mutation.
+
+---
+
 ## [FEAT] Add image input to the OpenAI moderations adapter (Phase 22.5)
 *Wednesday, September 2nd at 2pm*
 Fifth batch of the Phase 22 moderation family: `%ALLM.ImagePart{}` items reach 

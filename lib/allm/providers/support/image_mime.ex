@@ -51,6 +51,7 @@ defmodule ALLM.Providers.Support.ImageMime do
           | {:error,
              {:unsupported_image_format, mime :: String.t() | nil}
              | {:image_too_large, byte_size :: non_neg_integer()}
+             | {:unresolvable_image, reason :: term()}
              | :missing_mime_type}
 
   # 20 MB — both OpenAI and Anthropic published limit per the 2026-04
@@ -70,8 +71,15 @@ defmodule ALLM.Providers.Support.ImageMime do
   def accept_mimes(:anthropic), do: ~w(image/png image/jpeg image/webp image/gif)
 
   @doc """
-  Validate a single `%ImagePart{}` against an accept-set and the 20-MB
-  size ceiling.
+  Validate a single `%ImagePart{}` against an accept-set, the 20-MB size
+  ceiling, and whether its bytes can be resolved at all.
+
+  A `{:url, _}` source is never fetched, so it is checked for MIME only and
+  defers size and existence to the provider. Every other source must produce
+  bytes here: an image that cannot (a `{:file, path}` that is missing or
+  unreadable, a `{:base64, _}` that will not decode) is rejected as
+  `{:unresolvable_image, reason}` rather than passed along, because the
+  translators downstream resolve bytes with a hard match and would raise.
 
   ## Examples
 
@@ -115,6 +123,29 @@ defmodule ALLM.Providers.Support.ImageMime do
     end
   end
 
+  # Two questions, deliberately separated: "is this too big?" and "can these
+  # bytes be produced at all?"
+  #
+  # `:ok` on a resolution failure would answer the FIRST question honestly —
+  # with no bytes the size is genuinely unknown, so there is no size objection
+  # to raise. That is how this clause originally read, and it was wrong for the
+  # caller: every translator downstream read "no objection" as "the bytes
+  # exist" and then resolved them with a hard match. A `{:file, path}` whose
+  # file is missing therefore passed BOTH the MIME and the size gate — it looks
+  # maximally valid precisely because there is nothing there to object to — and
+  # raised from inside the translator, escaping the adapter's documented
+  # `{:ok, _} | {:error, _}` contract. Reproduced on four translators before
+  # this fix: `openai.ex` (both endpoints, `MatchError`), `anthropic.ex`
+  # (`MatchError`), `gemini.ex` (`File.Error` from `File.read!/1`).
+  #
+  # So the answer to the second question is now reported rather than folded
+  # into the first.
+  #
+  # This also newly rejects a `{:base64, s}` source carrying undecodable data,
+  # which the translators previously forwarded verbatim for the provider to
+  # 400 on. That widening is deliberate and small: the bytes are invalid either
+  # way, and failing locally with a field path beats spending a round trip to
+  # be told so. It is the only behaviour change here beyond the crash fix.
   defp check_byte_size(%Image{} = image) do
     case Image.to_binary(image) do
       {:ok, bytes} ->
@@ -124,11 +155,8 @@ defmodule ALLM.Providers.Support.ImageMime do
           :ok
         end
 
-      {:error, _reason} ->
-        # Resolution failure (file missing, base64 invalid). Treat as
-        # missing-mime equivalent — the adapter cannot prove the image is
-        # OK without bytes.
-        :ok
+      {:error, reason} ->
+        {:error, {:unresolvable_image, reason}}
     end
   end
 
@@ -193,5 +221,6 @@ defmodule ALLM.Providers.Support.ImageMime do
   # atom carried in `ValidationError.errors`.
   defp image_reason({:unsupported_image_format, _mime}), do: :unsupported_image_format
   defp image_reason({:image_too_large, _bytes}), do: :image_too_large
+  defp image_reason({:unresolvable_image, _reason}), do: :unresolvable_image
   defp image_reason(:missing_mime_type), do: :missing_mime_type
 end
