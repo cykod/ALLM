@@ -1648,6 +1648,22 @@ lib/
 >
 > Existing modules extended: `ALLM` (`embed/3`, `embedding_request/2`), `ALLM.Engine` (`:embed_adapter`), `ALLM.Validate` (`embedding_request/1`), `ALLM.Capability` (`preflight_embedding/2`), `ALLM.Telemetry` (`:embed` span), `ALLM.Serializer` (four registry entries), `ALLM.Error.EngineError` (`:no_embed_adapter`), `ALLM.Error.ValidationError` (`:invalid_embedding_request`).
 
+> **Phase 22 amendment (commits `cf8e340..5a73da6`; docs land in the 22.6 commit).** The content-moderation capability (§39) adds the following modules, likewise under the shipped `lib/allm/` prefix.
+>
+> ```text
+> lib/allm/moderation_request.ex         # Layer A
+> lib/allm/moderation_result.ex          # Layer A — one verdict + index
+> lib/allm/moderation_response.ex        # Layer A
+> lib/allm/moderation_adapter.ex         # Layer B — behaviour
+> lib/allm/error/moderation_adapter_error.ex
+> lib/allm/providers/fake_moderation.ex
+> lib/allm/providers/openai/moderation.ex
+> ```
+>
+> There is no moderation counterpart to `lib/allm/embedding_batch.ex`: the façade does not chunk (§39.6).
+>
+> Existing modules extended: `ALLM` (`moderate/3`, `moderation_request/2`), `ALLM.Engine` (`:moderation_adapter`), `ALLM.Validate` (`moderation_request/1`), `ALLM.Capability` (`preflight_moderation/2`), `ALLM.Telemetry` (`:moderate` span), `ALLM.Serializer` (four registry entries), `ALLM.Error.EngineError` (`:no_moderation_adapter`), `ALLM.Error.ValidationError` (`:invalid_moderation_request`).
+
 ---
 
 ## 28. Implementation guidance
@@ -1710,6 +1726,20 @@ Additional per-span metadata:
 > Both extra measurement keys are present on the success and error paths alike (`0` on error), so a handler written against the `[:allm, :image, :stop]` span does not `KeyError` when pointed at this one. `chunk_count` is the only signal that a single `ALLM.embed/3` call became N HTTP requests.
 >
 > **Namespace note.** This section writes the namespace `[:llm, …]`, which is a pre-existing error: the shipped code and §35.9 both emit `[:allm, …]`. The embeddings events above use `[:allm, …]` and deliberately do not propagate the mistake. The `[:llm, …]` spellings in the Event names block are stale and should be read as `[:allm, …]`.
+
+> **Phase 22 amendment (commits `cf8e340..5a73da6`; docs land in the 22.6 commit).** The content-moderation capability (§39) adds one span:
+>
+> ```elixir
+> [:allm, :moderate, :start | :stop | :exception]
+> ```
+>
+> - `:start` — measurements `%{system_time: integer()}`; metadata `:request_id`, `:engine`, `:model`, `:input_count`, `:multimodal`.
+> - `:stop` — measurements `%{duration: integer(), result_count: non_neg_integer(), flagged_count: non_neg_integer()}`; metadata `:request_id`, `:model`, `:input_count`, `:multimodal`, `:usage`, `:response`, `:error` (`nil` on success).
+> - `:exception` — measurements `%{duration: integer()}`; metadata `:kind`, `:reason`, `:stacktrace`. Emitted instead of `:stop`, then re-raised.
+>
+> Both extra measurement keys are present on the success and error paths alike (`0` on error). `:usage` is carried as `nil` unconditionally even though `%ALLM.ModerationResponse{}` has no `:usage` field, so a handler written against the `[:allm, :embed, :stop]` or `[:allm, :image, :stop]` span does not `KeyError` when pointed at this one. `:input_count` is the raw element count, **not** the provider's item count, which is `1` whenever `:multimodal` is true — see §39.9.
+>
+> The namespace note above applies unchanged: these events use `[:allm, …]`.
 
 ### Relationship to `middleware`
 
@@ -2248,6 +2278,18 @@ Third-party image providers (Stability, Replicate, Google Imagen `:predict`, fal
 >
 > **This is a carve-out, not a widening.** Criterion (b) requires the *provider* to have made the recommendation — a third party being popular, or well-suited, or cheaper does not qualify. Cohere, Mistral, and Jina embeddings remain out of core and ship as separate packages implementing `ALLM.EmbeddingAdapter`, exactly as third-party image adapters do. See §36.7.
 
+> **Phase 22 amendment (commits `cf8e340..5a73da6`; docs land in the 22.6 commit).** The rule takes a **second scoped carve-out**, this one about a family's *shape* rather than an individual adapter's admission.
+>
+> Criteria (a) and (b) each decide whether one adapter belongs in core. Neither decides what to do when a capability exists on **only one** bundled provider — the v0.3 and v0.5 families each had two or three, so the question never arose. Content moderation (§39) has exactly one: `ALLM.Providers.OpenAI.Moderation` qualifies under (a), and there is no candidate for the other two bundled providers under either criterion.
+>
+> The addition:
+>
+> > A capability family may be bundled with **exactly one** provider adapter when that provider is already bundled for chat, and the capability's absence on the other bundled providers is **documented rather than backfilled with a proxy**.
+>
+> Its one beneficiary today is the moderation family. Anthropic ships no moderation endpoint and names no partner for one, so criterion (b) has nothing to admit; Google exposes safety ratings inline on `generateContent` rather than as a standalone classification call, so there is no endpoint to implement `c:ALLM.ModerationAdapter.moderate/2` against. Both absences are documented in §39.7 and in `guides/moderation.md`.
+>
+> **This is a carve-out, not a widening**, on the same terms as the v0.5 one. It does not license shipping a one-provider family for a capability the other bundled providers *do* offer — that is a gap to be filled, not a shape to be documented. It licenses declining to invent a module for a provider that does not offer the capability at all, and it forbids satisfying the family's shape with a proxy (wrapping a chat call, or naming a third party after a provider that never recommended it). Third-party moderation providers remain out of core and ship as separate packages implementing `ALLM.ModerationAdapter`. See §39.7.
+
 ### 35.8 Testing
 
 `ALLM.Providers.FakeImages` implements `ALLM.ImageAdapter` with scripted responses — analogous to `ALLM.Providers.Fake` (§31).
@@ -2630,3 +2672,391 @@ Three events, mirroring the image span (§35.9):
 - **`ALLM.Session` integration** — embeddings carry no conversation state
 - **parallel chunk dispatch** — sequential is the safe default under provider rate limits (§36.6)
 - **multi-vector / late-interaction models** — the provider matrix does not support it
+
+---
+
+## 39. v0.6 — Content moderation
+
+> **Phase 22 amendment (commits `cf8e340..5a73da6`; docs land in the 22.6 commit).** This section is new. It amends §27 (module tree), §29 (telemetry), and §35.7 (bundled-adapter rule — a second scoped beneficiary). §32.5 and §33 are untouched: neither list named moderation, so there is nothing to strike.
+
+v0.6 extends ALLM with a non-streaming primitive for screening content against a provider's safety policy — before a chat call is spent on it, or before model output is published. Moderation is request/response, so the design stays parallel to images (§35) and embeddings (§36) and skips the streaming layer entirely.
+
+ALLM already models the *reactive* half of this problem as first-class data: `:content_filter` is an `ALLM.Response` finish reason and an `AdapterError` reason mapped from provider signals. That is post-hoc, after the generation is paid for. §39 adds the proactive half.
+
+Against embeddings, moderation drops batching, drops usage, drops cost population, and drops two of the three provider adapters. Against images it drops multipart bodies, binary payloads, and the operations enum. What it adds that neither has is a **result type whose per-category map is deliberately not normalized** (§39.2.2) and an **input union whose cardinality is type-dependent** (§39.2.1) — the two places a reviewer should look hardest.
+
+**Why a classification primitive is admitted where object detection is not.** §35.10 places *"image classification / object detection as distinct primitives — users build these on top of chat + vision"* out of scope. Moderation is a classification primitive and is nonetheless admitted, on two grounds that do not generalize to the excluded cases: it has a **dedicated, free, single-call endpoint** that no amount of chat + vision composition reproduces (composition would cost a generation call, return prose rather than a score map, and have no provider policy behind its verdict), and it is the gate a safety-conscious application runs *before* the chat call that such a composition would be built on. The §35.10 line stands unamended for object detection, OCR, and upscaling.
+
+### 39.1 Design goals
+
+1. **Parallel to the chat pipeline, not entangled with it.** Moderation requests, responses, and adapters are separate types. Chat adapters do not implement moderation support, and vice versa. There is no automatic moderation inside `chat/3` or `generate/3`: a hidden second HTTP call per turn would double latency and silently change `chat/3`'s error union. Screening is a caller-side two-liner, or a telemetry-handler concern (§29).
+2. **Non-streaming.** No `ALLM.ModerationStreamAdapter` and no `stream_moderate/3`. Same reasoning as §35.1 item 2 and §36.1 item 2. A `stream: true` opt is silently ignored rather than erroring.
+3. **Opt-in per engine.** An `ALLM.Engine` without a `:moderation_adapter` returns `{:error, %ALLM.Error.EngineError{reason: :no_moderation_adapter}}` for moderation calls, ahead of every other gate. No implicit wiring, and no fallback to `:adapter`, `:image_adapter`, or `:embed_adapter`.
+4. **The library does not decide what "unsafe" means.** ALLM returns the provider's `flagged` boolean and the provider's per-category scores. It ships no default threshold, no policy DSL, and no `block?/2`. A moderation threshold is a product decision that varies by jurisdiction, audience, and appetite; a library default would be quietly wrong for most callers and would be read as an endorsement.
+5. **Reuse engine plumbing.** Keys (§6.4), model resolution and capability pre-flight (§6.3), retries, telemetry (§29), and deterministic fakes (§31) apply identically to moderation calls.
+
+### 39.2 Data model
+
+#### 39.2.1 `ALLM.ModerationRequest`
+
+```elixir
+defmodule ALLM.ModerationRequest do
+  @type item :: String.t() | ALLM.ImagePart.t()
+
+  @type t :: %__MODULE__{
+          input: [item()],
+          model: String.t() | nil,
+          options: map(),
+          metadata: map()
+        }
+
+  defstruct [:model, input: [], options: %{}, metadata: %{}]
+
+  @spec new(keyword()) :: t()
+  @spec multimodal?(t()) :: boolean()   # true iff any element is an %ALLM.ImagePart{}
+end
+```
+
+- `:input` is **always a list on the struct**. The bare-string call shape is normalized at `ALLM.moderation_request/2`, so no adapter or validator handles a union.
+- `:options` is the documented home for provider-specific opaque knobs.
+
+**Cardinality is type-dependent, and this is the one normative surprise in the section.** It is a property of the provider endpoint, not an ALLM choice:
+
+- **All-strings `:input`** — a batch of `length(input)` independent items. `length(response.results) == length(request.input)`, and `Enum.at(results, i)` is the verdict for `Enum.at(input, i)`.
+- **Any `ALLM.ImagePart` present** — the whole `:input` list is **one** multimodal item (text plus its images, judged together), so there is exactly **one** result, at `index: 0`, however long the list is.
+
+`multimodal?/1` reports which shape a request is in, so the count is derivable *before* the call. The rule is stated normatively on `@moduledoc ALLM.ModerationRequest`; every other site cites it. Two consequences follow directly:
+
+1. the caller-side chunking loop of §39.6 applies to an all-strings `:input` **only** — splitting a multimodal list would sever an image from the text it belongs to;
+2. an adapter's `max_batch_size/0` gate measures the **item** count, which is `1` for any multimodal request, not `length(request.input)`.
+
+Validation lives in `ALLM.Validate.moderation_request/1`, and — like `embed/3`, unlike `generate_image/3` — the façade calls it. An empty `:input` list and an empty-string item are both guaranteed provider rejections and should fail before the round-trip.
+
+#### 39.2.2 `ALLM.ModerationResult`
+
+One verdict, plus the index that ties it back to its input.
+
+```elixir
+defmodule ALLM.ModerationResult do
+  @type t :: %__MODULE__{
+          flagged: boolean(),
+          categories: %{String.t() => boolean()},
+          category_scores: %{String.t() => float()},
+          applied_input_types: %{String.t() => [String.t()]},
+          index: non_neg_integer(),
+          metadata: map()
+        }
+
+  @enforce_keys [:flagged]
+  defstruct [:flagged, categories: %{}, category_scores: %{},
+             applied_input_types: %{}, index: 0, metadata: %{}]
+
+  @spec new(keyword()) :: t()
+  @spec flagged_categories(t()) :: [String.t()]   # sorted names whose :categories value is true
+  @spec score(t(), String.t()) :: float() | nil   # nil for a category the provider did not report
+end
+```
+
+**Only `:flagged` is normalized. `:categories` and `:category_scores` are provider-shaped and string-keyed**, passed through as identity by `__from_tagged__/1` — no decode hook, no safelist, no drift when the provider adds a category. Three arguments against a normalized atom taxonomy, each independently sufficient:
+
+1. **Atom-table growth.** A provider-controlled key set converted with `String.to_atom/1` grows the atom table on whatever the provider ships next; `String.to_existing_atom/1` would instead *drop* new categories silently, which is worse.
+2. **There is nothing to normalize against.** A cross-provider taxonomy needs a second provider, and moderation is a single-provider capability (§39.7). A taxonomy invented against one provider's thirteen categories is that provider's taxonomy wearing a neutral name.
+3. **The plausible second provider reports a different shape entirely.** Google's safety ratings are four harm categories on an ordinal `NEGLIGIBLE | LOW | MEDIUM | HIGH` enum attached to a generation call — not a float map, and not a standalone classification (§39.7).
+
+The cost is stated plainly in the public docs: reading `scores["violence"]` is writing provider-specific code and the compiler will not catch a typo. `score/2` exists so the miss is a `nil` rather than a raise.
+
+`:index` is **always** a `non_neg_integer()`, never `nil` — mirroring `ALLM.Embedding.index` (§36.2.1) and preserving `Enum.at(response.results, i) ↔ Enum.at(request.input, i)` for the all-strings shape. In the multimodal shape there is exactly one result and its index is `0`.
+
+`:applied_input_types` reports, per category, which parts of a multimodal input triggered it (`%{"violence" => ["image"]}`). It is `%{}` when the provider does not report it — an empty map is the honest representation of "not reported", never of "nothing applied". It is the only observable distinguishing "the image was classified and found clean" from "the image was ignored".
+
+**The `:flagged` decoder repairs rather than passes through, and it is the only one in the family that does.** On the JSON decode path (`ALLM.Serializer.from_json/1`) a `"flagged"` that is not a boolean — absent, `null`, the string `"true"`, a truncated or tampered payload — deserializes to `false`. The declared `t:boolean/0` is preserved rather than admitting a `nil`, and a decode glitch cannot manufacture a `true` that blocks legitimate content. Two consequences are stated in the public docs because both invert a reflex carried over from §36: a corrupted persisted verdict deserializes to *clean* rather than to a decode error (the honest signal being that `:categories` and `:category_scores` come back empty alongside it), and ETF and JSON round-trips are therefore **not** interchangeable for an off-contract `flagged: nil`.
+
+#### 39.2.3 `ALLM.ModerationResponse`
+
+```elixir
+defmodule ALLM.ModerationResponse do
+  @type t :: %__MODULE__{
+          id: String.t() | nil,
+          request_id: String.t() | nil,
+          model: String.t() | nil,
+          provider: atom() | nil,
+          results: [ALLM.ModerationResult.t()],
+          raw: term(),
+          metadata: map()
+        }
+
+  defstruct [:id, :request_id, :model, :provider, :raw, results: [], metadata: %{}]
+
+  @spec flagged?(t()) :: boolean()                 # true iff ANY result is flagged
+  @spec flagged_categories(t()) :: [String.t()]    # sorted union across flagged results
+end
+```
+
+**There is no `:usage` field, and its absence is deliberate rather than an omission.** The endpoint is free and returns no usage object, so a field that is structurally always empty would be a promise the capability cannot keep. This diverges from `ALLM.EmbeddingResponse` and `ALLM.ImageResponse`, both of which carry one.
+
+The telemetry span nonetheless carries `usage: nil` unconditionally (§39.9) — a stable metadata key set across capability spans is what a metrics backend wants, and a handler written against `[:allm, :embed, :stop]` must not `KeyError` when pointed at `[:allm, :moderate, :stop]`. The struct and the span therefore disagree on purpose; the reasoning is recorded on both.
+
+`flagged?/1` is the 95%-case accessor: one call answers "did anything here trip the provider's policy". `flagged_categories/1` is the sorted union across every flagged result, so "which policies" needs no list walk.
+
+#### 39.2.4 `ALLM.Error.ModerationAdapterError`
+
+Same shape as `ALLM.Error.EmbeddingAdapterError` (§36.2.4): a closed reason enum, a `new/2` that raises `ArgumentError` on an unlisted atom, a `legal_reasons/0` accessor, and a `defexception` with a `message/1` catch-all.
+
+```elixir
+@type reason ::
+        :authentication_failed
+      | :rate_limited
+      | :invalid_request
+      | :context_length_exceeded
+      | :provider_unavailable
+      | :timeout
+      | :network_error
+      | :malformed_response
+      | :unsupported_feature
+      | :batch_too_large
+      | :unknown
+```
+
+Eleven atoms — the same eleven as `EmbeddingAdapterError`. `ALLM.Error.EngineError` gains `:no_moderation_adapter` and `ALLM.Error.ValidationError` gains `:invalid_moderation_request`. Both are closed enums, so an exhaustive `case` over either union needs a new clause.
+
+**`moderate/2` returns only `ModerationAdapterError`, never `ValidationError`.** This matches `c:ALLM.ImageAdapter.generate/2` and `c:ALLM.EmbeddingAdapter.embed/2`, and deliberately does not copy `ALLM.Providers.OpenAI.generate/2`, whose concrete `@spec` widens beyond its own `@callback` to surface MIME validation. An adapter's image gate therefore converts MIME, byte-size, and resolvability failures into `%ModerationAdapterError{reason: :invalid_request}` with the detail on `:metadata`, rather than widening the union.
+
+### 39.3 `ALLM.ModerationAdapter` behaviour
+
+```elixir
+defmodule ALLM.ModerationAdapter do
+  @callback moderate(ALLM.ModerationRequest.t(), keyword()) ::
+              {:ok, ALLM.ModerationResponse.t()}
+              | {:error, ALLM.Error.ModerationAdapterError.t()}
+
+  @callback max_batch_size() :: pos_integer()
+
+  @callback prepare_request(ALLM.ModerationRequest.t(), keyword()) ::
+              {:ok, Req.Request.t()} | {:error, ALLM.Error.ModerationAdapterError.t()}
+
+  @optional_callbacks prepare_request: 2
+end
+```
+
+- `moderate/2` is `ALLM.moderate/3`'s dispatch target, and is synchronous — it returns only after the HTTP response is read in full.
+- `max_batch_size/0` is read by callers doing their own chunking, and gates direct adapter calls. It is per-module and constant, not per-model. Unlike §36 there is **no** batching layer reading it: the façade does not chunk (§39.6).
+- `prepare_request/2` is the low-level escape hatch (same role as §7.1 and §36.3), returning an unfired `Req.Request` configured exactly as `moderate/2` would fire it.
+
+There is no `ModerationStreamAdapter` — streaming is deliberately out of scope.
+
+**Contract invariants.** The numbering below is normative and matches `@moduledoc ALLM.ModerationAdapter` exactly, because conformance case names and forward-binding notes cite these by number. Invariants **1–8 are frozen**; 9 and 10 were *appended* rather than slotted in, and anything further appends at 11.
+
+1. `max_batch_size/0` returns a `pos_integer()` and is per-module — one number for the adapter, not per-call-with-model-argument. Per-model limits are the adapter's internal concern.
+2. `moderate/2` returns exactly `{:ok, %ModerationResponse{}}` or `{:error, %ModerationAdapterError{}}` — never a bare struct, never a three-tuple. Network failures, 4xx, and 5xx all convert to the error tuple. The one sanctioned exception is `ALLM.Keys.fetch!/2`, which raises `%EngineError{reason: :missing_key}` by documented design (§6.4) and is not rescued. **Enforced, not merely documented:** `ALLM.moderate/3` raises `ArgumentError` naming the adapter and this invariant on any other shape. The conformance suite cannot observe this — the enforcement lives at the façade, not inside any adapter — so a green conformance run is not evidence that every failure shape has been converted.
+3. Result cardinality follows §39.2.1's normative rule: `length(request.input)` results for an all-strings `:input`; exactly **one** result when any `%ALLM.ImagePart{}` is present.
+4. `:index` values on the returned results are exactly `0..length(results)-1`.
+5. An **item count** exceeding `max_batch_size()` returns `reason: :batch_too_large` with `metadata: %{count:, max:}`, before any I/O and — for an adapter that resolves credentials — **before** `ALLM.Keys.fetch!/2`, so a keyless environment observes the rejection rather than a missing-key raise. The item count is the one invariant 3 defines, **not** the raw list length: it is `1` for any multimodal request, so a multimodal request never trips this gate. That is what keeps the published suite correct for an adapter whose cap is `1`.
+6. `input: []` returns `reason: :invalid_request`, under the same before-I/O and before-key ordering. The bar holds at the adapter for direct callers even though the façade also validates.
+7. `opts[:request_id]` is preserved onto `response.request_id` when supplied. When absent, the adapter may populate it from a provider-supplied correlation id.
+8. `request.metadata` round-trips onto `response.metadata` unchanged — the library treats request/response metadata as opaque.
+9. `moderate/2` honours `opts[:request_timeout]`, producing `reason: :timeout`. Without this obligation nothing in a conforming adapter would ever emit `:timeout` and the façade's retry policy would cover a reason no implementation produces.
+10. `prepare_request/2` (optional) returns an unfired `Req.Request` configured exactly as `moderate/2` would fire it, and is defined only for a request whose item count is `<= max_batch_size()`. Callers may mutate the returned request before firing.
+
+**Error-struct hygiene** is an obligation on adapter authors that carries no invariant number, because the numbering was frozen before it was stated. It is not optional. `%ModerationAdapterError{}` derives `Jason.Encoder` and is commonly logged and persisted, so no raw response body, no request header, and no `Authorization` value may reach `:message`, `:cause`, or `:metadata`. Provider messages that may echo the offending credential are passed through a key-shaped-token redactor at the adapter's single error funnel — structurally, not conditioned on status — and there is deliberately **no `:body_preview` field** on the struct. Each provider needs its **own** redaction pattern; inheriting a sibling's is a silent no-op, so the pattern ships with a companion assertion that the sibling providers' patterns match nothing in the same fixture. The bundled adapter honours this in full; the published conformance suite does not bind it.
+
+There is no cleanup invariant: there is no `Stream.resource/3` and no Finch reference, because `Req.request/1` owns its own connection lifecycle. Stated so the absence reads as intent.
+
+### 39.4 Engine integration
+
+`ALLM.Engine.t()` gains one field:
+
+```elixir
+moderation_adapter: module() | nil
+```
+
+It is a **peer** to `:adapter`, `:image_adapter`, and `:embed_adapter`, never a fallback for any of them. A single engine may combine four providers, since the adapters are independent:
+
+```elixir
+engine =
+  ALLM.Engine.new(
+    adapter: ALLM.Providers.Anthropic,                     # chat
+    image_adapter: ALLM.Providers.OpenAI.Images,           # images
+    embed_adapter: ALLM.Providers.Voyage.Embeddings,       # embeddings
+    moderation_adapter: ALLM.Providers.OpenAI.Moderation,  # moderation
+    model: "claude-sonnet-4-6"
+  )
+```
+
+Key resolution (§6.4) uses each adapter's own provider key namespace, so mixing providers requires each provider's key to be resolvable. Engines remain free of key material and safe to serialize.
+
+### 39.5 Public API
+
+```elixir
+defmodule ALLM do
+  @spec moderation_request(String.t() | [ALLM.ModerationRequest.item()], keyword()) ::
+          ALLM.ModerationRequest.t()
+
+  @spec moderate(
+          ALLM.Engine.t(),
+          String.t() | [ALLM.ModerationRequest.item()] | ALLM.ModerationRequest.t(),
+          keyword()
+        ) ::
+          {:ok, ALLM.ModerationResponse.t()}
+          | {:error,
+             ALLM.Error.EngineError.t()
+             | ALLM.Error.ValidationError.t()
+             | ALLM.Error.ModerationAdapterError.t()}
+end
+```
+
+`moderate/3` accepts a bare string (sugar for a one-element batch), a list of items, or a fully constructed `%ALLM.ModerationRequest{}` (dispatched verbatim; opts are not merged onto it). For the first two shapes, opts named after `ModerationRequest` fields lift onto the built request and everything else is treated as a call-control opt or forwarded to the adapter.
+
+Example:
+
+```elixir
+engine = ALLM.Engine.new(moderation_adapter: ALLM.Providers.OpenAI.Moderation)
+
+{:ok, response} = ALLM.moderate(engine, user_text)
+
+if ALLM.ModerationResponse.flagged?(response) do
+  reject(ALLM.ModerationResponse.flagged_categories(response))
+end
+```
+
+Dispatch order is fixed, and the ordering is load-bearing:
+
+1. adapter-presence gate (`:no_moderation_adapter`) — first, so a misconfigured engine never surfaces as a request problem;
+2. `ALLM.Validate.moderation_request/1` (`:invalid_moderation_request`);
+3. `ALLM.Capability.preflight_moderation/2` (`:unsupported_capability`) — a no-op without a model catalog, per §6.3;
+4. model stamping, adapter-opt merge, then dispatch.
+
+**Capability pre-flight runs at the façade, not inside `moderate/2`.** A direct adapter call bypasses the capability gate by design; callers wanting the gate go through `ALLM.moderate/3`. The adapter's own pre-flight covers wire-shape validation only — empty input, batch size, image MIME, image byte size — and every one of those gates runs *ahead* of `ALLM.Keys.fetch!/2` so a request that is going to be rejected never needs a valid key.
+
+There is deliberately **no Layer D**. A moderation verdict carries no conversation state, so `ALLM.Session` is untouched.
+
+### 39.6 Batching — the deliberate divergence from §36.6
+
+**The façade does not chunk, and adapters may see an input longer than they accept.** This inverts §36.6 and is the one place the two capabilities were expected to match and do not. Two reasons, either sufficient:
+
+1. **Ids do not merge.** One moderation call returns exactly one provider `id` per HTTP request. Merging N chunks would produce N ids with nowhere to put them — `ALLM.EmbeddingResponse` absorbs this by taking the first non-`nil` because its ids are diagnostic, whereas a moderation `id` is the receipt for a verdict a caller may need to cite.
+2. **The endpoint is free.** The cost pressure that makes a fifty-round-trip embedding ingest worth hiding does not exist here.
+
+`max_batch_size/0` remains public and `:batch_too_large` still fires, so the caller-side loop is explicit and owns its own cursor:
+
+```elixir
+adapter = engine.moderation_adapter
+
+input
+|> Enum.chunk_every(adapter.max_batch_size())
+|> Enum.map(&ALLM.moderate(engine, &1))
+```
+
+That loop applies to an **all-strings** `:input` only. Per §39.2.1 a list carrying an `ALLM.ImagePart` is one item judged as a whole, so there is nothing to chunk; gate on `ALLM.ModerationRequest.multimodal?/1` when the shape is not known statically.
+
+**Retry budgets still nest.** `opts[:retry]` is forwarded verbatim in the adapter's dispatch opts, so an adapter running its own `ALLM.Retry.run/3` loop sits inside the façade's and the two budgets multiply for any reason both loops treat as retryable — up to 9 adapter calls under the default 3-attempt policy, against 3 for a reason retryable at one layer only. This is the library-wide characteristic §36.6 documents, not a moderation one; it is restated because there is no chunking layer here to attribute it to.
+
+### 39.7 Provider adapters in v0.6, and the §35.7 carve-out
+
+v0.6 bundles **one** moderation adapter, `ALLM.Providers.OpenAI.Moderation`, against `POST /v1/moderations`.
+
+| | OpenAI |
+|---|---|
+| Endpoint | `POST https://api.openai.com/v1/moderations` (not overridable) |
+| Auth | `authorization: Bearer` |
+| Key atom / env var | `:openai` / `OPENAI_API_KEY` |
+| Models | `omni-moderation-latest`, `omni-moderation-2024-09-26` |
+| Text input | `input` — always an array, even for one string |
+| Multimodal input | `input` — content blocks: `{"type":"text",…}` and `{"type":"image_url",{"url":…}}` |
+| Image source | a `{:url, _}` `ALLM.Image` forwards its URL verbatim; every other source inlines as a `data:` URI |
+| `ALLM.ImagePart.detail` | **never sent** — dropped with a one-per-process deferred-form `Logger.debug/1` |
+| Verdict | `results[].flagged` |
+| Categories / scores | `results[].categories`, `results[].category_scores` — 13 slash-named string keys |
+| Applied types | `results[].category_applied_input_types` → `:applied_input_types` |
+| Index | **absent from the wire** — assigned from array position |
+| Usage / cost | **none.** The endpoint is free |
+| Response id | top-level `id` (`"modr-…"`), one per HTTP call |
+| Correlation | `x-request-id` response header |
+| Error envelope | `{"error": {"message", "type", "param", "code"}}` |
+| `max_batch_size/0` | 1000 |
+
+Five provider behaviours are worth stating in the spec because each falsified an assumption during implementation and each is invisible from the type signatures:
+
+1. **`/v1/moderations` returns 200 for unknown fields and silently ignores them.** The recorder's negative-control arm confirmed it live. Two consequences: an unrecognised `ModerationRequest.options` key is dropped by the provider rather than surfacing a 400, and — the load-bearing half — "the API accepted it" is **not** evidence that a field is part of this endpoint's schema. Only an observable in the *response* can promote a wire-field row at this endpoint.
+2. **`detail` inside `image_url` is therefore unresolvable from this wire, and is recorded as inferred.** The decision to drop it rests on the provider's documented request shape, which carries no `detail` key. A paired live arm sending `detail: "low"` returned 200 with identical `category_scores`, which promotes nothing — acceptance is not evidence at a permissive endpoint, and score equality is not evidence either. A contract test asserting no `detail` key is emitted, at any `:detail` value, for either image source, is the only thing binding the behaviour.
+3. **`max_batch_size/0` of 1000 is a demonstrated floor, not a documented cap.** OpenAI documents no maximum `input` array length; a live ladder found every rung of `[1, 32, 100, 128, 1000]` accepted with no upper bound observed. The number is the ladder's top rung, chosen so the adapter never promises more than has been demonstrated.
+4. **The multimodal cardinality rule is confirmed on the wire, and the confirmation is stronger than a count.** A two-block `input` (one text, one inlined image) returned exactly one `results` entry whose `category_applied_input_types` listed `"image"` for six of thirteen categories — so the image was genuinely classified rather than silently dropped, which a bare result count could not have distinguished.
+5. **The response carries no free-text echo of the submitted input.** Verified by a recursive walk of a recorded body and asserted by the recorder as a precondition to writing, so the property is enforced on every re-record. This is what makes `response:` in the `:stop` telemetry metadata (§39.9) an exposure of *verdicts* rather than of user content.
+
+The `text-moderation-*` family (`text-moderation-latest`, `-stable`, `-007`) was **shut down on 2025-10-27** with `omni-moderation` as the stated replacement, and is not implemented. The adapter maintains no denylist — whatever `:model` the caller sets is forwarded, and a shut-down name comes back as the provider's own 400, which is clearer and more current than a hard-coded list that goes stale the moment a new model ships. A `nil` model is **omitted from the wire entirely**, letting OpenAI apply its own current default rather than pinning a name ALLM must chase.
+
+#### The §35.7 amendment
+
+§35.7's bundled-adapter rule, as amended in v0.5, admits an adapter when **either** (a) its maintenance overlaps with its provider's already-bundled chat adapter, **or** (b) it is the provider's own officially-recommended path for a capability that provider does not itself offer.
+
+`ALLM.Providers.OpenAI.Moderation` qualifies under (a) — it shares key resolution, header construction, and error-envelope handling with the bundled OpenAI chat adapter. The amendment moderation needs is not about *this* adapter's admission but about the family's **shape**:
+
+> A capability family may be bundled with **exactly one** provider adapter when that provider is already bundled for chat, and the capability's absence on the other bundled providers is **documented rather than backfilled with a proxy**.
+
+This is the second scoped carve-out to §35.7 and, like the v0.5 one, it is a carve-out rather than a widening. It does not license shipping a one-provider family for a capability the other providers *do* offer; it licenses declining to invent a module for providers that do not offer it at all.
+
+There is deliberately **no `ALLM.Providers.Anthropic.Moderation`** and **no `ALLM.Providers.Gemini.Moderation`**:
+
+- **Anthropic** ships no moderation endpoint and, unlike the embeddings case, names no partner for one. There is no honest module to write — criterion (b) has no candidate to admit.
+- **Google** exposes safety ratings *inline on `generateContent`*: `promptFeedback.safetyRatings` and `candidates[].safetyRatings`, four `HARM_CATEGORY_*` values on an ordinal `NEGLIGIBLE | LOW | MEDIUM | HIGH` enum. That is a property of a *generation call*, not a standalone classification endpoint, and cannot implement `c:ALLM.ModerationAdapter.moderate/2` without inventing a generation call to attach itself to. Surfacing those ratings belongs on `ALLM.Response.metadata` in a chat-adapter phase.
+
+This asymmetry is also what drives the score-map decision of §39.2.2: there is no second provider to normalize against, and the plausible one reports a different shape on a different call.
+
+Third-party moderation providers (Mistral, AWS Comprehend, Perspective API, local classifiers) remain out of core and ship as separate packages implementing `ALLM.ModerationAdapter`, exactly as third-party image and embedding adapters do.
+
+### 39.8 Testing
+
+`ALLM.Providers.FakeModeration` implements `ALLM.ModerationAdapter` with scripted responses — analogous to `ALLM.Providers.Fake` (§31), `ALLM.Providers.FakeImages` (§35.8), and `ALLM.Providers.FakeEmbeddings` (§36.8). It ships in `lib/`, not `test/support/`, because downstream applications need it for their own tests.
+
+```elixir
+engine =
+  ALLM.Engine.new(
+    moderation_adapter: ALLM.Providers.FakeModeration,
+    adapter_opts: [
+      moderation_script: [
+        {:ok, [%ALLM.ModerationResult{flagged: false}]},
+        {:flagged, ["violence"]},
+        {:error, %ALLM.Error.ModerationAdapterError{reason: :rate_limited}},
+        {:retry_until_call, 3}
+      ]
+    ]
+  )
+```
+
+`{:flagged, categories}` is the shorthand for the overwhelmingly common test — "assert my app rejects flagged content" — and synthesizes a single flagged result with those names `true` at score `1.0` and every other category `false` at `0.0`. `{:retry_until_call, n}` returns a synthetic retryable error for the first `n - 1` calls against that entry, which is the vehicle for exercising retry integration; consecutive entries chain, which is how a layered retry budget is scripted.
+
+Each call advances a cursor keyed on engine identity, so `async: true` is safe and two engines built with content-equal scripts each start at index 0. The content-hash fallback — and with it the shared-cursor footgun — remains only for **direct** adapter calls made without an engine.
+
+Two behaviours diverge deliberately from `FakeEmbeddings` and are stated here because both are load-bearing for test authors:
+
+1. **No script yields a clean verdict, not an error.** With `moderation_script` absent or `[]`, every call returns one unflagged result per item carrying the full category set at score `0.0`. A clean verdict is a meaningful default that costs a caller nothing, whereas a synthesized embedding vector is not.
+2. **A non-empty script that runs off the end IS an error** — `reason: :unknown` with `metadata.cause: :moderation_script_exhausted`. "I scripted nothing, give me a benign default" is a convenience; "my script ran out" is almost always an off-by-one in the caller's expectation of how many times `moderate/2` gets invoked, and answering it with an unflagged pass would hide that. In particular a truncated `[{:retry_until_call, 1}]` script would otherwise report success on call 1 with no retry ever exercised.
+
+`ALLM.Test.ModerationAdapterConformance` ships in the `allm_conformance` package with **ten cases**, covering `max_batch_size/0`'s shape, the two pre-flight gates, cardinality in the single-string and all-strings shapes, index range, `:flagged`'s type and the category maps' string keying, `metadata` round-tripping, `request_id` preservation, and the multimodal single-result rule. Third-party adapter authors add the package as a test-only dep and `use` the suite. Its cases size their input as `min(<wanted>, adapter.max_batch_size())`, so the published suite certifies a conforming adapter at **any** cap, including `1`; a literal input size in a case would make the suite fail for a conservative adapter.
+
+The §36.8 limitation applies here verbatim and is worth restating: the suite drives a real adapter through a script short-circuit, so **the adapter's own response decoder is never reached on the success path**. Each bundled adapter therefore carries its own decoder tests against recorded wire fixtures. The cases bind fully for an adapter that implements `moderate/2` itself, which is the third-party author the published suite exists to serve.
+
+### 39.9 Telemetry
+
+One span, mirroring §35.9 and §36.9:
+
+- `[:allm, :moderate, :start]` — measurements: `system_time`; metadata: `request_id`, `engine`, `model`, `input_count`, `multimodal`.
+- `[:allm, :moderate, :stop]` — measurements: `duration`, `result_count`, `flagged_count`; metadata: `request_id`, `model`, `input_count`, `multimodal`, `usage`, `response`, `error` (`nil` on success).
+- `[:allm, :moderate, :exception]` — measurements: `duration`; metadata: `kind`, `reason`, `stacktrace`. Emitted **instead of** `:stop` and then re-raised, via `:telemetry.span/3`. Two paths reach it: `ALLM.Keys.fetch!/2`'s `%EngineError{reason: :missing_key}` (§6.4) and the `ArgumentError` a non-conforming `:moderation_adapter` triggers (invariant 2). A `:start`/`:stop`-only attachment leaves an unterminated span on every missing key.
+
+`result_count` and `flagged_count` are present on **both** `:stop` paths, reporting `0` on error, so the measurement key set is stable for a metrics backend. `usage` is carried in metadata as `nil` unconditionally even though `%ModerationResponse{}` has no such field (§39.2.3), for the same reason: a handler written against the `:embed` or `:image` span must not `KeyError` here.
+
+**`input_count` is the raw element count, not the item count.** A two-element multimodal request reports `input_count: 2, multimodal: true` while the provider's item count is `1` (§39.2.1). The divergence is deliberate: `multimodal` rides alongside so a consumer derives the item count without a second measurement. Changing this derivation requires amending the façade `@doc`, `ALLM.Telemetry`'s moduledoc, this section, and the test that pins it — together.
+
+**Operator note.** `:stop` metadata carries `response:`, whose `:raw` is the provider body. The bundled provider does not echo submitted input there (§39.7 item 5), so this is an export of *verdicts about* user content rather than of the content itself — but a handler that serializes the whole metadata map to an external backend is still exporting moderation judgements about identifiable users to that vendor. Established precedent rather than new exposure (the `:image` span has carried `response:` with image bytes since v0.3), and it requires explicit operator opt-in, so it is a documentation obligation carried by `guides/moderation.md`.
+
+### 39.10 Out of scope for v0.6
+
+- **streaming** — moderation is request/response; there is no `stream_moderate/3`, and `stream: true` is silently ignored rather than erroring
+- **`text-moderation-*` models** — shut down 2025-10-27 (§39.7); shipping a code path for a model the provider has switched off would be shipping a guaranteed 404
+- **a normalized cross-provider category taxonomy** — one bundled provider, and the plausible second reports a different shape on a different call (§39.2.2)
+- **a default "unsafe" threshold, `block?/2`, or a policy DSL** — a product decision, not a library one (§39.1 item 4)
+- **`ALLM.Providers.Gemini.Moderation` / `ALLM.Providers.Anthropic.Moderation`** — no standalone endpoint exists on either (§39.7)
+- **transparent batch chunking** — ids do not merge and the endpoint is free (§39.6)
+- **automatic moderation inside `chat/3` / `generate/3`** — a hidden second HTTP call per turn, doubling latency and silently changing `chat/3`'s error union
+- **`ALLM.Session` integration** — a moderation verdict carries no conversation state
+- **moderating tool results or assistant output as a distinct API** — the same call with a different input string; no new surface is needed

@@ -1471,3 +1471,219 @@ Baseline before the fix pass was 3410 tests → **+7**. Coverage on `ALLM.Provid
 * **`recorded/multimodal_text_image.json` is the only fixture in the tree whose `results` length is `1` for a two-element `:input`.** Binds **22.6**: the guide's image section should read the result count from the response rather than stating a number, and should show `ModerationRequest.multimodal?/1` as the pre-call derivation.
 * **The adapter now has six `@doc false` seams**, not three: `to_json_body/2`, `to_moderation_adapter_error/4`, `decode_response/4`, `to_openai_content_blocks/1`, `part_to_block/1`, `gate_images/2`. Binds any later doc that quotes the count OR the names (22.4's RECORDS entry was corrected once already for the count, and the fix pass renamed the last one).
 * **Data URIs work on `/v1/moderations`.** Binds **22.6**'s `examples/20_moderate_image.exs`: it can inline a small PNG and needs no hosted image, so the script is hermetic and costs $0.00.
+
+---
+
+## Phase 22.6 — Spec §39, guide, examples, docs wiring
+
+**Status: Completed** (2026-09-03). All four review gates ran; artifacts present and non-empty: `.work/reviews/2026-09-03-phase22-6-docs/overview.md` (functional — 8 steps, 3 findings), `.work/code-reviews/2026-09-03-phase22-6-docs.md` (1 High, 3 Medium, 4 Low), `.work/security-reviews/2026-09-03-phase22-6-docs.md` (**clean**; architecture lane self-gated off, no `agent-spec/ARCHITECTURE.md`), `.work/design-reviews/2026-09-03-phase22-6-docs.md` (N/A — backend-only diff). Fix pass applied 3 findings plus 1 Low, deferred 1 to 22.7 and returned 2 fence collisions the orchestrator routed to 22.7.
+
+**The one High was found by all three lanes, and the arch & security lane reached it unprompted** — its brief said nothing about fenced blocks, while the code-review and functional briefs both seeded fence-checking. The orchestrator also reproduced it independently before dispatching the fix pass. `guides/moderation.md`'s flagship "Screening before you generate" recipe referenced a `with`-clause binding inside `else`, where Elixir does not expose it, so the guide's most copy-pasteable block raised `CompileError` on paste. It shipped green because it was a ` ```elixir ` fence and `doctest_file/1` ignores fences — and the prose immediately after it was *about* that `else` clause, so it read as reviewed. **The fix converts it to an `iex>` block rather than repairing the fence**, which is what actually closes the hole: the example runs under `FakeModeration` with no key, so CLAUDE.md's rule says it should never have been a fence.
+
+**Causally upstream, and deferred to 22.7:** `CLAUDE.md:57` claims `test/guides_test.exs` carries "a fenced-API denylist for dead-API references fences can't otherwise flag" and tells agents to extend it. No such gate exists — verified independently by the code reviewer and the orchestrator (`grep -rn 'denylist\|dead_api' test/ lib/ scripts/` returns two unrelated hits; the file is four per-guide structural gates plus three `mix.exs`-wiring tests). The implementer had documented grounds to believe fences carried coverage. 22.7 owns both files.
+
+### What shipped
+
+| File | Change |
+|------|--------|
+| `steering/allm_engine_session_streaming_spec_v0_2.md` | MODIFY — new **§39** (10 subsections, mirroring §36's structure) plus amendment blocks appended to **§27**, **§29**, and **§35.7** |
+| `guides/moderation.md` | NEW — 25,501 bytes, **13 `iex>` blocks** (all executed by `doctest_file/1`), 5 ` ```elixir ` fences. *At the `wip/22-6-checkpoint` tag this row read "12 `iex>` blocks, 5 fences"; the tree actually held 12 and **6** — see Fix pass (2026-09-03), Fix 3.* |
+| `mix.exs` | MODIFY — `guides/moderation.md` added to `@guides` (flows into `docs.extras`; `package.files` already names `guides` wholesale) |
+| `test/guides_test.exs` | MODIFY — `moderation.md` added to `@guides` (+4 structural gate tests) |
+| `test/guides_doctest_test.exs` | MODIFY — `doctest_file("guides/moderation.md")` (+13 doctests; +12 at the checkpoint, +1 from the Fix-pass fence→`iex>` conversion) |
+| `examples/_helpers.exs` | MODIFY — `moderation_adapter:` / `moderation_default_model:` on all three `@providers` rows, `moderation_engine/1`, two moduledoc sections; the Fix pass then folded `image_engine/1` + `embedding_engine/1` + `moderation_engine/1` onto a shared private `capability_engine/2` (Fix pass, Fix 2) |
+| `examples/19_moderate_text.exs` | NEW — `# Provider: openai` |
+| `examples/20_moderate_image.exs` | NEW — `# Provider: openai` |
+| `examples/README.md` | MODIFY — `@providers` block, key table (+ moderation column), a `#### Moderation scripts and the # Provider: openai marker` subsection, a `## Moderation (19–20)` narrative section, `ALLM_MODERATION_MODEL` in `## Models`, two script-table rows, cost-note row |
+| `CHANGELOG.md` | MODIFY — two bullets **appended** to the existing `## [REL] v0.6.0` entry (see Deviation 2) |
+| `ASKS.md` | MODIFY — the `@guides` divergence `[CHORE]` ticket, filed with its self-scoring predicate |
+
+`README.md` was clean at batch start and is untouched: `git --no-optional-locks diff --stat HEAD -- README.md` is empty.
+
+### Deviations
+
+1. **[scope, instructed] The release step was NOT run.** 22.6.2's final checklist bullet reads *"Release via `mix run scripts/release.exs minor` → v0.6.0"*. It was deliberately not executed, and `mix.exs @version` was not touched. **This OVERRIDES 22.6.2's final checklist bullet because publishing to Hex is irreversible and outward-facing, and this run was scoped to building the phase, not releasing it.** Every other checklist bullet is in scope and was completed. The Definition of Done item *"Released as v0.6.0 via `mix run scripts/release.exs minor`"* therefore remains unticked and is the phase's outstanding release action.
+
+2. **[bookkeeping] The `## [REL] v0.6.0 — Content moderation` CHANGELOG entry already existed** at batch start (written 2026-09-03, derived from `git diff v0.5.0..HEAD lib/` as the checklist requires) and was **amended, not re-written**. Verified accurate against `git --no-optional-locks diff --stat v0.5.0..HEAD -- lib/` (24 files, +3551/−105): every file in that diff is represented. Two bullets were appended for 22.6's own user-visible surface, which is not `lib/`-visible and therefore could not have been in the original derivation — `guides/moderation.md`, and the two example scripts plus `ExamplesHelpers.moderation_engine/1` and `ALLM_MODERATION_MODEL`. No second entry was written.
+
+3. **[contract corrected in-place] §39.3's invariant list was rewritten mid-batch to match the shipped numbering exactly.** The first draft renumbered the invariants into a §36.3-shaped list — HTTP-shape conversion first, error-struct hygiene at 8, timeout at 9. That is wrong twice over: `lib/allm/moderation_adapter.ex:130-132` states the numbering is **frozen** because conformance case names and forward-binding notes cite it by number, and error-struct hygiene is not in the shipped numbered list at all. §39.3 now reproduces 1–10 verbatim in the module's order, states that 1–8 are frozen and that 9/10 were appended, and carries error-struct hygiene as an explicitly **unnumbered** obligation with the reason it has no number. The spec is the source of truth for numbering; shipping a spec whose numbering disagreed with the code's would have silently invalidated every by-number citation in the conformance suite.
+
+4. **[scope] `examples/RUN_OUTPUT_OPENAI.md` was NOT regenerated.** The full OpenAI arm did not complete cleanly (it halts at script 10 — see the live gate below), so per the snapshot-defer policy the file is untouched rather than hand-edited.
+
+### Hypotheses put to the tree
+
+| Hypothesis | Verdict |
+|---|---|
+| `run_all.exs` auto-discovers via `Path.wildcard("[0-9][0-9]_*.exs")` and honours a `# Provider: openai` marker, so scripts 19–20 need no edit to `run_all.exs` | **CONFIRMED.** `examples/run_all.exs:40-41` is the wildcard + sort; `:34-37` is the marker regex `~r/^#\s*Provider:\s*([\w, ]+)\s*$/m`, marker-absent → run everywhere, marker-present-and-not-matching → `[SKIP]` not counted as failed. `run_all.exs` is unmodified and picked both new scripts up. |
+| `examples/_helpers.exs` has an `embedding_engine/1` whose shape `moderation_engine/1` should mirror | **CONFIRMED.** It was at `:179-222` before this batch's edits. `moderation_engine/1` mirrors it modulo one deliberate difference: there is no `:moderation_key_env` fallback key, because the only moderation adapter authenticates with the same `OPENAI_API_KEY` as its provider's chat adapter — the Voyage situation that motivated `:embedding_key_env` has no moderation analogue. |
+| `doctest_file/1` executes every `iex>` block in a registered guide and ignores ` ``` ` fences regardless of fence type | **CONFIRMED, and verified by mutation rather than by reading.** Registering the guide moved the suite 420 → **432 doctests**, exactly the guide's 12 `iex>` blocks at the checkpoint; its **6** fenced blocks contributed 0 (this cell said 5 at the checkpoint — the miscount is Fix pass, Fix 3). Post-fix-pass the guide has 13 `iex>` blocks and 5 fences, and the suite reads 433. Mutating one expected value (`:no_moderation_adapter` → `:no_such_reason`, `guides/moderation.md:51`) turns `test/guides_doctest_test.exs` **red**, so the gate binds rather than merely counting. Tree restored and re-verified green. |
+
+### Handoff items discharged
+
+* **`ImagePart.detail` is dropped and the wire cannot confirm it.** Applied. The guide's `### ALLM.ImagePart.detail is dropped` subsection states the drop, states that the wire *cannot* settle it (`/v1/moderations` 200s unknown fields, so a 200 proves nothing about schema membership), and names the in-suite contract test as what actually holds the behaviour. It does **not** say the provider confirmed it. §39.7 item 2 carries the same framing, including the paired `detail: "low"` arm's identical `category_scores` and why score-equality is not evidence either.
+* **Data URIs are accepted.** Applied. `examples/20_moderate_image.exs` inlines the checked-in `examples/fixtures/kestrel_256.png` via `ALLM.Image.from_binary/2`; no third-party image host, hermetic, $0.00. Ran green live.
+* **The cardinality rule is confirmed on the wire.** Applied. Both the guide's *Moderating images* section and script 20 use `ModerationRequest.multimodal?/1` as the **pre-call** derivation and then read the count **off the response** rather than asserting a literal — script 20 asserts the derived count against the returned count, so the two disagreeing is what fails. The guide also explains `:applied_input_types` as the only observable distinguishing "classified and clean" from "ignored", which is the half a bare count cannot show.
+* **The audit gate cannot exit 0; the predicate is `| grep moderation` → empty.** Applied and honoured. Baseline re-measured at **10 hits across 5 files** (`guides/fakes.md` 4, `engine.ex` 3, `fake.ex` 1, `fake_images.ex` 1, `validate.ex` 1) — unchanged by this batch, so the new guide and every new doc string contributed **zero** hits. No `decision <n>` form appears in any new prose; the two places that would naturally have cited a numbered decision (the category-map rationale, the no-chunking rationale) state the rule instead.
+* **Six `@doc false` seams, `gate_images/2` not `reject_oversized_images/2`.** No new doc names any seam, so nothing to correct. §39 deliberately describes the gate by behaviour rather than by helper name — a spec section naming a private-ish helper would go stale on the next rename, which is the failure this item records.
+
+### Verification (2026-09-03)
+
+```
+mix compile --warnings-as-errors            exit 0
+mix format --check-formatted                exit 0
+mix test                432 doctests, 31 properties, 3429 tests, 0 failures, 14 excluded
+mix test --seed 0       432 doctests, 31 properties, 3429 tests, 0 failures, 14 excluded
+mix credo --strict      3164 mods/funs, found no issues
+mix dialyzer            Total errors: 0, Skipped: 0, Unnecessary Skips: 0
+mix docs                grep -ciE '(warning|error)' → 0
+mix run scripts/audit_user_docs.exs | grep moderation       empty
+git --no-optional-locks diff --stat HEAD -- README.md       empty
+cd conformance && mix test                  103 tests, 0 failures
+cd conformance && mix credo --strict        found no issues
+cd conformance && mix format --check-formatted              exit 0
+```
+
+Baseline at batch start was 420 doctests / 3425 tests. Delta: **+12 doctests** (the guide's 12 `iex>` blocks at the checkpoint; **+13 / 433 total** after the Fix pass converted a fence to an `iex>` block) and **+4 tests** (the four per-guide structural gates `test/guides_test.exs` applies to a newly-registered guide: exists, >2 KB, zero audit hits, at least one `iex>` block).
+
+### BLOCKING live gate — ran. $0.00 for both new scripts.
+
+```
+set -a; . ./.env; set +a; ALLM_PROVIDER=openai mix run examples/19_moderate_text.exs   → exit 0
+  OK: moderate text — results=2 clean_flagged=false threat_flagged=true
+      categories=["harassment", "harassment/threatening", "violence"]
+      top_score=0.5259 model="omni-moderation-latest" id="modr-9368"
+
+set -a; . ./.env; set +a; ALLM_PROVIDER=openai mix run examples/20_moderate_image.exs  → exit 0
+  OK: moderate image — multimodal=true input_elements=2 results=1 index=0 flagged=false
+      categories_scored=13
+      applied_to_image=["self-harm", "self-harm/instructions", "self-harm/intent",
+                        "sexual", "violence", "violence/graphic"]
+      model="omni-moderation-latest"
+```
+
+Script 20's `applied_to_image` list is the same six-of-thirteen categories the 22.5 recording found, against a different image — independent corroboration that the image is genuinely classified rather than dropped.
+
+### Blocked-arm re-characterization — NOT inherited
+
+`set -a; . ./.env; set +a; ALLM_PROVIDER=openai mix run examples/run_all.exs` halted at **script 10**. Every script from 11 on was then run **individually, past the halt**:
+
+```
+01–09 OK, 10 FAIL, 11–12 OK, 13 FAIL, 14–20 OK
+```
+
+Two failures, both re-tested against the failure actually observed rather than against the arm's reputation:
+
+1. **`10_generate_image.exs` — FAIL.** `%ALLM.Error.ImageAdapterError{reason: :invalid_request, message: "Unknown parameter: 'response_format'.", status: 400, metadata: %{openai_code: "unknown_parameter", openai_type: "invalid_request_error"}}`. Resolves **exactly** to the `[BUG]` at `ASKS.md:313` — same message, same `openai_code`, same `openai_type`, same originating site (`lib/allm/providers/openai/images.ex:554` sends `response_format` to `dall-e-2`). Released v0.4 code broken against the live API, filed after Phase 20.7 observed it, out of 22.6's docs-only Module Tree. Not a new defect; **no new ticket filed.**
+2. **`13_image_variations.exs` — FAIL.** `%ALLM.Error.ImageAdapterError{reason: :unknown, message: "OpenAI HTTP 404", status: 404}`. Resolves to the `dall-e-2` variations 404 documented at commit `a7b934b` and inherited through PHASE_17.3 / 18.5, and named at `ASKS.md:313` as **distinct** from failure 1. Not a new defect; **no new ticket filed.**
+
+The observed line matches `ASKS.md:313`'s own recorded characterization (`01-09 OK, 10 FAIL, 11 OK, 12 OK, 13 FAIL, 14 OK, 15 OK, 16-18 OK`) extended by the two scripts this batch added, with **no** new failure and no movement of either halt point. Both new scripts sit **after** both halts, which is why running them individually is the only observation of them that exists — and both are green.
+
+`examples/RUN_OUTPUT_OPENAI.md` is untouched (Deviation 4).
+
+### Fix pass (2026-09-03)
+
+Applied against `wip/22-6-checkpoint` (`4efb37c`) from the four review artifacts
+(`.work/reviews/`, `.work/code-reviews/`, `.work/security-reviews/`,
+`.work/design-reviews/`, all dated `2026-09-03-phase22-6-docs`). Three fixes, all
+inside 22.6's Module Tree.
+
+**Fix 1 — `guides/moderation.md` *Screening before you generate* was a `CompileError`, and is now an `iex>` block.**
+Reported by all four lanes that read the guide; reproduced here verbatim before
+acting (`mix run` on the extracted block → `error: undefined variable "verdict"` →
+`** (CompileError) cannot compile module`). `verdict` was bound in a `with` clause
+and referenced from `else`, where `with`-clause bindings are not in scope
+(`elixir/lib/kernel/special_forms.ex` documents this). The repair carries the
+verdict across the boundary as `{false, _verdict} <- {flagged?(verdict), verdict}`.
+
+The block was **converted to an `iex>` doctest rather than repaired in place**, per
+CLAUDE.md's *"Prefer an `iex>` block for anything Fake can run"* — it runs
+end-to-end on `ALLM.Providers.FakeModeration` + `ALLM.Providers.Fake` with no key
+and no network, so the fence was never the justified fallback case. One block now
+exercises all three branches (clean → `Fake`'s scripted text; flagged →
+`{:error, {:rejected, ["violence"]}}`; no adapter → `:no_moderation_adapter`).
+**Verified to bind, not merely to run:** mutating the expected `["violence"]` to
+`["zzz"]` turns the block red (`1 doctest, 1 failure`), so the conversion closes the
+hole rather than moving it. The trailing note, which previously taught `else`
+exhaustiveness, now teaches the scoping rule that actually caused the defect.
+
+**Fix 2 — `[structural, documented]` `image_engine/1` + `embedding_engine/1` + `moderation_engine/1` folded onto a private `capability_engine/2`.**
+`agent-spec/IMPLEMENTATION.md:68`'s second-caller trigger had fired twice
+unrecorded (at `embedding_engine/1` in 20.7 and again here), and `:235` requires
+every existing copy migrate in the same commit. The Module Tree does **not**
+foreclose it — `examples/_helpers.exs (MODIFY — 22.6)` — so the `[DEFERRED-DRY]`
+escape hatch did not apply and the extraction was taken. The three public names,
+arities, `@doc` blocks and `ArgumentError` messages are unchanged; the spec map
+carries the five differing values and its comment block names the one live
+divergence it deliberately preserved rather than normalized (`image_engine/1`
+reads `ALLM_MODEL` where its two siblings read a capability-specific variable).
+
+**Behaviour-preservation was measured, not asserted.** A 36-probe matrix — 3
+provider arms × {no model overrides, all three model env vars set} × 6 calls
+(each constructor bare and with `extra_opts`) — captured `{:ok, %ALLM.Engine{}}`
+or `{:raised, ArgumentError, message}` before and after; `diff` over the two
+captures, with the unique `%ALLM.Engine{}` `:id` normalized, is **empty**. That
+matrix includes all 12 raise paths, so the article difference
+("an image_adapter" vs "a moderation_adapter") is pinned byte-for-byte. Both
+migrated siblings were additionally re-run live: `16_embed_single.exs` → exit 0
+(`dimensions=1536`, `total_tokens=16`). `image_engine/1` has no green end-to-end
+arm to re-run — `10_generate_image.exs` is the `ASKS.md:313` `[BUG]` halt — so the
+probe matrix is its only observation, which is sufficient because the helper's
+entire job is constructing that struct.
+
+**Fix 3 — two false counts corrected.** The *What shipped* row and the
+`doctest_file/1` hypothesis cell both said the guide had **5** ` ```elixir `
+fences; `grep -c '^```elixir' guides/moderation.md` at the checkpoint returned
+**6** (openings at `:32, :83, :260, :396, :425, :525`). The miscount is worth the
+line only because the block it loses track of is `:425` — the one that did not
+compile — so a hand audit sized against "5 fences" stops one block early. Fix 1
+makes the row true for the first time: the guide now holds **13 `iex>` blocks and
+5 fences**, measured by `doctest_file/1` (13 doctests) and `grep -c` (5).
+
+`CHANGELOG.md`'s *"Every runnable example executes as a doctest under `mix test`"*
+was **verified rather than reworded**, as Fix 1 was the right direction for it.
+Each of the five surviving fences depends on something absent from a doctest
+context — a provider key (`:32`, `:83`), a local file that does not exist plus an
+unbound `engine` (`:260`), an application module `MyApp.Metrics` (`:396`), or
+ExUnit's `assert_receive` (`:525` at the checkpoint) — so none is runnable in the
+sense the sentence claims. No edit made.
+
+**Not fixed, out of fence.** F4 (the fenced-API denylist CLAUDE.md promises and
+`test/guides_test.exs` does not implement) is transcribed to `.work/HANDOFF.md`
+for 22.7, which owns both files. Two sibling copies of the Fix-1-adjacent false
+claim corrected in the guide — `lib/allm/moderation_result.ex:67-68` and spec
+§39 at `allm_engine_session_streaming_spec_v0_2.md:2772` — were left alone and
+returned to the orchestrator as fence collisions; both are outside 22.6's
+docs-only tree (`lib/` belongs to 22.1, and the spec is a steering document a fix
+pass may not amend). The remaining Lows (F5–F8) stay in their review docs for the
+phase-end polish pass.
+
+#### Fix-pass gates — full stack re-run
+
+```
+mix format --check-formatted                exit 0
+mix compile --warnings-as-errors            exit 0
+mix test                433 doctests, 31 properties, 3429 tests, 0 failures, 14 excluded
+mix test --seed 0       433 doctests, 31 properties, 3429 tests, 0 failures, 14 excluded
+mix credo --strict      3164 mods/funs, found no issues
+mix dialyzer            Total errors: 0, Skipped: 0, Unnecessary Skips: 0
+mix docs                grep -ciE '(warning|error)' → 0
+mix run scripts/audit_user_docs.exs | grep moderation       empty (baseline still 10 hits / 5 files)
+cd conformance && mix test                  103 tests, 0 failures
+cd conformance && mix credo --strict        103 mods/funs, found no issues
+cd conformance && mix format --check-formatted              exit 0
+
+set -a; . ./.env; set +a; ALLM_PROVIDER=openai mix run examples/19_moderate_text.exs   → exit 0 (id="modr-6828")
+set -a; . ./.env; set +a; ALLM_PROVIDER=openai mix run examples/20_moderate_image.exs  → exit 0
+set -a; . ./.env; set +a; ALLM_PROVIDER=openai mix run examples/16_embed_single.exs    → exit 0
+```
+
+Doctest delta from the checkpoint is **+1** (432 → 433), exactly the one block Fix
+1 converted; test count is unchanged at 3429, confirming nothing else moved.
+`mix.exs @version` was not touched and no release step was run.
+
+### Notes for later sub-phases
+
+* **The `@guides` divergence is filed and is 22.7's to close** — `ASKS.md`, dated 2026-09-03, with the self-scoring predicate `diff <(grep -oE 'guides/[a-z_]+\.md' mix.exs | sort -u) <(grep -oE '[a-z_]+\.md' test/guides_test.exs | sed 's|^|guides/|' | sort -u)` → empty. 22.6 registered `moderation.md` in **all three** literals so it does not widen the divergence, but it cannot close it: 22.6's tree is docs-only. **Measured evidence the hazard is live, not theoretical:** `guides/fakes.md` — the one guide in `mix.exs`'s literal and not in `test/guides_test.exs`'s — carries **4 of the repo's 10** banned-token audit hits (two `phase_n`, one `section_marker`, one `spec_section`) and has shipped to hexdocs with them since Phase 16. Adding it to the literal in 22.7 turns those into failures; fixing them is in scope for that sub-phase, as its own Test Plan already says.
+* **§39 is now the normative home for the invariant numbering**, and it is frozen at 1–10 with 1–8 additionally frozen against renumbering. Anything further appends at 11 in **both** `lib/allm/moderation_adapter.ex` and §39.3, in the same commit. Error-struct hygiene is deliberately unnumbered in both.
+* **The commit-range provenance stamp on all four spec blocks is `cf8e340..5a73da6`** — `cf8e340` (22.1) through `5a73da6` (the `[BUG]` follow-up that closed 22.5's `[CARRY]`), with *"docs land in the 22.6 commit"*, mirroring §36's `ac5d845..c3aefce` form exactly. If 22.7 amends any of those four blocks it should extend the range rather than open a second stamp.
+* **The release is outstanding.** Deviation 1. `mix.exs @version` is still v0.5.x and must be bumped only by `mix run scripts/release.exs minor`, never by hand.

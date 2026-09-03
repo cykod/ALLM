@@ -29,7 +29,9 @@ provider table:
     image_adapter: ALLM.Providers.OpenAI.Images,
     image_default_model: "dall-e-2",
     embed_adapter: ALLM.Providers.OpenAI.Embeddings,
-    embedding_default_model: "text-embedding-3-small"
+    embedding_default_model: "text-embedding-3-small",
+    moderation_adapter: ALLM.Providers.OpenAI.Moderation,
+    moderation_default_model: "omni-moderation-latest"
   },
   "anthropic" => %{
     adapter: ALLM.Providers.Anthropic,
@@ -40,7 +42,9 @@ provider table:
     image_default_model: nil,
     embed_adapter: ALLM.Providers.Voyage.Embeddings,
     embedding_default_model: "voyage-3.5-lite",
-    embedding_key_env: "VOYAGE_API_KEY"
+    embedding_key_env: "VOYAGE_API_KEY",
+    moderation_adapter: nil,
+    moderation_default_model: nil
   },
   "gemini" => %{
     adapter: ALLM.Providers.Gemini,
@@ -51,13 +55,16 @@ provider table:
     image_default_model: "gemini-3.1-flash-image-preview",
     default_temperature: 1.0,
     embed_adapter: ALLM.Providers.Gemini.Embeddings,
-    embedding_default_model: "gemini-embedding-001"
+    embedding_default_model: "gemini-embedding-001",
+    moderation_adapter: nil,
+    moderation_default_model: nil
   }
 }
 ```
 
 The map shape lets future fields (`:image_adapter`, `:embed_adapter`,
-`:vision_default_model`, …) be added without churning the destructure
+`:moderation_adapter`, `:vision_default_model`, …) be added without churning
+the destructure
 pattern in the helper.
 
 `ExamplesHelpers.embedding_engine/1` is the third constructor, sister to
@@ -105,11 +112,11 @@ So either:
 
 ### Which keys each provider arm needs
 
-| `ALLM_PROVIDER` | Chat / vision / image scripts | Embedding scripts (16–18) |
-|---|---|---|
-| `openai` | `OPENAI_API_KEY` | `OPENAI_API_KEY` |
-| `gemini` | `GEMINI_API_KEY` | `GEMINI_API_KEY` |
-| `anthropic` | `ANTHROPIC_API_KEY` | **`VOYAGE_API_KEY`** |
+| `ALLM_PROVIDER` | Chat / vision / image scripts | Embedding scripts (16–18) | Moderation scripts (19–20) |
+|---|---|---|---|
+| `openai` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` |
+| `gemini` | `GEMINI_API_KEY` | `GEMINI_API_KEY` | *skipped* |
+| `anthropic` | `ANTHROPIC_API_KEY` | **`VOYAGE_API_KEY`** | *skipped* |
 
 #### Embedding scripts and `VOYAGE_API_KEY`
 
@@ -126,6 +133,20 @@ skipped on the Anthropic arm, and `ensure_key_present!/1` halts on a
 missing key. So `ALLM_PROVIDER=anthropic mix run examples/run_all.exs`
 requires **both** `ANTHROPIC_API_KEY` and `VOYAGE_API_KEY`. Voyage's free
 tier covers the examples budget.
+
+#### Moderation scripts and the `# Provider: openai` marker
+
+Scripts 19–20 are the mirror image of 16–18. Moderation is a
+single-provider capability — Anthropic ships no moderation endpoint, and
+Gemini's safety ratings ride `generateContent` rather than a standalone
+call — so the `"anthropic"` and `"gemini"` rows carry
+`moderation_adapter: nil` and `ExamplesHelpers.moderation_engine/1` raises
+`ArgumentError` for them.
+
+Because 19–20 **do** carry a `# Provider: openai` marker, `run_all.exs`
+SKIPS them on those arms rather than reaching that raise, so no extra key
+is needed anywhere. Both scripts cost **$0.00** — `/v1/moderations` is
+free — which is why the OpenAI arm's cost estimate is unchanged.
 
 The `:env_loader` dep is declared `only: [:dev]` in `mix.exs`, so it does
 NOT ship in the published Hex package (the `examples/` directory itself is
@@ -233,6 +254,23 @@ All three carry **no** `# Provider:` marker, so `run_all.exs` runs them
 on every arm. See "Embedding scripts and `VOYAGE_API_KEY`" above for the
 one extra key that implies.
 
+## Moderation (19–20)
+
+- `19_moderate_text.exs` — an all-strings `:input` through
+  `ALLM.moderate/3`. One result per string, in input order.
+- `20_moderate_image.exs` — a multimodal `:input` (one string plus one
+  `%ALLM.ImagePart{}`, the checked-in kestrel PNG inlined as a `data:`
+  URI). Any image present makes the whole list **one** item judged as a
+  whole, so two elements in yields exactly one result out. The script
+  derives that count with `ALLM.ModerationRequest.multimodal?/1` *before*
+  the call and asserts it against what actually came back.
+
+Both carry `# Provider: openai` — the mirror image of 16–18's deliberate
+absence of a marker. See "Moderation scripts and the `# Provider: openai`
+marker" above.
+
+Neither script costs anything: `/v1/moderations` is free.
+
 ## Running
 
 Single script (default — OpenAI):
@@ -289,6 +327,8 @@ facade (`generate/3`, `stream/3`, `chat/3`, `step/3`, `generate_image/3`,
 | `16_embed_single.exs` | tight | C | all | `ALLM.embed/3` with one input; asserts vector shape and `dimensions/1` agreement |
 | `17_embed_batch_chunked.exs` | tight | C | all | 250 inputs through transparent chunking; asserts `chunk_count` against the adapter's `max_batch_size/0` |
 | `18_embed_query_vs_document.exs` | loose | C | all | asymmetric embedding — `task_type: :search_query` vs `:search_document`, ranked by cosine similarity |
+| `19_moderate_text.exs` | tight | C | openai | `ALLM.moderate/3` over an all-strings input; asserts batch cardinality, index order, and that a plain threat is flagged while a benign string is not |
+| `20_moderate_image.exs` | tight | C | openai | multimodal `ALLM.moderate/3` — `ModerationRequest.multimodal?/1` derives the result count before the call, and the script asserts it against the count that came back (two elements in, one result out) |
 
 ## Image generation
 
@@ -377,7 +417,7 @@ provider pricing page for any tight budget.
 
 | Provider arm | Approx cost | Notes |
 |--------------|-------------|-------|
-| OpenAI (`gpt-5.4-nano` + `dall-e-2` + `gpt-image-1` + `text-embedding-3-small`) | **~$0.13 USD** | bulk of the cost is `11_edit_image.exs` (~$0.04) |
+| OpenAI (`gpt-5.4-nano` + `dall-e-2` + `gpt-image-1` + `text-embedding-3-small` + `omni-moderation-latest`) | **~$0.13 USD** | bulk of the cost is `11_edit_image.exs` (~$0.04); the moderation scripts are free |
 | Anthropic (`claude-sonnet-4-6` + `voyage-3.5-lite`) | **~$0.08 USD** | drops to ~$0.01 with `ALLM_MODEL=claude-haiku-4-5` |
 | Gemini (`gemini-3-flash-preview` + image preview + `gemini-embedding-001`) | **~$0.03 USD** | image scripts on Gemini skip variations |
 | **All three combined** | **~$0.24 USD** | per clean dual+gemini pass |
@@ -423,8 +463,13 @@ defaults per provider row to:
 - **Anthropic (via Voyage):** `voyage-3.5-lite`
 - **Gemini:** `gemini-embedding-001`
 
-The two variables are deliberately separate: a chat model id sent to an
-embeddings endpoint is a guaranteed 400, so the documented
+Scripts 19–20 likewise ignore `ALLM_MODEL` and read
+`ALLM_MODERATION_MODEL`, which defaults to `omni-moderation-latest` on
+the only arm they run on. The `text-moderation-*` family was shut down on
+2025-10-27 and answers a 400.
+
+The variables are deliberately separate: a chat model id sent to an
+embeddings or moderations endpoint is a guaranteed 400, so the documented
 `ALLM_MODEL=…` invocations below would otherwise fail every embedding
 script now that 16–18 run on every arm.
 
@@ -436,6 +481,7 @@ ALLM_MODEL=claude-haiku-4-5  ALLM_PROVIDER=anthropic mix run examples/run_all.ex
 ALLM_MODEL=gemini-2.5-flash  ALLM_PROVIDER=gemini    mix run examples/run_all.exs
 
 ALLM_EMBEDDING_MODEL=text-embedding-3-large mix run examples/17_embed_batch_chunked.exs
+ALLM_MODERATION_MODEL=omni-moderation-2024-09-26 mix run examples/19_moderate_text.exs
 ```
 
 `gpt-4.1-mini` is a non-reasoning model on the Chat Completions endpoint

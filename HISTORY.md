@@ -1,3 +1,53 @@
+## [DOC] Document content moderation — spec §39, guide, examples (Phase 22.6)
+*Thursday, September 3rd at 7pm*
+Sixth batch of the Phase 22 moderation family: the capability becomes 
+discoverable. Code landed in 22.1–22.5; this is the layer a user actually 
+meets.
+
+- Add spec §39 (Content moderation) in ten subsections mirroring §36, plus 
+stamped amendment blocks on §27 (module tree), §29 (telemetry) and §35.7 
+(bundled-adapter rule). §39.3 reproduces the behaviour's ten invariants in the 
+module's own frozen order rather than renumbering them into §36's shape — 
+conformance case names cite them by number.
+- Add `guides/moderation.md` and register it in all three `@guides` literals, 
+so `doctest_file/1` executes its examples rather than letting them rot. Prefer 
+`iex>` throughout: 13 executable blocks against `FakeModeration`, 5 fences 
+reserved for what a doctest genuinely cannot run (a live key, a nonexistent 
+file, an external metrics module, ExUnit's `assert_receive`).
+- Add `examples/19_moderate_text.exs` and `20_moderate_image.exs` with `# 
+Provider: openai` markers, so `run_all.exs` scopes them to the one arm that has 
+an adapter instead of halting the other two. Both cost $0.00 — the endpoint 
+is free — and the image script inlines its PNG as a data URI, so it needs no 
+third-party host.
+- Extract `capability_engine/2` in `examples/_helpers.exs` and migrate 
+`image_engine/1`, `embedding_engine/1` and the new `moderation_engine/1` onto 
+it in the same edit. Behaviour-preservation measured across a 36-probe matrix; 
+the diff is empty once the unique engine id is normalized.
+- Fix the guide's flagship screening recipe, which did not compile: it 
+referenced a `with`-clause binding inside `else`, where Elixir does not expose 
+it. Found by all three review lanes and reproduced before fixing. Converted to 
+an `iex>` doctest rather than repaired as a fence — the example runs on Fake 
+with no key, so it should never have been a fence, and conversion is what stops 
+the next edit breaking silently.
+- Correct a false claim about corrupted verdicts. The docs said a repaired 
+`flagged` announces itself via empty `:categories`/`:category_scores`; 
+`__from_tagged__/1` decodes those fields independently, so a tampered payload 
+decodes to `flagged: false` beside a fully populated map. The guide now says 
+the repair is silent and tells the caller to validate before decoding. Two 
+further copies of the same claim, in the spec and in `ALLM.ModerationResult`'s 
+moduledoc, are routed to 22.7 so the normative source and its derived copy move 
+together.
+
+The OpenAI examples arm was re-characterized rather than inherited: it halts at 
+script 10, not 13. Run individually past the halt, 01–09 OK, 10 FAIL, 11–12 
+OK, 13 FAIL, 14–20 OK — both failures resolve to their own existing 
+tickets, so no new bug was filed and `RUN_OUTPUT_OPENAI.md` was left untouched.
+
+Not released. `mix.exs @version` stays at 0.5.0; the v0.6.0 CHANGELOG entry is 
+staged for a release the maintainer runs deliberately.
+
+---
+
 ## [BUG] Stop unreadable image files crashing every vision adapter
 *Wednesday, September 2nd at 2pm*
 An `%ALLM.Image{source: {:file, path}}` whose file cannot be read raised out of 

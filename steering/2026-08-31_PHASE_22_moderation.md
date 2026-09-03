@@ -18,10 +18,10 @@
 | 22.3 | Layer C façade: `ALLM.moderate/3`, `ALLM.moderation_request/2`, `:moderate` telemetry span, `Capability.preflight_moderation/2` | C | Completed |
 | 22.4 | `ALLM.Providers.OpenAI.Moderation` — text input, recorder + wire probe + fixtures | B | Completed |
 | 22.5 | Image input: `%ALLM.ImagePart{}` items, MIME/size gate, multimodal cardinality | B | Completed |
-| 22.6 | Spec §39, `guides/moderation.md`, examples 19–20, `mix.exs` wiring, `CHANGELOG` | — | Not Started |
+| 22.6 | Spec §39, `guides/moderation.md`, examples 19–20, `mix.exs` wiring, `CHANGELOG` | — | Completed |
 | 22.7 | `[CHORE]` sweep: CLAUDE.md stale claim, `@guides` parity meta-test, images.ex redaction `[CARRY]` | — | Not Started |
 
-**Overall Progress:** 5/7 sub-phases complete. Per-sub-phase detail: `steering/2026-08-31_PHASE_22_moderation_RECORDS.md`.
+**Overall Progress:** 5/7 sub-phases complete; 22.6 built, review gates pending. Per-sub-phase detail: `steering/2026-08-31_PHASE_22_moderation_RECORDS.md`.
 
 ---
 

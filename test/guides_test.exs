@@ -25,6 +25,7 @@ defmodule GuidesTest do
     errors_and_retries.md
     multi_tenant_keys.md
     embeddings.md
+    moderation.md
   )
 
   setup_all do

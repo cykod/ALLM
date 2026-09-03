@@ -1,3 +1,69 @@
+## [REL] v0.6.0 — Content moderation
+
+Breaking changes:
+- An `%ALLM.Image{source: {:base64, _}}` whose data will not decode is now
+  rejected locally as `%ALLM.Error.ValidationError{reason: :invalid_message}`
+  carrying `:unresolvable_image`, instead of being forwarded for the provider
+  to answer 400. Code matching on the provider's `%AdapterError{}` for this
+  case now sees a `%ValidationError{}` from pre-flight
+- `ALLM.Error.EngineError` gains `:no_moderation_adapter` and
+  `ALLM.Error.ValidationError` gains `:invalid_moderation_request`. Both are
+  closed enums, so an exhaustive `case` over either reason union needs a new
+  clause
+
+Other changes:
+- Add content moderation: `ALLM.moderate(engine, "…user text…")` returns
+  `{:ok, %ALLM.ModerationResponse{}}` via the engine's new
+  `:moderation_adapter` slot. `ModerationResponse.flagged?/1` answers the
+  common question in one call; `ModerationResult.category_scores` carries the
+  provider's full per-category float map for callers wanting their own
+  threshold
+- Add `ALLM.Providers.OpenAI.Moderation` against the free `POST
+  /v1/moderations`, targeting `omni-moderation-latest`. `max_batch_size/0` is
+  1000, settled by a live ladder and documented as a demonstrated floor rather
+  than a provider-stated cap
+- Accept images: an `:input` may carry `%ALLM.ImagePart{}` items alongside
+  strings. Any image makes the whole input **one** multimodal item, so the
+  provider returns exactly one result however long the list —
+  `ModerationRequest.multimodal?/1` derives that before the call
+- Keep per-category maps provider-shaped and string-keyed rather than
+  normalizing to a cross-provider atom taxonomy, so provider-controlled keys
+  never grow the atom table
+- Add the `ALLM.ModerationAdapter` behaviour with ten numbered invariants,
+  a ten-case published conformance suite, and `ALLM.Providers.FakeModeration`
+  — a scripted adapter whose `{:flagged, categories}` entry makes "assert the
+  app rejects flagged content" a one-liner
+- Add the `[:allm, :moderate, :*]` telemetry span with `result_count` and
+  `flagged_count` on both success and error paths, and `usage: nil` on
+  `:stop` so a handler written for `:embed` does not `KeyError`
+- Add `ALLM.Capability.preflight_moderation/2`, inert without the optional
+  `llm_db` catalog, and bind it with a test — deleting the gate previously
+  left the whole suite green
+- Add `guides/moderation.md` — the engine slot, `flagged?/1` versus a
+  per-category threshold, the caller-side chunk loop (moderation deliberately
+  does NOT chunk transparently the way `embed/3` does), image input and the
+  multimodal cardinality rule, the one-row provider matrix and why it has one
+  row, and the `FakeModeration` scripting grammar. Every runnable example
+  executes as a doctest under `mix test`
+- Add `examples/19_moderate_text.exs` and `examples/20_moderate_image.exs`,
+  plus `ExamplesHelpers.moderation_engine/1` and the `ALLM_MODERATION_MODEL`
+  override. Both carry a `# Provider: openai` marker so `run_all.exs` skips
+  them on the arms that have no moderation adapter, and both cost $0.00
+- Fix unreadable image files crashing every vision adapter. A
+  `%ALLM.Image{source: {:file, path}}` whose file could not be read passed
+  both the MIME and the size gate and then raised out of `generate/2` and
+  `stream/2` on all four translators; it now returns an error tuple
+- Fix transport timeouts never reaching Finch, so a slow reasoning turn is no
+  longer killed at Finch's 15 s default. Add `ALLM.Adapter.transport_opts/0`
+  as the neutral key list; transport opts now reach the adapter without
+  leaking onto the request body, which also makes the documented
+  `adapter_opts: [finch_name: …]` route work for the first time
+- Assign the run-level `request_id` unconditionally in `ALLM.Runner`,
+  dropping a defensive fallback no current code path could reach, and let
+  `ALLM.Chat` compile clean under the Elixir 1.19 type checker
+- Silence every compile, test, docs, and conformance warning across both Mix
+  projects
+
 ## [REL] v0.5.0 — Text embeddings
 
 Breaking changes:

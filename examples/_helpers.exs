@@ -18,6 +18,10 @@ defmodule ExamplesHelpers do
     * `embedding_engine/1` — embed-adapter engine (Phase 20.7); reads
       `:embed_adapter` / `:embedding_default_model` / `:embedding_key_env`.
       Raises `ArgumentError` for providers without an embedding adapter.
+    * `moderation_engine/1` — moderation-adapter engine (Phase 22.6); reads
+      `:moderation_adapter` / `:moderation_default_model`. Raises
+      `ArgumentError` for providers without a moderation adapter, which
+      today is every provider except OpenAI.
 
   ## Why the Anthropic row's embedding adapter is `Voyage`
 
@@ -33,6 +37,19 @@ defmodule ExamplesHelpers do
 
   `:embedding_key_env` defaults to the row's chat `:key_env` when absent, so
   OpenAI and Gemini need no extra key.
+
+  ## Why only the OpenAI row has a moderation adapter
+
+  Moderation is a single-provider capability. Anthropic ships no moderation
+  endpoint, and Google exposes safety ratings inline on `generateContent`
+  rather than as a standalone classification call — neither can implement
+  `c:ALLM.ModerationAdapter.moderate/2` without inventing a generation call
+  to attach itself to. So the `"anthropic"` and `"gemini"` rows carry
+  `moderation_adapter: nil`, `moderation_engine/1` raises for them, and the
+  moderation scripts carry a `# Provider: openai` marker so `run_all.exs`
+  SKIPS them on those arms instead of halting the run. This is the opposite
+  of the embedding scripts, which carry no marker because every arm has an
+  adapter.
 
   Auto-loads a project-root `.env` via `:env_loader` (dev-only dep) so reviewers
   who keep both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` in `.env` don't have to
@@ -53,7 +70,9 @@ defmodule ExamplesHelpers do
       image_adapter: ALLM.Providers.OpenAI.Images,
       image_default_model: "dall-e-2",
       embed_adapter: ALLM.Providers.OpenAI.Embeddings,
-      embedding_default_model: "text-embedding-3-small"
+      embedding_default_model: "text-embedding-3-small",
+      moderation_adapter: ALLM.Providers.OpenAI.Moderation,
+      moderation_default_model: "omni-moderation-latest"
     },
     "anthropic" => %{
       adapter: ALLM.Providers.Anthropic,
@@ -66,7 +85,11 @@ defmodule ExamplesHelpers do
       # partner, and the key comes from VOYAGE_API_KEY. See the moduledoc.
       embed_adapter: ALLM.Providers.Voyage.Embeddings,
       embedding_default_model: "voyage-3.5-lite",
-      embedding_key_env: "VOYAGE_API_KEY"
+      embedding_key_env: "VOYAGE_API_KEY",
+      # Anthropic ships no moderation endpoint and names no partner for it —
+      # see the moduledoc. `moderation_engine/1` raises here by design.
+      moderation_adapter: nil,
+      moderation_default_model: nil
     },
     "gemini" => %{
       adapter: ALLM.Providers.Gemini,
@@ -77,7 +100,11 @@ defmodule ExamplesHelpers do
       image_default_model: "gemini-3.1-flash-image-preview",
       default_temperature: 1.0,
       embed_adapter: ALLM.Providers.Gemini.Embeddings,
-      embedding_default_model: "gemini-embedding-001"
+      embedding_default_model: "gemini-embedding-001",
+      # Gemini's safety ratings ride `generateContent` rather than a
+      # standalone endpoint — see the moduledoc.
+      moderation_adapter: nil,
+      moderation_default_model: nil
     }
   }
 
@@ -152,28 +179,16 @@ defmodule ExamplesHelpers do
   `ALLM_MODEL` overrides the default model when set).
   """
   def image_engine(extra_opts \\ []) do
-    provider = active_provider()
-    row = lookup_provider_row()
-
-    %{key_env: key_env, image_adapter: image_adapter, image_default_model: image_default_model} =
-      row
-
-    if is_nil(image_adapter) or is_nil(image_default_model) do
-      raise ArgumentError,
-            "#{provider} does not have an image_adapter; this script is OpenAI-only"
-    end
-
-    ensure_adapter_loaded!(image_adapter)
-    ensure_key_present!(key_env)
-
-    model = System.get_env("ALLM_MODEL", image_default_model)
-
-    base = [
-      image_adapter: image_adapter,
-      model: model
-    ]
-
-    ALLM.Engine.new(Keyword.merge(base, extra_opts))
+    capability_engine(
+      %{
+        adapter_key: :image_adapter,
+        model_key: :image_default_model,
+        key_env_key: nil,
+        model_env: "ALLM_MODEL",
+        unavailable: "does not have an image_adapter; this script is OpenAI-only"
+      },
+      extra_opts
+    )
   end
 
   @doc """
@@ -195,28 +210,91 @@ defmodule ExamplesHelpers do
   overrides the default model when set).
   """
   def embedding_engine(extra_opts \\ []) do
+    capability_engine(
+      %{
+        adapter_key: :embed_adapter,
+        model_key: :embedding_default_model,
+        key_env_key: :embedding_key_env,
+        model_env: "ALLM_EMBEDDING_MODEL",
+        unavailable: "does not have an embed_adapter; this script cannot run on that provider arm"
+      },
+      extra_opts
+    )
+  end
+
+  @doc """
+  Build a `%ALLM.Engine{}` for the active provider's moderation adapter
+  (Phase 22.6).
+
+  Reads `:moderation_adapter` / `:moderation_default_model` from the provider
+  row. The key comes from the row's chat `:key_env`, because the only
+  moderation adapter that exists is OpenAI's and it authenticates with the
+  same `OPENAI_API_KEY` as the chat adapter.
+
+  Raises `ArgumentError` naming the provider when the active row has no
+  moderation adapter. Only the OpenAI row has one, so the moderation scripts
+  carry a `# Provider: openai` marker and `run_all.exs` skips them on the
+  other arms rather than reaching this raise; see the moduledoc.
+
+  `extra_opts` is merged on top of the helper defaults (`moderation_adapter:`
+  and `model:` are baked in from the provider row; `ALLM_MODERATION_MODEL`
+  overrides the default model when set).
+  """
+  def moderation_engine(extra_opts \\ []) do
+    capability_engine(
+      %{
+        adapter_key: :moderation_adapter,
+        model_key: :moderation_default_model,
+        key_env_key: nil,
+        model_env: "ALLM_MODERATION_MODEL",
+        unavailable: "does not have a moderation_adapter; this script is OpenAI-only"
+      },
+      extra_opts
+    )
+  end
+
+  # `image_engine/1`, `embedding_engine/1` and `moderation_engine/1` are one
+  # constructor differing only in five values, so they share one body
+  # (`agent-spec/IMPLEMENTATION.md:68` — the second-caller trigger is two
+  # implementations and is semantic, not byte-level; `:235` requires every
+  # existing copy migrate in the same commit). A fourth capability is a spec
+  # map, not a fourth copy.
+  #
+  #   * `:adapter_key`  — provider-row key AND the `%ALLM.Engine{}` slot; the
+  #     two are the same atom for all three capabilities today.
+  #   * `:model_key`    — provider-row key for the capability's default model,
+  #     which always lands on the engine's single shared `:model` field.
+  #   * `:key_env_key`  — optional provider-row key naming a capability-specific
+  #     key env var, falling back to the row's chat `:key_env`. Only embeddings
+  #     uses it (the Anthropic row's `VOYAGE_API_KEY`); `nil` for the others.
+  #   * `:model_env`    — env var that overrides the row's default model. Note
+  #     `image_engine/1` reads the generic `ALLM_MODEL` while its two siblings
+  #     read a capability-specific variable; that divergence predates this
+  #     extraction and is preserved here rather than silently normalized.
+  #   * `:unavailable`  — the `ArgumentError` tail, appended to the provider
+  #     name. Carries its own article ("an image_adapter" vs "a
+  #     moderation_adapter"), so each message stays byte-identical to the one
+  #     its script's `# Provider:` marker documents.
+  defp capability_engine(spec, extra_opts) do
     provider = active_provider()
     row = lookup_provider_row()
 
-    embed_adapter = Map.get(row, :embed_adapter)
-    embedding_default_model = Map.get(row, :embedding_default_model)
-    key_env = Map.get(row, :embedding_key_env) || Map.fetch!(row, :key_env)
+    adapter = Map.get(row, spec.adapter_key)
+    default_model = Map.get(row, spec.model_key)
 
-    if is_nil(embed_adapter) or is_nil(embedding_default_model) do
-      raise ArgumentError,
-            "#{provider} does not have an embed_adapter; " <>
-              "this script cannot run on that provider arm"
+    key_env =
+      (spec.key_env_key && Map.get(row, spec.key_env_key)) || Map.fetch!(row, :key_env)
+
+    if is_nil(adapter) or is_nil(default_model) do
+      raise ArgumentError, "#{provider} #{spec.unavailable}"
     end
 
-    ensure_adapter_loaded!(embed_adapter)
+    ensure_adapter_loaded!(adapter)
     ensure_key_present!(key_env)
 
-    model = System.get_env("ALLM_EMBEDDING_MODEL", embedding_default_model)
+    model = System.get_env(spec.model_env, default_model)
 
-    base = [
-      embed_adapter: embed_adapter,
-      model: model
-    ]
+    base = [{spec.adapter_key, adapter}, {:model, model}]
 
     ALLM.Engine.new(Keyword.merge(base, extra_opts))
   end
