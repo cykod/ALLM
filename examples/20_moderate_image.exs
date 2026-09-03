@@ -39,11 +39,6 @@ Code.require_file("_helpers.exs", __DIR__)
 
 engine = ExamplesHelpers.moderation_engine()
 
-fail = fn msg ->
-  IO.puts(:stderr, "FAIL: #{msg}")
-  System.halt(1)
-end
-
 image =
   __DIR__
   |> Path.join("fixtures/kestrel_256.png")
@@ -59,17 +54,22 @@ input = [
 # `multimodal?/1`. Build the request explicitly so the derivation is visible.
 request = ALLM.moderation_request(input)
 multimodal? = ALLM.ModerationRequest.multimodal?(request)
-expected_results = if multimodal?, do: 1, else: length(input)
 
 if not multimodal? do
-  fail.("multimodal?/1 returned false for an input carrying an %ALLM.ImagePart{}")
+  ExamplesHelpers.fail!("multimodal?/1 returned false for an input carrying an %ALLM.ImagePart{}")
 end
+
+# Past the halt above, `multimodal?` is necessarily true, and the cardinality
+# rule for a multimodal request is one result for the whole input regardless of
+# how many elements it carries. Binding this before the halt would compute an
+# `else` branch no run can reach.
+expected_results = 1
 
 case ALLM.moderate(engine, request) do
   {:ok, %ALLM.ModerationResponse{results: results} = resp} ->
     cond do
       length(results) != expected_results ->
-        fail.(
+        ExamplesHelpers.fail!(
           "multimodal?/1 predicted #{expected_results} result(s) for a " <>
             "#{length(input)}-element input; the provider returned #{length(results)}"
         )
@@ -79,16 +79,18 @@ case ALLM.moderate(engine, request) do
 
         cond do
           result.index != 0 ->
-            fail.("expected index 0 on the single multimodal result, got #{result.index}")
+            ExamplesHelpers.fail!(
+              "expected index 0 on the single multimodal result, got #{result.index}"
+            )
 
           map_size(result.category_scores) == 0 ->
-            fail.("expected a populated category_scores map")
+            ExamplesHelpers.fail!("expected a populated category_scores map")
 
           not Enum.all?(Map.values(result.category_scores), &is_float/1) ->
-            fail.("expected every category score to be a float")
+            ExamplesHelpers.fail!("expected every category score to be a float")
 
           result.flagged ->
-            fail.(
+            ExamplesHelpers.fail!(
               "expected a benign photograph NOT to be flagged; categories=" <>
                 inspect(ALLM.ModerationResult.flagged_categories(result))
             )
@@ -113,5 +115,5 @@ case ALLM.moderate(engine, request) do
     end
 
   {:error, error} ->
-    fail.("ALLM.moderate/3 returned error #{inspect(error)}")
+    ExamplesHelpers.fail!("ALLM.moderate/3 returned error #{inspect(error)}")
 end

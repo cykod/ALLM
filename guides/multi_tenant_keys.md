@@ -73,6 +73,7 @@ binary key.
 
 Library-wide defaults belong in `config/runtime.exs`:
 
+<!-- fence-check: skip — a `config/runtime.exs` snippet: `config/3` exists only inside a Mix config file -->
 ```elixir
 config :allm, :keys,
   openai: System.fetch_env!("OPENAI_API_KEY"),

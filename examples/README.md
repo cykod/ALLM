@@ -67,11 +67,16 @@ The map shape lets future fields (`:image_adapter`, `:embed_adapter`,
 the destructure
 pattern in the helper.
 
-`ExamplesHelpers.embedding_engine/1` is the third constructor, sister to
-`engine/1` and `image_engine/1`. It reads `:embed_adapter` /
+`ExamplesHelpers.embedding_engine/1` reads `:embed_adapter` /
 `:embedding_default_model`, and `:embedding_key_env` — which falls back
 to the row's chat `:key_env` when the row omits it. `ALLM_EMBEDDING_MODEL`
 overrides the model independently of `ALLM_MODEL`.
+
+`ExamplesHelpers.moderation_engine/1` reads `:moderation_adapter` /
+`:moderation_default_model`, and raises `ArgumentError` naming the provider
+for a row that has no moderation adapter — which is why scripts 19 and 20
+carry a `# Provider: openai` marker. `ALLM_MODERATION_MODEL` overrides the
+model independently of `ALLM_MODEL`.
 
 Every script's first lines are:
 

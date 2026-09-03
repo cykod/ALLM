@@ -1,3 +1,45 @@
+## [TST] Add a fence-compile gate for guides, and apply the Phase 22 polish pass
+*Thursday, September 3rd at 8pm*
+Builds the gate CLAUDE.md claimed existed for months, and closes the run's 
+deferred Low findings.
+
+- Add `scripts/check_guide_fences.exs` plus six tests in 
+`test/guides_test.exs`. Every ` ```elixir ` fence in every registered guide is 
+now compiled. The claimed gate was a hand-maintained denylist of dead API names 
+— an unbounded subject set maintained by the same faculty that had already 
+failed; this is a compiler, which discovers its own subjects.
+- Two problems had to be solved before it was shippable. Compiling a fence body 
+evaluates it: the first pass resolved live API keys and tried to read a 
+nonexistent path, so bodies are now wrapped in a module and never run. And a 
+naive gate skipped 54 of 81 fences, because guides legitimately read `engine` 
+or `session` from an earlier block; the script instead walks the fence AST in 
+evaluation order and binds only names read before ever bound. That is exactly 
+the discriminator the commissioning defect needs — `session = f(session)` 
+reads before it binds and passes, while a `with` clause binds `verdict` before 
+anything reads it, so referencing it from `else` stays red. 54 skips became 14.
+- Verified against the real defect rather than a reconstruction: restoring 
+`guides/moderation.md` from the 22.6 review checkpoint makes the gate report 
+`:425 — undefined variable "verdict"`, the one hard defect four agents each 
+rediscovered by reading.
+- The gate documents what it cannot catch, pinned by negative-control tests 
+rather than asserted: `response.content` on a struct without that field 
+compiles clean, so the run's second defect would have escaped it. Skips use an 
+adjacent `<!-- fence-check: skip — reason -->` pragma with a mandatory 
+reason, and a test asserts no fence is skipped that would have compiled anyway 
+— the first draft of that test was vacuous, which is the species this phase 
+spent two batches removing.
+- Polish pass: extracted a duplicated `fail!/1` from the two moderation 
+examples, corrected a "three constructors" count above a four-item list, 
+replaced a hard-coded batch cap with the derived value and its provenance, 
+hoisted an unreachable `else` branch, and swapped a duplicated Gemini stub for 
+the file's own helper.
+
+Also corrects the retro, which reported a self-matching predicate as live at 
+HEAD; the prior fix pass had already scoped it, and the cite was stale. Caught 
+by re-measuring instead of acting on the claim.
+
+---
+
 ## [OTHR] Close Phase 22's out-of-tree debt — redaction, guide parity, false claims (Phase 22.7)
 *Thursday, September 3rd at 7pm*
 Seventh and last batch of Phase 22: the `[CHORE]` sweep that closes the phase's 

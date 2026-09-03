@@ -1905,6 +1905,8 @@ Both structs are **live evidence for the hardening**: `:cause` is `nil` (no tran
 * **A new guide must now be registered in THREE places** — `mix.exs` `@guides`, `test/guides_test.exs` `@guides`, and a `doctest_file/1` line in `test/guides_doctest_test.exs` — or the suite goes red. That is the intended signal, not a test to relax; `@excluded` is the visible opt-out and is empty.
 * **The `guides/fakes.md` finding generalises.** It is 8 KB of fences with one `iex>` block; the other five guides' fences carry the same zero protection. Whoever next touches a guide should convert every Fake-runnable fence in it rather than treating `fakes.md` as the only offender.
 * **`v0.6.0` is still BUILT but NOT RELEASED.** `mix.exs @version` untouched; `mix run scripts/release.exs minor` remains the phase's outstanding action and was explicitly out of scope for this run.
+* **The image fixture families have no provenance assertion** (22.7 code review F8, Low, deferred). `openai/embeddings_wire_test.exs`, `gemini/embeddings_wire_test.exs`, `voyage/embeddings_wire_test.exs` and `openai/moderation_wire_test.exs` each read raw bytes and assert `_comment` present on `synthesized/` and absent on `recorded/`; neither `test/allm/providers/openai/images_test.exs` nor `test/allm/providers/gemini/images_test.exs` does, and both families hold genuine `recorded/` fixtures. Whoever next touches either file should port the `raw_fixture/2` provenance block from `test/allm/providers/openai/moderation_wire_test.exs:80-95`. **DONE WHEN** `grep -L 'refute Map.has_key?(raw, "_comment")' test/allm/providers/openai/images_test.exs test/allm/providers/gemini/images_test.exs` is empty (today: both files).
+* **The three unsanitized `:cause` assignments in `openai/images.ex`'s `fetch_url_bytes/2`** (`:934`, `:943`, `:952` at the time of measurement) are still raw at HEAD — re-verified 2026-09-03 with `grep -n 'cause: cause\|cause: exception\|sanitize_cause' lib/allm/providers/openai/images.ex`, which returns those three alongside the four sanitized sites (`:1021`, `:1035`, `:1118`, and the definition at `:1127`). Deliberately deferred by 22.7 as caller-URL-sourced rather than provider-sourced; carried in `.work/HANDOFF.md`. Not re-opened by the 22.7 polish pass, which is `test/`-and-docs scoped.
 
 ### `[DEFERRED-DRY]` entries — 22.7 (added by the fix pass; the entry shipped without one)
 
@@ -1989,3 +1991,117 @@ the family-wide `:metadata` redaction gap; the six-copy `sanitize_cause/1` extra
 unhardened chat adapters; `BadMapError` on a string-valued `"error"` envelope in both image
 funnels; and `sanitize_cause/1` leaving `Jason.DecodeError.position` inconsistent so
 `Exception.message/1` on the sanitized cause raises `ArgumentError`.
+
+---
+
+## Post-22.7 retro fix pass (2026-09-03) — the fence-compile gate
+
+Commissioned by `.work/retro/2026-09-03-phase22-6-7.md` **CODE-ACTIONABLE item 1**,
+which asked for the gate `CLAUDE.md:57` had claimed existed for months. It is
+deliberately **not** the thing that was claimed: the claimed gate was a
+hand-maintained denylist of dead API names, whose subject set is unbounded and
+whose maintenance trigger is the same faculty that had already failed. A compiler
+discovers its own subjects.
+
+**What shipped.** `scripts/check_guide_fences.exs` (`Scripts.CheckGuideFences`),
+plus a `describe "fenced blocks"` block in `test/guides_test.exs` so it is a red
+suite rather than a script nobody runs. The guide set is read off
+`Mix.Project.config()[:docs][:extras]`, not from a literal in the script — same
+reasoning as that file's existing `@guides` parity block.
+
+**Two design decisions worth the ink.**
+
+1. **Nothing the fences contain is ever executed.** The obvious implementation —
+   `Code.compile_string/1` on the fence body — *runs* top-level code. Measured on
+   the first pass: it resolved live API keys for `:openai` and `:anthropic`,
+   called `System.fetch_env!("OPENAI_API_KEY")`, and tried to read
+   `/path/to/photo.png`. Every fence is therefore wrapped either in
+   `defmodule X do def __fence__ do … end end` or in `defmodule X do … end`, so
+   the body is compiled and never evaluated; whichever wrapping matches the
+   fence's own shape is attempted first so the reported diagnostic is the
+   compiler's real complaint. Modules a fence defines are `:code.purge/1`'d
+   immediately, because the gate runs inside a VM that holds the real `ALLM.*`.
+2. **Free variables are bound to `nil`; bound-then-misread ones are not.** A
+   narrative guide's fences legitimately read `engine`, `request`, `session`,
+   `chunks`, `tenant` from an earlier block. With the non-executing wrapping in
+   place but no handling for those names, **54 of the 81 fences failed** — a 67%
+   opt-out rate, which is a fig leaf, not a gate. (Before the wrapping, with
+   fences compiled at top level, it was 63 — but those numbers are not
+   comparable, since several of the 63 were live key lookups and file reads
+   rather than compile failures.) The script
+   instead walks the fence AST in *evaluation order* and binds only names that
+   are READ before they are ever BOUND. This is exactly the discriminator the
+   commissioning defect needs: `session = f(session)` reads before it binds
+   (carried in — green), while `with {:ok, verdict} <- …` binds before anything
+   reads `verdict`, so referencing it from `else` is a use of a name the fence
+   owns and stays red. That took failures from 54 to 14.
+
+**Measured, at HEAD:**
+
+```
+$ mix run scripts/check_guide_fences.exs | head -1
+67 fences compiled, 14 skipped.
+$ grep -c '^```elixir' $(grep -oE 'guides/[a-z_]+\.md' mix.exs | sort -u) | awk -F: '{t+=$2} END {print t}'
+81
+```
+
+**The 14 skips are the honest residue**, each carrying a mandatory reason in an
+`<!-- fence-check: skip — … -->` comment on the line above its opening
+delimiter (invisible in rendered hexdocs, adjacent to the fence so it cannot
+drift the way a line-numbered central literal would, and printed in full on every
+run). They fall into six kinds: bare `adapter_opts:` keyword fragments that are
+not expressions (`fakes.md` ×3), ExUnit test bodies needing a `use ExUnit.Case`
+module (`fakes.md` ×2, `moderation.md` ×1), literal `...` elisions
+(`tools.md`, `errors_and_retries.md`, `fakes.md`), functions the reader supplies
+(`tools.md`, `errors_and_retries.md`), a `config/runtime.exs` snippet
+(`multi_tenant_keys.md`), and Ecto/Pgvector/`MyApp.Document` which are not
+dependencies (`embeddings.md` ×2).
+
+**Proof it binds, run against the file that shipped the defect** rather than
+against a reconstruction — `guides/moderation.md` temporarily replaced with
+`git show 4efb37c:guides/moderation.md` (tag `wip/22-6-checkpoint`) and restored:
+
+```
+$ mix run scripts/check_guide_fences.exs
+2 ```elixir fence(s) do not compile:
+  guides/moderation.md:425 — undefined variable "verdict"
+  guides/moderation.md:525 — undefined function assert_receive/1 …
+EXIT=1
+```
+
+`:425` is the flagship *Screening before you generate* recipe, the run's one hard
+defect, which four agents each rediscovered by reading. It is now a suite
+failure. (`:525` is the `capture_pid` test snippet, correctly a skip today.)
+
+**What it does NOT catch, stated because over-claiming a control's coverage is
+the defect this whole sub-phase exists to punish.** Runtime behaviour of any
+kind. `%ALLM.Response{}` has no `:content` field, and `response.content`
+compiles clean on Elixir 1.17.3 — so the *second* defect this run hit
+(`guides/fakes.md`'s `## Construction` block) would **not** have been caught by
+this gate; it was caught by conversion to an `iex>` doctest. Calls to
+non-existent modules are warnings, not errors, and are deliberately not
+escalated, because that is what keeps illustrative `MyApp.*` fences legal without
+a skip. Both boundaries are pinned by negative-control tests
+(`test/guides_test.exs`, `describe "fenced blocks"`) rather than asserted in
+prose, and the adjacent struct-*literal* case — which IS caught — is pinned too,
+so the boundary is drawn where it actually falls.
+
+**`CLAUDE.md:57` amended in the same pass** to describe the gate, its two
+documented limits, the skip mechanism, and the reason the denylist was the wrong
+shape. That bullet's count carries the command that produced it.
+
+### Retro CODE-ACTIONABLE item 2 — no action needed
+
+The retro states that `RECORDS.md:1796`'s predicate *"still matches its own line
+at HEAD"*. Re-measured before acting on it, and it does not — the fix pass had
+already scoped it, and the retro's line number is stale (the text is at `:1807`):
+
+```
+$ git --no-optional-locks show 6842fe4:steering/2026-08-31_PHASE_22_moderation_RECORDS.md | grep -c 'grep -rn "come back empty alongside it" lib/ guides/ steering/allm_engine_session_streaming_spec_v0_2.md'
+1
+$ grep -rn "come back empty alongside it" lib/ guides/ steering/allm_engine_session_streaming_spec_v0_2.md; echo "exit=$?"
+exit=1
+```
+
+The unscoped form still matches this file, as it must — the record is not a site.
+

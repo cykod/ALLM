@@ -79,6 +79,7 @@ engine = ALLM.Engine.new(
 
 Disable retries entirely with `retry: false`:
 
+<!-- fence-check: skip — `adapter: ...` is an elision for the reader, not a literal argument -->
 ```elixir
 engine = ALLM.Engine.new(adapter: ..., retry: false)
 ```
@@ -106,6 +107,7 @@ response; see "Mid-stream errors fold into the response" below.
 
 In application code:
 
+<!-- fence-check: skip — `handle/1` stands in for an application function the reader supplies -->
 ```elixir
 case ALLM.generate(engine, request) do
   {:ok, response} ->

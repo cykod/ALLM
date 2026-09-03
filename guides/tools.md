@@ -137,6 +137,7 @@ thread.
 Mix-and-match: most tools auto, one tool manual. Set `manual: true` on
 the tool definition:
 
+<!-- fence-check: skip — the `%{...}` schema bodies are elisions for the reader, not literal maps -->
 ```elixir
 auto_tool = ALLM.tool(name: "get_weather", description: "...", schema: %{...})
 
@@ -227,6 +228,7 @@ The arity-2 keyword list carries call context. Standard keys provided by
 | `:engine` | `%ALLM.Engine{}` | The engine driving the call — handlers needing to issue downstream LLM calls reuse it via `ALLM.generate/3`. |
 | `:request_id` | `String.t() \| nil` | Telemetry-correlation id from the parent span. |
 
+<!-- fence-check: skip — `lookup_for_user/2` stands in for an application function the reader supplies -->
 ```elixir
 handler = fn args, ctx ->
   case Keyword.get(ctx, :context) do

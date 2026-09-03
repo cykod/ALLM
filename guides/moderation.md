@@ -293,7 +293,7 @@ nothing.
 | Endpoint | `POST /v1/moderations` |
 | Example model | `omni-moderation-latest` |
 | Key env var | `OPENAI_API_KEY` |
-| Inputs per request | 1000 |
+| Inputs per request | `max_batch_size/0` — 1000, a demonstrated floor from a live ladder rather than a provider-stated cap |
 | Image input | yes |
 | Categories reported | 13, string-keyed |
 | Per-category scores | yes |
@@ -553,6 +553,7 @@ Two behaviours to know before you script a *sequence*:
 before any gate runs, so you can assert on what the adapter received without
 registering a named process:
 
+<!-- fence-check: skip — an ExUnit test body: `assert_receive/1` and `assert/1` need a `use ExUnit.Case` module around them -->
 ```elixir
 engine =
   ALLM.Engine.new(

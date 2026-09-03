@@ -69,6 +69,7 @@ The full grammar lives in `ALLM.Providers.Fake.Script`'s moduledoc.
 
 For multi-call tests, use `:scripts` (a list of per-call lists):
 
+<!-- fence-check: skip — a bare `adapter_opts:` keyword fragment, not a standalone expression -->
 ```elixir
 adapter_opts: [
   scripts: [
@@ -116,6 +117,7 @@ isolation would otherwise reset the cursor for each Task.
 `adapter_opts[:usage]` materializes a `%ALLM.Usage{}` on every response
 without writing the usage entry per script:
 
+<!-- fence-check: skip — a bare `adapter_opts:` keyword fragment, not a standalone expression -->
 ```elixir
 adapter_opts: [
   script: [{:text, "ok"}, {:finish, :stop}],
@@ -145,6 +147,7 @@ path; the change is scoped to Fake's `{:usage, _}` entry.
 interpretation runs. The recording fires once per call — both
 `generate/2` and `stream/2` send before opening the stream.
 
+<!-- fence-check: skip — an ExUnit test body: `test/2`, `assert_receive/1` and `assert/1` need a `use ExUnit.Case` module around them -->
 ```elixir
 test "tool call sends the right schema" do
   me = self()
@@ -175,6 +178,7 @@ test bug.
 For streaming tests asserting that `Stream.resource/3`'s `after_fun`
 runs:
 
+<!-- fence-check: skip — `script: [...]` is an elision for the reader, not a literal list -->
 ```elixir
 ref = :counters.new(1, [:atomics])
 
@@ -194,6 +198,7 @@ reducer throws, or `Stream.run/1` scope exit). Brutal `Process.exit(pid,
 `adapter_opts[:retry_until_call]` makes the first `n - 1` calls fail
 transiently (with `:timeout`) and the `n`-th call succeed:
 
+<!-- fence-check: skip — a bare `adapter_opts:` keyword fragment, not a standalone expression -->
 ```elixir
 adapter_opts: [
   script: [{:text, "ok"}, {:finish, :stop}],
@@ -212,6 +217,7 @@ arm; see `errors_and_retries.md`.
 When a test fans work out across `Task.async/1` and you want the
 workers to see the test's engine, use `ALLM.Sandbox.set_engine/1`:
 
+<!-- fence-check: skip — an ExUnit test body: `test/2` and `assert/1` need a `use ExUnit.Case` module around them, and `fake_engine/0` is the reader's own helper -->
 ```elixir
 test "fan-out workers use the test engine" do
   ALLM.Sandbox.set_engine(fake_engine())

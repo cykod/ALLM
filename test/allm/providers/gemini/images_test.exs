@@ -745,14 +745,7 @@ defmodule ALLM.Providers.Gemini.ImagesTest do
     end
 
     test "no error struct carries a body preview" do
-      stub =
-        String.to_atom("img_nonjson_#{System.unique_integer([:positive])}")
-
-      Req.Test.stub(stub, fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!("a bare JSON string, not an object"))
-      end)
+      stub = stub_json("img_nonjson", 200, "a bare JSON string, not an object")
 
       assert {:error, %ImageAdapterError{reason: :malformed_response} = err} =
                call(stub, gen_request())

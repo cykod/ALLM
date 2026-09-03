@@ -5,7 +5,7 @@ defmodule ExamplesHelpers do
   adapter + default model + key env var name from the `@providers` table, and
   returns a configured `%ALLM.Engine{}` for use in any script.
 
-  Three constructors are exposed:
+  Four constructors are exposed:
 
     * `engine/1` — chat-adapter engine; reads `:adapter` / `:default_model`
       / `:key_env` from the provider row. Pass `vision: true` to route to
@@ -275,6 +275,20 @@ defmodule ExamplesHelpers do
   #     name. Carries its own article ("an image_adapter" vs "a
   #     moderation_adapter"), so each message stays byte-identical to the one
   #     its script's `# Provider:` marker documents.
+  @doc """
+  Prints `FAIL: <msg>` to stderr and halts with exit status 1.
+
+  Scripts 19 and 20 each defined this closure locally; `agent-spec/IMPLEMENTATION.md`
+  puts the extraction trigger at two implementations. Scripts 01-18 still inline
+  the two statements at every branch — migrating them is a separate `[CHORE]`, not
+  a reason to leave the third copy here.
+  """
+  @spec fail!(String.t()) :: no_return()
+  def fail!(msg) do
+    IO.puts(:stderr, "FAIL: " <> msg)
+    System.halt(1)
+  end
+
   defp capability_engine(spec, extra_opts) do
     provider = active_provider()
     row = lookup_provider_row()

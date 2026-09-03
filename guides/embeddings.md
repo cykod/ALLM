@@ -360,6 +360,7 @@ Vectors from different models — or the same model at different
 **2. Embed and insert.** Store the documents with
 `task_type: :search_document`:
 
+<!-- fence-check: skip — writes to `%MyApp.Document{}` through Ecto/Pgvector — neither is a dependency of this library -->
 ```elixir
 {:ok, response} = ALLM.embed(engine, texts, task_type: :search_document)
 
@@ -373,6 +374,7 @@ end)
 **3. Query by cosine distance.** Embed the search string with
 `task_type: :search_query`, then order by the `<=>` operator:
 
+<!-- fence-check: skip — imports `Ecto.Query` and `Pgvector.Ecto.Query` — neither is a dependency of this library -->
 ```elixir
 import Ecto.Query
 import Pgvector.Ecto.Query
