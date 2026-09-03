@@ -463,3 +463,5 @@
 [RETR] thu 9/3 7pm - Retro on the Phase 22.6 + 22.7 build run (moderation docs + chore sweep)
 
 [FIX] thu 9/3 8pm - Build the fence-compile gate the Phase 22.6/22.7 retro commissioned (scripts/check_guide_fences.exs + test/guides_test.exs), and sweep the run four review docs deferred Lows
+
+[MILE] thu 9/3 8pm - Added a fence-compile gate that actually checks guide code blocks, replacing a control CLAUDE.md had claimed for months, and applied the Phase 22 polish pass

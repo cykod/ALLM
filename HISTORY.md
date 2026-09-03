@@ -1,3 +1,34 @@
+## [DOC] Apply the Phase 22.6/22.7 retro — gate the shape of unverified claims
+*Thursday, September 3rd at 8pm*
+Folds the run's one repeated failure into the rules, as merges into existing 
+bullets rather than new ones.
+
+- `CLAUDE.md`: a count, a date, or a "since Phase N" in any claim about this 
+repo is pasted from a command run in the same turn, with the command beside it. 
+This is the checkable shape the neighbouring "inherited cite is not 
+pre-verified" and "a ticket can be wrong about its own cause" clauses only 
+gesture at, so it merges into them. It binds tickets, RECORDS, HANDOFF, code 
+comments and CLAUDE.md itself — a review lane checks what is checkable in the 
+files under review, and a claim about the repo's past is not.
+- Same bullet: run every predicate you write, from the repo root, against the 
+tree the fix produces, and paste its exit code. Two failure modes cost this 
+phase separately — a predicate grepping a tree that contains the document 
+asserting it matches its own record, and one measuring a proxy rather than the 
+property (`grep -l <helper>` counts filenames, not coverage, which closed a 
+redaction bug green while three chat adapters still had none).
+- `agent-spec/DESIGN.md`: a Test Plan or checklist bullet referencing an 
+existing gate, test, or file:line carries the command that finds it, run at 
+design time. The design is the cheapest place to break the chain, since 
+CLAUDE.md is loaded as truth into the design agent too.
+
+The worked example is this run's own: "unchecked since Phase 16" was minted in 
+a 22.6 ticket without a history command and travelled through RECORDS, HANDOFF, 
+the implementer's report and the user before reaching CLAUDE.md — in the same 
+commit that added the rule its carriage violated. It was wrong by five phases. 
+Two commands falsify it.
+
+---
+
 ## [TST] Add a fence-compile gate for guides, and apply the Phase 22 polish pass
 *Thursday, September 3rd at 8pm*
 Builds the gate CLAUDE.md claimed existed for months, and closes the run's 
