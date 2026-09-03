@@ -550,7 +550,10 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
       Req.Test.stub(stub, fn conn -> respond_json(conn, 200, body) end)
 
       assert {:error, %ImageAdapterError{reason: :malformed_response} = err} = call(stub, req)
-      assert err.metadata[:body_preview]
+      # Phase 22.7: the 200-char body preview is gone. It rode into a
+      # `Jason.Encoder`-derived struct downstream apps persist, and the message
+      # already names the parse failure.
+      refute Map.has_key?(err.metadata, :body_preview)
     end
 
     test "403 → :authentication_failed", %{stub: stub, req: req} do
@@ -1175,6 +1178,111 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
       headers = %{"retry-after" => ["3"]}
       err = Images.to_image_adapter_error(429, %{}, headers, [])
       assert err.retry_after_ms == 3_000
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Key-material redaction and error-struct hygiene (Phase 22.7).
+  #
+  # `%ImageAdapterError{}` derives `Jason.Encoder` and downstream apps persist
+  # it, so nothing that reaches it may carry credential material or a slice of
+  # the raw response body. OpenAI is *believed* to echo a prefix of the offending
+  # key in its 401 text ("Incorrect API key provided: sk-..."), and that message
+  # lands on `:message` — but that echo is INFERRED, not confirmed: every
+  # 401/auth fixture in this repo is under `synthesized/`, and no recorded
+  # OpenAI 401 exists anywhere in the tree. So this is defence in depth like the
+  # Gemini sibling, and the planted token in `synthesized/auth_failed.json`
+  # binds the *pattern*, not the leak path — per CLAUDE.md, it is not evidence
+  # that provider-authored text reaches the redactor. What IS certain is that
+  # `error["message"]` is free text a provider or an intermediary proxy can
+  # populate at will.
+  # ---------------------------------------------------------------------------
+
+  describe "redaction" do
+    @planted_key "sk-proj-FAKEKEY000111222333444555"
+
+    setup ctx do
+      req =
+        ImageRequest.new(
+          operation: :generate,
+          prompt: "x",
+          model: "dall-e-2",
+          response_format: :base64
+        )
+
+      Map.put(ctx, :req, req)
+    end
+
+    test "an sk- token echoed in a 401 message never reaches the error struct",
+         %{stub: stub, req: req} do
+      body = synthesized("auth_failed.json") |> drop_comment()
+      assert body["error"]["message"] =~ @planted_key, "fixture must carry a key-shaped string"
+
+      Req.Test.stub(stub, fn conn -> respond_json(conn, 401, body) end)
+
+      assert {:error, %ImageAdapterError{reason: :authentication_failed} = err} = call(stub, req)
+
+      refute inspect(err) =~ @planted_key
+      refute Jason.encode!(err) =~ @planted_key
+      assert err.message =~ "[REDACTED]"
+      assert err.message =~ "API key"
+    end
+
+    test "redaction sits at the single funnel, so every non-2xx status is covered" do
+      body = synthesized("auth_failed.json") |> drop_comment()
+
+      for status <- [400, 401, 403, 404, 429, 500, 503, 418] do
+        err = Images.to_image_adapter_error(status, body, [], [])
+
+        refute inspect(err) =~ @planted_key,
+               "status #{status} leaked key material — redaction must be structural, " <>
+                 "not conditional on the classified reason"
+      end
+    end
+
+    # CLAUDE.md's companion-test rule. Each provider needs its OWN pattern;
+    # inheriting a sibling's is a silent no-op that redacts nothing while
+    # looking correct. Asserting the siblings MISS is what makes an inherited
+    # regex fail loudly here rather than pass vacuously.
+    test "the Gemini and Voyage key patterns match nothing in the same 401 fixture" do
+      message = synthesized("auth_failed.json")["error"]["message"]
+
+      refute message =~ ~r/\b(?:AIza[A-Za-z0-9_\-]{6,}|ya29\.[A-Za-z0-9_\-.]{6,})/
+      refute message =~ ~r/\bpa-[A-Za-z0-9_\-]{6,}/
+      assert message =~ ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/
+    end
+
+    test "a non-binary provider message degrades to a static string" do
+      err = Images.to_image_adapter_error(400, %{"error" => %{"message" => 123}}, [], [])
+
+      assert err.message == "OpenAI images error"
+    end
+
+    test "no error struct carries a body preview", %{stub: stub, req: req} do
+      body = synthesized("malformed.json") |> drop_comment()
+      Req.Test.stub(stub, fn conn -> respond_json(conn, 200, body) end)
+
+      assert {:error, %ImageAdapterError{reason: :malformed_response} = err} = call(stub, req)
+
+      refute Map.has_key?(err.metadata, :body_preview)
+      refute inspect(err) =~ "body_preview"
+    end
+
+    test ":cause never smuggles the undecodable payload out", %{stub: stub, req: req} do
+      Req.Test.stub(stub, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, "{not json #{@planted_key}")
+      end)
+
+      assert {:error, %ImageAdapterError{reason: :malformed_response} = err} = call(stub, req)
+
+      # `Jason.DecodeError` carries the whole undecodable payload on `:data`;
+      # `sanitize_cause/1` blanks it so the persisted struct cannot smuggle a
+      # response body out through `:cause`, and the message no longer
+      # interpolates `inspect(cause)`.
+      refute inspect(err) =~ @planted_key
+      refute inspect(err) =~ "not json"
     end
   end
 

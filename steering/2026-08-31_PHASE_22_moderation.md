@@ -19,9 +19,9 @@
 | 22.4 | `ALLM.Providers.OpenAI.Moderation` — text input, recorder + wire probe + fixtures | B | Completed |
 | 22.5 | Image input: `%ALLM.ImagePart{}` items, MIME/size gate, multimodal cardinality | B | Completed |
 | 22.6 | Spec §39, `guides/moderation.md`, examples 19–20, `mix.exs` wiring, `CHANGELOG` | — | Completed |
-| 22.7 | `[CHORE]` sweep: CLAUDE.md stale claim, `@guides` parity meta-test, images.ex redaction `[CARRY]` | — | Not Started |
+| 22.7 | `[CHORE]` sweep: CLAUDE.md stale claim, `@guides` parity meta-test, images.ex redaction `[CARRY]` | — | Completed |
 
-**Overall Progress:** 5/7 sub-phases complete; 22.6 built, review gates pending. Per-sub-phase detail: `steering/2026-08-31_PHASE_22_moderation_RECORDS.md`.
+**Overall Progress:** 7/7 sub-phases complete. The one Definition-of-Done item outstanding is the **release itself** — `mix.exs @version` is still `0.5.0` and `scripts/release.exs` has not been run; publishing was deliberately excluded from the build run and is the maintainer's to trigger. Per-sub-phase detail: `steering/2026-08-31_PHASE_22_moderation_RECORDS.md`.
 
 ---
 
@@ -1408,7 +1408,9 @@ cd conformance && mix test && mix credo --strict && mix format --check-formatted
 # Self-scoring predicates — both must come back clean.
 diff <(grep -oE 'guides/[a-z_]+\.md' mix.exs | sort -u) \
      <(grep -oE '[a-z_]+\.md' test/guides_test.exs | sed 's|^|guides/|' | sort -u)
-grep -rn 'body_preview' lib/allm/providers/     # expected: empty
+# The bare token still appears once, in `openai/moderation.ex`'s @doc sentence
+# saying the struct has none, so the field-assignment form is what scores this.
+grep -rn 'body_preview:' lib/allm/providers/    # expected: empty
 ```
 
 **Success criterion:** both predicates come back clean; `mix test` green including the newly-gated `fakes.md`; the two `ASKS.md` tickets are closed rather than re-dated.

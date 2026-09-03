@@ -1,3 +1,47 @@
+## [OTHR] Close Phase 22's out-of-tree debt — redaction, guide parity, false claims (Phase 22.7)
+*Thursday, September 3rd at 7pm*
+Seventh and last batch of Phase 22: the `[CHORE]` sweep that closes the phase's 
+own debt inside the phase rather than filing tickets that outlive it. It 
+deliberately edits released code, which its Module Tree scopes.
+
+- Redact key material in `ALLM.Providers.OpenAI.Images` and 
+`ALLM.Providers.Gemini.Images`, and drop `body_preview` from their error 
+structs. Those structs derive `Jason.Encoder` and downstream apps persist them, 
+so raw provider messages and 200-character body previews in them were a real 
+exposure. Redaction sits at the single `to_image_adapter_error/4` funnel every 
+non-2xx routes through, so it cannot be bypassed by adding a status, and each 
+provider carries its own pattern — applying OpenAI's regex to a Gemini 
+credential returns it unchanged, which is the silent no-op the companion tests 
+now make fail loudly.
+- Route Gemini's `promptFeedback.blockReason` through the redactor too. It 
+arrives on a 200 body, structurally off the error funnel, and reached 
+`:message` and `metadata.block_reason` raw.
+- Add `@guides` parity meta-tests asserting `mix.exs` `docs[:extras]`, 
+`test/guides_test.exs`'s literal, and `Path.wildcard/1` over `guides/` name the 
+same set in both directions, with an explicit `@excluded` map. This registers 
+`guides/fakes.md` for the first time: it was in `mix.exs`'s list and not the 
+test's, so it shipped to hexdocs with zero `iex>` blocks and four banned-token 
+hits, gated by nothing.
+- Correct a false claim about corrupted verdicts at both remaining sites — 
+`ALLM.ModerationResult`'s moduledoc and spec §39. A tampered `flagged` decodes 
+to `false` beside a fully populated category map; `__from_tagged__/1` decodes 
+those fields independently, so the repair is silent rather than self-announcing.
+- Strike two false claims from CLAUDE.md and, on review, two more that replaced 
+them. The bullet had promised a fenced-API denylist that never existed; the 
+replacement then asserted fences get "no gate of any kind" (the banned-token 
+audit is line-based and does scan fence text) and dated `fakes.md` to Phase 16 
+(it was Phase 21, `85f45d8`). Each correction now carries the command that 
+settles it.
+
+The reviews' own finding was that the code here was held to a 
+measure-don't-assume standard and the prose written about it was not — two 
+lanes reached that independently, and the fix pass then corrected three of the 
+reviews' figures the same way, including one wrong impact claim: 
+`Exception.message/1` wraps the error from a sanitized decode cause rather than 
+crashing the caller.
+
+---
+
 ## [DOC] Document content moderation — spec §39, guide, examples (Phase 22.6)
 *Thursday, September 3rd at 7pm*
 Sixth batch of the Phase 22 moderation family: the capability becomes 

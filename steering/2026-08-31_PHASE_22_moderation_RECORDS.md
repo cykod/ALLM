@@ -1683,7 +1683,309 @@ Doctest delta from the checkpoint is **+1** (432 → 433), exactly the one block
 
 ### Notes for later sub-phases
 
-* **The `@guides` divergence is filed and is 22.7's to close** — `ASKS.md`, dated 2026-09-03, with the self-scoring predicate `diff <(grep -oE 'guides/[a-z_]+\.md' mix.exs | sort -u) <(grep -oE '[a-z_]+\.md' test/guides_test.exs | sed 's|^|guides/|' | sort -u)` → empty. 22.6 registered `moderation.md` in **all three** literals so it does not widen the divergence, but it cannot close it: 22.6's tree is docs-only. **Measured evidence the hazard is live, not theoretical:** `guides/fakes.md` — the one guide in `mix.exs`'s literal and not in `test/guides_test.exs`'s — carries **4 of the repo's 10** banned-token audit hits (two `phase_n`, one `section_marker`, one `spec_section`) and has shipped to hexdocs with them since Phase 16. Adding it to the literal in 22.7 turns those into failures; fixing them is in scope for that sub-phase, as its own Test Plan already says.
+* **The `@guides` divergence is filed and is 22.7's to close** — `ASKS.md`, dated 2026-09-03, with the self-scoring predicate `diff <(grep -oE 'guides/[a-z_]+\.md' mix.exs | sort -u) <(grep -oE '[a-z_]+\.md' test/guides_test.exs | sed 's|^|guides/|' | sort -u)` → empty. 22.6 registered `moderation.md` in **all three** literals so it does not widen the divergence, but it cannot close it: 22.6's tree is docs-only. **Measured evidence the hazard is live, not theoretical:** `guides/fakes.md` — the one guide in `mix.exs`'s literal and not in `test/guides_test.exs`'s — carries **4 of the repo's 10** banned-token audit hits (two `phase_n`, one `section_marker`, one `spec_section`) and has shipped to hexdocs with them since Phase 16. **[CORRECTED in the 22.7 fix pass: "since Phase 16" was the ticket's wording and is wrong — `85f45d8` (Phase 21, 2026-05-25) both created the guide and registered it in `mix.exs`. Left in place here because this bullet records what 22.6 filed; the correction is authoritative.]** Adding it to the literal in 22.7 turns those into failures; fixing them is in scope for that sub-phase, as its own Test Plan already says.
 * **§39 is now the normative home for the invariant numbering**, and it is frozen at 1–10 with 1–8 additionally frozen against renumbering. Anything further appends at 11 in **both** `lib/allm/moderation_adapter.ex` and §39.3, in the same commit. Error-struct hygiene is deliberately unnumbered in both.
 * **The commit-range provenance stamp on all four spec blocks is `cf8e340..5a73da6`** — `cf8e340` (22.1) through `5a73da6` (the `[BUG]` follow-up that closed 22.5's `[CARRY]`), with *"docs land in the 22.6 commit"*, mirroring §36's `ac5d845..c3aefce` form exactly. If 22.7 amends any of those four blocks it should extend the range rather than open a second stamp.
 * **The release is outstanding.** Deviation 1. `mix.exs @version` is still v0.5.x and must be bumped only by `mix run scripts/release.exs minor`, never by hand.
+
+---
+
+## Phase 22.7 — `[CHORE]` sweep
+
+**Status: Completed** (2026-09-03). All four review gates ran; artifacts present and non-empty: `.work/reviews/2026-09-03-phase22-7-chore/overview.md` (functional — **PASS**, 3 findings), `.work/code-reviews/2026-09-03-phase22-7-chore.md` (1 High, 4 Medium, 4 Low), `.work/security-reviews/2026-09-03-phase22-7-chore.md` (0 High, 0 Medium, 2 Low; architecture lane N/A — no `agent-spec/ARCHITECTURE.md`), `.work/design-reviews/2026-09-03-phase22-7-chore.md` (N/A — backend-only). Fix pass applied 11 sites, deferred 6 to HANDOFF, escalated 0.
+
+**The control this sub-phase exists to ship was verified independently by all three lanes** and holds: redaction is structural at the single `to_image_adapter_error/4` funnel in both adapters, each provider's pattern is genuinely its own (the functional reviewer applied OpenAI's regex to the Gemini credential and got it back unchanged — the silent no-op CLAUDE.md warns about), and `body_preview` is gone from `lib/` on every path, clean through both `inspect/1` and `Jason.encode!/1` at all eight statuses.
+
+**The findings were almost entirely about prose, and two lanes reached that diagnosis independently.** The code was held to a measure-don't-assume standard — mutation-tested gates, the funnel verified by reading, the corruption claim re-measured before editing — and the prose written *about* that code was not. Six unverified claims resulted, most of them landing in permanent documents: `CLAUDE.md:57` traded one false claim ("a fenced-API denylist exists") for two more ("shipped since Phase 16" — it was Phase 21, `85f45d8`; and "no gate of any kind" — the banned-token audit is line-based and does scan fence text, demonstrated by planting a marker inside a fence); the redactors' provenance comments read as exhaustive audits while `error["code"]`/`["type"]`/`["status"]` reach `:metadata` unredacted; a `:cause` count was wrong in both adapters; a self-scoring predicate matched its own record; and the claim that converting `fakes.md`'s fence "caught a shipped defect" was false — the pre-22.7 fence never touched a `%Response{}`, so the `:content` `KeyError` came from assertion lines authored during the conversion.
+
+**The fix pass then corrected three of the reviews' own figures by re-measurement**, including one materially wrong impact claim: `Exception.message/1` *wraps* the `ArgumentError` from a sanitized `%Jason.DecodeError{}` rather than crashing the caller's error handler — degraded diagnostics, not a crash.
+
+### Module Tree — WIDENED
+
+The design's 22.7.1 tree lists seven files. The orchestrator widened it by two before dispatch, and the implementation widened it by four more. Every addition is recorded here rather than in the design.
+
+| File | Origin | Why |
+|------|--------|-----|
+| `lib/allm/moderation_result.ex` | orchestrator | Carries the same false corruption-signal claim 22.6 corrected in the guide but could not reach (`lib/` belongs to 22.1). |
+| `steering/allm_engine_session_streaming_spec_v0_2.md` | orchestrator | §39.4 holds the **normative** copy both other copies derive from. Fixing the derived moduledoc while the normative source stayed wrong is how the claim would recur. |
+| `test/guides_doctest_test.exs` | implementer | `test/guides_test.exs`'s `iex>` gate binds on nothing unless the guide is ALSO registered here. Registering `fakes.md` in one literal and not the other would have reproduced, one file over, the exact fail-open shape the sub-phase exists to close. CLAUDE.md's `guides/` bullet already names both files as a pair. |
+| `guides/fakes.md` | implementer | The design's own Test Plan scopes it: *"Adding `fakes.md` here also subjects it to the four per-guide gates and to `doctest_file/1`, which may surface real defects in a guide that has never been checked — fixing those is in scope for this sub-phase."* |
+| `test/fixtures/openai/images/synthesized/auth_failed.json` (MODIFY) and `test/fixtures/gemini/synthesized/image_auth_failed_key_echo.json` (NEW) | implementer | A redaction test needs a planted subject. See *The planted subjects* below. |
+| `test/allm/moderation_result_test.exs` | implementer | The corrected claim is a behavioural claim about `__from_tagged__/1` that no test bound. Without one it can drift back. |
+
+`README.md` was clean at batch start and is untouched: `git --no-optional-locks diff --stat HEAD -- README.md` is empty.
+
+### Hypotheses put to the tree
+
+| Hypothesis | Verdict |
+|---|---|
+| `conformance/lib/allm/test/image_adapter_conformance.ex` is format-clean at HEAD, making CLAUDE.md's claim stale | **CONFIRMED.** `cd conformance && mix format --check-formatted` → exit 0. `git log --oneline --all -- conformance/lib/allm/test/image_adapter_conformance.ex` shows exactly two commits: `b18ebeb` (Phase 14.1, the origin CLAUDE.md names) and `6282322` *"[OTHR] Clean all compile, test, docs, and conformance warnings"*, which fixed it. The rule survives; the cite had expired. |
+| Registering `guides/fakes.md` turns the audit gate red with ~4 hits | **CONFIRMED on the count, and it was not the only thing that went red.** Baseline before: 10 hits / 5 files, `fakes.md` 4 of them (`:114`, `:141` `phase_n`; `:208` `section_marker` + `spec_section`). After: **6 hits / 4 files**. But registration produced **three** failing tests, not one: the audit gate, the *"contains at least one `iex>` code block"* gate (`fakes.md` had **zero** `iex>` blocks — the handoff item did not predict this), and the new `doctest_file/1`-registration parity test. See *What registering `fakes.md` surfaced*. |
+| Both image adapters funnel every non-2xx through a single error constructor, so redaction can be structural | **CONFIRMED for both, by reading.** `openai/images.ex` `run_one_attempt/3` → `classify_http_error/4` → `to_image_adapter_error/4`; `gemini/images.ex` has the byte-identical shape at `run_one_attempt/3` → `classify_http_error/4` → `to_image_adapter_error/4`. One redaction site per adapter covers every status. Pinned, not merely asserted, by a per-provider test looping `[400, 401, 403, 404, 429, 500, 503, 418]` through the seam and refuting the planted token at each. |
+| (implied by the orchestrator's item 4) The corruption-signal claim is false | **CONFIRMED by measurement before editing.** `ModerationResult.__from_tagged__(%{"flagged" => "true", "categories" => %{"violence" => true}, "category_scores" => %{"violence" => 0.9}, ...})` returns `flagged: false` beside a **fully populated** `categories` and `category_scores`. The three fields decode independently; nothing marks the repair. |
+
+### The CLAUDE.md decision — STRUCK, not built
+
+CLAUDE.md's `guides/` bullet claimed `test/guides_test.exs` carried "a fenced-API denylist for dead-API references fences can't otherwise flag" and instructed agents to extend it whenever they removed a public field or function. No such gate existed. **Decision: strike the claim; do not build the gate.** Five reasons, in descending weight:
+
+1. **A denylist is the very fail-open shape the bullet two lines below warns against.** CLAUDE.md's *"repo-wide audit gate whose subject set is a hand-maintained literal"* rule exists because an unregistered subject produces silence, not a failure. A denylist of dead APIs is a hand-maintained literal whose subject set is *unbounded* (arbitrary prose in arbitrary fences) and whose maintenance trigger — "remember to extend it whenever you remove a public name" — is the same faculty that had just failed. Building it would ship coverage-shaped reassurance over a gate that binds only on what someone remembered.
+2. **The proven remedy is not a denylist, it is not being a fence.** 22.6's High finding was closed by converting the offending fence to an `iex>` block; 22.7 closed `fakes.md`'s gap the same way and the conversion immediately caught a wrong API name. `doctest_file/1` is a *discovered-set* gate — it executes every `iex>` block with no literal to maintain — and is therefore strictly stronger than any denylist could be, on exactly the blocks a denylist would target.
+3. **The false claim was causally upstream of a real defect.** 22.6's implementer had documented grounds to believe fences carried coverage and shipped an uncompilable one. The fix that removes that belief is a sentence saying fences carry *zero* protection; a partial gate would leave the belief half-standing and the incentive muddled.
+4. **Cost lands on every future phase.** A gate whose subject set is prose competes with the `@public_facade` / `@layer_a` / `@guides` machinery already in place and adds a fourth literal to keep honest — while the three existing ones already have known fail-open directions, one of which is still open (see *Not closed here*).
+5. **It is not what the sub-phase was scoped to buy.** 22.7's Test Plan asks for the `@guides` parity meta-test, which closes a *measured* fail-open with a *discovered* subject set. That is the same money spent on a gate that cannot fail open.
+
+The replacement sentence names conversion as the only remedy. **As first written it also said "nothing checks what a fence contains — no reference audit, no compile step, no gate of any kind", which the 22.7 fix pass measured false and narrowed:** `scripts/audit_user_docs.exs` is line-based over the whole `.md` (only `.ex` files get `@moduledoc`/`@doc` heredoc targeting), so the banned-token audit **does** see fence contents — planting `# see spec §6.1 for details` inside a fence in a copy of `guides/fakes.md` gave 2 hits against 0 on the file itself. The true, narrower statement now in `CLAUDE.md` is that nothing checks whether the code inside a fence **compiles or names a live API**. Striking one over-claim and writing another in its place is the failure this sub-phase exists to punish. **The word "denylist" was removed from the prose rather than kept inside a denial**, so the handoff's `grep -c denylist` predicate scores honestly (0 and 0) instead of by evasion.
+
+**A second CLAUDE.md correction, not in the design's checklist but forced by this one:** the parity bullet's parenthetical *"note the last two share a name and carry DIFFERENT membership"* becomes false the moment 22.7 makes them equal. Rewritten to *"the last two share a name, and carried DIFFERENT membership until Phase 22.7 made the divergence a test failure."*
+
+**A third, generalising the stale conformance cite:** the design asked for the expired `image_adapter_conformance.ex:91-92` claim to be replaced by *"the general lesson it is now an instance of, not a second stale cite."* The lesson recorded is that **a worked example naming a file:line as *currently* failing is a claim about the tree that expires the moment someone fixes it**, after which it teaches a false fact and sends a later phase to repair something already clean — which is precisely what happened: 22.7's own checklist was written to fix a defect that `6282322` had already fixed. The incident is now in the past tense with its resolving commit.
+
+### What registering `guides/fakes.md` surfaced
+
+Red on registration, three tests:
+
+1. **Four banned-token audit hits**, as forecast. `:114` and `:141` were `## The `:usage` opt (Phase 21.2)` / `## The `:record` opt (Phase 21.2)` — internal build provenance meaningless to a reader, deleted. `:208` carried `section_marker` **and** `spec_section` on one line (`— spec §6.1`); rewritten to name the contract and point at `errors_and_retries.md` instead of a spec section number.
+2. **Zero `iex>` blocks.** Not predicted by the handoff item, and worse than the audit hits: the guide is 8 KB of pure ` ```elixir ` fences, so it had *no* drift protection of any kind and the `iex>` gate would have had nothing to bind on even had it been registered. `## Construction` was converted from a fence to an `iex>` block — under CLAUDE.md's *"prefer an `iex>` block for anything Fake can run"* rule it should never have been a fence, since it runs end-to-end on `ALLM.Providers.Fake` with no key and no network.
+3. **Not registered with `doctest_file/1`** — caught by the new parity meta-test, and load-bearing: without the registration the converted block would have satisfied the `iex>` gate while still never executing.
+
+**CORRECTED IN THE 22.7 FIX PASS — the original claim here was wrong twice over, and both errors were the same species as the ones this sub-phase was commissioned to strike.** As first written this paragraph read *"the conversion caught a real defect on its first-ever execution … a wrong public field name had been in a guide shipped to hexdocs since Phase 16."* Neither half survives re-derivation:
+
+* **Not a shipped defect.** `git show 45e114f:guides/fakes.md` shows the pre-22.7 `## Construction` fence stopping at `engine = ALLM.Engine.new(…)`; it never called `ALLM.generate/2` and never touched a `%ALLM.Response{}` (`git show 45e114f:guides/fakes.md | grep -n 'content\|output_text\|%ALLM.Response'` returns only prose lines `:19` and `:91`). The `** (KeyError) key :content not found` came from assertion lines authored **during** the conversion, in the same sitting — a doctest catching an authoring slip, not a latent defect being uncovered.
+* **Not since Phase 16.** `guides/fakes.md` was created *and* registered in `mix.exs` by `85f45d8` (Phase 21, 2026-05-25); `git log --follow --diff-filter=AR -- guides/fakes.md` and `git log -S 'guides/fakes.md' -- mix.exs` each return that one commit. "Phase 16" was inherited verbatim from the commissioning ticket (`ASKS.md`, 2026-09-03) and never re-derived — the exact failure mode CLAUDE.md's *"a ticket can still be wrong about its own cause"* rule names.
+
+**What the registration actually caught, and it is enough:** a guide `mix.exs` ships to hexdocs with **zero `iex>` blocks** and **four banned-token audit hits**, gated by nothing at all, for a full phase. The argument for converting Fake-runnable fences survives the correction intact and is arguably stronger — the `:content`/`:output_text` slip is direct evidence that `%ALLM.Response{}`'s field name is easy to get wrong when nothing executes the example. What does not survive is citing this as an instance of a *shipped* dead API; a future phase auditing that claim would find nothing.
+
+### The `@guides` parity meta-tests
+
+Four tests in a new `describe "@guides parity"`, plus an `@excluded %{}` map (empty — the healthy state; an entry means a guide ships ungated, which is the hazard the tests exist to surface):
+
+* `every guide mix.exs publishes is gated here` — `mix.exs docs[:extras] \ (@guides ∪ @excluded)`. **The direction that cannot fail open.**
+* `every guide gated here is one mix.exs publishes` — the converse; catches a stale literal.
+* `every guide on disk is accounted for` — `Path.wildcard("guides/*.md") \ (@guides ∪ @excluded)`. Catches a new guide added to *neither* literal, which neither of the first two can see.
+* `every guide is registered with doctest_file/1` — reads `test/guides_doctest_test.exs`'s source and requires the `doctest_file("guides/<name>.md")` line. Closes the third literal CLAUDE.md names as a pair with the second.
+
+`mix_guides/0` reads the shipped set off `Mix.Project.config()[:docs][:extras]` rather than grepping `mix.exs` — the module attribute is unreadable post-compile, and `docs[:extras]` is what ExDoc actually publishes.
+
+**Verified binding by mutation, all four:**
+
+| Mutation | Result |
+|---|---|
+| Drop `fakes.md` from `test/guides_test.exs`'s `@guides` | **2 red** — "every guide mix.exs publishes is gated here" + "every guide on disk is accounted for" |
+| Remove `doctest_file("guides/fakes.md")` from `test/guides_doctest_test.exs` | **1 red** — the `doctest_file/1` parity test |
+| Add a phantom `"phantom.md"` to `@excluded` | **1 red** — "every guide gated here is one mix.exs publishes" |
+| (restored) | 36 doctests, 51 tests, 0 failures |
+
+### The image-adapter `[CARRY]` — redaction, `sanitize_cause/1`, no `body_preview`
+
+Both adapters, following Phase 20.4's `openai/embeddings.ex` template rather than diverging:
+
+* **`redact_key_material/1` at the single funnel.** `to_image_adapter_error/4` in each — structural, not status-conditional. OpenAI inherits the sibling's `sk-|rk-|org-` pattern **verbatim and correctly** (same provider, same key shapes); Gemini **widens** to `AIza…|ya29.…`, which is the point of the companion tests.
+* **Gemini reads the message off the RAW body via `provider_message/2`**, mirroring `gemini/embeddings.ex:873-886`, not off `chat_err.message` — `ALLM.Error.AdapterError` types that field `String.t()` optimistically while `classify_error/3` populates it with `Map.get(error, "message", default)` straight off the body, so a proxy answering `{"error": {"message": 123}}` puts a non-binary there. Sourcing from the body keeps the non-binary arm reachable AND visible to Dialyzer.
+* **`sanitize_cause/1` at every `:cause` assignment on the provider-response path**, and `malformed_error/2` no longer interpolates `inspect(cause)` into `:message`. **Count corrected in the 22.7 fix pass** — the original line said "all three `:cause` assignments in each adapter" and both halves were wrong. Re-measured with `grep -n 'cause:' lib/allm/providers/{openai,gemini}/images.ex`: **OpenAI has six** — three sanitized at the response funnel (`:1021`, `:1035`, `:1118` at the time of measurement) and **three in `fetch_url_bytes/2` (`:934`, `:943`, `:952`) that still take the raw exception**; **Gemini has four**, all sanitized (`:541`, `:555`, `:609`, `:661`). The three OpenAI stragglers are inert today because `fetch_url_bytes/2` sets `decode_body: false`, so the only shape `sanitize_cause/1` blanks (`Jason.DecodeError`) cannot arise there — but they were never covered, and the "all three" wording is what would have stopped anyone re-checking. Carried to `.work/HANDOFF.md` rather than fixed here: that path is caller-URL-sourced, not provider-sourced, and hardening it is out of 22.7's fence.
+* **`body_preview` removed outright, not replaced.** `grep -rn 'body_preview:' lib/allm/providers/` is empty and `body_preview/1` is deleted from both files. The 2026-07-29 ticket proposed swapping it for the body's sorted top-level key list; **that half was deliberately not taken**, because the 20.4 template that actually shipped passes a bare `%{}` and all three embeddings adapters plus the moderation adapter agree. Family consistency and the 22.7 checklist both say drop. Recorded in the ticket's `[RESOLVED]` line rather than left as a silent omission.
+* One pre-existing assertion inverted: `test/allm/providers/openai/images_test.exs` asserted `err.metadata[:body_preview]` was present. Now `refute Map.has_key?(...)`.
+
+**The planted subjects.** A redaction test binds nothing without one.
+
+* **OpenAI** — `test/fixtures/openai/images/synthesized/auth_failed.json` already modelled the key echo, but with `sk-bad`: **the redactor requires 6+ characters after the prefix, so the placeholder was a key-shaped string no pattern could ever match.** Lengthened to `sk-proj-FAKEKEY000111222333444555`, with the reason recorded in the fixture's `_comment`. This provider's redactor guards a **live** channel: OpenAI's real 401 text echoes a prefix of the offending key.
+* **Gemini** — new `test/fixtures/gemini/synthesized/image_auth_failed_key_echo.json`, rather than mutating the shared `auth_failed.json` (read by `gemini_test.exs`'s chat tests, which do not redact). Gemini's real 401 (`"API key not valid. Please pass a valid API key."`) carries **no** key material, so this is defence in depth and **not** evidence that any Gemini-authored text reaches the redactor. The `_comment` says so explicitly.
+* **The channel that actually routes through the redactor, in both adapters, is `body["error"]["message"]` off any non-2xx response** — which a proxy or gateway in front of the API populates freely. Every other message either adapter constructs is a static literal, and no body preview is carried at all. Recorded in each `redact_key_material/1`'s comment block.
+
+**Verified binding by mutation, four checks:**
+
+| Mutation | Result |
+|---|---|
+| OpenAI: drop `\|> redact_key_material()` from the funnel | **3 red** |
+| OpenAI: `cause: cause` instead of `sanitize_cause(cause)` in `malformed_error/2` | **1 red** |
+| **Gemini: inherit the OpenAI `sk-\|rk-\|org-` pattern verbatim** (the silent no-op the companion test exists for) | **3 red** — it fails loudly, exactly as CLAUDE.md requires |
+| Gemini: source the message from `chat_err.message` instead of the body | **4 red** |
+
+### The false corruption-signal claim — corrected at both remaining sites
+
+Re-measured before editing (see the hypothesis table). `__from_tagged__/1` decodes `flagged`, `categories` and `category_scores` independently, so a tampered payload comes back `flagged: false` beside a **fully populated** category map with nothing marking it as repaired. The claim that empty category maps are "the honest signal that something is wrong" was false.
+
+Corrected at `lib/allm/moderation_result.ex` (moduledoc, ships to hexdocs) and `steering/allm_engine_session_streaming_spec_v0_2.md` §39.4 (**normative**), both rewritten to match the wording 22.6 landed in `guides/moderation.md`, so all three now agree. `grep -rn "come back empty alongside it" lib/ guides/ steering/allm_engine_session_streaming_spec_v0_2.md` is empty (exit 1, no output — re-run in the 22.7 fix pass). **The predicate as first written scoped `steering/` whole and therefore matched its own prose on this line, scoring itself false** — the identical defect Deviation 1 caught and fixed for the neighbouring `body_preview` predicate one paragraph earlier, missed on the neighbour written in the same pass.
+
+**Plus one test the design did not ask for.** The corrected text is a *behavioural* claim about `__from_tagged__/1` that no test bound — which is how the false version survived from 22.1 to 22.6. `test/allm/moderation_result_test.exs` gains *"a repaired `:flagged` leaves a fully populated category map beside it"*, whose comment names the two documents that were wrong and the phase that corrected them.
+
+### Deviations
+
+1. **[claim correction, in the design doc] 22.7.4's second self-scoring predicate was wrong as written.** `grep -rn 'body_preview' lib/allm/providers/  # expected: empty` returns **one** hit at HEAD *after* the fix: `openai/moderation.ex:223`, a `@doc` sentence stating the struct has no `body_preview`. Corrected in place to the field-assignment form `grep -rn 'body_preview:' lib/allm/providers/`, with the reason in a comment above it. This is CLAUDE.md's own *"design Verification commands SHOULD be runnable as-written"* rule; the token is a substring of prose that legitimately mentions it.
+2. **[scope, widening] Four files beyond the orchestrator's tree.** Enumerated with reasons in *Module Tree — WIDENED* above. Three of the four (`test/guides_doctest_test.exs`, `guides/fakes.md`, `test/allm/moderation_result_test.exs`) are consequences the design's own Test Plan anticipates; the two fixtures are the planted subjects a redaction test cannot bind without.
+3. **[deliberate non-fix] The ticket's `body_preview` → sorted-key-list replacement was not taken.** Reason above; recorded in the ticket's `[RESOLVED]` line so the divergence is visible to whoever compares ticket to fix.
+4. **[tactical] `sanitize_cause/1` fixes contents, not the struct.** Both adapters now blank `Jason.DecodeError.data`, but the sanitized cause remains a struct that does not implement `Jason.Encoder`, so `Jason.encode!/1` on the surrounding error still raises `Protocol.UndefinedError` on the transport/decode paths. Library-wide and pre-existing — `gemini/embeddings.ex:860-869` documents and tickets it — so 22.7 mirrored the siblings rather than diverging, per cross-phase discipline. It is why the redaction tests assert `Jason.encode!(err)` only on the 401 path, where `:cause` is `nil`. Carried to `.work/HANDOFF.md`.
+
+### Verification (2026-09-03)
+
+```
+Start Green (base 45e114f)
+  mix compile --warnings-as-errors        exit 0
+  mix format --check-formatted            exit 0
+  mix test        433 doctests, 31 properties, 3429 tests, 0 failures, 14 excluded
+  mix credo --strict                      3164 mods/funs, found no issues
+  cd conformance && mix test              103 tests, 0 failures
+
+Post-implementation
+  mix format --check-formatted            exit 0
+  mix compile --warnings-as-errors        exit 0
+  mix test        434 doctests, 31 properties, 3451 tests, 0 failures, 14 excluded
+  mix test --seed 0                       434 doctests, 31 properties, 3451 tests, 0 failures, 14 excluded
+  mix credo --strict                      3171 mods/funs, found no issues
+  mix dialyzer                            Total errors: 0, Skipped: 0, Unnecessary Skips: 0
+  mix docs                                grep -ciE '(warning|error)' → 0
+  mix run scripts/audit_user_docs.exs     6 hits / 4 files (was 10 / 5)
+  mix run scripts/audit_user_docs.exs | grep moderation      empty
+  git --no-optional-locks diff --stat HEAD -- README.md      empty
+  cd conformance && mix test              103 tests, 0 failures
+  cd conformance && mix credo --strict    103 mods/funs, found no issues
+  cd conformance && mix format --check-formatted             exit 0
+```
+
+Deltas: **+1 doctest** (the `fakes.md` block converted from a fence, executed for the first time) and **+22 tests** — 5 per-guide structural gates and 4 parity meta-tests in `test/guides_test.exs`, 6 redaction tests in `openai/images_test.exs`, 6 in `gemini/images_test.exs`, 1 in `moderation_result_test.exs`.
+
+### Self-scoring predicates
+
+```
+# design 22.7.4 #1 — the @guides divergence
+diff <(grep -oE 'guides/[a-z_]+\.md' mix.exs | sort -u) \
+     <(grep -oE '[a-z_]+\.md' test/guides_test.exs | sed 's|^|guides/|' | sort -u)
+  → no output, exit 0                                            CLEAN
+
+# design 22.7.4 #2 — as corrected (Deviation 1)
+grep -rn 'body_preview:' lib/allm/providers/
+  → no output, exit 1                                            CLEAN
+
+# handoff — the fenced-API claim
+grep -c denylist CLAUDE.md              → 0
+grep -c denylist test/guides_test.exs   → 0                      AGREE
+
+# ASKS 2026-07-29 [BUG] — "grep -rn 'redact' lib/ hits only the new embeddings module"
+grep -rln redact_key_material lib/allm/providers/
+  → gemini/embeddings.ex, gemini/images.ex, openai/embeddings.ex,
+    voyage/embeddings.ex, openai/moderation.ex, openai/images.ex  CLOSED
+```
+
+### `ASKS.md` — closed two, left three open
+
+**Closed**, each with its own predicate's actual output in the `[RESOLVED]` line:
+
+* the 2026-09-03 `[CHORE]` for the `mix.exs` / `test/guides_test.exs` `@guides` divergence;
+* the 2026-07-29 `[BUG]` to port 20.4's error-struct hardening to the image adapters.
+
+**Left open rather than re-dated**, because none of their files is in 22.7's Module Tree — all three carried to `.work/HANDOFF.md` with their predicates:
+
+* `[CHORE]` recorder-scaffolding extraction into `scripts/support/fixture_recorder.exs`;
+* `[CHORE]` close `@public_facade`'s fail-open direction (`test/allm_facade_doctest_inventory_test.exs`) — the same class 22.7 just closed for `@guides`, and the four new parity tests are a directly copyable template;
+* `[CARRY]` `fake_embeddings.ex:391` / `fake_images.ex:370` keying `bump_retry_visits/2` on `:erlang.phash2(script)`.
+
+### Live gate — the image arms, because 22.7 edits two released image adapters
+
+22.7.4 lists no live gate and 22.7 ships no example script, but the sub-phase edits `lib/allm/providers/openai/images.ex` and `lib/allm/providers/gemini/images.ex`, so the image scripts were run rather than reasoned about. All invocations sourced `.env` first, per CLAUDE.md.
+
+```
+set -a; . ./.env; set +a
+ALLM_PROVIDER=openai mix run examples/10_generate_image.exs   → exit 1  (pre-existing)
+ALLM_PROVIDER=openai mix run examples/11_edit_image.exs       → exit 0  images=1 bytes=1887530
+ALLM_PROVIDER=openai mix run examples/13_image_variations.exs → exit 1  (pre-existing)
+ALLM_PROVIDER=gemini mix run examples/10_generate_image.exs   → exit 0  images=1 bytes=914854
+ALLM_PROVIDER=gemini mix run examples/11_edit_image.exs       → exit 0  images=1 bytes=409219
+```
+
+**Blocked-arm re-characterization — re-tested against the failures actually OBSERVED, not inherited.** Both OpenAI failures resolve to `ASKS.md:313`, and both now print through the funnel this sub-phase modified, which is the observation worth having:
+
+1. `10_generate_image.exs` — `%ImageAdapterError{reason: :invalid_request, message: "Unknown parameter: 'response_format'.", status: 400, cause: nil, metadata: %{status: 400, request_id: "…", openai_code: "unknown_parameter", openai_type: "invalid_request_error"}}`. Same message, same `openai_code`, same `openai_type`, same originating site (`openai/images.ex` sends `response_format` to `dall-e-2`) as 22.6 recorded. **Not a new defect; no new ticket.**
+2. `13_image_variations.exs` — `%ImageAdapterError{reason: :unknown, message: "OpenAI HTTP 404", status: 404, cause: nil, metadata: %{status: 404, …}}`. The `dall-e-2` variations 404 from `a7b934b`. **Not a new defect; no new ticket.**
+
+Both structs are **live evidence for the hardening**: `:cause` is `nil` (no transport struct, nothing to smuggle), `:metadata` carries no `:body_preview`, and `:message` is the provider's own text with no `inspect(cause)` interpolation — the shapes the redaction tests assert, observed on the wire rather than through a stub. Neither provider's real message carried key material, which is precisely why both fixtures plant one.
+
+**`examples/RUN_OUTPUT_*.md` were NOT regenerated.** The OpenAI arm still does not complete cleanly, so per the snapshot-defer policy the files are untouched rather than hand-edited. `run_all.exs` was not run end-to-end for either provider — the scripts touching the modified adapters were run individually, which is the observation the blocked-arm rule asks for.
+
+### Notes for later sub-phases
+
+* **A new guide must now be registered in THREE places** — `mix.exs` `@guides`, `test/guides_test.exs` `@guides`, and a `doctest_file/1` line in `test/guides_doctest_test.exs` — or the suite goes red. That is the intended signal, not a test to relax; `@excluded` is the visible opt-out and is empty.
+* **The `guides/fakes.md` finding generalises.** It is 8 KB of fences with one `iex>` block; the other five guides' fences carry the same zero protection. Whoever next touches a guide should convert every Fake-runnable fence in it rather than treating `fakes.md` as the only offender.
+* **`v0.6.0` is still BUILT but NOT RELEASED.** `mix.exs @version` untouched; `mix run scripts/release.exs minor` remains the phase's outstanding action and was explicitly out of scope for this run.
+
+### `[DEFERRED-DRY]` entries — 22.7 (added by the fix pass; the entry shipped without one)
+
+`agent-spec/IMPLEMENTATION.md:68` puts the extraction trigger at **two** implementations and
+requires that, where the Module Tree forecloses consolidation, a one-line `[DEFERRED-DRY]`
+entry name every trigger site and be filed in `ASKS.md` with a grep predicate. 22.1, 22.2,
+22.3 and 22.5 each carry one; 22.7 shipped with none, which read as an oversight rather than
+a judgement. Re-measured 2026-09-03:
+
+* **`[DEFERRED-DRY]` — `sanitize_cause/1`, now SIX byte-identical copies.**
+  `grep -l 'defp sanitize_cause' lib/allm/providers/*.ex lib/allm/providers/*/*.ex` →
+  `gemini/embeddings.ex`, `gemini/images.ex`, `openai/embeddings.ex`, `openai/images.ex`,
+  `openai/moderation.ex`, `voyage/embeddings.ex`. Both function clauses are literally
+  provider-free:
+
+  ```elixir
+  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause), do: %{cause | data: ""}
+  defp sanitize_cause(cause), do: cause
+  ```
+
+  `lib/allm/providers/support/` already hosts `transport.ex`, `openai_headers.ex`,
+  `gemini_headers.ex` and `image_mime.ex`, so the destination is not in doubt — only the
+  tree-scope. Deferred because five of the six files are outside 22.7's Module Tree.
+* **`[DEFERRED-DRY]` — `provider_message/2`, two copies.**
+  `grep -l 'defp provider_message' lib/allm/providers/*.ex lib/allm/providers/*/*.ex` →
+  `gemini/embeddings.ex`, `gemini/images.ex`. Byte-identical; same destination.
+* **NOT a trigger: `redact_key_material/1`'s regex.** The *body* is now identical across the
+  three OpenAI modules modulo the fallback string, but CLAUDE.md is explicit that inheriting a
+  sibling's pattern across providers is a silent no-op, and the new companion tests enforce
+  per-provider divergence. Any shared extraction must take the pattern as an argument; it must
+  not consolidate the patterns themselves.
+
+Filed in `ASKS.md` (2026-09-03) with the self-scoring predicate
+`grep -l 'defp sanitize_cause' lib/allm/providers/*.ex lib/allm/providers/*/*.ex` **must be
+empty** (today: six files). Carried to `.work/HANDOFF.md`.
+
+### Fix pass (2026-09-03) — what the three review lanes converged on
+
+All three lanes independently reached the same diagnosis: 22.7 held its **code** to a
+measure-don't-assume standard (mutation-tested gates, the single-funnel property established
+by reading the call chain, the corruption-signal claim re-measured before editing) and did not
+hold the **prose about that code** to the same standard. Six unverified claims resulted, most
+of them in permanent documents. Corrections applied, each re-derived rather than taken from a
+review's numbers:
+
+1. **`CLAUDE.md:57`, "had shipped since Phase 16"** — false; `85f45d8` (Phase 21, 2026-05-25).
+   Corrected in `CLAUDE.md`, this file (§"What registering `guides/fakes.md` surfaced" and the
+   22.6 bullet), `ASKS.md`'s `[RESOLVED]` line, `test/guides_test.exs`'s parity comment, and
+   `.work/HANDOFF.md`. The claim came from the commissioning ticket and was carried unverified
+   — violating a rule *the same commit added*.
+2. **`CLAUDE.md:57`, "no gate of any kind" on fence contents** — false, and written while
+   striking a false claim. `scripts/audit_user_docs.exs` is line-based over the whole `.md` and
+   **does** scan fence text. Measured: planting `# see spec §6.1 for details` inside a fence in
+   a copy of `guides/fakes.md` gave `mix run scripts/audit_user_docs.exs <copy>` → **2 hits**,
+   against **0** on the file itself. The true statement is narrower: the banned-token audit sees
+   fence contents; nothing checks whether the code in a fence **compiles or names a live API**.
+3. **"The conversion caught a shipped defect"** — unsupported. See the corrected paragraph
+   above; the pre-22.7 fence never touched a `%ALLM.Response{}`.
+4. **The redactors' provenance comments over-claimed.** Both read as an exhaustive audit of
+   provider-authored bytes reaching the persisted struct. Measured 2026-09-03 through the
+   `@doc false` seam: a key planted in `error["code"]` (OpenAI) or `error["status"]` (Gemini)
+   lands on `:metadata` **unredacted** and survives both `inspect/1` and `Jason.encode!/1`. Both
+   comments now carry an explicit `SCOPE —` paragraph naming the uncovered channels. The *code*
+   gap is family-wide and pre-existing (`openai/embeddings.ex`, `openai/moderation.ex`,
+   `gemini/embeddings.ex`), so widening the fix stays out of scope and is ticketed.
+5. **`gemini/images.ex`'s `promptFeedback.blockReason`** — an unvalidated binary off a **200**
+   body interpolated into `:message` and `metadata.block_reason`, structurally off the non-2xx
+   funnel the comment claimed covered everything. **Fixed in-batch** (one call site):
+   `decode_image_response/4` now redacts it before both assignments. Pinned by
+   `test/allm/providers/gemini/images_test.exs`'s *"a blocked-prompt reason off a 200 body is
+   redacted at its own site"*, verified binding by mutation (replacing
+   `redact_key_material(reason)` with `reason` → 1 red; restored → 74 tests, 0 failures).
+6. **The OpenAI redactor asserted OpenAI's real 401 echoes a key prefix, as fact.** No recorded
+   401 exists anywhere in the tree — every auth fixture is under `synthesized/`. Under CLAUDE.md's
+   four-part live-probe rule that is an *inferred* provider claim written as a confirmed one. The
+   comment now marks it INFERRED and restates the planted-token fixture as binding the *pattern*,
+   not the leak path.
+7. **Two `:cause` counts** and **one self-scoring predicate** corrected in place above.
+
+**Not fixed here, by scope fence** — carried to `.work/HANDOFF.md` and filed in `ASKS.md`:
+the family-wide `:metadata` redaction gap; the six-copy `sanitize_cause/1` extraction; the three
+unhardened chat adapters; `BadMapError` on a string-valued `"error"` envelope in both image
+funnels; and `sanitize_cause/1` leaving `Jason.DecodeError.position` inconsistent so
+`Exception.message/1` on the sanitized cause raises `ArgumentError`.

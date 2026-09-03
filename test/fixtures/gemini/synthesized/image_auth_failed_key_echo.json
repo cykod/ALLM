@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthesized for Phase 22.7 — a 401 UNAUTHENTICATED envelope carrying a PLANTED Google API key so the image adapter's redactor has a target. Gemini's real 401 text (see auth_failed.json) does not echo the key, so this is defence in depth and NOT evidence that any provider-authored Gemini text reaches the redactor: the channel that does is `error.message` off any non-2xx body, which a proxy or gateway in front of the API can populate freely.",
+  "error": {
+    "code": 401,
+    "message": "API key not valid. Please pass a valid API key. Rejected credential: AIzaSyFAKEKEY000111222333444555666777",
+    "status": "UNAUTHENTICATED"
+  }
+}

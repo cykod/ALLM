@@ -64,8 +64,15 @@ defmodule ALLM.ModerationResult do
   reflex carried over from `ALLM.Embedding`:
 
     * a **corrupted persisted verdict deserializes to "clean"**, not to a
-      decode error — the honest signal that something is wrong is that
-      `:categories` and `:category_scores` come back empty alongside it;
+      decode error, and **the repair is silent**. `:categories` and
+      `:category_scores` decode independently of `:flagged`, so a tampered
+      payload — or one carrying the string `"true"` — comes back
+      `flagged: false` beside a fully populated category map, with nothing in
+      the struct marking it as repaired. Only a payload truncated so badly
+      that all three keys are missing arrives with the category maps empty,
+      and that is the absence of data rather than a signal about the repair.
+      A caller who needs to detect a corrupted verdict has to validate the
+      payload before decoding, or compare `:flagged` against `:categories`;
     * ETF and JSON round-trips are therefore **not interchangeable** for an
       off-contract `flagged: nil`: `:erlang.term_to_binary/1` preserves the
       `nil`, JSON returns `false`.

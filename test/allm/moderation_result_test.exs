@@ -95,6 +95,25 @@ defmodule ALLM.ModerationResultTest do
       assert ModerationResult.__from_tagged__(%{"flagged" => nil}).flagged == false
     end
 
+    # The repair is SILENT: `:categories` and `:category_scores` decode
+    # independently of `:flagged`, so nothing in the struct marks a repaired
+    # verdict. The moduledoc and spec §39.4 both claimed the empty category
+    # maps were the honest signal that something had gone wrong; both were
+    # measured false and corrected in Phase 22.7. This test is what keeps the
+    # claim from coming back.
+    test "a repaired :flagged leaves a fully populated category map beside it" do
+      decoded =
+        ModerationResult.__from_tagged__(%{
+          "flagged" => "true",
+          "categories" => %{"violence" => true},
+          "category_scores" => %{"violence" => 0.91}
+        })
+
+      assert decoded.flagged == false
+      assert decoded.categories == %{"violence" => true}
+      assert decoded.category_scores == %{"violence" => 0.91}
+    end
+
     test "a true \"flagged\" value is preserved" do
       assert ModerationResult.__from_tagged__(%{"flagged" => true}).flagged == true
     end

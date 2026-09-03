@@ -58,14 +58,14 @@ The full grammar lives in `ALLM.Providers.Fake.Script`'s moduledoc.
 
 ## Construction
 
-```elixir
-engine = ALLM.Engine.new(
-  adapter: ALLM.Providers.Fake,
-  adapter_opts: [
-    script: [{:text, "ok"}, {:finish, :stop}]
-  ]
-)
-```
+    iex> engine =
+    ...>   ALLM.Engine.new(
+    ...>     adapter: ALLM.Providers.Fake,
+    ...>     adapter_opts: [script: [{:text, "ok"}, {:finish, :stop}]]
+    ...>   )
+    iex> {:ok, response} = ALLM.generate(engine, ALLM.request([ALLM.user("hi")]))
+    iex> {response.output_text, response.finish_reason}
+    {"ok", :stop}
 
 For multi-call tests, use `:scripts` (a list of per-call lists):
 
@@ -111,7 +111,7 @@ When a test dispatches the adapter call across processes
 (`Task.async/1`), the explicit cursor is load-bearing — process-dict
 isolation would otherwise reset the cursor for each Task.
 
-## The `:usage` opt (Phase 21.2)
+## The `:usage` opt
 
 `adapter_opts[:usage]` materializes a `%ALLM.Usage{}` on every response
 without writing the usage entry per script:
@@ -138,7 +138,7 @@ accumulates into `metadata.usage` rather than emitting a `:raw_chunk`.
 Real adapters emitting `{:raw_chunk, {:usage, _}}` keep their existing
 path; the change is scoped to Fake's `{:usage, _}` entry.
 
-## The `:record` opt (Phase 21.2)
+## The `:record` opt
 
 `adapter_opts[:record]` accepts a pid that receives
 `{:allm_fake_record, %Request{}, opts}` verbatim BEFORE the script
@@ -203,9 +203,9 @@ adapter_opts: [
 
 `generate/2` retries automatically under the default policy. `stream/2`
 emits the transient failure as a mid-stream `{:error, _}` event so the
-consumer reduces to `%Response{finish_reason: :error}` per the
-mid-stream error contract (`ALLM.Runner` / `chat/3` do not retry the
-streaming arm — spec §6.1).
+consumer reduces to `%Response{finish_reason: :error}` — the mid-stream
+error contract. Neither `ALLM.Runner` nor `chat/3` retries the streaming
+arm; see `errors_and_retries.md`.
 
 ## Cross-process engine injection
 

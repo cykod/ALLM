@@ -1018,7 +1018,7 @@ defmodule ALLM.Providers.OpenAI.Images do
           ImageAdapterError.new(:timeout,
             provider: :openai,
             message: "request timed out",
-            cause: cause,
+            cause: sanitize_cause(cause),
             metadata: build_metadata(%{}, opts)
           )
 
@@ -1032,7 +1032,7 @@ defmodule ALLM.Providers.OpenAI.Images do
           ImageAdapterError.new(:network_error,
             provider: :openai,
             message: "transport failure: " <> Exception.message(exception),
-            cause: exception,
+            cause: sanitize_cause(exception),
             metadata: build_metadata(%{}, opts)
           )
 
@@ -1067,7 +1067,12 @@ defmodule ALLM.Providers.OpenAI.Images do
     error = Map.get(body, "error", %{})
     code = Map.get(error, "code")
     type = Map.get(error, "type")
-    message = Map.get(error, "message", "OpenAI HTTP #{status}")
+
+    # `classify_http_error/4` routes EVERY non-2xx status through this
+    # function, so redacting here is structural rather than conditional on the
+    # classified reason — a 500 whose body happens to echo a key is covered
+    # without a second site remembering to.
+    message = error |> Map.get("message", "OpenAI HTTP #{status}") |> redact_key_material()
 
     base_metadata =
       build_metadata(
@@ -1109,11 +1114,51 @@ defmodule ALLM.Providers.OpenAI.Images do
   defp malformed_error(cause, opts) do
     ImageAdapterError.new(:malformed_response,
       provider: :openai,
-      message: "could not parse OpenAI response: " <> inspect(cause),
-      cause: cause,
+      message: "could not parse OpenAI response: body is not valid JSON",
+      cause: sanitize_cause(cause),
       metadata: build_metadata(%{}, opts)
     )
   end
+
+  # `%ImageAdapterError{}` derives `Jason.Encoder` and is routinely logged and
+  # persisted, so `:cause` must never smuggle a raw response body through.
+  # `Jason.DecodeError` carries the whole undecodable payload on `:data`;
+  # everything else (transport errors) carries only a reason atom.
+  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause), do: %{cause | data: ""}
+  defp sanitize_cause(cause), do: cause
+
+  # OpenAI is *believed* to echo a prefix of the offending key back in its 401
+  # text ("Incorrect API key provided: sk-..."), and that message lands on
+  # `:message`. Strip anything key-shaped before it reaches the struct.
+  #
+  # That echo is INFERRED, not confirmed: every 401/auth fixture in this repo is
+  # under `synthesized/` — there is no recorded OpenAI 401 anywhere in the tree
+  # — so nothing here demonstrates a live leak, and the planted token in
+  # `test/fixtures/openai/images/synthesized/auth_failed.json` binds the
+  # *pattern*, not the leak path. Treat this as defence in depth until a
+  # recorded 401 says otherwise. What is certain is that `error["message"]` is
+  # free text a provider or an intermediary proxy can populate at will.
+  #
+  # Inherited VERBATIM from `ALLM.Providers.OpenAI.Embeddings` — same provider,
+  # same key shapes — which is correct here and would be a silent no-op if
+  # carried to another provider. `ALLM.Providers.Gemini.Images` therefore
+  # widens its own pattern rather than reusing this one.
+  #
+  # SCOPE — this is not an exhaustive audit of provider-authored bytes in the
+  # struct. The only channel that reaches THIS FUNCTION is
+  # `body["error"]["message"]` off a non-2xx response, and no body preview is
+  # carried at all. But `error["code"]` and `error["type"]` come off the same
+  # untrusted body and land on `:metadata` UNREDACTED (read at
+  # `to_image_adapter_error/4`, assigned via `build_metadata/2`); measured
+  # 2026-09-03, a key planted in `error["code"]` survives both `inspect/1` and
+  # `Jason.encode!/1`. That gap is family-wide and pre-existing
+  # (`openai/embeddings.ex`, `openai/moderation.ex`, `gemini/embeddings.ex`) and
+  # is ticketed separately in `ASKS.md`.
+  defp redact_key_material(message) when is_binary(message) do
+    String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
+  end
+
+  defp redact_key_material(_message), do: "OpenAI images error"
 
   # ---------------------------------------------------------------------------
   # Internals — Retry-After header parsing
@@ -1228,16 +1273,16 @@ defmodule ALLM.Providers.OpenAI.Images do
      ImageAdapterError.new(:malformed_response,
        provider: :openai,
        message: "could not parse OpenAI response: missing or non-list :data field",
-       metadata: build_metadata(%{body_preview: body_preview(body)}, opts)
+       metadata: build_metadata(%{}, opts)
      )}
   end
 
-  def decode_response(body, _headers, _request, opts) do
+  def decode_response(_body, _headers, _request, opts) do
     {:error,
      ImageAdapterError.new(:malformed_response,
        provider: :openai,
        message: "could not parse OpenAI response: non-JSON body",
-       metadata: build_metadata(%{body_preview: body_preview(body)}, opts)
+       metadata: build_metadata(%{}, opts)
      )}
   end
 
@@ -1405,13 +1450,5 @@ defmodule ALLM.Providers.OpenAI.Images do
     else
       _ -> map
     end
-  end
-
-  defp body_preview(body) when is_binary(body) do
-    String.slice(body, 0, 200)
-  end
-
-  defp body_preview(body) do
-    body |> inspect() |> String.slice(0, 200)
   end
 end

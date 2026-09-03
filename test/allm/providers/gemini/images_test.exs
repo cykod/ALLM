@@ -651,6 +651,137 @@ defmodule ALLM.Providers.Gemini.ImagesTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Key-material redaction and error-struct hygiene (Phase 22.7).
+  #
+  # `%ImageAdapterError{}` derives `Jason.Encoder` and downstream apps persist
+  # it, so nothing that reaches it may carry credential material or a slice of
+  # the raw response body. Unlike OpenAI, Gemini's real 401 text does NOT echo
+  # the key back (`synthesized/auth_failed.json` is the recorded shape), so this
+  # is defence in depth: the untrusted channel is `body["error"]["message"]` off
+  # any non-2xx, which a proxy or gateway in front of the API populates freely.
+  # `synthesized/image_auth_failed_key_echo.json` plants the token so the
+  # redactor has a target at all.
+  # ---------------------------------------------------------------------------
+
+  describe "redaction" do
+    @planted_key "AIzaSyFAKEKEY000111222333444555666777"
+
+    test "an AIza token in a 401 message never reaches the error struct" do
+      body = Fx.synthesized(:image_auth_failed_key_echo)
+      assert body["error"]["message"] =~ @planted_key, "fixture must carry a key-shaped string"
+
+      stub = stub_json("img_401_key", 401, body)
+
+      assert {:error, %ImageAdapterError{reason: :authentication_failed} = err} =
+               call(stub, gen_request())
+
+      refute inspect(err) =~ @planted_key
+      refute Jason.encode!(err) =~ @planted_key
+      assert err.message =~ "[REDACTED]"
+      assert err.message =~ "API key not valid"
+    end
+
+    test "redaction sits at the single funnel, so every non-2xx status is covered" do
+      body = Fx.synthesized(:image_auth_failed_key_echo)
+
+      for status <- [400, 401, 403, 404, 429, 500, 503, 418] do
+        err = Images.to_image_adapter_error(status, body, [], [])
+
+        refute inspect(err) =~ @planted_key,
+               "status #{status} leaked key material — redaction must be structural, " <>
+                 "not conditional on the classified reason"
+      end
+    end
+
+    # CLAUDE.md's companion-test rule. Each provider needs its OWN pattern;
+    # inheriting a sibling's is a silent no-op that redacts nothing while
+    # looking correct. Asserting the siblings MISS is what makes an inherited
+    # regex fail loudly here rather than pass vacuously.
+    test "the OpenAI and Voyage key patterns match nothing in the same 401 fixture" do
+      message = Fx.synthesized(:image_auth_failed_key_echo)["error"]["message"]
+
+      refute message =~ ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/
+      refute message =~ ~r/\bpa-[A-Za-z0-9_\-]{6,}/
+      assert message =~ ~r/\b(?:AIza[A-Za-z0-9_\-]{6,}|ya29\.[A-Za-z0-9_\-.]{6,})/
+    end
+
+    test "a ya29. OAuth access token is redacted too" do
+      body = %{
+        "error" => %{
+          "code" => 401,
+          "status" => "UNAUTHENTICATED",
+          "message" => "Invalid credential: ya29.A0ARFAKE000111222333"
+        }
+      }
+
+      err = Images.to_image_adapter_error(401, body, [], [])
+
+      refute inspect(err) =~ "ya29.A0ARFAKE000111222333"
+      assert err.message =~ "[REDACTED]"
+    end
+
+    test "a non-binary provider message degrades to a static string" do
+      err = Images.to_image_adapter_error(400, %{"error" => %{"message" => 123}}, [], [])
+
+      assert err.message == "Gemini images error"
+    end
+
+    # `promptFeedback.blockReason` is an unvalidated binary off a **200** body,
+    # so it never reaches `classify_http_error/4` and the non-2xx funnel cannot
+    # cover it. `decode_image_response/4` redacts it at the site instead; this
+    # pins that, because a comment claiming coverage is exactly what this
+    # sub-phase exists to stop shipping.
+    test "a blocked-prompt reason off a 200 body is redacted at its own site" do
+      body = %{"promptFeedback" => %{"blockReason" => "SAFETY " <> @planted_key}}
+
+      assert {:error, %ImageAdapterError{reason: :content_filter} = err} =
+               Images.decode_image_response(body, [], gen_request(), [])
+
+      refute inspect(err) =~ @planted_key
+      refute Jason.encode!(err) =~ @planted_key
+      assert err.message =~ "[REDACTED]"
+      assert err.metadata[:block_reason] =~ "[REDACTED]"
+    end
+
+    test "no error struct carries a body preview" do
+      stub =
+        String.to_atom("img_nonjson_#{System.unique_integer([:positive])}")
+
+      Req.Test.stub(stub, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!("a bare JSON string, not an object"))
+      end)
+
+      assert {:error, %ImageAdapterError{reason: :malformed_response} = err} =
+               call(stub, gen_request())
+
+      refute Map.has_key?(err.metadata, :body_preview)
+      refute inspect(err) =~ "body_preview"
+    end
+
+    test ":cause never smuggles the undecodable payload out" do
+      stub = String.to_atom("img_baddecode_#{System.unique_integer([:positive])}")
+
+      Req.Test.stub(stub, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, "{not json #{@planted_key}")
+      end)
+
+      assert {:error, %ImageAdapterError{reason: :malformed_response} = err} =
+               call(stub, gen_request())
+
+      # `Jason.DecodeError` carries the whole undecodable payload on `:data`;
+      # `sanitize_cause/1` blanks it so the persisted struct cannot smuggle a
+      # response body out through `:cause`, and the message no longer
+      # interpolates `inspect(cause)`.
+      refute inspect(err) =~ @planted_key
+      refute inspect(err) =~ "not json"
+    end
+  end
+
   describe "prepare_request/2" do
     test "returns an unfired Req.Request configured like generate/2" do
       ALLM.Keys.put(:gemini, "AIza-test-key")

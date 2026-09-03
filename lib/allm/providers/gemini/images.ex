@@ -538,7 +538,7 @@ defmodule ALLM.Providers.Gemini.Images do
           ImageAdapterError.new(:timeout,
             provider: :gemini,
             message: "request timed out",
-            cause: cause,
+            cause: sanitize_cause(cause),
             metadata: build_metadata(%{}, opts)
           )
 
@@ -552,7 +552,7 @@ defmodule ALLM.Providers.Gemini.Images do
           ImageAdapterError.new(:network_error,
             provider: :gemini,
             message: "transport failure: " <> Exception.message(exception),
-            cause: exception,
+            cause: sanitize_cause(exception),
             metadata: build_metadata(%{}, opts)
           )
 
@@ -597,21 +597,81 @@ defmodule ALLM.Providers.Gemini.Images do
         opts
       )
 
+    # `classify_http_error/4` routes EVERY non-2xx status through this function,
+    # so redacting here is structural rather than conditional on the classified
+    # reason — a 500 whose body happens to echo a credential is covered without
+    # a second site remembering to.
     ImageAdapterError.new(chat_err.reason,
       provider: :gemini,
       status: chat_err.status,
       retry_after_ms: chat_err.retry_after_ms,
-      message: chat_err.message,
-      cause: chat_err.cause,
+      message: body |> provider_message(chat_err.message) |> redact_key_material(),
+      cause: sanitize_cause(chat_err.cause),
       metadata: base_metadata
     )
   end
 
+  # Read off the RAW decoded body rather than off `chat_err.message`, which
+  # `ALLM.Error.AdapterError` types as `String.t()`. That declaration is
+  # optimistic: `classify_error/3` populates the field with
+  # `Map.get(error, "message", default)` straight off the body, so a provider or
+  # proxy answering `{"error": {"message": 123}}` puts a non-binary there.
+  # Sourcing from the body keeps the non-binary arm below both reachable AND
+  # visible to Dialyzer, and it is the more honest seam anyway — redaction is a
+  # property of untrusted provider text, not of a typed struct field.
+  #
+  # Mirrors `ALLM.Providers.Gemini.Embeddings.provider_message/2`.
+  defp provider_message(body, fallback) do
+    case body do
+      %{"error" => %{"message" => message}} -> message
+      _ -> fallback
+    end
+  end
+
+  # Google credential shapes: `AIza…` API keys and `ya29.…` OAuth access
+  # tokens. The OpenAI sibling's `sk-`/`rk-`/`org-` pattern and Voyage's `pa-…`
+  # each match neither, so this is widened for this provider rather than
+  # inherited — an inherited pattern is a redactor that redacts nothing.
+  #
+  # Gemini's real 401 text does not echo the key back, which makes this defence
+  # in depth. The channel that reaches THIS FUNCTION is
+  # `body["error"]["message"]` off any non-2xx response — free text a provider
+  # or an intermediary proxy can populate at will — and no body preview is
+  # carried at all.
+  #
+  # SCOPE — this is not an exhaustive audit of provider-authored bytes in the
+  # struct. Two more channels come off the untrusted body and do NOT pass
+  # through here:
+  #
+  #   * `error["status"]` lands on `metadata.google_status` UNREDACTED, via
+  #     `ALLM.Providers.Gemini.classify_error/3` merged in `build_metadata/2`.
+  #     Family-wide and pre-existing (`gemini/embeddings.ex`,
+  #     `openai/{images,embeddings,moderation}.ex`); ticketed in `ASKS.md`.
+  #   * `promptFeedback.blockReason` arrives on a **200** and so never reaches
+  #     `classify_http_error/4`. `decode_image_response/4` therefore calls
+  #     `redact_key_material/1` on it directly — see the `:blocked` arm.
+  defp redact_key_material(message) when is_binary(message) do
+    String.replace(
+      message,
+      ~r/\b(?:AIza[A-Za-z0-9_\-]{6,}|ya29\.[A-Za-z0-9_\-.]{6,})/,
+      "[REDACTED]"
+    )
+  end
+
+  defp redact_key_material(_message), do: "Gemini images error"
+
+  # `%ImageAdapterError{}` derives `Jason.Encoder` and is routinely logged and
+  # persisted, so `:cause` must never smuggle a raw response body through.
+  # `Jason.DecodeError` carries the whole undecodable payload on `:data`;
+  # everything else (transport errors) carries only a reason atom.
+  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause), do: %{cause | data: ""}
+  defp sanitize_cause(cause), do: cause
+
   defp malformed_error(cause, opts) do
     ImageAdapterError.new(:malformed_response,
       provider: :gemini,
-      message: "could not parse Gemini response: " <> inspect(cause),
-      cause: cause,
+      message: "could not parse Gemini response: body is not valid JSON",
+      cause: sanitize_cause(cause),
       metadata: build_metadata(%{}, opts)
     )
   end
@@ -630,12 +690,18 @@ defmodule ALLM.Providers.Gemini.Images do
   def decode_image_response(%{} = body, _headers, %ImageRequest{} = request, opts) do
     case classify_image_response(body) do
       {:blocked, reason} ->
+        # `blockReason` is an unvalidated binary off a 200 body, so it bypasses
+        # the non-2xx funnel where `redact_key_material/1` normally sits. Redact
+        # here instead — `%ImageAdapterError{}` derives `Jason.Encoder` and is
+        # routinely persisted.
+        safe_reason = redact_key_material(reason)
+
         {:error,
          ImageAdapterError.new(:content_filter,
            provider: :gemini,
            status: 200,
-           message: "Gemini blocked the prompt: #{reason}",
-           metadata: build_metadata(%{block_reason: reason}, opts)
+           message: "Gemini blocked the prompt: #{safe_reason}",
+           metadata: build_metadata(%{block_reason: safe_reason}, opts)
          )}
 
       {:candidates, []} ->
@@ -652,12 +718,12 @@ defmodule ALLM.Providers.Gemini.Images do
     end
   end
 
-  def decode_image_response(body, _headers, _request, opts) do
+  def decode_image_response(_body, _headers, _request, opts) do
     {:error,
      ImageAdapterError.new(:malformed_response,
        provider: :gemini,
        message: "Gemini returned a non-JSON body",
-       metadata: build_metadata(%{body_preview: body_preview(body)}, opts)
+       metadata: build_metadata(%{}, opts)
      )}
   end
 
@@ -714,9 +780,6 @@ defmodule ALLM.Providers.Gemini.Images do
       metadata: metadata
     }
   end
-
-  defp body_preview(body) when is_binary(body), do: String.slice(body, 0, 200)
-  defp body_preview(body), do: body |> inspect() |> String.slice(0, 200)
 
   # ---------------------------------------------------------------------------
   # Internals — opts plumbing

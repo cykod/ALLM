@@ -1,7 +1,7 @@
 {
-  "_comment": "Synthesized 401 image-endpoint auth-failure body. Modeled after https://platform.openai.com/docs/guides/error-codes — invalid_api_key. Modeled 2026-04-27.",
+  "_comment": "Synthesized 401 image-endpoint auth-failure body. Modeled after https://platform.openai.com/docs/guides/error-codes — invalid_api_key. Modeled 2026-04-27. Phase 22.7 lengthened the echoed key from `sk-bad` to a realistic `sk-proj-` token: the redactor requires 6+ characters after the prefix, so the short placeholder was a key-shaped string no pattern could ever match — the redaction test needs a planted subject to have a target. NOTE (22.7 fix pass): this file is SYNTHESIZED and no recorded OpenAI 401 exists anywhere in the tree, so the echo modeled here is INFERRED from OpenAI's published error-codes page, not confirmed on the wire. The planted token binds the redaction PATTERN; it is not evidence that provider-authored text reaches the redactor. Promoting that row needs a recorded 401 body.",
   "error": {
-    "message": "Incorrect API key provided: sk-bad. You can find your API key at https://platform.openai.com/account/api-keys.",
+    "message": "Incorrect API key provided: sk-proj-FAKEKEY000111222333444555. You can find your API key at https://platform.openai.com/account/api-keys.",
     "type": "invalid_request_error",
     "param": null,
     "code": "invalid_api_key"
