@@ -1,3 +1,14 @@
+## [OTHR] Sweep Phase 23 deferrals (Phase 23.5)
+*Tuesday, September 22nd at 9pm*
+Closes the two in-tree Phase 23 carries (ALLM.tool/1 now documents compact: and 
+:summary; a banned phase token is gone from ALLM.Validate's moduledoc) and 
+re-files the two out-of-scope ones with explicit owners: the four private 
+stringify_keys copies as a [CHORE] with a strengthened three-part DONE WHEN, 
+and the pre-existing structured_finalize pass-2 :tools leak as a standalone 
+[BUG]. RECORDS carries each disposition with its predicate output.
+
+---
+
 ## [DOC] Document compact tools — spec §40, guide, live example (Phase 23.4)
 *Tuesday, September 22nd at 9pm*
 Adds spec §40 (Compact tool disclosure) with amendments to §5.2, §16 and 

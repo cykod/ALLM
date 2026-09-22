@@ -172,7 +172,11 @@ defmodule ALLM do
 
   `:name`, `:description`, and `:schema` are required; omitting any raises
   `ArgumentError`. `:handler` is optional. Pass `manual: true` to opt this
-  tool out of automatic execution under `chat/3`'s `mode: :auto`.
+  tool out of automatic execution under `chat/3`'s `mode: :auto`. Pass
+  `compact: true` to send the tool to the model as a one-line stub whose
+  full definition the model reads on demand through a `tool_help` tool, and
+  `:summary` to override that stub's one-line summary; see `ALLM.Tool` and
+  `ALLM.ToolHelp`.
 
   ## Examples
 

@@ -16,7 +16,7 @@ defmodule ALLM.Validate do
 
   The field-error tuple `{:content, :invalid_part_type}` retains its
   atom-only second element so existing pattern-matching callers continue to
-  match. Phase 21.1 carries the structured detail on the surrounding
+  match. The structured detail rides on the surrounding
   `%ValidationError{}`'s `:metadata` map:
 
       %ALLM.Error.ValidationError{

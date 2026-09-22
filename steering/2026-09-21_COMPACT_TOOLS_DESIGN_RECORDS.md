@@ -10,7 +10,59 @@ Companion to `steering/2026-09-21_COMPACT_TOOLS_DESIGN.md`. Status, checklist st
 | 23.2 | Completed | Built 2026-09-22 on `9b74416`. Functional, code and arch/security reviews ran (`.work/*/2026-09-22-phase-23-2-tool-help*`; design review N/A); fix pass: 0 fixed (all findings Low), 2 deferred to `[CARRY]` (below), 4 Lows left for polish. |
 | 23.3 | Completed | Built 2026-09-22 on `f7a4b87`. Implementer gates green (below); review gates not yet run. |
 | 23.4 | Completed | Built 2026-09-22 on `d8b3ae2`. Implementer gates green and all three live arms exit 0 (below); review gates not yet run. |
-| 23.5 | Not Started | |
+| 23.5 | Completed | Built 2026-09-22 on `fa1d3c6`. 2 tickets closed in-tree, 2 re-filed with a later owner (below). Implementer gates: see §23.5 → Gates. |
+
+## 23.5 — `[CHORE]` sweep
+
+### Enumeration
+
+`grep -n "Phase 23\|23\.[1-4]" .work/ASKS.md steering/2026-09-21_COMPACT_TOOLS_DESIGN_RECORDS.md` (run 2026-09-22 before any edit). It turned up 4 tickets addressed to or filed by Phase 23 that are still open. The other hits are skill log lines (`[IMPL]`/`[REVW]`/`[CDRV]`/`[ASRV]`/`[FIX]`/`[MILE]`), status rows, or carries already discharged (the 23.2 F4 carry, discharged by 23.3's table). A second pass, `grep -n "CARRY\|receiver\|23\.5" …_RECORDS.md`, found no further tickets. `.work/HANDOFF.md` held 3 Open rows naming Phase 23, and each one mirrors a ticket below.
+
+Not in the enumeration, and left alone on purpose: the two 23.4 functional-review Lows at `.work/reviews/2026-09-22-phase-23-4-docs-live/overview.md` (L1, which is §40.2's "required names" wording vs `signature/1` filtering to `properties`, and L2, which is script 21's cost-header token budget). Each one names "Receiver: 23.5 sweep", but they are review-doc Lows. They belong to the orchestrator's phase-end polish pass, not to this sweep.
+
+### Dispositions
+
+| # | Ticket | Disposition | DONE WHEN predicate, run against the resulting tree |
+|---|--------|-------------|------------------------------------------------------|
+| 1 | `[CARRY]` 23.1 code review F3: `ALLM.tool/1` `@doc` omits `compact:` / `summary:` | **Closed in-tree.** One sentence added to `ALLM.tool/1`'s `@doc` in `lib/allm.ex`. It names `compact: true` (one-line stub, full definition on demand through `tool_help`) and `:summary` (overrides the stub's summary), and points to `ALLM.Tool` / `ALLM.ToolHelp`. | `grep -c compact lib/allm.ex` → `1` (exit 0; was `0`). Audit: `mix run scripts/audit_user_docs.exs lib/allm.ex` → `No banned-token matches.` both before (0 hits) and after (exit 0). |
+| 2 | `[CARRY]` 23.1 functional O2: banned `phase_n` token at `lib/allm/validate.ex:19` (predates Phase 23) | **Closed in-tree.** "Phase 21.1 carries the structured detail on" became "The structured detail rides on". This is prose only, with no behaviour change. | `mix run scripts/audit_user_docs.exs lib/allm/validate.ex` → `No banned-token matches. The surface is clean.` (exit 0; before: `lib/allm/validate.ex:19:phase_n`, 1 hit). |
+| 3 | `[CARRY]` 23.2 code review F3: four private copies of shallow key stringification | **Re-filed, not fixed.** It is now a standalone `[CHORE]` ticket in `.work/ASKS.md` (`[ASKS] tue 9/22 9pm - [CHORE] Extract one shared @doc false …`). Owner: the next `[CHORE]` commit after Phase 23 closes. The extraction touches released adapter code (`openai.ex`, `anthropic.ex`, `openai/moderation.ex`), so under CLAUDE.md's cross-phase rule it needs its own commit. The ticket carries the predicate from §"`[CARRY]` lines filed by the 23.2 fix pass" verbatim. | Still open by design. With `F` = the four files above, DONE WHEN is all three of: (a) `grep -lE 'defp (stringify_keys\|stringify_option_keys\|to_string_key)\b' $F` prints nothing; (b) `grep -rln 'Atom.to_string(k)' lib/ \| grep -vxE 'lib/allm/(json_schema\|providers/gemini)\.ex\|<shared helper file>'` prints nothing; (c) `grep -L '<SharedModule>.<helper>' $F` prints nothing. (a) alone passes on a rename or inline (23.5 code review F1), so (b) binds the body and (c) binds the migration onto the one helper. Measured 2026-09-22 by the 23.5 fix pass: (a) → all four files (exit 0); (b) with the placeholder dropped → the same four files (exit 0); (c) is not runnable until the helper is named, and the `[CHORE]` implementer fills in both placeholders. Limit: (b) is a text match, so a copy that renames the bound variable escapes it, and (c) is what catches that. |
+| 4 | `/asks` `[BUG]` filed by 23.3: call-level `:tools` leak into `structured_finalize` pass 2 (predates Phase 23) | **Re-filed with an explicit later owner.** A disposition line was appended to `.work/ASKS.md` (`[ASKS] tue 9/22 9pm - [DISPOSITION] …`). Owner: a standalone `[BUG]` fix commit after Phase 23 closes. The design's Out-of-scope section keeps the fix out of every Phase 23 Module Tree, and 23.5's own text does not scope it in. | Still open by design: the ticket's reproducer (`mix run -e '…'`, verbatim from ASKS) → `[1, 1]` (re-run 2026-09-22 by 23.5). DONE WHEN is `[1, 0]`. |
+
+### HANDOFF
+
+The 3 Open rows naming Phase 23 moved to `## Discharged`. The two 23.1 rows were closed in-tree (dispositions 1 and 2), and the 23.2 stringify row was re-filed (disposition 3). The row points at its `ASKS.md` ticket. The v0.6.0 "built not released" row carries a 23.4 note but is not a Phase 23 ticket, so it stays Open.
+
+### Files changed
+
+- `lib/allm.ex`: `ALLM.tool/1` `@doc` only.
+- `lib/allm/validate.ex`: `@moduledoc` line 19 only.
+- `steering/2026-09-21_COMPACT_TOOLS_DESIGN.md`: the embedded 23.5 status cell changed from `Not Started` to `Built, gates pending`, so the doc no longer states a falsified status. The orchestrator's uncommitted 23.4 row edit is untouched.
+- This file. `.work/ASKS.md` and `.work/HANDOFF.md` (both gitignored/work files).
+
+### Gates
+
+All gates ran 2026-09-22 against the edited tree, after both `lib/` edits:
+
+- `mix format --check-formatted` → exit 0
+- `mix compile --warnings-as-errors --force` → exit 0 (84 files)
+- `mix credo --strict` → exit 0 ("3238 mods/funs, found no issues.")
+- `mix test` → exit 0 (seed 526170: "445 doctests, 32 properties, 3564 tests, 0 failures, 14 excluded")
+- `mix test --seed 0` → exit 0 ("445 doctests, 32 properties, 3564 tests, 0 failures, 14 excluded")
+- `mix dialyzer` → exit 0 ("Total errors: 0")
+
+Functional, code and arch/security reviews ran afterwards (`.work/*/2026-09-22-phase-23-5-chore-sweep*`; design review N/A); see the fix pass below.
+
+### Fix pass (2026-09-22)
+
+The functional, code and arch-security reviews ran (`.work/reviews/2026-09-22-phase-23-5-chore-sweep/overview.md`, `.work/code-reviews/2026-09-22-phase-23-5-chore-sweep.md`, `.work/security-reviews/2026-09-22-phase-23-5-chore-sweep.md`: clean). The design review was N/A. Two Lows landed under the severity-floor carve-outs:
+
+- **Functional L2 (false sentences in this register).** The 23.4 "still omits" carry and the `[CARRY]` lines for dispositions 1–3 each gained a `**Superseded:**` pointer to their §23.5 disposition. Re-measured first: `grep -c compact lib/allm.ex` → `1`; `mix run scripts/audit_user_docs.exs lib/allm/validate.ex` → `No banned-token matches.` (exit 0). The 23.2 F4 carry (`[CARRY]` from 23.2 code review F4) makes no tree claim that has since expired, so it was left alone.
+- **Code review F1 (a DONE WHEN predicate that passes without the property).** Dispositions row 3 and the `.work/ASKS.md` `[CHORE]` ticket now require the body clause (b) and the migration clause (c) as well as the name grep (a). Measured values are in row 3.
+
+Functional L1 (script 21's cost-header token estimate) stays with the phase-end polish pass.
+
+Gates after the fix pass: `mix test` → exit 0 ("445 doctests, 32 properties, 3564 tests, 0 failures, 14 excluded"); `mix format --check-formatted` → exit 0; `mix credo --strict` → exit 0.
 
 ## 23.4 — Spec §40, guide, live example (docs)
 
@@ -66,7 +118,7 @@ First-implementation cost was one clean run per provider (not the 2–4× the de
 
 ### Not done here (carried)
 
-- `ALLM.tool/1`'s `@doc` in `lib/allm.ex` still omits `compact:` (23.1 code review F3; `grep -c compact lib/allm.ex` → `0`). `lib/allm.ex` is outside 23.4's Module Tree; receiver stays 23.5.
+- `ALLM.tool/1`'s `@doc` in `lib/allm.ex` still omits `compact:` (23.1 code review F3; `grep -c compact lib/allm.ex` → `0`). `lib/allm.ex` is outside 23.4's Module Tree; receiver stays 23.5. **Superseded:** closed in-tree by §23.5 disposition 1 (`grep -c compact lib/allm.ex` → `1`, run 2026-09-22 by the 23.5 fix pass); the `0` above is the pre-23.5 tree.
 - The `ALLM.Tool` `:summary` field doc is not amended with the multi-line hint (outside the Module Tree); the guide carries it.
 
 ### Gate results (implementer run, 2026-09-22)
@@ -217,7 +269,7 @@ Inputs: `.work/reviews/2026-09-22-phase-23-3-chat-wiring/overview.md`, `.work/co
 Both are Low. The 23.2 fix pass filed them here so that 23.3's implementer and 23.5's enumeration predicate find them.
 
 - `[CARRY]` (from 23.2 code review F4, receiver: 23.3) `ALLM.ToolHelp`'s docs state chat-loop and tool-runner behaviour that 23.3 wires in: the usage error replaces the handler and is routed through `on_tool_error` (`lib/allm/tool_help.ex:46-47`, `:277-279`), a user tool named `tool_help` beside a compact tool is rejected with `{:tools, :duplicate_name}` (`:74-76`), and `ALLM.ToolRunner.run_tool_calls/3` / `stream_tool_calls/3` check compact args and answer `tool_help` (`:92-95`). 23.3 pins each of the four claims with a test and records each test's `file:line` in its own RECORDS section. The direct-`ToolRunner` claim is the one a chat-loop-shaped Test Plan misses.
-- `[CARRY]` (from 23.2 code review F3, receiver: a `[CHORE]` outside Phase 23) `tool_help.ex`'s private `stringify_keys/1` (`:409-414`) repeats shallow atom-to-string key normalisation that also sits privately in `lib/allm/providers/openai.ex:1690-1695`, `lib/allm/providers/anthropic.ex:635-640` and `lib/allm/providers/openai/moderation.ex:930-935`. That is four copies, not the review's five: `gemini.ex:1049-1054`'s `option_key/1` also renames keys and is not a copy (`grep -rn 'Atom.to_string(k)' lib/` → 6 lines, read 2026-09-22). Extracting one shared `@doc false` helper touches released adapter code, so it is a separate commit. **DONE WHEN** `grep -lE 'defp (stringify_keys|stringify_option_keys|to_string_key)\b' lib/allm/tool_help.ex lib/allm/providers/openai.ex lib/allm/providers/anthropic.ex lib/allm/providers/openai/moderation.ex` prints nothing (measured 2026-09-22: all four files). `lib/allm/json_schema.ex`'s `to_string_key/1` also stringifies non-atom keys with `inspect/1`, so it is not a copy and is left out of the predicate.
+- `[CARRY]` (from 23.2 code review F3, receiver: a `[CHORE]` outside Phase 23) `tool_help.ex`'s private `stringify_keys/1` (`:409-414`) repeats shallow atom-to-string key normalisation that also sits privately in `lib/allm/providers/openai.ex:1690-1695`, `lib/allm/providers/anthropic.ex:635-640` and `lib/allm/providers/openai/moderation.ex:930-935`. That is four copies, not the review's five: `gemini.ex:1049-1054`'s `option_key/1` also renames keys and is not a copy (`grep -rn 'Atom.to_string(k)' lib/` → 6 lines, read 2026-09-22). Extracting one shared `@doc false` helper touches released adapter code, so it is a separate commit. **DONE WHEN** `grep -lE 'defp (stringify_keys|stringify_option_keys|to_string_key)\b' lib/allm/tool_help.ex lib/allm/providers/openai.ex lib/allm/providers/anthropic.ex lib/allm/providers/openai/moderation.ex` prints nothing (measured 2026-09-22: all four files). `lib/allm/json_schema.ex`'s `to_string_key/1` also stringifies non-atom keys with `inspect/1`, so it is not a copy and is left out of the predicate. **Superseded:** re-filed as a standalone `[CHORE]` by §23.5 disposition 3, and the DONE WHEN above was strengthened there by the 23.5 fix pass (23.5 code review F1: the name-only grep passes on a rename). The §23.5 row 3 predicate is the live one; this line keeps the original for history.
 
 ## 23.1 — `ALLM.Tool` fields + validation (Layer A)
 
@@ -253,5 +305,5 @@ Both are Low. The 23.2 fix pass filed them here so that 23.3's implementer and 2
 
 Both are Low and sit outside 23.1's Module Tree. The 23.1 fix pass filed them here so that 23.5's enumeration predicate finds them (`grep -n "Phase 23\|23\.[1-4]" … _RECORDS.md`).
 
-- `[CARRY]` (from 23.1 code review F3) `ALLM.tool/1`'s `@doc` in `lib/allm.ex` names `manual: true` but not `compact:` / `summary:`, which the facade forwards to `Tool.new/1`. Add one sentence pointing to `ALLM.Tool` / `ALLM.ToolHelp` once 23.2 exists to link to. It is 23.4's docs pass if that Module Tree is widened, else 23.5. **DONE WHEN** `grep -c compact lib/allm.ex` is ≥1 (measured 2026-09-22: `0`).
-- `[CARRY]` (from 23.1 functional review O2) This one predates 23.1. A banned `phase_n` token sits in `ALLM.Validate`'s `@moduledoc` at `lib/allm/validate.ex:19` ("Phase 21.1 carries the structured detail…"). It is identical at base `1859dac` (`git show 1859dac:lib/allm/validate.ex | sed -n 19p`). **DONE WHEN** `mix run scripts/audit_user_docs.exs lib/allm/validate.ex` prints `No banned-token matches.` (measured 2026-09-22: 1 hit).
+- `[CARRY]` (from 23.1 code review F3) `ALLM.tool/1`'s `@doc` in `lib/allm.ex` names `manual: true` but not `compact:` / `summary:`, which the facade forwards to `Tool.new/1`. Add one sentence pointing to `ALLM.Tool` / `ALLM.ToolHelp` once 23.2 exists to link to. It is 23.4's docs pass if that Module Tree is widened, else 23.5. **DONE WHEN** `grep -c compact lib/allm.ex` is ≥1 (measured 2026-09-22: `0`). **Superseded:** closed in-tree by §23.5 disposition 1 (`grep -c compact lib/allm.ex` → `1`, run 2026-09-22 by the 23.5 fix pass).
+- `[CARRY]` (from 23.1 functional review O2) This one predates 23.1. A banned `phase_n` token sits in `ALLM.Validate`'s `@moduledoc` at `lib/allm/validate.ex:19` ("Phase 21.1 carries the structured detail…"). It is identical at base `1859dac` (`git show 1859dac:lib/allm/validate.ex | sed -n 19p`). **DONE WHEN** `mix run scripts/audit_user_docs.exs lib/allm/validate.ex` prints `No banned-token matches.` (measured 2026-09-22: 1 hit). **Superseded:** closed in-tree by §23.5 disposition 2 (the predicate now prints `No banned-token matches.`, exit 0, run 2026-09-22 by the 23.5 fix pass).
