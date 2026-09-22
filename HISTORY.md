@@ -1,3 +1,16 @@
+## [TWK] Polish Phase 23 compact tools after the gate cleared
+*Tuesday, September 22nd at 9pm*
+Phase 23 (compact tools, §40) cleared its gate review. This commit applies the 
+post-gate polish pass over the deferred Low findings: ToolHelp.render/2 now 
+says "Compact tools: (none)" instead of a dangling label, the ToolRunner 
+moduledoc no longer claims every call reaches the executor, the determinism 
+property also compares a JSON-round-tripped copy, test fixtures and mailbox 
+handling are tidied, and the script-21 cost header, examples README and 
+CHANGELOG now carry the measured token figures and their conditions. RECORDS 
+gains the polish dispositions and corrected 23.3/23.4 status rows.
+
+---
+
 ## [OTHR] Sweep Phase 23 deferrals (Phase 23.5)
 *Tuesday, September 22nd at 9pm*
 Closes the two in-tree Phase 23 carries (ALLM.tool/1 now documents compact: and 

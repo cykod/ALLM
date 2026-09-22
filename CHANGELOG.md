@@ -74,6 +74,8 @@ Other changes:
   `examples/21_compact_tools.exs`, which runs one task with and without
   compact tools on every provider. Measured step-1 input tokens fell by 54%
   (OpenAI), 64% (Gemini) and 44% (Anthropic) on its eight-tool fixture
+  (one prompt, one run, default example models, all eight tools compact;
+  compacting only part of a catalog saves less)
 - Fix unreadable image files crashing every vision adapter. A
   `%ALLM.Image{source: {:file, path}}` whose file could not be read passed
   both the MIME and the size gate and then raised out of `generate/2` and

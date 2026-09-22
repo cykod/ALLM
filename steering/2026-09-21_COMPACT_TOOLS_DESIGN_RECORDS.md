@@ -8,9 +8,30 @@ Companion to `steering/2026-09-21_COMPACT_TOOLS_DESIGN.md`. Status, checklist st
 |-------|--------|-------|
 | 23.1 | Completed | Built 2026-09-22 on `1859dac`. Functional, code and arch/security reviews ran (`.work/*/2026-09-22-phase-23-1-tool-fields*`); fix pass: 0 fixed, 2 deferred to `[CARRY]`, 3 Lows left for polish. |
 | 23.2 | Completed | Built 2026-09-22 on `9b74416`. Functional, code and arch/security reviews ran (`.work/*/2026-09-22-phase-23-2-tool-help*`; design review N/A); fix pass: 0 fixed (all findings Low), 2 deferred to `[CARRY]` (below), 4 Lows left for polish. |
-| 23.3 | Completed | Built 2026-09-22 on `f7a4b87`. Implementer gates green (below); review gates not yet run. |
-| 23.4 | Completed | Built 2026-09-22 on `d8b3ae2`. Implementer gates green and all three live arms exit 0 (below); review gates not yet run. |
+| 23.3 | Completed | Built 2026-09-22 on `f7a4b87`. Implementer gates green (below); functional, code and arch/security reviews then ran (`.work/*/2026-09-22-phase-23-3-chat-wiring*`; design review N/A) and the fix pass added row 10b and fixed row 11 (below). |
+| 23.4 | Completed | Built 2026-09-22 on `d8b3ae2`. Implementer gates green and all three live arms exit 0 (below); functional, code and arch/security reviews then ran (`.work/*/2026-09-22-phase-23-4-docs-live*`; design review N/A) and the fix pass corrected two doc sentences (below). |
 | 23.5 | Completed | Built 2026-09-22 on `fa1d3c6`. 2 tickets closed in-tree, 2 re-filed with a later owner (below). Implementer gates: see §23.5 → Gates. |
+
+## Polish pass (2026-09-22)
+
+Phase-end sweep of the Lows the fix passes deferred. Each was re-checked against the tree first.
+
+- 23.1 CR F1 (`:summary` tests under the reserved-name comment): **fixed**. The three tests now sit above the comment in `test/allm/validate_test.exs`.
+- 23.1 CR F2 (`tool.ex` moduledoc "exactly as before" + unwrapped line): **fixed**. The sentence now says "sent with its full description and schema", and the intro paragraph is re-wrapped.
+- 23.1 FR O1 (moduledoc ahead of the code): **already moot**. 23.3 wired the behaviour.
+- 23.2 CR F1 (determinism property cannot fail): **fixed**. The property also compares `project/2` on a JSON-round-tripped, hydrated copy.
+- 23.2 CR F2 / FR L1 (bare trailing `"Compact tools: "`): **fixed**. `compact_names/1` returns `(none)` for an empty list, the `render/2` `@doc` says so, and a new `tool_help_test.exs` test covers both the unknown-name note and the usage string. Spec §40 and the guide never quote the literal (`grep -n "Compact tools:" steering/allm_engine_session_streaming_spec_v0_2.md guides/tools.md` → no hits), so they needed no edit. This deviates from the design contract's literal concatenation (design lines 358/361) only when the list is empty.
+- 23.2 FR L2 (multi-line `:summary`): **already fixed** by 23.4 (the guide's one-line hint).
+- 23.3 CR F2 / F3 (`chat_equivalence_test.exs` comment placement, "no new relaxation row"): **fixed**. The fixture id and the absolute-shape test each have their own comment, and both "no new relaxation row" sentences now state the present-tense fact.
+- 23.3 CR F4 (mailbox draining, arm labels): **fixed**. `run/3` in `compact_tools_test.exs` flushes both mailboxes before each arm, the 10 trailing `_ =` discards are gone, and the unlabelled in-loop asserts now carry `"arm #{arm}"`. Mutation check: removing the flush leaves the file green (`mix test test/allm/chat/compact_tools_test.exs` → 20 tests, 0 failures). Every current row's assertions already drain what they read, so the flush guards future rows and is not load-bearing today.
+- 23.3 CR F5 (repeated oracle; misplaced Invariant-1 test): **fixed**. `expected_help/2` replaces the three inline `render(with_meta_tool(...))` expressions. The pure name-equality test moved from `compact_tools_test.exs` (the `:190` cited in §23.3) to `tool_help_test.exs`'s `with_meta_tool/1` describe and now loops over three `tool_choice` values. Line cites into `compact_tools_test.exs` elsewhere in this file (`:176`, `:339`, `:411`, `:451`, `:477`, `:538`) predate this pass and have shifted.
+- 23.3 CR F6 (`ToolRunner` moduledoc): **fixed**. One paragraph says that `tool_help` calls and compact calls missing a required argument are answered without reaching the executor.
+- 23.4 CR F2 / FR L2 / 23.5 FR L1 (script 21 cost header): **fixed**. The header gives the measured figures from §23.4's cost table (2 steps per run; about 2.4k/3.8k/6.2k input tokens for both runs; under 400 output). Comment only, so the live example was not re-run.
+- 23.4 CR F1 (README cost table missing script 21): **fixed**. A paragraph under the cost table gives the same token counts, with no dollar figure because prices are UNVERIFIED.
+- 23.4 CR F4 (CHANGELOG percentages without conditions): **fixed**. The v0.6.0 entry (untagged) now says "one prompt, one run, default example models, all eight tools compact; compacting only part of a catalog saves less".
+- 23.4 CR F3 / FR L1, 23.5 FR L2, 23.5 CR F1: **already fixed** by the 23.4 and 23.5 fix passes.
+
+Gates after the pass: `mix test` (445 doctests, 32 properties, 3565 tests, 0 failures) 0; `mix test --seed 0` 0; `mix format --check-formatted` 0; `mix credo --strict` 0; `mix compile --warnings-as-errors --force` 0; `mix dialyzer` 0; `mix test test/guides_test.exs test/guides_doctest_test.exs` 0; `mix run scripts/check_guide_fences.exs` 0 (67 compiled, 14 skipped); `mix run scripts/audit_user_docs.exs lib/allm/tool_runner.ex lib/allm/tool.ex lib/allm/tool_help.ex` → no banned-token matches.
 
 ## 23.5 — `[CHORE]` sweep
 

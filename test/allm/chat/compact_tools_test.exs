@@ -113,9 +113,18 @@ defmodule ALLM.Chat.CompactToolsTest do
 
   defp user_thread, do: Thread.from_messages([ALLM.user("hi")])
 
-  defp run(:chat, %Engine{} = engine, opts), do: ALLM.chat(engine, user_thread(), opts)
+  # Every row loops over both arms in one test process. Flush what the
+  # previous arm left in the mailbox (recorded requests, x handler runs) so
+  # each arm's assertions see only its own traffic.
+  defp run(arm, %Engine{} = engine, opts) do
+    _ = recorded_requests()
+    _ = drain_x_runs()
+    do_run(arm, engine, opts)
+  end
 
-  defp run(:stream, %Engine{} = engine, opts) do
+  defp do_run(:chat, engine, opts), do: ALLM.chat(engine, user_thread(), opts)
+
+  defp do_run(:stream, engine, opts) do
     thread = user_thread()
 
     case ALLM.stream(engine, thread, opts) do
@@ -147,6 +156,10 @@ defmodule ALLM.Chat.CompactToolsTest do
     end
   end
 
+  # The tool_help content the loop must produce for `names` over `tools`.
+  defp expected_help(tools, names \\ ["x"]),
+    do: ToolHelp.render(ToolHelp.with_meta_tool(tools), %{"names" => names})
+
   defp tool_message(%ChatResult{thread: thread}, id) do
     Enum.find(thread.messages, &match?(%Message{role: :tool, tool_call_id: ^id}, &1))
   end
@@ -161,7 +174,7 @@ defmodule ALLM.Chat.CompactToolsTest do
         engine = engine([text()], [full_tool()])
         assert {:ok, %ChatResult{halted_reason: :completed}} = run(arm, engine, [])
 
-        assert [req] = recorded_requests()
+        assert [req] = recorded_requests(), "arm #{arm}"
         assert req.tools == Engine.resolve_tools(engine, []), "arm #{arm}"
         refute Enum.any?(req.tools, &(&1.name == "tool_help")), "arm #{arm}"
       end
@@ -179,20 +192,15 @@ defmodule ALLM.Chat.CompactToolsTest do
         engine = engine([text()], tools)
         assert {:ok, %ChatResult{halted_reason: :completed}} = run(arm, engine, [])
 
-        assert [req] = recorded_requests()
+        assert [req] = recorded_requests(), "arm #{arm}"
         assert req.tools == ToolHelp.project(Engine.resolve_tools(engine, []), nil), "arm #{arm}"
-        assert Enum.map(req.tools, & &1.name) == ["x", "full", "y", "tool_help"]
-        assert Enum.find(req.tools, &(&1.name == "x")).schema == %{"type" => "object"}
-        assert Enum.find(req.tools, &(&1.name == "full")) == full_tool()
+        assert Enum.map(req.tools, & &1.name) == ["x", "full", "y", "tool_help"], "arm #{arm}"
+
+        assert Enum.find(req.tools, &(&1.name == "x")).schema == %{"type" => "object"},
+               "arm #{arm}"
+
+        assert Enum.find(req.tools, &(&1.name == "full")) == full_tool(), "arm #{arm}"
       end
-    end
-
-    test "the wire and execution lists name the same tools (Invariant 1)" do
-      tools = [x_tool(self()), full_tool(), y_tool()]
-      wire = ToolHelp.project(tools, nil)
-      execution = ToolHelp.with_meta_tool(tools)
-
-      assert Enum.map(wire, & &1.name) == Enum.map(execution, & &1.name)
     end
   end
 
@@ -210,12 +218,11 @@ defmodule ALLM.Chat.CompactToolsTest do
 
         assert {:ok, %ChatResult{halted_reason: :completed} = cr} = run(arm, engine, [])
 
-        expected = ToolHelp.render(ToolHelp.with_meta_tool(tools), %{"names" => ["x"]})
+        expected = expected_help(tools)
         assert tool_message(cr, "h0").content == expected, "arm #{arm}"
         assert expected =~ "It has a long explanation that only tool_help shows."
         assert drain_x_runs() == [@valid_x_args], "arm #{arm}"
-        assert cr.final_response.output_text == "done"
-        _ = recorded_requests()
+        assert cr.final_response.output_text == "done", "arm #{arm}"
       end
     end
   end
@@ -240,10 +247,9 @@ defmodule ALLM.Chat.CompactToolsTest do
 
         assert %{"error" => usage} = Jason.decode!(tool_message(cr, "c0").content)
         assert {:error, ^usage} = ToolHelp.check_args(x, @bad_x_args)
-        assert usage =~ "missing required argument(s): a"
-        assert tool_message(cr, "c1").content == "x done"
+        assert usage =~ "missing required argument(s): a", "arm #{arm}"
+        assert tool_message(cr, "c1").content == "x done", "arm #{arm}"
         assert drain_x_runs() == [@valid_x_args], "arm #{arm}"
-        _ = recorded_requests()
       end
     end
   end
@@ -257,7 +263,6 @@ defmodule ALLM.Chat.CompactToolsTest do
                  run(arm, engine(scripts, [x_tool(self())]), on_tool_error: :halt)
 
         assert drain_x_runs() == [], "arm #{arm}"
-        _ = recorded_requests()
       end
     end
   end
@@ -275,11 +280,10 @@ defmodule ALLM.Chat.CompactToolsTest do
         assert {:ok, %ChatResult{halted_reason: :completed}} =
                  run(arm, engine(scripts, tools), [])
 
-        assert [r1, r2, r3] = recorded_requests()
+        assert [r1, r2, r3] = recorded_requests(), "arm #{arm}"
         assert r1.tools == r2.tools, "arm #{arm}"
         assert r2.tools == r3.tools, "arm #{arm}"
-        assert Enum.any?(r1.tools, &ToolHelp.meta_tool?/1)
-        _ = drain_x_runs()
+        assert Enum.any?(r1.tools, &ToolHelp.meta_tool?/1), "arm #{arm}"
       end
     end
   end
@@ -306,7 +310,7 @@ defmodule ALLM.Chat.CompactToolsTest do
 
         assert {:ok, %ChatResult{}} = run(arm, engine([text()], [x, y]), tool_choice: choice)
 
-        assert [req] = recorded_requests()
+        assert [req] = recorded_requests(), "arm #{arm}"
         label = "arm #{arm}, tool_choice #{inspect(choice)}"
         assert Enum.find(req.tools, &(&1.name == "x")) == x, label
         assert Enum.find(req.tools, &(&1.name == "y")) == ToolHelp.stub(y), label
@@ -352,7 +356,6 @@ defmodule ALLM.Chat.CompactToolsTest do
                  run(arm, engine(scripts, [mine, full_tool()]), [])
 
         assert tool_message(cr, "h0").content == "mine", "arm #{arm}"
-        _ = recorded_requests()
       end
     end
   end
@@ -370,11 +373,7 @@ defmodule ALLM.Chat.CompactToolsTest do
         assert {:ok, %ChatResult{halted_reason: :completed} = cr} =
                  run(arm, engine(scripts, tools, tool_executor: RaisingExecutor), [])
 
-        assert tool_message(cr, "h0").content ==
-                 ToolHelp.render(ToolHelp.with_meta_tool(tools), %{"names" => ["x"]}),
-               "arm #{arm}"
-
-        _ = recorded_requests()
+        assert tool_message(cr, "h0").content == expected_help(tools), "arm #{arm}"
       end
     end
   end
@@ -393,9 +392,8 @@ defmodule ALLM.Chat.CompactToolsTest do
                  run(arm, engine(scripts, tools), [])
 
         assert tool_message(cr, "h0").content =~ "## x", "arm #{arm}"
-        assert [%ToolCall{id: "c1", name: "x"}] = cr.metadata.manual_tool_calls
+        assert [%ToolCall{id: "c1", name: "x"}] = cr.metadata.manual_tool_calls, "arm #{arm}"
         assert drain_x_runs() == [], "arm #{arm}"
-        _ = recorded_requests()
       end
     end
   end
@@ -428,9 +426,7 @@ defmodule ALLM.Chat.CompactToolsTest do
         assert help, "arm #{arm}: tool_help result missing"
         assert help.content =~ "It has a long explanation that only tool_help shows.", "arm #{arm}"
 
-        assert help.content ==
-                 ToolHelp.render(ToolHelp.with_meta_tool(tools), %{"names" => ["x"]}),
-               "arm #{arm}"
+        assert help.content == expected_help(tools), "arm #{arm}"
 
         usage = tool_message(cr, "yy")
         assert usage, "arm #{arm}: y result missing"
@@ -438,7 +434,6 @@ defmodule ALLM.Chat.CompactToolsTest do
 
         assert [%ToolCall{id: "c1", name: "x"}] = cr.metadata.manual_tool_calls, "arm #{arm}"
         assert drain_x_runs() == [], "arm #{arm}"
-        _ = recorded_requests()
       end
     end
   end
@@ -531,7 +526,6 @@ defmodule ALLM.Chat.CompactToolsTest do
         {:error, usage} = ToolHelp.check_args(x, @bad_x_args)
         assert_received {:on_err, "c0", ^usage}
         assert drain_x_runs() == [], "arm #{arm}"
-        _ = recorded_requests()
       end
     end
 
@@ -544,7 +538,6 @@ defmodule ALLM.Chat.CompactToolsTest do
                  run(arm, engine(scripts, [x_tool(self())]), on_tool_error: on_err)
 
         assert tool_message(cr, "c0").content == "retry with a", "arm #{arm}"
-        _ = recorded_requests()
       end
     end
   end
@@ -563,7 +556,7 @@ defmodule ALLM.Chat.CompactToolsTest do
                  run(arm, engine(scripts, [x_tool(self())]), halt_when: halt_when)
 
         assert length(cr.steps) == 1, "arm #{arm}"
-        assert [_] = recorded_requests()
+        assert [_] = recorded_requests(), "arm #{arm}"
       end
     end
   end
@@ -581,7 +574,6 @@ defmodule ALLM.Chat.CompactToolsTest do
                  run(arm, engine(scripts, [x_tool(self())]), max_turns: 2)
 
         assert length(recorded_requests()) == 2, "arm #{arm}"
-        _ = drain_x_runs()
       end
     end
   end
@@ -601,10 +593,10 @@ defmodule ALLM.Chat.CompactToolsTest do
         assert [first | _] = cr.steps
         ids = first.tool_results |> Enum.map(& &1.tool_call_id) |> Enum.sort()
         assert ids == ["c1", "h0"], "arm #{arm}"
-        assert tool_message(cr, "h0").content =~ "## x"
-        assert tool_message(cr, "c1").content == "x done"
+        assert tool_message(cr, "h0").content =~ "## x", "arm #{arm}"
+        assert tool_message(cr, "c1").content == "x done", "arm #{arm}"
         assert drain_x_runs() == [@valid_x_args], "arm #{arm}"
-        assert length(recorded_requests()) == 2
+        assert length(recorded_requests()) == 2, "arm #{arm}"
       end
     end
   end
@@ -627,7 +619,7 @@ defmodule ALLM.Chat.CompactToolsTest do
                    response_format: rf
                  )
 
-        assert [pass_1, pass_2] = recorded_requests()
+        assert [pass_1, pass_2] = recorded_requests(), "arm #{arm}"
         assert pass_1.tools == ToolHelp.project(tools, nil), "arm #{arm}"
         assert pass_2.tools == [], "arm #{arm}"
       end

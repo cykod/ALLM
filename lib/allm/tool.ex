@@ -4,10 +4,11 @@ defmodule ALLM.Tool do
   runtime `:handler`.
 
   The struct itself is pure data (`:name`, `:description`, `:schema`,
-  `:metadata`, `:manual`, `:compact`, `:summary` are all serializable), but `:handler` may be an
-  anonymous function. A tool with a `fn` handler is **not** safe to
-  persist via `:erlang.term_to_binary/1`; persist either `:handler | nil`
-  and re-attach at load time, or use a `{Module, :function}` tuple.
+  `:metadata`, `:manual`, `:compact`, `:summary` are all serializable),
+  but `:handler` may be an anonymous function. A tool with a `fn` handler
+  is **not** safe to persist via `:erlang.term_to_binary/1`; persist
+  either `:handler | nil` and re-attach at load time, or use a
+  `{Module, :function}` tuple.
 
   ## Per-tool manual mode
 
@@ -38,9 +39,9 @@ defmodule ALLM.Tool do
   It must be `nil` or a string — `ALLM.Validate.tool/1` rejects anything
   else with `{:summary, :not_a_string}`.
 
-  Default: `compact: false` — the tool is sent in full, exactly as before.
-  Opting in is per tool, so the most-used tools can stay full while a long
-  tail is compacted.
+  Default: `compact: false` — the tool is sent with its full description
+  and schema. Opting in is per tool, so the most-used tools can stay full
+  while a long tail is compacted.
 
   See also `guides/tools.md`.
   """

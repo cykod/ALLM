@@ -465,10 +465,6 @@ defmodule ALLM.ValidateTest do
       assert {:name, :invalid_format} in errors
     end
 
-    # Reserved-name collision with `tool_choice` atom restoration: per sub-phase
-    # 1.5 Finding 3, a tool named `"auto"` would round-trip to `:auto` on
-    # decode. Rejecting these names at validation time makes the decoder
-    # string-to-atom restoration safe by construction.
     test "fails on summary that is neither nil nor a string" do
       assert {:error, %ValidationError{reason: :invalid_tool, errors: [{:summary, :not_a_string}]}} =
                Validate.tool(%Tool{name: "ok", description: "d", schema: %{}, summary: 123})
@@ -482,6 +478,10 @@ defmodule ALLM.ValidateTest do
       assert :ok = Validate.tool(%Tool{name: "ok", description: "d", schema: %{}, summary: "x"})
     end
 
+    # Reserved-name collision with `tool_choice` atom restoration: per sub-phase
+    # 1.5 Finding 3, a tool named `"auto"` would round-trip to `:auto` on
+    # decode. Rejecting these names at validation time makes the decoder
+    # string-to-atom restoration safe by construction.
     test "fails on reserved tool name: auto" do
       assert {:error, %ValidationError{reason: :invalid_tool, errors: errors}} =
                Validate.tool(%Tool{name: "auto", description: "d", schema: %{}})

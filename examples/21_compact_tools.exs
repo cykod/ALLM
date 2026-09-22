@@ -18,8 +18,10 @@
 #                    thread, so it can eat into the saving), and whether
 #                    `labels` arrived as an array (a stub carries no types,
 #                    and nothing checks them).
-# Cost: two short chat runs of 2-4 steps each, roughly 6-12k input tokens
-#       and under 1k output tokens per provider on the default models.
+# Cost: two short chat runs. Measured 2026-09-22 on the default models:
+#       2 steps per run and, for both runs combined, about 2.4k (OpenAI),
+#       3.8k (Gemini) and 6.2k (Anthropic) input tokens, under 400 output
+#       tokens.
 # Run with:    OPENAI_API_KEY=sk-... mix run examples/21_compact_tools.exs                                # default
 #         OR:  ANTHROPIC_API_KEY=sk-ant-... ALLM_PROVIDER=anthropic mix run examples/21_compact_tools.exs
 #         OR:  GEMINI_API_KEY=...           ALLM_PROVIDER=gemini    mix run examples/21_compact_tools.exs

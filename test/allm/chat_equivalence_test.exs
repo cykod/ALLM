@@ -49,8 +49,9 @@ defmodule ALLM.ChatEquivalenceTest do
     * Auto-only no-manual-flags-set control (Phase 18.5 — byte-identical
       pre/post-Phase-18; same Fake script as `:happy_multi_turn` but
       asserts `metadata.manual_tool_calls` is absent on both arms)
-    * Compact tools (`tool_help` → compact tool → text; holds with no new
-      relaxation row)
+    * Compact tools (`tool_help` → compact tool → text; holds under the
+      existing relaxation budget, since the `tool_help` result is an
+      ordinary `:tool` message)
 
   StreamData iterates a fixture-id and chat-opts variant; each (fixture,
   opts) tuple is a property iteration. Total: ≥100 iterations.
@@ -287,8 +288,9 @@ defmodule ALLM.ChatEquivalenceTest do
   end
 
   # Compact tools: turn 1 asks `tool_help` about the compact `lookup`,
-  # turn 2 calls it with valid arguments, turn 3 answers in text. No new
-  # relaxation row: the `tool_help` result is an ordinary `:tool` message.
+  # turn 2 calls it with valid arguments, turn 3 answers in text. Holds
+  # under the existing relaxation budget: the `tool_help` result is an
+  # ordinary `:tool` message.
   defp fixture(:compact_tool_help_round_trip) do
     scripts = [
       [
@@ -383,6 +385,7 @@ defmodule ALLM.ChatEquivalenceTest do
     :mixed_manual_first_turn,
     :pure_manual_first_turn,
     :auto_only_no_manual_flags_set,
+    # Compact tools: `tool_help` round trip.
     :compact_tool_help_round_trip
   ]
 
@@ -448,6 +451,8 @@ defmodule ALLM.ChatEquivalenceTest do
     Assertions.assert_equivalent_chat_result(run_result, stream_result)
   end
 
+  # Absolute shape for the compact fixture: equivalence alone would pass if
+  # both arms dropped the `tool_help` answer.
   test "compact_tool_help_round_trip — both arms answer tool_help and complete" do
     {engine_builder, opts} = fixture(:compact_tool_help_round_trip)
 

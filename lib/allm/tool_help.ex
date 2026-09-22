@@ -221,7 +221,8 @@ defmodule ALLM.ToolHelp do
   order and deduplicated, and sections are separated by a blank line. A
   known tool, compact or not, renders as its name, full description and
   compact JSON schema. An unknown name renders a note listing the compact
-  tools. Any other `args` shape returns a short usage string. Never raises:
+  tools (`(none)` when there are none). Any other `args` shape returns a
+  short usage string ending in the same list. Never raises:
   a schema that cannot be encoded as JSON is shown with `inspect/1`.
 
   ## Examples
@@ -445,9 +446,10 @@ defmodule ALLM.ToolHelp do
   end
 
   defp compact_names(tools) do
-    tools
-    |> Enum.filter(&(compact?(&1) and not meta_tool?(&1)))
-    |> Enum.map_join(", ", & &1.name)
+    case Enum.filter(tools, &(compact?(&1) and not meta_tool?(&1))) do
+      [] -> "(none)"
+      compact -> Enum.map_join(compact, ", ", & &1.name)
+    end
   end
 
   defp required_names(%{"required" => required}) when is_list(required),

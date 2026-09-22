@@ -16,6 +16,10 @@ defmodule ALLM.ToolRunner do
   `Task.async_stream/5`, per-tool timeout, and the `on_tool_error`
   policy.
 
+  Compact tools (see `ALLM.ToolHelp`) are the exception to executor
+  dispatch: a `tool_help` call and a compact tool call missing a required
+  argument are answered here without reaching the executor.
+
   ## Result ordering
 
     * `run_tool_calls/3` emits messages in `tool_calls` **input order**

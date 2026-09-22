@@ -220,6 +220,16 @@ defmodule ALLM.ToolHelpTest do
       expanded = ToolHelp.with_meta_tool([tool(name: "a", compact: true)])
       assert ToolHelp.with_meta_tool(expanded) == expanded
     end
+
+    test "names the same tools as project/2 (wire and execution lists agree)" do
+      tools = [tool(name: "x", compact: true), tool(name: "full"), tool(name: "y", compact: true)]
+
+      for choice <- [nil, :auto, "x"] do
+        assert Enum.map(ToolHelp.project(tools, choice), & &1.name) ==
+                 Enum.map(ToolHelp.with_meta_tool(tools), & &1.name),
+               "choice: #{inspect(choice)}"
+      end
+    end
   end
 
   describe "project/2" do
@@ -290,6 +300,11 @@ defmodule ALLM.ToolHelpTest do
             ) do
         assert ToolHelp.project(tools, choice) == ToolHelp.project(tools, choice)
 
+        # Equal-but-separately-built input: a JSON round trip rebuilds every
+        # map, so this binds determinism across copies, not just re-calls.
+        rebuilt = tools |> Jason.encode!() |> Jason.decode!() |> ALLM.Serializer.hydrate()
+        assert ToolHelp.project(rebuilt, choice) == ToolHelp.project(tools, choice)
+
         extra = if Enum.any?(tools, &ToolHelp.compact?/1), do: 1, else: 0
         assert length(ToolHelp.project(tools, choice)) == length(tools) + extra
       end
@@ -333,6 +348,15 @@ defmodule ALLM.ToolHelpTest do
       assert out == "## nope\nUnknown tool. Compact tools: " <> compact_names
       refute String.contains?(out, "tool_help")
       refute String.contains?(out, "plain")
+    end
+
+    test "with no compact tool, the unknown-name note and usage string say (none)" do
+      tools = [Tool.new(name: "a", description: "A.", schema: %{})]
+
+      assert ToolHelp.render(tools, %{"names" => ["zz"]}) ==
+               "## zz\nUnknown tool. Compact tools: (none)"
+
+      assert ToolHelp.render(tools, %{}) == @usage_prefix <> "(none)"
     end
 
     test "a binary names value is wrapped", ctx do

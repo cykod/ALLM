@@ -445,6 +445,11 @@ provider pricing page for any tight budget.
 The embedding scripts add well under $0.001 per arm — a few thousand
 tokens total, and Voyage's free tier covers its share outright.
 
+`21_compact_tools.exs` runs on every arm (it carries no `# Provider:`
+marker) and makes two short chat runs. Measured on the default models,
+the two runs together use about 2.4k input tokens on OpenAI, 3.8k on
+Gemini and 6.2k on Anthropic, with under 400 output tokens each.
+
 A full suite typically runs in 60–120 s per provider; the per-script
 budget is 180 s, enforced by `run_all.exs`'s `Task.yield/2`.
 
