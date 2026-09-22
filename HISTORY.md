@@ -1,3 +1,16 @@
+## [DOC] Document compact tools — spec §40, guide, live example (Phase 23.4)
+*Tuesday, September 22nd at 9pm*
+Adds spec §40 (Compact tool disclosure) with amendments to §5.2, §16 and 
+§27, a Compact tools section in guides/tools.md whose iex> blocks run over 
+Fake, and examples/21_compact_tools.exs as the live gate. The gate passed on 
+all three providers, cutting step-1 input tokens by 54% (OpenAI), 64% (Gemini) 
+and 44% (Anthropic); the Anthropic {"type":"object"} stub-schema acceptance is 
+now measured rather than inferred. The compact-tools CHANGELOG entry is folded 
+into the still-unreleased v0.6.0 entry, which also gains a missed Phase 22.7 
+breaking-change line.
+
+---
+
 ## [FEAT] Wire compact tools into the chat loop (Phase 23.3)
 *Tuesday, September 22nd at 9pm*
 The chat loop now sends compact tools to the model as ToolHelp stubs plus a 

@@ -16,7 +16,7 @@
 | 23.1 | `ALLM.Tool` gains `:compact` + `:summary`; validator + serializer | A | Completed |
 | 23.2 | `ALLM.ToolHelp` pure helper: summary, signature, stub projection, help rendering, required-arg check, meta-tool | C (internal, pure) | Completed |
 | 23.3 | Wire it into the chat loop (both paths) + `ToolRunner` interception | C | Completed |
-| 23.4 | Spec §40, `guides/tools.md` section, `examples/21_compact_tools.exs` live gate, CHANGELOG | docs | Not Started |
+| 23.4 | Spec §40, `guides/tools.md` section, `examples/21_compact_tools.exs` live gate, CHANGELOG | docs | Built, gates pending (see RECORDS) |
 | 23.5 | `[CHORE]` sweep for deferrals raised in 23.1–23.4 | — | Not Started |
 
 Per-sub-phase records go to `steering/2026-09-21_COMPACT_TOOLS_DESIGN_RECORDS.md` (created on first need).
@@ -31,6 +31,8 @@ Per-sub-phase records go to `steering/2026-09-21_COMPACT_TOOLS_DESIGN_RECORDS.md
 4. **Opt-in is per tool.** This follows the `:manual` precedent (Phase 18, `lib/allm/tool.ex:116-119`). A default of `false` leaves every existing caller byte-identical on the wire. No engine-wide or call-level switch is added (Alternative D).
 5. **ALLM does not validate tool arguments against the schema today.** `grep -rn "ex_json_schema\|validate_args" lib/ mix.exs` returns nothing, and `ToolRunner.execute_one_tool/3` passes `tc.arguments || %{}` straight to the executor (`lib/allm/tool_runner.ex:530-534`). Compact mode adds only a top-level required-key check, and only for compact tools (Decision #5). It does not add a JSON Schema validator.
 6. **Next minor release (expected v0.7.0) via `scripts/release.exs minor`.** The change is additive: two new defaulted struct fields and one new public module. No closed union changes.
+
+   > CORRECTED 2026-09-22: v0.6.0 was built but never published (`mix.exs @version` is still `"0.5.0"`, and `git tag` has no `v0.6.0`), so the next `scripts/release.exs minor` produces **v0.6.0**, and compact tools ship in it. The CHANGELOG entry is folded into the unreleased `## [REL] v0.6.0` entry; see RECORDS §23.4.
 
 ---
 
@@ -108,6 +110,8 @@ The per-tool marginal cost is roughly 94 tokens full, 53 shallow, 34 signature a
 | `array` property without `items` | 400 `properties[b].items: missing field` | 200 | UNVERIFIED |
 | invented key `bogusField` in parameters (negative control) | 400 `Unknown name "bogusField"` | — | — |
 
+> CORRECTED 2026-09-22: the Anthropic `{"type":"object"}` row is now **measured: accepted (200)** on `claude-sonnet-4-6`. The 23.4 live gate (`ALLM_PROVIDER=anthropic mix run examples/21_compact_tools.exs`, exit 0) sent eight compact stubs with exactly that schema, plus `tool_help`, and the model called `create_issue` with every required argument. The nested-object and array-without-items rows stay UNVERIFIED for Anthropic; the gate sends neither shape.
+
 Gemini validates parameter schemas (the control proves it); OpenAI accepted even the array-without-items case, so OpenAI acceptance is weak evidence. **The chosen stub schema is exactly `{"type":"object"}`, the one shape accepted everywhere it was tested.** Anthropic's acceptance is the one inferred-not-confirmed row, and the 23.4 live gate is its falsifier.
 
 ### Measured: whether models fill in arguments on a bare-schema stub (2026-09-21)
@@ -125,7 +129,9 @@ Results:
 - All 7 had every required argument filled in.
 - All 7 sent `labels` as an array, although the stub carries no type information.
 
-Gemini does *not* strip arguments that a bare `{"type":"object"}` doesn't declare. Anthropic is UNVERIFIED (no credit), and the 23.4 gate re-measures it together with the others. This is a single easy prompt; the gate also records whether `tool_help` was called.
+Gemini does *not* strip arguments that a bare `{"type":"object"}` doesn't declare. Anthropic is UNVERIFIED (no credit), and the 23.4 gate re-measures it together with the others.
+
+> CORRECTED 2026-09-22: Anthropic is now measured. In the 23.4 gate `claude-sonnet-4-6` called the `create_issue` stub directly (no `tool_help`) with `{"repo":"acme/web","title":"Login button broken","labels":["bug"]}`: every required argument, `labels` as an array. OpenAI and Gemini repeated the same behaviour. Full numbers are in RECORDS §23.4. This is a single easy prompt; the gate also records whether `tool_help` was called.
 
 ---
 

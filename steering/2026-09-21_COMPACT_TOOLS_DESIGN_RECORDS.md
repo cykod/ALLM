@@ -9,8 +9,101 @@ Companion to `steering/2026-09-21_COMPACT_TOOLS_DESIGN.md`. Status, checklist st
 | 23.1 | Completed | Built 2026-09-22 on `1859dac`. Functional, code and arch/security reviews ran (`.work/*/2026-09-22-phase-23-1-tool-fields*`); fix pass: 0 fixed, 2 deferred to `[CARRY]`, 3 Lows left for polish. |
 | 23.2 | Completed | Built 2026-09-22 on `9b74416`. Functional, code and arch/security reviews ran (`.work/*/2026-09-22-phase-23-2-tool-help*`; design review N/A); fix pass: 0 fixed (all findings Low), 2 deferred to `[CARRY]` (below), 4 Lows left for polish. |
 | 23.3 | Completed | Built 2026-09-22 on `f7a4b87`. Implementer gates green (below); review gates not yet run. |
-| 23.4 | Not Started | |
+| 23.4 | Completed | Built 2026-09-22 on `d8b3ae2`. Implementer gates green and all three live arms exit 0 (below); review gates not yet run. |
 | 23.5 | Not Started | |
+
+## 23.4 — Spec §40, guide, live example (docs)
+
+### Checklist
+
+- [x] Spec §40 "Compact tool disclosure" (motivation, stub/meta-tool contract by reference to `ALLM.ToolHelp`'s docs, where it runs with `file:line` cites, invariants incl. cache stability, manual modes, the five-row taxonomy, the live measurements, out of scope). Amendments to §5.2 (fields), §16 (`{:summary, :not_a_string}`) and §27 (`tool_help.ex`). Every block opens `> **Phase 23 amendment (commits `9b74416..d8b3ae2`; docs land in the 23.4 commit).**`
+- [x] `guides/tools.md` `## Compact tools` section: two `iex>` blocks over `Fake` (the `project/2` output; a scripted `tool_help` → usage error → valid call round trip), a "Things to know" list, and the carried one-line hint that an explicit `:summary` is used verbatim (23.2 functional L2). Intro sentence and "Where to next" list gained one line each.
+- [x] `examples/21_compact_tools.exs` (NEW) and `examples/README.md` (a "Compact tools (21)" section + Scripts-table row).
+- [x] CHANGELOG entry (see Deviations 1 and 2).
+- [x] `RUN_OUTPUT_*.md` untouched: no provider's whole `run_all.exs` arm was run.
+
+### Provenance range choice
+
+`<last>` is `d8b3ae2` (the 23.3 commit), not this batch's own commit: the range names the commits whose `lib/` changes the amendments describe, and 23.4 changes no `lib/` file. Following the Phase 20/22 precedent, each block adds "docs land in the 23.4 commit".
+
+### Live gate (2026-09-22)
+
+Each arm run once, as `set -a; . ./.env; set +a; ALLM_PROVIDER=<p> mix run examples/21_compact_tools.exs`. No retries. Default example models from `examples/_helpers.exs`.
+
+| Provider (model) | Exit | (a) completes | (b) `create_issue` args have repo+title | (c) step-1 input tokens compact / full |
+|---|---|---|---|---|
+| openai (`gpt-5.4-nano`) | 0 | yes, 2 steps | yes | 348 / 755 (−54%) |
+| gemini (`gemini-3-flash-preview`) | 0 | yes, 2 steps | yes | 471 / 1294 (−64%) |
+| anthropic (`claude-sonnet-4-6`) | 0 | yes, 2 steps | yes | 1054 / 1899 (−44%) |
+
+**Recorded, not asserted:**
+
+| Provider | `tool_help` called first? | Tool calls (compact run) | Run-total input compact / full | `labels` an array? | `create_issue` args |
+|---|---|---|---|---|---|
+| openai | no | `["create_issue"]` | 766 / 1676 | yes | `{"body":"","labels":["bug"],"repo":"acme/web","title":"Login button broken"}` |
+| gemini | no | `["create_issue"]` | 1120 / 2716 | yes | `{"labels":["bug"],"repo":"acme/web","title":"Login button broken"}` |
+| anthropic | no | `["create_issue"]` | 2243 / 3933 | yes | `{"labels":["bug"],"repo":"acme/web","title":"Login button broken"}` |
+
+The R8 open question's first measurement: 0 of 3 models called `tool_help` on this prompt; all went straight to the stub with every required argument. The full runs also completed (`halted: :completed`, one `create_issue` call each).
+
+**Anthropic ran.** The 2026-09-21 "credit balance is too low" condition is gone, so no `/asks` `[BUG]` was filed and no deferral applies. The Research table's Anthropic `{"type":"object"}` row is now **measured: accepted**; corrected at the claim in the design doc (dated `> CORRECTED 2026-09-22:` blockquote, the skill's default form, since `agent-spec/*.md` prescribes none), as is the "whether models fill in arguments" paragraph. The nested-object and array-without-items Anthropic rows stay UNVERIFIED; the gate sends neither shape.
+
+**Cost against the design budget** (~6–12k input + <1k output tokens per provider per clean run). Both runs (compact + full) summed:
+
+| Provider | Input tokens | Output tokens | vs budget |
+|---|---|---|---|
+| openai | 2442 | 256 | under (2 steps per run, not 2–4) |
+| gemini | 3836 | 140 | under |
+| anthropic | 6176 | 336 | within |
+
+First-implementation cost was one clean run per provider (not the 2–4× the design allowed); the guide's round trip was prototyped against `Fake` at zero cost. Per-1M-token prices were not quoted from the pricing pages: UNVERIFIED here, so no dollar figure is claimed.
+
+### Deviations
+
+1. `[structural, documented]` **CHANGELOG entry folded into the unreleased `## [REL] v0.6.0` entry, not a new v0.7.0 entry.** `git tag --sort=-creatordate` has no `v0.6.0` (latest release tag `v0.5.0`), `mix.exs @version` is `"0.5.0"`, and HANDOFF records v0.6.0 as built-not-released. The CHANGELOG's own convention is one `[REL]` entry per next version, written before release by the docs sub-phase (Phase 20.7 wrote v0.5.0's; 22.6 wrote v0.6.0's). The next `scripts/release.exs minor` produces v0.6.0 from HEAD, which includes Phase 23, so a separate v0.7.0 heading would describe code shipping under v0.6.0. The heading became "Content moderation and compact tools". Design Assumption 6 ("expected v0.7.0") corrected at the claim. Entry derived from `git diff v0.5.0..HEAD lib/`; `mix.exs @version` untouched.
+2. `[structural, documented]` **The diff-derived pass added one pre-existing 22.7 change the v0.6.0 entry had missed**: `6842fe4` dropped `:body_preview` from both image adapters' `%ImageAdapterError{}.metadata` and redacts key material from `:message` (`git show 6842fe4 -- lib/allm/providers/openai/images.ex | grep '^-.*body_preview'`). Added under "Breaking changes" because code reading `metadata.body_preview` now gets nothing. Not a Phase 23 change; included because the entry is derived from the whole `v0.5.0..HEAD lib/` diff.
+3. **Script 21's (b) assertion checks the compact run only**, as the design's (b) reads; the full run's `create_issue` args are captured but not asserted.
+
+### Not done here (carried)
+
+- `ALLM.tool/1`'s `@doc` in `lib/allm.ex` still omits `compact:` (23.1 code review F3; `grep -c compact lib/allm.ex` → `0`). `lib/allm.ex` is outside 23.4's Module Tree; receiver stays 23.5.
+- The `ALLM.Tool` `:summary` field doc is not amended with the multi-line hint (outside the Module Tree); the guide carries it.
+
+### Gate results (implementer run, 2026-09-22)
+
+| Command | Exit |
+|---|---|
+| `mix test test/guides_test.exs test/guides_doctest_test.exs` (38 doctests, 58 tests, 0 failures) | 0 |
+| `mix run scripts/check_guide_fences.exs` (`67 fences compiled, 14 skipped.`, unchanged: no fence added) | 0 |
+| `mix run scripts/audit_user_docs.exs guides/tools.md` (`No banned-token matches.`) | 0 |
+| `mix test` (445 doctests, 32 properties, 3564 tests, 0 failures, 14 excluded; baseline 443 / 32 / 3564) | 0 |
+| `mix test --seed 0` (same counts) | 0 |
+| `mix format --check-formatted` | 0 |
+| `mix credo --strict` | 0 |
+| `mix compile --warnings-as-errors --force` | 0 |
+| `mix dialyzer` | 0 |
+| `mix docs 2>&1 \| grep -ciE '(warning\|error)'` → `0` | — |
+| Doctest binding check: changing the round trip's expected `"Filed issue #7."` to `#8` → `38 doctests, 1 failure`; reverted | — |
+| `ALLM_PROVIDER=openai mix run examples/21_compact_tools.exs` | 0 |
+| `ALLM_PROVIDER=gemini mix run examples/21_compact_tools.exs` | 0 |
+| `ALLM_PROVIDER=anthropic mix run examples/21_compact_tools.exs` | 0 |
+
+### Fix pass (2026-09-22, delegated)
+
+Every finding is Low. The two applied below fall under the false-sentence carve-out: the code contradicted the doc, so the doc was changed to match the code (`lib/` is outside the fence).
+
+- Functional L1: spec §40.2 and the guide said the `Args:` hint lists the required names. `ToolHelp.signature/1` (`lib/allm/tool_help.ex:350`) drops required names absent from `"properties"`, returns `Args: none` for an empty map, and returns `nil` (no hint) when there is no `"properties"` map. `check_args/2` still enforces the unfiltered list. §40.2 now says all of this, and the guide says the hint lists names declared in `"properties"`.
+- Code review F3: the guide said an explicit `:summary` is "copied as-is", and §40.2 said "when set". `ToolHelp.summary/1` (`tool_help.ex:322`) uses it only when `summary != ""`. Both now say non-empty, and the guide says that `summary: ""` falls back.
+- Left for the phase-end polish pass, since none is a false sentence: functional L2 / code review F2 (the script header's stale 6-12k token estimate, one work item), F1 (the README cost table is missing script 21), F4 (the CHANGELOG percentages have no qualifier).
+
+| Command | Exit |
+|---|---|
+| `mix test test/guides_test.exs test/guides_doctest_test.exs` (38 doctests, 58 tests, 0 failures) | 0 |
+| `mix run scripts/check_guide_fences.exs` (`67 fences compiled, 14 skipped.`) | 0 |
+| `mix run scripts/audit_user_docs.exs guides/tools.md` (`No banned-token matches.`) | 0 |
+| `mix test` (445 doctests, 32 properties, 3564 tests, 0 failures, 14 excluded) | 0 |
+| `mix format --check-formatted` | 0 |
+| `mix credo --strict` | 0 |
 
 ## 23.3 — Chat-loop wiring (Layer C)
 

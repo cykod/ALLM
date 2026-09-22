@@ -5,7 +5,8 @@ query, an action in your app. ALLM ships a synchronous tool loop that
 handles the round-trip: the model emits a tool call, your code runs the
 tool, the result feeds back to the model, the model produces a final
 reply. This guide covers the auto-loop, manual mode, per-tool manual
-control, and the `{:ask_user, _}` suspension protocol.
+control, the `{:ask_user, _}` suspension protocol, and compact tools for
+large tool catalogs.
 
 ## Declaring a tool
 
@@ -291,6 +292,130 @@ The result's metadata carries observability for the two passes:
 `result.steps` contains the merged step list from both passes so step
 indexes remain stable across the two-pass boundary.
 
+## Compact tools
+
+Every tool you give the model costs prompt tokens on every step: its
+full description and its whole JSON Schema are sent each time. With a
+large tool catalog most of that is spent on tools the model never calls.
+Mark those tools `compact: true` and the model sees a one-line usage
+summary instead, and can ask for the full definition when it needs it.
+
+A compact tool is sent to the model as a **stub**. The stub has:
+
+* the tool's real name, so the model can call it directly;
+* a one-line description: the first sentence of `:description` (or
+  your `:summary`), then an `Args:` hint listing the argument names
+  declared in the schema's `"properties"`, required ones first and
+  optional ones in brackets, then `[compact]`;
+* the bare schema `{"type": "object"}`.
+
+Whenever at least one compact tool is present, one extra tool named
+`tool_help` is added. The model calls it with a list of tool names and
+gets back each tool's full description and JSON Schema as text.
+`ALLM.ToolHelp.project/2` shows exactly what the model receives:
+
+    iex> issue = ALLM.tool(
+    ...>   name: "create_issue",
+    ...>   description: "Create a new issue in a repository. The issue number and URL are returned.",
+    ...>   schema: %{
+    ...>     "type" => "object",
+    ...>     "properties" => %{
+    ...>       "repo" => %{"type" => "string", "description" => "owner/name"},
+    ...>       "title" => %{"type" => "string"},
+    ...>       "labels" => %{"type" => "array", "items" => %{"type" => "string"}}
+    ...>     },
+    ...>     "required" => ["repo", "title"]
+    ...>   },
+    ...>   compact: true
+    ...> )
+    iex> [stub, help] = ALLM.ToolHelp.project([issue], nil)
+    iex> stub.description
+    "Create a new issue in a repository. Args: repo, title [labels] [compact]"
+    iex> stub.schema
+    %{"type" => "object"}
+    iex> help.name
+    "tool_help"
+
+Only the list sent to the model is compacted. When the model calls a
+compact tool, your handler runs with the arguments exactly as it would
+for a full tool.
+
+### A round trip
+
+The chat loop answers `tool_help` itself; you write no handler for it.
+In this scripted run the model first asks for help, then calls
+`create_issue` without its required `repo`, gets a usage error back,
+and corrects itself:
+
+    iex> issue = ALLM.tool(
+    ...>   name: "create_issue",
+    ...>   description: "Create a new issue in a repository. The issue number and URL are returned.",
+    ...>   schema: %{
+    ...>     "type" => "object",
+    ...>     "properties" => %{"repo" => %{"type" => "string"}, "title" => %{"type" => "string"}},
+    ...>     "required" => ["repo", "title"]
+    ...>   },
+    ...>   handler: fn args -> {:ok, %{number: 7, repo: args["repo"]}} end,
+    ...>   compact: true
+    ...> )
+    iex> engine = ALLM.Engine.new(
+    ...>   adapter: ALLM.Providers.Fake,
+    ...>   adapter_opts: [stream_script: [
+    ...>     [{:tool_call, id: "c1", name: "tool_help", arguments: %{"names" => ["create_issue"]}}, {:finish, :tool_calls}],
+    ...>     [{:tool_call, id: "c2", name: "create_issue", arguments: %{"title" => "Login broken"}}, {:finish, :tool_calls}],
+    ...>     [{:tool_call, id: "c3", name: "create_issue", arguments: %{"repo" => "acme/web", "title" => "Login broken"}}, {:finish, :tool_calls}],
+    ...>     [{:text, "Filed issue #7."}, {:finish, :stop}]
+    ...>   ]],
+    ...>   tools: [issue]
+    ...> )
+    iex> {:ok, result} = ALLM.chat(engine, [ALLM.user("File a bug: login is broken in acme/web.")])
+    iex> [help, usage, created] = for m <- result.thread.messages, m.role == :tool, do: m.content
+    iex> help |> String.split("\n") |> Enum.take(2)
+    ["## create_issue", "Create a new issue in a repository. The issue number and URL are returned."]
+    iex> usage |> Jason.decode!() |> Map.fetch!("error") |> String.split("\n") |> hd()
+    "missing required argument(s): repo"
+    iex> created
+    ~s({"number":7,"repo":"acme/web"})
+    iex> result.final_response.output_text
+    "Filed issue #7."
+
+Things to know:
+
+* **The usage error replaces the handler call.** A compact tool called
+  without one of its top-level `"required"` arguments does not run its
+  handler; the model gets back an error carrying the tool's full help.
+  It goes through your `:on_tool_error` policy like any other tool
+  error, so `on_tool_error: :halt` stops the loop there. Only the
+  presence of required keys is checked, not their types. Full
+  (non-compact) tools are never checked.
+* **Each `tool_help` call is a round trip.** It uses a turn of
+  `max_turns`, and its result counts as a tool result for `halt_when`.
+  The model can skip it whenever the `Args:` hint is enough.
+* **The tool list sent to the model never changes during a run**, so
+  provider prompt caches keep working. Learning about a tool adds a
+  message to the conversation, not a tool definition.
+* **Forcing a compact tool sends it in full.** When `:tool_choice`
+  names one compact tool, that tool goes out with its whole description
+  and schema, so the model does not have to guess its arguments.
+* **The summary is used verbatim.** Without a non-empty `:summary`,
+  the stub uses the first sentence of the description (`summary: ""`
+  falls back too). An explicit non-empty `:summary` is copied as-is, so
+  keep it to one line: a line break in it becomes a line break in the
+  stub.
+* **Don't name your own tool `tool_help`** alongside a compact tool.
+  The request is rejected before it is sent, with
+  `{:tools, :duplicate_name}`.
+* **Under `mode: :manual` you run `tool_help` too.** Its call comes
+  back to you like any other. Submit `ALLM.ToolHelp.answer/2` as its
+  result. With per-tool `manual: true`, `tool_help` still runs
+  automatically.
+
+Compact tools suit the long tail of a catalog. Keep the few tools the
+model calls most often in full, so their argument types reach the
+provider, and compact the rest. `examples/21_compact_tools.exs` runs
+the same task with and without compact tools against a real provider
+and prints the input-token counts of both.
+
 ## Where to next
 
 * `sessions.md` — multi-turn tool flows with persistence.
@@ -298,3 +423,5 @@ indexes remain stable across the two-pass boundary.
 * `examples/03_single_tool_call.exs` — runnable single-tool smoke test.
 * `examples/04_parallel_tool_calls.exs` — two tools in one round.
 * `examples/07_manual_tool_round_trip.exs` — engine-wide manual mode.
+* `examples/21_compact_tools.exs` — compact tools against a real
+  provider, with and without compaction.

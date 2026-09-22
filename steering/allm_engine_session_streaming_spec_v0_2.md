@@ -236,6 +236,25 @@ end
 > flag is silent — the existing whole-loop short-circuit fires before the
 > partition runs. See §12.4.
 
+> **Phase 23 amendment (commits `9b74416..d8b3ae2`; docs land in the 23.4 commit).** `ALLM.Tool` gains two
+> serializable fields, both defaulted so every existing tool is unchanged on
+> the wire:
+>
+> ```elixir
+> compact: boolean(),          # default false
+> summary: String.t() | nil,   # default nil
+> ```
+>
+> `compact: true` asks the chat loop to send the tool to the model as a
+> one-line stub and to offer the built-in `tool_help` meta-tool (§40).
+> `summary` overrides the stub's one-line summary; `nil` derives it from the
+> first sentence of `description`. `Tool.new/1` guards `:compact` with
+> `is_boolean/1` and raises `ArgumentError` otherwise (`lib/allm/tool.ex:159-161`),
+> the same form as the `:manual` guard; `:summary` is not guarded by the
+> constructor and is checked by `ALLM.Validate.tool/1` instead (§16).
+> `__from_tagged__/1` decodes `compact` as `data["compact"] || false`, which is
+> safe because both defaults are falsy (`lib/allm/tool.ex:181`).
+
 #### Handler return values
 
 - `{:ok, result}` — normal completion; `result` is encoded as the tool-result message and the orchestrator continues.
@@ -1267,6 +1286,16 @@ Minimum validation rules:
 - tool names are unique
 - `:tool` messages include `tool_call_id`
 
+> **Phase 23 amendment (commits `9b74416..d8b3ae2`; docs land in the 23.4 commit).** `ALLM.Validate.tool/1` gains one
+> rule, `{:summary, :not_a_string}`: a tool's `:summary` must be `nil` or a
+> binary (`lib/allm/validate.ex:514-515`). Through `ALLM.Validate.request/1`
+> the path is prefixed as `[:tools, idx, :summary]`. `:compact` gets no
+> validator rule, mirroring `:manual`: the constructor guard is its only gate,
+> and a hand-built `%Tool{compact: :yes}` is treated as not compact (sent in
+> full), which is the safe direction. No new reason atom is added. The
+> existing "tool names are unique" rule is what rejects a caller's own tool
+> named `tool_help` beside a compact tool (§40.4).
+
 ---
 
 ## 17. Internal modules
@@ -1663,6 +1692,14 @@ lib/
 > There is no moderation counterpart to `lib/allm/embedding_batch.ex`: the façade does not chunk (§39.6).
 >
 > Existing modules extended: `ALLM` (`moderate/3`, `moderation_request/2`), `ALLM.Engine` (`:moderation_adapter`), `ALLM.Validate` (`moderation_request/1`), `ALLM.Capability` (`preflight_moderation/2`), `ALLM.Telemetry` (`:moderate` span), `ALLM.Serializer` (four registry entries), `ALLM.Error.EngineError` (`:no_moderation_adapter`), `ALLM.Error.ValidationError` (`:invalid_moderation_request`).
+
+> **Phase 23 amendment (commits `9b74416..d8b3ae2`; docs land in the 23.4 commit).** Compact tool disclosure (§40) adds one module, under the shipped `lib/allm/` prefix:
+>
+> ```text
+> lib/allm/tool_help.ex                  # pure runtime helper — stub projection, tool_help rendering, required-key check
+> ```
+>
+> Existing modules extended: `ALLM.Tool` (`:compact`, `:summary`), `ALLM.Validate` (`{:summary, :not_a_string}`), `ALLM.Chat` (the wire list goes through `ToolHelp.project/2`; execution sites see the full list plus the meta-tool), `ALLM.ToolRunner` (answers `tool_help`, runs the required-key check for compact tools). No adapter, `ALLM.Event` variant, or `ALLM.Engine` field changes.
 
 ---
 
@@ -3060,3 +3097,78 @@ One span, mirroring §35.9 and §36.9:
 - **automatic moderation inside `chat/3` / `generate/3`** — a hidden second HTTP call per turn, doubling latency and silently changing `chat/3`'s error union
 - **`ALLM.Session` integration** — a moderation verdict carries no conversation state
 - **moderating tool results or assistant output as a distinct API** — the same call with a different input string; no new surface is needed
+
+---
+
+## 40. Compact tool disclosure
+
+> **Phase 23 amendment (commits `9b74416..d8b3ae2`; docs land in the 23.4 commit).** This section is new. It amends §5.2 (`ALLM.Tool` fields), §16 (validation) and §27 (module tree). No closed union changes: no `ALLM.Event` variant, no error reason atom, no adapter callback.
+
+### 40.1 Motivation
+
+Every tool definition is sent to the model on every step. A catalog of dozens of tools spends most of its prompt on descriptions and JSON Schemas of tools the turn never calls, and tool-selection accuracy degrades as the catalog grows. A tool marked `compact: true` is sent as a one-line stub instead, and the model pulls the full definition on demand through one built-in `tool_help` tool, the way a CLI prints a usage line and answers `--help`.
+
+The opt-in is per tool, like `:manual` (§5.2). Callers keep their few most-used tools full and compact the long tail. There is no engine-level or call-level switch; `Enum.map(tools, &%{&1 | compact: true})` does the same.
+
+### 40.2 The stub and the meta-tool
+
+The normative definitions are the `@doc`s of `ALLM.ToolHelp` (`lib/allm/tool_help.ex`); this section summarises them.
+
+- **Stub** (`ToolHelp.stub/1`, via `project/2`). Same `name`. `description` is `<summary> Args: <required, …> [<optional, …>] [compact]`, where the summary is `:summary` when set and non-empty and otherwise the first sentence of `:description` (cut at 160 graphemes), required names follow the schema's `"required"` order, and optional names are sorted. The `Args:` hint lists only names declared in `"properties"`: a `"required"` name with no property is left out of the hint but is still enforced by the usage error below, an empty `"properties"` map gives `Args: none`, and a schema with no `"properties"` map gives no hint at all (`ToolHelp.signature/1`). `schema` is exactly `%{"type" => "object"}`, the one shape every bundled provider accepted when measured. `handler` is `nil`, so the wire list holds no funs.
+- **Meta-tool** (`ToolHelp.meta_tool/0`). Named `tool_help`, taking `{"names": ["tool_name", …]}`, with no handler. It is recognised by the string-keyed marker `metadata: %{"allm_builtin" => "tool_help"}`, not by its name, so the marker survives a JSON round trip. It is appended once whenever at least one compact tool is present.
+- **Answer** (`ToolHelp.render/2`). One section per requested name: the full description and the schema as compact JSON. Unknown names and malformed arguments get an explanatory string, never an error. It never raises.
+- **Usage error** (`ToolHelp.check_args/2`). A compact tool called without one of its top-level `"required"` keys does not reach its handler. It returns `{:error, "missing required argument(s): …\n\n" <> <that tool's help>}`, routed through `on_tool_error` like any handler error (§19): `:continue` feeds it back, `:halt` stops the loop with `:tool_error`. Only key presence is checked; there is no type or nested validation, and full tools are never checked.
+- **Forced tool.** When `tool_choice` forces a single compact tool (a binary name, `{:tool, name}`, or any single-tool provider map shape the adapters accept), that one tool is sent in full.
+
+### 40.3 Where it runs
+
+- **Wire side.** `ALLM.Chat.build_request/4` sends `ToolHelp.project(Engine.resolve_tools(engine, opts), tool_choice)` (`lib/allm/chat.ex:2020`, shared by the streaming and non-streaming paths).
+- **Execution side.** Every tool-executing site in `ALLM.Chat` uses the private `effective_tools/2` (`lib/allm/chat.ex:2001`), which is the full resolved list plus the meta-tool. For every name, the wire list and the execution list both contain it or both lack it, so the `:unknown_tool` pre-flight never rejects a stub or `tool_help`.
+- **Tool runner.** `ALLM.ToolRunner.execute_one_tool/3` (`lib/allm/tool_runner.ex:537`) answers the meta-tool with `render/2` over the full list without reaching the configured `tool_executor`, so a custom executor that dispatches by name never sees `tool_help`; otherwise it runs `check_args/2` before the executor (`:548`). Direct callers of `run_tool_calls/3` / `stream_tool_calls/3` get the same check, and get `tool_help` answered only if their list contains `meta_tool/0`.
+- **Not affected.** `ALLM.generate/3` / `stream_generate/3` with a caller-built `%Request{}` never pass through `build_request/4`, so `request.tools` is sent as built. `Engine.resolve_tools/2`'s public contract is unchanged; the meta-tool is injected only inside `ALLM.Chat`. `ALLM.Session` stores no tools, and `tool_help` exchanges live in the thread as ordinary `:tool` messages.
+
+### 40.4 Invariants
+
+1. **Cache stability.** `project/2` is deterministic, and the engine and `opts` are fixed across the steps of one run, so `request.tools` is `==` on every step. Learning about a tool adds a `:tool` message, never a tool definition, so provider prompt caches keyed on the tool list survive. (Anthropic with `response_format: json_schema` drops its own synthetic tool after it has been called, independent of this feature.)
+2. **Compact-off is a no-op.** With no `compact: true` tool, `project/2` returns its input unchanged and `check_args/2` is `:ok`: existing callers are byte-identical on the wire.
+3. **Name collision.** When at least one compact tool is present, a caller's own tool named `tool_help` collides with the injected one and the request is rejected pre-flight with `{:tools, :duplicate_name}` (§16). With no compact tool, such a tool is ordinary.
+4. **Turns.** Each `tool_help` call is a round trip: it uses a `max_turns` turn and counts as a tool result for `halt_when`.
+
+### 40.5 Manual modes
+
+- **Whole-loop `mode: :manual`** (§12): the caller runs everything, `tool_help` included. Its call surfaces like any other; `ToolHelp.answer/2` builds the content to submit. Compact tools executed by the caller never pass through `ToolRunner`, so they get no usage-error check unless the caller calls `check_args/2`.
+- **Per-tool manual** (§12.4): the meta-tool has `manual: false`, so it lands in the auto bucket and runs, while a compact tool with `manual: true` halts the loop as usual.
+
+### 40.6 Choice of mechanism
+
+Five patterns exist for large tool catalogs (survey 2026-09-21):
+
+| | Pattern | Cache | Provider-neutral |
+|---|---|---|---|
+| A | Native deferral + server-side search (Anthropic `tool_search_tool_*`, OpenAI Responses `tool_search`) | kept | no — two of four translators, newer models only |
+| B | Client search meta-tool; discovered definitions appended to the next request's `tools` | broken on every discovery | yes |
+| **C** | **Callable stubs + a describe meta-tool (this section)** | **kept** | **yes** |
+| D | One dispatcher tool `call_tool({name, args})` | kept | yes, but loses per-tool events, `:manual`, `on_tool_error` |
+| E | Code mode (the model writes code against the tools) | kept | no — needs a sandbox |
+
+C is the only pattern that is cache-stable, works on every translator with no adapter change, and keeps each compact tool a first-class `%Tool{}`. A later adapter phase may map `compact: true` onto native deferral (A) where a provider supports it; that changes semantics (a deferred tool is invisible until searched, a stub is visible) and needs its own design.
+
+### 40.7 Measured behaviour (2026-09-22)
+
+`examples/21_compact_tools.exs` runs the eight-tool fixture (`examples/fixtures/compact_tools.exs`) once all compact and once all full, with the prompt *"File an issue in acme/web titled 'Login button broken' with label bug."*, on each bundled chat provider's default example model:
+
+| Provider (model) | Step-1 input tokens compact / full | Run-total input compact / full | `tool_help` called first? | `labels` an array? |
+|---|---|---|---|---|
+| OpenAI (`gpt-5.4-nano`) | 348 / 755 (−54%) | 766 / 1676 | no | yes |
+| Gemini (`gemini-3-flash-preview`) | 471 / 1294 (−64%) | 1120 / 2716 | no | yes |
+| Anthropic (`claude-sonnet-4-6`) | 1054 / 1899 (−44%) | 2243 / 3933 | no | yes |
+
+All three providers accept the stub schema `{"type":"object"}`, and all three filled in every required argument straight from the `Args:` hint without calling `tool_help`. This is one easy prompt; it shows the mechanism works end to end, not how often models need `tool_help` on harder tasks.
+
+### 40.8 Out of scope
+
+- native provider deferral (§40.6, pattern A)
+- a hidden tier where tool names are withheld and found by search
+- engine-level or call-level compaction switches
+- full JSON Schema argument validation; only the required-key check ships
+- compaction of a caller-built `%Request{}` passed to `generate/3` / `stream_generate/3`

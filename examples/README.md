@@ -276,6 +276,20 @@ marker" above.
 
 Neither script costs anything: `/v1/moderations` is free.
 
+## Compact tools (21)
+
+- `21_compact_tools.exs` — the eight GitHub-style tools of
+  `fixtures/compact_tools.exs`, all marked `compact: true`, so the model
+  sees one-line stubs plus the built-in `tool_help` tool. The script
+  asserts the model still files the issue (the run completes and
+  `create_issue`'s handler receives `"repo"` and `"title"`), then runs the
+  same prompt with every tool in full and asserts that step 1 cost fewer
+  input tokens with compact tools. It prints, without asserting, whether
+  the model called `tool_help` first, both runs' total input tokens, and
+  whether `labels` arrived as an array.
+
+No `# Provider:` marker: it runs on every arm.
+
 ## Running
 
 Single script (default — OpenAI):
@@ -334,6 +348,7 @@ facade (`generate/3`, `stream/3`, `chat/3`, `step/3`, `generate_image/3`,
 | `18_embed_query_vs_document.exs` | loose | C | all | asymmetric embedding — `task_type: :search_query` vs `:search_document`, ranked by cosine similarity |
 | `19_moderate_text.exs` | tight | C | openai | `ALLM.moderate/3` over an all-strings input; asserts batch cardinality, index order, and that a plain threat is flagged while a benign string is not |
 | `20_moderate_image.exs` | tight | C | openai | multimodal `ALLM.moderate/3` — `ModerationRequest.multimodal?/1` derives the result count before the call, and the script asserts it against the count that came back (two elements in, one result out) |
+| `21_compact_tools.exs` | tight | C | all | `compact: true` tools: the model completes a task through stubs + `tool_help`; asserts step-1 input tokens drop versus the same run with full tools |
 
 ## Image generation
 

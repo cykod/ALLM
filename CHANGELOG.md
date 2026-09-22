@@ -1,4 +1,4 @@
-## [REL] v0.6.0 — Content moderation
+## [REL] v0.6.0 — Content moderation and compact tools
 
 Breaking changes:
 - An `%ALLM.Image{source: {:base64, _}}` whose data will not decode is now
@@ -10,6 +10,10 @@ Breaking changes:
   `ALLM.Error.ValidationError` gains `:invalid_moderation_request`. Both are
   closed enums, so an exhaustive `case` over either reason union needs a new
   clause
+- `ALLM.Providers.OpenAI.Images` and `ALLM.Providers.Gemini.Images` no
+  longer put `:body_preview` in an `%ImageAdapterError{}`'s `:metadata`, and
+  redact key material from its `:message`. Code reading
+  `metadata.body_preview` now gets nothing
 
 Other changes:
 - Add content moderation: `ALLM.moderate(engine, "…user text…")` returns
@@ -49,6 +53,27 @@ Other changes:
   plus `ExamplesHelpers.moderation_engine/1` and the `ALLM_MODERATION_MODEL`
   override. Both carry a `# Provider: openai` marker so `run_all.exs` skips
   them on the arms that have no moderation adapter, and both cost $0.00
+- Add compact tools for large tool catalogs: `ALLM.tool(..., compact: true)`
+  sends the tool to the model as a one-line stub (a summary, the argument
+  names, and a bare `{"type": "object"}` schema) and adds one built-in
+  `tool_help` tool the model calls to get full descriptions and schemas on
+  demand. Execution always uses the full tool. The tool list sent to the
+  model is identical on every step of a run, so provider prompt caches keep
+  working. Default `compact: false` leaves every existing tool unchanged on
+  the wire
+- Add `ALLM.Tool`'s `:summary` field to override a stub's one-line summary.
+  `ALLM.Validate.tool/1` rejects a non-string summary with
+  `{:summary, :not_a_string}`, and `Tool.new/1` raises `ArgumentError` on a
+  non-boolean `:compact`
+- Add `ALLM.ToolHelp`: `project/2` shows exactly what the model receives,
+  `check_args/2` is the required-argument check, and `answer/2` builds the
+  `tool_help` result a caller submits under `mode: :manual`. A compact tool
+  called without a required argument returns a usage error carrying its
+  full help instead of running the handler, routed through `:on_tool_error`
+- Add a "Compact tools" section to `guides/tools.md` and
+  `examples/21_compact_tools.exs`, which runs one task with and without
+  compact tools on every provider. Measured step-1 input tokens fell by 54%
+  (OpenAI), 64% (Gemini) and 44% (Anthropic) on its eight-tool fixture
 - Fix unreadable image files crashing every vision adapter. A
   `%ALLM.Image{source: {:file, path}}` whose file could not be read passed
   both the MIME and the size gate and then raised out of `generate/2` and
