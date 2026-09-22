@@ -99,6 +99,7 @@ defmodule ALLM.Chat do
     Thread,
     Tool,
     ToolCall,
+    ToolHelp,
     ToolRunner,
     Validate
   }
@@ -1084,7 +1085,7 @@ defmodule ALLM.Chat do
          %Response{} = response,
          opts
        ) do
-    tools = Engine.resolve_tools(engine, opts)
+    tools = effective_tools(engine, opts)
 
     case preflight_unknown(response.tool_calls, tools) do
       :ok ->
@@ -1174,7 +1175,7 @@ defmodule ALLM.Chat do
          manual_tcs,
          opts
        ) do
-    tools = Engine.resolve_tools(engine, opts)
+    tools = effective_tools(engine, opts)
     runner_opts = build_runner_opts(engine, response, opts)
 
     case ToolRunner.run_tool_calls(auto_tcs, tools, runner_opts) do
@@ -1219,7 +1220,7 @@ defmodule ALLM.Chat do
   end
 
   defp run_tools_non_streaming(%Engine{} = engine, thread, assistant_msg, response, opts) do
-    tools = Engine.resolve_tools(engine, opts)
+    tools = effective_tools(engine, opts)
     runner_opts = build_runner_opts(engine, response, opts)
 
     case ToolRunner.run_tool_calls(response.tool_calls, tools, runner_opts) do
@@ -1385,7 +1386,7 @@ defmodule ALLM.Chat do
          %Response{} = response,
          assistant_msg
        ) do
-    tools = Engine.resolve_tools(engine, opts)
+    tools = effective_tools(engine, opts)
 
     case partition_tool_calls(response.tool_calls, tools) do
       {_auto, []} ->
@@ -1413,7 +1414,7 @@ defmodule ALLM.Chat do
          %Response{} = response,
          assistant_msg
        ) do
-    tools = Engine.resolve_tools(engine, opts)
+    tools = effective_tools(engine, opts)
     runner_opts = build_runner_opts(engine, response, opts)
 
     case preflight_unknown(response.tool_calls, tools) do
@@ -1468,7 +1469,7 @@ defmodule ALLM.Chat do
          auto_tcs,
          manual_tcs
        ) do
-    tools = Engine.resolve_tools(engine, opts)
+    tools = effective_tools(engine, opts)
     runner_opts = build_runner_opts(engine, response, opts)
 
     # Preflight is on the FULL response.tool_calls in start_phase_b/3 above;
@@ -1992,6 +1993,15 @@ defmodule ALLM.Chat do
      )}
   end
 
+  # Execution-side tool list: the full resolved tools plus the `tool_help`
+  # meta-tool when any tool is compact (see `ALLM.ToolHelp`). Every execution
+  # site (the unknown-tool preflight, per-tool-manual partitioning and
+  # `ToolRunner`) reads this list; `build_request/4` sends `ToolHelp.project/2`
+  # of the same resolved tools, so both lists name the same tools.
+  defp effective_tools(%Engine{} = engine, opts) do
+    engine |> Engine.resolve_tools(opts) |> ToolHelp.with_meta_tool()
+  end
+
   # The `stream` flag on `%Request{}` is informational in Phase 6 — adapters
   # dispatch via `Runner.run/3` vs `StreamRunner.run/3` based on which the
   # caller invokes, not on this field. We still set it truthfully so that
@@ -2007,7 +2017,7 @@ defmodule ALLM.Chat do
     {typed, opaque} = Map.split(params, [:max_tokens, :temperature])
 
     base = [
-      tools: Engine.resolve_tools(engine, opts),
+      tools: ToolHelp.project(Engine.resolve_tools(engine, opts), Keyword.get(opts, :tool_choice)),
       stream: Keyword.get(flags, :stream, false),
       max_tokens: Map.get(typed, :max_tokens),
       temperature: Map.get(typed, :temperature),

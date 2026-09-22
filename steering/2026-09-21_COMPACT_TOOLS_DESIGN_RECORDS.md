@@ -8,9 +8,83 @@ Companion to `steering/2026-09-21_COMPACT_TOOLS_DESIGN.md`. Status, checklist st
 |-------|--------|-------|
 | 23.1 | Completed | Built 2026-09-22 on `1859dac`. Functional, code and arch/security reviews ran (`.work/*/2026-09-22-phase-23-1-tool-fields*`); fix pass: 0 fixed, 2 deferred to `[CARRY]`, 3 Lows left for polish. |
 | 23.2 | Completed | Built 2026-09-22 on `9b74416`. Functional, code and arch/security reviews ran (`.work/*/2026-09-22-phase-23-2-tool-help*`; design review N/A); fix pass: 0 fixed (all findings Low), 2 deferred to `[CARRY]` (below), 4 Lows left for polish. |
-| 23.3 | Not Started | |
+| 23.3 | Completed | Built 2026-09-22 on `f7a4b87`. Implementer gates green (below); review gates not yet run. |
 | 23.4 | Not Started | |
 | 23.5 | Not Started | |
+
+## 23.3 — Chat-loop wiring (Layer C)
+
+### Checklist
+
+- [x] `effective_tools/2` added to `lib/allm/chat.ex` (`:2001`) and the six execution sites routed through it: non-streaming `run_auto_tool_calls_step/5`, `run_tools_then_halt/7`, `run_tools_non_streaming/5`; streaming `dispatch_partitioned_stream/3`, `start_phase_b/3`, `start_phase_b_partial/5`. `build_request/4` (shared by both paths) sends `ToolHelp.project(Engine.resolve_tools(engine, opts), Keyword.get(opts, :tool_choice))` (`:2020`). Post-condition `git --no-optional-locks grep -n 'Engine.resolve_tools(' lib/allm/chat.ex | wc -l` → `2` (the `effective_tools/2` body and `build_request/4`).
+- [x] `ToolRunner.execute_one_tool/3` interception (`lib/allm/tool_runner.ex:537`): the meta-tool is answered with `ToolHelp.render(ctx.tools, args)` without reaching `ctx.executor`; otherwise the private `execute_checked/4` (`:548`) returns `ToolHelp.check_args/2`'s `{:error, usage}` or runs the executor. Both results go through the unchanged `dispatch_handler_return/3`.
+- [x] Contract-flip audit (below): all keep.
+- [x] `guides/tools.md` not touched.
+
+### Test Plan coverage
+
+All 16 rows are in `test/allm/chat/compact_tools_test.exs`, and every row loops over both arms (`ALLM.chat/3` and `ALLM.stream/3` folded through `StreamCollector`) inside one test, labelling assertion failures with the arm. Row 11 is Layer D, so it has one test per arm (`Session.start`/`continue` and `Session.stream_start`/`stream_step` folded with `StreamReducer`, re-passing `mode: :manual` each time). Additions beyond the matrix: a pure Invariant-1 name check (row 2, `:190`), the no-compact-tool `tool_help` user tool staying ordinary (row 8, `:339`), the `{:continue, replacement}` half of row 12 (`:538`), and row 10b (`:411`, added by the fix pass below).
+
+`test/allm/tool_runner_test.exs` `describe "compact tools — direct run_tool_calls/3 / stream_tool_calls/3 callers"` (`:1868`) holds 10 unit rows. `test/allm/chat_equivalence_test.exs` gains fixture `:compact_tool_help_round_trip` (the row-3 script) in `@fixture_ids`, plus an absolute-shape test (`:451`) per IMPLEMENTATION.md §4m. The property holds with **no new relaxation row**; the moduledoc fixture list names it.
+
+Binding checks: 6 of the 10 `tool_runner_test.exs` rows failed before `tool_runner.ex` changed, each for the expected reason (executor reached, `:not_found` from the default executor, un-decodable content); the other 4 pin behaviour that must stay unchanged (`:1922`, `:1941`, `:1989`, `:1998`). 11 of the 20 `compact_tools_test.exs` tests failed before `chat.ex` changed. Reverting only `effective_tools/2` to a bare `Engine.resolve_tools/2` turns 9 tests red across `compact_tools_test.exs` and `chat_equivalence_test.exs`.
+
+### `[CARRY]` from 23.2: the four `ALLM.ToolHelp` moduledoc claims, now pinned
+
+| Claim (`lib/allm/tool_help.ex`) | Pinning test(s) |
+|---|---|
+| Usage error replaces the handler (`:46-47`, `check_args/2` `@doc` `:277-279`) | `test/allm/chat/compact_tools_test.exs:228` (row 4), `test/allm/tool_runner_test.exs:1954`, `:1965` |
+| Usage error routed through `on_tool_error` (`:277-279`) | `compact_tools_test.exs:252` (row 5, `:halt`), `:516` and `:538` (row 12, fun/2), `tool_runner_test.exs:1979` |
+| `{:tools, :duplicate_name}` for a user tool named `tool_help` beside a compact tool (`:74-76`) | `compact_tools_test.exs:322` (row 8, both arms) |
+| Direct `ToolRunner.run_tool_calls/3` / `stream_tool_calls/3` callers get `check_args` and `tool_help` answered only when their list holds `meta_tool/0` (`:92-95`) | `tool_runner_test.exs:1897`, `:1908` (answered), `:1922` (list without `meta_tool/0` → `:unknown_tool`), `:1954`, `:1965` (check_args on both entry points) |
+
+The `[CARRY]` line in §"`[CARRY]` lines filed by the 23.2 fix pass" is discharged by this table.
+
+### Security carry from 23.2: `render/2` sees exactly the resolved list
+
+Verified. `render/2` reads `ctx.tools` (`tool_runner.ex:537`), which is the `tools` argument of `run_tool_calls/3` / `stream_tool_calls/3`. In the chat loop every such call passes the `tools` bound by `effective_tools(engine, opts)` at the six sites above. `effective_tools/2` is `with_meta_tool(Engine.resolve_tools(engine, opts))`, and the wire list is `project(Engine.resolve_tools(engine, opts), tool_choice)`: the same resolved list with the same `engine` and `opts` on the same step. `project/2` keeps every name and appends the meta-tool under exactly the condition `with_meta_tool/1` does, so the two lists name the same tools (Invariant 1). `compact_tools_test.exs:176` pins the wire side through the chat loop; `:190` pins only the helper-level name equality (`project/2` vs `with_meta_tool/1`) and cannot fail if a `chat.ex` site regresses. The execution side is bound through the chat loop at five of the six sites (see §"Fix pass" below); `:1389` is defensive and not observable for `tool_help`. No other tool source reaches `ctx.tools`: `grep -n 'run_tool_calls(\|stream_tool_calls(' lib/allm/chat.ex` shows only calls taking that local `tools`, and `ALLM.Session` stores no tools. Residual: structured_finalize pass 2 re-resolves call-level `:tools` (the pre-existing `[BUG]` below), but on pass 2 the wire and execution lists are still derived from the same resolved list, so `tool_help` still cannot describe a tool the model was not sent.
+
+### Contract-flip audit (Invariant 3)
+
+`git --no-optional-locks grep -n 'request.tools\|resolve_tools' test/` (run 2026-09-22, 15 hits). No assertion inverts, because no existing test uses a compact tool.
+
+- `test/allm/engine_integration_test.exs:7` — keep (moduledoc prose naming `resolve_tools/2`).
+- `test/allm/engine_integration_test.exs:105`, `:120`, `:182` — keep (`Engine.resolve_tools/2` public contract, unchanged).
+- `test/allm/engine_property_test.exs:153`, `:166` — keep (`resolve_tools/2` dedup property, unchanged).
+- `test/allm/engine_test.exs:181`, `:184`, `:189`, `:194`, `:204`, `:213`, `:224`, `:230` — keep (`resolve_tools/2` unit tests and describe header, unchanged; the meta-tool is injected only inside `ALLM.Chat`).
+- `test/allm/providers/openai_test.exs:298` — keep (adapter encodes a caller-built `request.tools`; no chat loop).
+
+### Implementation notes
+
+- `[tactical]` **The usage-error branch lives in a private `execute_checked/4`** rather than a three-arm `cond` in `execute_one_tool/3`, so each function makes one decision.
+- **Row 12's fun receives `(tool_call, reason)`**, the existing `on_tool_error` arity-2 order (`invoke_on_tool_error/5`), not `(reason, …)`.
+- **Row 11 streaming uses `StreamReducer.new(session, mode: :step)` for the `stream_step` fold**, since `finalize/1` dispatches on the reducer mode; the `stream_start` fold uses the default `:chat`.
+- **Filed** the `/asks` `[BUG]` the design's Out-of-scope section requires: call-level `:tools` leak into structured_finalize pass 2 (`run_finalize_pass/4`, `lib/allm/chat.ex:488` non-streaming, `:750` streaming). Reproduced 2026-09-22: the ticket's `mix run -e` one-liner prints `[1, 1]` (tools on pass 1, pass 2). **DONE WHEN** it prints `[1, 0]`. Not fixed here; outside the Module Tree.
+- `HANDOFF.md`: the one Open item addressed to 23.3 (pin the four `ALLM.ToolHelp` claims) is discharged by the table above.
+- No deviations from the contract block.
+
+### Gate results (implementer run, 2026-09-22)
+
+| Command | Exit |
+|---|---|
+| `mix test test/allm/chat/compact_tools_test.exs test/allm/chat_equivalence_test.exs test/allm/tool_runner_test.exs` (2 doctests, 1 property, 119 tests, 0 failures) | 0 |
+| `mix test` (443 doctests, 32 properties, 3563 tests, 0 failures, 14 excluded; baseline 443 / 32 / 3532) | 0 |
+| `mix test --seed 0` (same counts) | 0 |
+| `mix format --check-formatted` | 0 |
+| `mix credo --strict` | 0 |
+| `mix compile --warnings-as-errors --force` | 0 |
+| `mix dialyzer` | 0 |
+| `git --no-optional-locks grep -n 'Engine.resolve_tools(' lib/allm/chat.ex \| wc -l` → `2` | 0 |
+| `grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test/allm/chat/compact_tools_test.exs` → empty | 1 (no match) |
+
+### Fix pass (2026-09-22, delegated)
+
+Inputs: `.work/reviews/2026-09-22-phase-23-3-chat-wiring/overview.md`, `.work/code-reviews/2026-09-22-phase-23-3-chat-wiring.md`, `.work/security-reviews/2026-09-22-phase-23-3-chat-wiring.md` (clean), design review N/A.
+
+- **Fixed (functional Known Issue 1, Medium): row 10b** (`test/allm/chat/compact_tools_test.exs:411`, both arms). One assistant turn calls `tool_help`, auto compact `y` with a missing argument, and per-tool-manual compact `x`; asserts `:manual_tool_calls` on `x` only, `tool_help`'s rendered content, and `y`'s usage error. Mutation check on a scratchpad copy, one site at a time reverted to `Engine.resolve_tools(engine, opts)`, `mix test test/allm/chat/compact_tools_test.exs`: `lib/allm/chat.ex:1178` (`run_tools_then_halt/7`, non-streaming) → 1 failure, row 10b, `{:error, %EngineError{reason: :unknown_tool}}` on the `:chat` arm; `:1472` (`start_phase_b_partial/5`, streaming) → 1 failure, row 10b, `"arm stream: tool_help result missing"`; `:1389` (`dispatch_partitioned_stream/3`, streaming) → 0 failures, as the functional review predicted (an unknown name partitions as auto, so the site is defensive for `tool_help`). Invariant 1 is now bound through the chat loop at 5 of 6 sites (`:1088`, `:1178`, `:1223`, `:1417`, `:1472`).
+- **Fixed (functional Known Issue 2 / code review F1, both Low): row 11's self-comparison.** Adjudication: both lanes were seeded with the "value compared with itself" shape, so double-reporting is not an independence signal. Taken under the gate carve-out: the replaced line (`answer/2 == render/2` of the same list) could not fail, and the row's own claim (the submitted answer reaches the model) was unasserted. Replaced with `tc.arguments == %{"names" => ["x"]}` plus an absolute content anchor, and added `Enum.any?(r2.messages, &(&1.role == :tool and &1.content == content))` to both arms (`:451`, `:477`). Mutation check: `lib/allm/session.ex` `do_submit_tool_result/3` storing `encode_tool_content("")` instead of the submitted content → both row-11 tests fail.
+- **Left for the phase-end polish pass (Low):** code review F2, F3, F4, F5 (test move / oracle helper), F6 (`ToolRunner` moduledoc sentence). F5's RECORDS half (the `:190` pin claim) was corrected above as a governed-document sentence.
+- Gates after the pass: `mix test` (443 doctests, 32 properties, 3564 tests, 0 failures) 0; `mix test --seed 0` 0; `mix format --check-formatted` 0; `mix credo --strict` 0; `mix compile --warnings-as-errors --force` 0; `mix dialyzer` 0; `git --no-optional-locks grep -n 'Engine.resolve_tools(' lib/allm/chat.ex | wc -l` → `2`.
 
 ## 23.2 — `ALLM.ToolHelp` (pure helper)
 

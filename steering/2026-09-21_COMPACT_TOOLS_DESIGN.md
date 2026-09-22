@@ -13,9 +13,9 @@
 
 | Phase | Description | Layer | Status |
 |-------|-------------|-------|--------|
-| 23.1 | `ALLM.Tool` gains `:compact` + `:summary`; validator + serializer | A | Not Started |
-| 23.2 | `ALLM.ToolHelp` pure helper: summary, signature, stub projection, help rendering, required-arg check, meta-tool | C (internal, pure) | Not Started |
-| 23.3 | Wire it into the chat loop (both paths) + `ToolRunner` interception | C | Not Started |
+| 23.1 | `ALLM.Tool` gains `:compact` + `:summary`; validator + serializer | A | Completed |
+| 23.2 | `ALLM.ToolHelp` pure helper: summary, signature, stub projection, help rendering, required-arg check, meta-tool | C (internal, pure) | Completed |
+| 23.3 | Wire it into the chat loop (both paths) + `ToolRunner` interception | C | Completed |
 | 23.4 | Spec §40, `guides/tools.md` section, `examples/21_compact_tools.exs` live gate, CHANGELOG | docs | Not Started |
 | 23.5 | `[CHORE]` sweep for deferrals raised in 23.1–23.4 | — | Not Started |
 

@@ -1,3 +1,18 @@
+## [FEAT] Wire compact tools into the chat loop (Phase 23.3)
+*Tuesday, September 22nd at 9pm*
+The chat loop now sends compact tools to the model as ToolHelp stubs plus a 
+tool_help meta-tool, while every execution site (three non-streaming, three 
+streaming) runs against the full tool list, so the wire tools array is 
+identical on every step and provider prompt caches survive (§40, 
+cross-function invariants 1-3). ToolRunner.execute_one_tool/3 answers tool_help 
+from the resolved list without touching the configured executor, and returns a 
+usage error carrying the tool's full help when a compact tool is called without 
+a required argument, routed through on_tool_error. Compact-off runs are 
+byte-identical to before; the chat_equivalence property holds with a compact 
+fixture and no relaxation.
+
+---
+
 ## [FEAT] Add ALLM.ToolHelp compact-tool projection helper (Phase 23.2)
 *Tuesday, September 22nd at 9pm*
 New pure public module ALLM.ToolHelp projects compact tools into one-line 

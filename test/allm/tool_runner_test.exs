@@ -1860,4 +1860,148 @@ defmodule ALLM.ToolRunnerTest do
       assert exc.stacktrace == []
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Compact tools: tool_help interception + required-argument check
+  # ---------------------------------------------------------------------------
+
+  describe "compact tools — direct run_tool_calls/3 / stream_tool_calls/3 callers" do
+    defmodule RaisingCompactExecutor do
+      @moduledoc false
+      @behaviour ALLM.ToolExecutor
+
+      @impl true
+      def execute(%Tool{}, _args, _opts), do: raise("executor must not be reached")
+    end
+
+    defp compact_lookup(me) do
+      Tool.new(
+        name: "lookup",
+        description: "Look up a record by id. Returns the record.",
+        schema: %{
+          "type" => "object",
+          "properties" => %{"id" => %{"type" => "string"}, "verbose" => %{"type" => "boolean"}},
+          "required" => ["id"]
+        },
+        handler: fn args ->
+          send(me, {:lookup_ran, args})
+          {:ok, "found"}
+        end,
+        compact: true
+      )
+    end
+
+    defp help_call(names),
+      do: ToolCall.new(id: "h0", name: "tool_help", arguments: %{"names" => names})
+
+    test "run_tool_calls/3 answers a tool_help call with render/2 when the list holds meta_tool/0" do
+      tools = ALLM.ToolHelp.with_meta_tool([compact_lookup(self())])
+
+      assert {:ok, [msg]} =
+               ToolRunner.run_tool_calls([help_call(["lookup"])], tools, engine: engine())
+
+      assert msg.tool_call_id == "h0"
+      assert msg.content == ALLM.ToolHelp.render(tools, %{"names" => ["lookup"]})
+      assert msg.content =~ "Look up a record by id. Returns the record."
+    end
+
+    test "stream_tool_calls/3 answers a tool_help call with render/2 when the list holds meta_tool/0" do
+      tools = ALLM.ToolHelp.with_meta_tool([compact_lookup(self())])
+
+      events =
+        [help_call(["lookup"])]
+        |> ToolRunner.stream_tool_calls(tools, engine: engine())
+        |> Enum.to_list()
+
+      assert {:tool_result_encoded, %{id: "h0", content: content}} =
+               List.keyfind(events, :tool_result_encoded, 0)
+
+      assert content == ALLM.ToolHelp.render(tools, %{"names" => ["lookup"]})
+    end
+
+    test "a tool_help call is an unknown tool when the caller's list lacks meta_tool/0" do
+      tools = [compact_lookup(self())]
+
+      assert {:error, %EngineError{reason: :unknown_tool, metadata: %{tool_name: "tool_help"}}} =
+               ToolRunner.run_tool_calls([help_call(["lookup"])], tools, engine: engine())
+    end
+
+    test "tool_help bypasses a custom executor" do
+      tools = ALLM.ToolHelp.with_meta_tool([compact_lookup(self())])
+
+      assert {:ok, [msg]} =
+               ToolRunner.run_tool_calls([help_call(["lookup"])], tools,
+                 engine: engine(),
+                 tool_executor: RaisingCompactExecutor
+               )
+
+      assert msg.content == ALLM.ToolHelp.render(tools, %{"names" => ["lookup"]})
+    end
+
+    test "a user tool named tool_help without the marker runs its own handler" do
+      mine =
+        Tool.new(
+          name: "tool_help",
+          description: "mine",
+          schema: %{},
+          handler: fn _ -> {:ok, "my own help"} end
+        )
+
+      assert {:ok, [msg]} = ToolRunner.run_tool_calls([help_call(["x"])], [mine], engine: engine())
+      assert msg.content == "my own help"
+    end
+
+    test "run_tool_calls/3: a compact tool missing a required argument returns the usage error and skips the handler" do
+      tool = compact_lookup(self())
+      bad = ToolCall.new(id: "c0", name: "lookup", arguments: %{"verbose" => true})
+
+      assert {:ok, [msg]} = ToolRunner.run_tool_calls([bad], [tool], engine: engine())
+
+      assert {:error, usage} = ALLM.ToolHelp.check_args(tool, %{"verbose" => true})
+      assert Jason.decode!(msg.content) == %{"error" => usage}
+      refute_received {:lookup_ran, _}
+    end
+
+    test "stream_tool_calls/3: a compact tool missing a required argument returns the usage error and skips the handler" do
+      tool = compact_lookup(self())
+      bad = ToolCall.new(id: "c0", name: "lookup", arguments: %{})
+
+      events = [bad] |> ToolRunner.stream_tool_calls([tool], engine: engine()) |> Enum.to_list()
+
+      assert {:tool_result_encoded, %{content: content}} =
+               List.keyfind(events, :tool_result_encoded, 0)
+
+      assert {:error, usage} = ALLM.ToolHelp.check_args(tool, %{})
+      assert Jason.decode!(content) == %{"error" => usage}
+      refute_received {:lookup_ran, _}
+    end
+
+    test "the usage error honours on_tool_error: :halt" do
+      tool = compact_lookup(self())
+      bad = ToolCall.new(id: "c0", name: "lookup", arguments: %{})
+
+      assert {:ok, [_msg], %{halted_reason: :tool_error}} =
+               ToolRunner.run_tool_calls([bad], [tool], engine: engine(), on_tool_error: :halt)
+
+      refute_received {:lookup_ran, _}
+    end
+
+    test "a compact tool with its required arguments (atom-keyed) runs the handler" do
+      tool = compact_lookup(self())
+      good = ToolCall.new(id: "c0", name: "lookup", arguments: %{id: "42"})
+
+      assert {:ok, [msg]} = ToolRunner.run_tool_calls([good], [tool], engine: engine())
+      assert msg.content == "found"
+      assert_received {:lookup_ran, %{id: "42"}}
+    end
+
+    test "a full (non-compact) tool missing a required argument still runs its handler" do
+      tool = %{compact_lookup(self()) | compact: false}
+      bad = ToolCall.new(id: "c0", name: "lookup", arguments: %{})
+
+      assert {:ok, [msg]} = ToolRunner.run_tool_calls([bad], [tool], engine: engine())
+      assert msg.content == "found"
+      assert_received {:lookup_ran, %{}}
+    end
+  end
 end

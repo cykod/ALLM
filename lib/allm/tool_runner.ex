@@ -70,7 +70,7 @@ defmodule ALLM.ToolRunner do
   and routed via `on_tool_error`.
   """
 
-  alias ALLM.{Engine, Event, Message, Tool, ToolCall}
+  alias ALLM.{Engine, Event, Message, Tool, ToolCall, ToolHelp}
   alias ALLM.Error.{EngineError, ToolError}
 
   @default_tool_timeout 30_000
@@ -525,12 +525,31 @@ defmodule ALLM.ToolRunner do
   # the terminal shape (for the event trio's third element). When the
   # dispatch is `:halt`, `extra.halt_metadata` carries the
   # `halt_metadata()` struct to be surfaced in the final run_outcome.
+  #
+  # Compact tools (see `ALLM.ToolHelp`): the built-in `tool_help` meta-tool
+  # (recognised by its metadata marker, not its name) is answered from
+  # `ctx.tools` without reaching the executor, and a compact tool missing a
+  # required top-level argument returns the usage text as a handler
+  # `{:error, _}` so `on_tool_error` applies unchanged. Non-compact tools are
+  # untouched (`check_args/2` returns `:ok`).
   @spec execute_one_tool(ToolCall.t(), Tool.t(), map()) ::
           {:continue | :halt, Message.t(), map()}
   defp execute_one_tool(%ToolCall{} = tc, %Tool{} = tool, %{} = ctx) do
-    handler_opts = build_handler_opts(ctx.engine, ctx.opts, tc)
-    result = ctx.executor.execute(tool, tc.arguments || %{}, handler_opts)
+    args = tc.arguments || %{}
+
+    result =
+      if ToolHelp.meta_tool?(tool),
+        do: {:ok, ToolHelp.render(ctx.tools, args)},
+        else: execute_checked(tool, args, tc, ctx)
+
     dispatch_handler_return(result, tc, ctx)
+  end
+
+  defp execute_checked(%Tool{} = tool, args, %ToolCall{} = tc, ctx) do
+    case ToolHelp.check_args(tool, args) do
+      :ok -> ctx.executor.execute(tool, args, build_handler_opts(ctx.engine, ctx.opts, tc))
+      {:error, _usage} = usage_error -> usage_error
+    end
   end
 
   # Dispatch on the five spec §5.2 handler return shapes plus the

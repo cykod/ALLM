@@ -49,6 +49,8 @@ defmodule ALLM.ChatEquivalenceTest do
     * Auto-only no-manual-flags-set control (Phase 18.5 — byte-identical
       pre/post-Phase-18; same Fake script as `:happy_multi_turn` but
       asserts `metadata.manual_tool_calls` is absent on both arms)
+    * Compact tools (`tool_help` → compact tool → text; holds with no new
+      relaxation row)
 
   StreamData iterates a fixture-id and chat-opts variant; each (fixture,
   opts) tuple is a property iteration. Total: ≥100 iterations.
@@ -116,6 +118,20 @@ defmodule ALLM.ChatEquivalenceTest do
   # because the manual subset never executes (per spec §12.4).
   defp manual_tool(name) do
     Tool.new(name: name, description: "", schema: %{}, manual: true)
+  end
+
+  defp compact_lookup_tool do
+    Tool.new(
+      name: "lookup",
+      description: "Look up a record by id. Returns the record.",
+      schema: %{
+        "type" => "object",
+        "properties" => %{"id" => %{"type" => "string"}},
+        "required" => ["id"]
+      },
+      handler: fn args -> {:ok, args} end,
+      compact: true
+    )
   end
 
   defp user_thread, do: Thread.from_messages([ALLM.user("hi")])
@@ -270,6 +286,25 @@ defmodule ALLM.ChatEquivalenceTest do
     {fn -> FakeFixtures.engine_with_scripts(scripts, tools: [echo_tool()]) end, []}
   end
 
+  # Compact tools: turn 1 asks `tool_help` about the compact `lookup`,
+  # turn 2 calls it with valid arguments, turn 3 answers in text. No new
+  # relaxation row: the `tool_help` result is an ordinary `:tool` message.
+  defp fixture(:compact_tool_help_round_trip) do
+    scripts = [
+      [
+        {:tool_call, id: "h0", name: "tool_help", arguments: %{"names" => ["lookup"]}},
+        {:finish, :tool_calls}
+      ],
+      [
+        {:tool_call, id: "c1", name: "lookup", arguments: %{"id" => "42"}},
+        {:finish, :tool_calls}
+      ],
+      [{:text, "done"}, {:finish, :stop}]
+    ]
+
+    {fn -> FakeFixtures.engine_with_scripts(scripts, tools: [compact_lookup_tool()]) end, []}
+  end
+
   defp vision_thread do
     img = Image.from_url("https://example.com/cat.png")
 
@@ -347,7 +382,8 @@ defmodule ALLM.ChatEquivalenceTest do
     # holds with `metadata.manual_tool_calls` non-relaxed).
     :mixed_manual_first_turn,
     :pure_manual_first_turn,
-    :auto_only_no_manual_flags_set
+    :auto_only_no_manual_flags_set,
+    :compact_tool_help_round_trip
   ]
 
   property "Chat.run/3 ≡ Chat.stream/3 |> StreamCollector.to_chat_result/1 — every fixture × valid opts" do
@@ -407,6 +443,28 @@ defmodule ALLM.ChatEquivalenceTest do
     for cr <- [run_result, stream_result] do
       assert cr.halted_reason == :completed
       refute Map.has_key?(cr.metadata, :manual_tool_calls)
+    end
+
+    Assertions.assert_equivalent_chat_result(run_result, stream_result)
+  end
+
+  test "compact_tool_help_round_trip — both arms answer tool_help and complete" do
+    {engine_builder, opts} = fixture(:compact_tool_help_round_trip)
+
+    assert {:ok, %ChatResult{} = run_result} = run_chat(engine_builder, opts)
+    assert {:ok, %ChatResult{} = stream_result} = run_stream_chat(engine_builder, opts)
+
+    expected =
+      ALLM.ToolHelp.render(ALLM.ToolHelp.with_meta_tool([compact_lookup_tool()]), %{
+        "names" => ["lookup"]
+      })
+
+    for cr <- [run_result, stream_result] do
+      assert cr.halted_reason == :completed
+      assert length(cr.steps) == 3
+
+      assert %Message{content: ^expected} =
+               Enum.find(cr.thread.messages, &(&1.role == :tool and &1.tool_call_id == "h0"))
     end
 
     Assertions.assert_equivalent_chat_result(run_result, stream_result)
