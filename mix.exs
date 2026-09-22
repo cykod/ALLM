@@ -178,7 +178,8 @@ defmodule ALLM.MixProject do
           ALLM.Telemetry,
           ALLM.StreamCollector,
           ALLM.Serializer,
-          ALLM.Sandbox
+          ALLM.Sandbox,
+          ALLM.ToolHelp
         ],
         Internals: [
           ALLM.Chat,

@@ -1,3 +1,17 @@
+## [FEAT] Add ALLM.ToolHelp compact-tool projection helper (Phase 23.2)
+*Tuesday, September 22nd at 9pm*
+New pure public module ALLM.ToolHelp projects compact tools into one-line 
+CLI-style stubs (summary plus an Args hint, schema {"type":"object"}), appends 
+a serializable tool_help meta-tool identified by a string-keyed metadata 
+marker, renders full help text for model-requested names, and checks required 
+top-level arguments for compact tools (§40, to be written in 23.4). project/2 
+is deterministic so the wire tools array stays cache-stable, and a tool_choice 
+forcing a compact tool sends that tool in full. Also adds the 8-tool 
+examples/fixtures/compact_tools.exs fixture shared by tests and the 23.4 live 
+example.
+
+---
+
 ## [TWK] Add :compact and :summary fields to ALLM.Tool (Phase 23.1)
 *Tuesday, September 22nd at 8pm*
 ALLM.Tool gains a guarded boolean :compact (default false) and an optional 

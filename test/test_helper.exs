@@ -1,5 +1,10 @@
 {:ok, _started} = Application.ensure_all_started(:allm)
 
+# The 8-tool compact-tools fixture is plain data shared with `examples/`
+# (which cannot see `test/support/`). Required once here so test modules
+# don't redefine `CompactToolsFixture`.
+Code.require_file("../examples/fixtures/compact_tools.exs", __DIR__)
+
 # Exclude `:pending` by default so `@tag :pending` actually suspends tests on
 # plain `mix test`. ExUnit precedence: `include` beats `exclude`, so a test
 # tagged (or moduletagged) `:spec_31` will still run under `mix test --only
