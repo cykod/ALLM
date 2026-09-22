@@ -4,7 +4,7 @@ defmodule ALLM.Tool do
   runtime `:handler`.
 
   The struct itself is pure data (`:name`, `:description`, `:schema`,
-  `:metadata`, `:manual` are all serializable), but `:handler` may be an
+  `:metadata`, `:manual`, `:compact`, `:summary` are all serializable), but `:handler` may be an
   anonymous function. A tool with a `fn` handler is **not** safe to
   persist via `:erlang.term_to_binary/1`; persist either `:handler | nil`
   and re-attach at load time, or use a `{Module, :function}` tuple.
@@ -23,6 +23,24 @@ defmodule ALLM.Tool do
   Default: `false` — the tool is auto-executed under `mode: :auto`. The
   flag is silent under whole-loop `mode: :manual`; the whole-loop
   short-circuit fires before the per-tool partition runs.
+
+  ## Compact tools
+
+  Setting `compact: true` asks the chat loop to send this tool to the model
+  as a one-line stub (a summary, the argument names, and a bare
+  `{"type": "object"}` schema) instead of its full description and JSON
+  Schema, alongside a built-in `tool_help` tool the model can call to read
+  the full definition on demand. Execution always uses the full tool. The
+  projection and the meta-tool are provided by `ALLM.ToolHelp`.
+
+  `:summary` optionally overrides the one-line summary a stub carries;
+  when `nil` (the default), the summary is derived from `:description`.
+  It must be `nil` or a string — `ALLM.Validate.tool/1` rejects anything
+  else with `{:summary, :not_a_string}`.
+
+  Default: `compact: false` — the tool is sent in full, exactly as before.
+  Opting in is per tool, so the most-used tools can stay full while a long
+  tail is compacted.
 
   See also `guides/tools.md`.
   """
@@ -68,11 +86,22 @@ defmodule ALLM.Tool do
           schema: schema(),
           handler: handler() | nil,
           manual: boolean(),
+          compact: boolean(),
+          summary: String.t() | nil,
           metadata: map()
         }
 
   @enforce_keys [:name, :description, :schema]
-  defstruct [:name, :description, :schema, :handler, manual: false, metadata: %{}]
+  defstruct [
+    :name,
+    :description,
+    :schema,
+    :handler,
+    manual: false,
+    compact: false,
+    summary: nil,
+    metadata: %{}
+  ]
 
   @doc """
   Build a `%Tool{}` from keyword opts.
@@ -87,6 +116,11 @@ defmodule ALLM.Tool do
   `struct!/2` accepts an explicit `nil` (silently overwriting the default),
   so this constructor adds an explicit guard.
 
+  `:compact` is optional, defaults to `false`, and is guarded the same way:
+  a non-boolean value (including `nil`) raises `ArgumentError`. `:summary`
+  is optional, defaults to `nil`, and is not guarded here — a non-string
+  summary is reported by `ALLM.Validate.tool/1`.
+
   ## Examples
 
       iex> tool = ALLM.Tool.new(name: "weather", description: "weather by city", schema: %{"type" => "object"})
@@ -100,6 +134,10 @@ defmodule ALLM.Tool do
       iex> tool = ALLM.Tool.new(name: "charge", description: "charge a card", schema: %{"type" => "object"}, manual: true)
       iex> tool.manual
       true
+
+      iex> tool = ALLM.Tool.new(name: "search", description: "search the web", schema: %{"type" => "object"}, compact: true)
+      iex> {tool.compact, tool.summary}
+      {true, nil}
   """
   @spec new(keyword()) :: t()
   def new(opts) when is_list(opts) do
@@ -116,6 +154,11 @@ defmodule ALLM.Tool do
     unless is_boolean(tool.manual) do
       raise ArgumentError,
             "ALLM.Tool :manual must be a boolean, got: #{inspect(tool.manual)}"
+    end
+
+    unless is_boolean(tool.compact) do
+      raise ArgumentError,
+            "ALLM.Tool :compact must be a boolean, got: #{inspect(tool.compact)}"
     end
 
     tool
@@ -135,6 +178,8 @@ defmodule ALLM.Tool do
       schema: ALLM.JsonSchema.normalize(data["schema"] || %{}),
       handler: data["handler"],
       manual: data["manual"] || false,
+      compact: data["compact"] || false,
+      summary: data["summary"],
       metadata: data["metadata"] || %{}
     }
   end

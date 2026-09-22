@@ -61,6 +61,91 @@ defmodule ALLM.ToolTest do
     end
   end
 
+  describe "new/1 :compact and :summary fields" do
+    test "defaults: compact is false and summary is nil" do
+      tool = Tool.new(name: "w", description: "d", schema: %{})
+      assert tool.compact == false
+      assert tool.summary == nil
+    end
+
+    test "with compact: true sets the field" do
+      tool = Tool.new(name: "w", description: "d", schema: %{}, compact: true)
+      assert tool.compact == true
+    end
+
+    test "with compact: nil raises ArgumentError with the contract message" do
+      assert_raise ArgumentError, "ALLM.Tool :compact must be a boolean, got: nil", fn ->
+        Tool.new(name: "w", description: "d", schema: %{}, compact: nil)
+      end
+    end
+
+    test "with compact: \"yes\" raises ArgumentError with the contract message" do
+      assert_raise ArgumentError, ~s(ALLM.Tool :compact must be a boolean, got: "yes"), fn ->
+        Tool.new(name: "w", description: "d", schema: %{}, compact: "yes")
+      end
+    end
+
+    test "with summary: 123 does not raise (no constructor guard; Validate.tool/1 catches it)" do
+      tool = Tool.new(name: "w", description: "d", schema: %{}, summary: 123)
+      assert tool.summary == 123
+    end
+
+    test "with summary: \"s\" sets the field" do
+      tool = Tool.new(name: "w", description: "d", schema: %{}, summary: "s")
+      assert tool.summary == "s"
+    end
+
+    @tag :roundtrip
+    test "ETF round-trip preserves non-default compact and summary" do
+      tool =
+        Tool.new(
+          name: "create_issue",
+          description: "Create a new issue in a repository.",
+          schema: %{"type" => "object"},
+          compact: true,
+          summary: "s"
+        )
+
+      decoded = tool |> :erlang.term_to_binary() |> :erlang.binary_to_term()
+      assert decoded == tool
+      assert %Tool{compact: true, summary: "s"} = decoded
+    end
+
+    test "JSON round-trip via Serializer preserves non-default compact and summary" do
+      tool =
+        Tool.new(
+          name: "create_issue",
+          description: "Create a new issue in a repository.",
+          schema: %{"type" => "object"},
+          compact: true,
+          summary: "s"
+        )
+
+      json = Jason.encode!(tool)
+      {:ok, decoded} = ALLM.Serializer.from_json(json)
+      assert decoded == tool
+      assert %Tool{compact: true, summary: "s"} = decoded
+    end
+
+    test "JSON encoded without compact/summary keys decodes to the defaults" do
+      tool = Tool.new(name: "w", description: "d", schema: %{"type" => "object"})
+
+      legacy_json =
+        tool
+        |> Jason.encode!()
+        |> Jason.decode!()
+        |> Map.update!("data", &Map.drop(&1, ["compact", "summary"]))
+        |> Jason.encode!()
+
+      refute legacy_json =~ "compact"
+      refute legacy_json =~ "summary"
+
+      {:ok, decoded} = ALLM.Serializer.from_json(legacy_json)
+      assert %Tool{compact: false, summary: nil} = decoded
+      assert decoded == tool
+    end
+  end
+
   describe "ALLM.tool/1 keyword pass-through" do
     test "forwards :manual to Tool.new/1" do
       tool = ALLM.tool(name: "w", description: "d", schema: %{}, manual: true)

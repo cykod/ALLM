@@ -1,3 +1,13 @@
+## [TWK] Add :compact and :summary fields to ALLM.Tool (Phase 23.1)
+*Tuesday, September 22nd at 8pm*
+ALLM.Tool gains a guarded boolean :compact (default false) and an optional 
+:summary string, both round-tripping through ETF and JSON, and Validate.tool/1 
+rejects a non-binary summary as {:summary, :not_a_string} (spec §5.2, §16; 
+amendments land in 23.4). Also adds the Phase 23 compact-tools design doc and 
+its RECORDS companion.
+
+---
+
 ## [DOC] Apply the Phase 22.6/22.7 retro — gate the shape of unverified claims
 *Thursday, September 3rd at 8pm*
 Folds the run's one repeated failure into the rules, as merges into existing 

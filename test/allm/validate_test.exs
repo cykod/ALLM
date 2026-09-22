@@ -196,6 +196,22 @@ defmodule ALLM.ValidateTest do
       assert {[:tools, 1, :name], :invalid_format} in errors
     end
 
+    test "propagates a tool :summary error with [:tools, idx, :summary] path prefix" do
+      req =
+        Request.new(
+          [%Message{role: :user, content: "ok"}],
+          tools: [
+            %Tool{name: "ok", description: "d", schema: %{}},
+            %Tool{name: "also_ok", description: "d", schema: %{}, summary: 123}
+          ]
+        )
+
+      assert {:error, %ValidationError{reason: :invalid_request, errors: errors}} =
+               Validate.request(req)
+
+      assert {[:tools, 1, :summary], :not_a_string} in errors
+    end
+
     test "vision ImagePart in message content is accepted (v0.3 §35.6)" do
       img = Image.from_url("https://example.com/cat.png")
 
@@ -453,6 +469,19 @@ defmodule ALLM.ValidateTest do
     # 1.5 Finding 3, a tool named `"auto"` would round-trip to `:auto` on
     # decode. Rejecting these names at validation time makes the decoder
     # string-to-atom restoration safe by construction.
+    test "fails on summary that is neither nil nor a string" do
+      assert {:error, %ValidationError{reason: :invalid_tool, errors: [{:summary, :not_a_string}]}} =
+               Validate.tool(%Tool{name: "ok", description: "d", schema: %{}, summary: 123})
+    end
+
+    test "accepts summary: nil" do
+      assert :ok = Validate.tool(%Tool{name: "ok", description: "d", schema: %{}, summary: nil})
+    end
+
+    test "accepts a binary summary" do
+      assert :ok = Validate.tool(%Tool{name: "ok", description: "d", schema: %{}, summary: "x"})
+    end
+
     test "fails on reserved tool name: auto" do
       assert {:error, %ValidationError{reason: :invalid_tool, errors: errors}} =
                Validate.tool(%Tool{name: "auto", description: "d", schema: %{}})

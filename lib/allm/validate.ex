@@ -155,6 +155,7 @@ defmodule ALLM.Validate do
   Returns `:ok` or `{:error, %ALLM.Error.ValidationError{}}`. The top-level
   shape of `:schema` is intentionally not checked — providers differ on
   whether `"type" => "object"` is required — but non-map schemas are rejected.
+  `:summary` must be `nil` or a string (`{:summary, :not_a_string}`).
 
   ## Examples
 
@@ -175,6 +176,7 @@ defmodule ALLM.Validate do
       |> validate_tool_name(t.name)
       |> validate_tool_description(t.description)
       |> validate_tool_schema(t.schema)
+      |> validate_tool_summary(t.summary)
       |> Enum.reverse()
 
     finalize(:invalid_tool, errors)
@@ -508,6 +510,9 @@ defmodule ALLM.Validate do
 
   defp validate_tool_schema(errs, s) when is_map(s), do: errs
   defp validate_tool_schema(errs, _), do: [{:schema, :not_a_map} | errs]
+
+  defp validate_tool_summary(errs, s) when is_nil(s) or is_binary(s), do: errs
+  defp validate_tool_summary(errs, _), do: [{:summary, :not_a_string} | errs]
 
   # ---------------------------------------------------------------------------
   # Internal: session rules
