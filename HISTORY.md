@@ -1,3 +1,15 @@
+## [DOC] Apply the Phase 23 retro — Test Plan rows name their falsifier
+*Tuesday, September 22nd at 9pm*
+DESIGN.md rule 27 now requires every Test Plan invariant and matrix row to name 
+its falsifier, replacing that rule's worked-example sentence so the line count 
+is unchanged; both tautological assertions in Phase 23 traced to rows without 
+one. Three pipeline-skill proposals from the retro (gated status agreement, 
+known shapes to implementers, carve-out classification left to /fix) are 
+recorded in the new steering/SKILL_NOTES.md for the user to carry into 
+~/.claude/skills.
+
+---
+
 ## [TWK] Polish Phase 23 compact tools after the gate cleared
 *Tuesday, September 22nd at 9pm*
 Phase 23 (compact tools, §40) cleared its gate review. This commit applies the 
