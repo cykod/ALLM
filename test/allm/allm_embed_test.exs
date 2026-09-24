@@ -506,6 +506,25 @@ defmodule ALLM.ALLMEmbedTest do
       assert Keyword.get(opts, :request_timeout) == 1234
       assert Keyword.get(opts, :request_id) != nil
     end
+
+    # Pins the façade's `adapter_opts[:cursor_key]` injection (engine
+    # identity, §6/§31). Without it, content-equal scripts share one
+    # `phash2` cursor and `e2`'s first call would read entry 1.
+    test "two content-equal engines each read their own script from entry 0" do
+      script = [
+        {:ok, [Embedding.new(vector: [1.0], index: 0)]},
+        {:ok, [Embedding.new(vector: [2.0], index: 0)]}
+      ]
+
+      e1 = fake_engine(script)
+      e2 = fake_engine(script)
+      assert e1.id != e2.id
+
+      assert {:ok, r1} = ALLM.embed(e1, "x")
+      assert {:ok, r2} = ALLM.embed(e2, "x")
+      assert EmbeddingResponse.vectors(r1) == [[1.0]]
+      assert EmbeddingResponse.vectors(r2) == [[1.0]]
+    end
   end
 
   # ---------------------------------------------------------------------------

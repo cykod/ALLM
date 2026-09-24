@@ -59,6 +59,8 @@ defmodule ALLM do
   | Generate or edit images | `generate_image/3`, `edit_image/4`, `image_variations/3` | `{:ok, %ALLM.ImageResponse{}}` |
   | Turn text into vectors for a vector store | `embed/3` | `{:ok, %ALLM.EmbeddingResponse{}}` |
   | Screen text (or text + images) for policy violations | `moderate/3` | `{:ok, %ALLM.ModerationResponse{}}` |
+  | Turn text into spoken audio | `synthesize/3` | `{:ok, %ALLM.SpeechResponse{}}` |
+  | Turn recorded speech into text | `transcribe/3` | `{:ok, %ALLM.TranscriptionResponse{}}` |
   | Fold `generate/3` result into `{:ok, text}` | `unwrap/1` | `{:ok, String.t()} \| {:error, term()}` |
 
   Stateless calls (`generate/3` / `chat/3` / etc.) are pure functions of
@@ -91,6 +93,7 @@ defmodule ALLM do
   """
 
   alias ALLM.{
+    Audio,
     ChatResult,
     EmbeddingRequest,
     EmbeddingResponse,
@@ -102,9 +105,13 @@ defmodule ALLM do
     ModerationRequest,
     ModerationResponse,
     Request,
+    SpeechRequest,
+    SpeechResponse,
     StepResult,
     Thread,
-    Tool
+    Tool,
+    TranscriptionRequest,
+    TranscriptionResponse
   }
 
   alias ALLM.Error.{
@@ -113,6 +120,8 @@ defmodule ALLM do
     EngineError,
     ImageAdapterError,
     ModerationAdapterError,
+    SpeechAdapterError,
+    TranscriptionAdapterError,
     ValidationError
   }
 
@@ -1379,6 +1388,303 @@ defmodule ALLM do
     do_moderate(engine, moderation_request(input, opts), opts)
   end
 
+  # The opts `speech_request/2` lifts onto the struct — an explicit
+  # ALLOW-list, never a deny-list, so a new façade opt can never leak into
+  # `SpeechRequest.new/1` (a bare `struct!/2` that raises `KeyError` on any
+  # unknown key). Symmetry invariant: this list equals the `%SpeechRequest{}`
+  # field set minus `:input`, or the missing field is silently unreachable
+  # from the string call shape. Pinned by a test computing from `Map.keys/1`.
+  # `drop_speech_request_opts/1` below is the outbound counterpart.
+  @speech_request_field_opts [
+    :model,
+    :voice,
+    :format,
+    :instructions,
+    :speed,
+    :options,
+    :metadata
+  ]
+
+  @doc """
+  Build an `%ALLM.SpeechRequest{}` from the text to speak.
+
+  ## Options
+
+  Only `ALLM.SpeechRequest` field names are read: `:model`, `:voice`,
+  `:format`, `:instructions`, `:speed`, `:options`, `:metadata`. Every other
+  key is ignored, which is what lets `synthesize/3` forward its own
+  call-control opts (`:request_id`, `:request_timeout`, `:retry`,
+  `:adapter_opts`, `:api_key`, `:stream`) through this function without
+  them landing on the struct.
+
+  No validation runs here — call `ALLM.Validate.speech_request/1` if you
+  want the field rules checked before dispatch. `synthesize/3` calls it for
+  you.
+
+  ## Examples
+
+      iex> req = ALLM.speech_request("Hello.", voice: "alloy", format: :mp3)
+      iex> {req.input, req.voice, req.format, req.model}
+      {"Hello.", "alloy", :mp3, nil}
+  """
+  @spec speech_request(String.t(), keyword()) :: SpeechRequest.t()
+  def speech_request(input, opts \\ []) when is_list(opts) do
+    opts
+    |> Keyword.take(@speech_request_field_opts)
+    |> Keyword.put(:input, input)
+    |> SpeechRequest.new()
+  end
+
+  @doc """
+  Turn text into speech using the engine's `:speech_adapter`.
+
+  Layer-C façade. Two input shapes:
+
+    * Binary — the text to speak. Opts named in `speech_request/2`
+      (`:model`, `:voice`, `:format`, `:instructions`, `:speed`, `:options`,
+      `:metadata`) lift onto the built request; everything else is a
+      call-control opt.
+    * Pre-built `%ALLM.SpeechRequest{}` — dispatched verbatim; opts are NOT
+      merged onto it.
+
+  On success `response.audio` is an `ALLM.Audio` holding the bytes, and
+  `response.format` says which file format arrived (see
+  `ALLM.SpeechResponse`). `ALLM.Audio.to_binary/1` returns the bytes.
+
+  ## Model resolution
+
+  The model comes from the speech slot, never from the chat model:
+  `request.model`, else `engine.speech_model`, else the adapter's own
+  default. `engine.model` is not consulted — a chat model name is not a
+  speech model name on any provider. On the binary shape `opts[:model]`
+  sets `request.model`; a pre-built request's `:model` is authoritative.
+
+  ## Gate order
+
+    1. `{:error, %ALLM.Error.EngineError{reason: :no_speech_adapter}}` when
+       `engine.speech_adapter == nil` — first, so a misconfigured engine
+       never surfaces as a request problem.
+    2. `ALLM.Validate.speech_request/1`, returning
+       `{:error, %ALLM.Error.ValidationError{reason: :invalid_speech_request}}`
+       on failure (an empty `:input`, an unknown `:format`, …).
+    3. Dispatch to `c:ALLM.SpeechAdapter.synthesize/2`, under the retry
+       policy below.
+
+  ## Unknown opts — forwarded to the adapter
+
+  Any opt that is neither a request field nor a call-control opt is passed
+  through to `c:ALLM.SpeechAdapter.synthesize/2` untouched, so
+  provider-specific knobs need no façade change.
+
+  ## Retry
+
+  `:rate_limited`, `:provider_unavailable`, `:timeout` and `:network_error`
+  are retried under the engine's `:retry` policy; every other
+  `ALLM.Error.SpeechAdapterError` reason surfaces immediately.
+
+  `opts[:retry]` is also forwarded to the adapter, and a speech adapter may
+  run its own retry loop inside this one. The two budgets then
+  **multiply**: with the default 3-attempt policy on each, a reason
+  retryable at both layers costs up to 9 synthesis calls. Read the
+  adapter's own docs for which reasons it retries.
+
+  ## Telemetry carries the audio
+
+  The call runs inside an `[:allm, :synthesize, …]` span (see
+  `ALLM.Telemetry`). Its `:stop` metadata includes the whole
+  `%ALLM.SpeechResponse{}`, and with it the audio bytes, so a handler that
+  logs or ships `metadata.response` wholesale moves the full payload on
+  every call. The `audio_bytes` measurement gives the size without
+  touching it.
+
+  ## Non-conforming adapters raise
+
+  `c:ALLM.SpeechAdapter.synthesize/2` must return
+  `{:ok, %ALLM.SpeechResponse{}}` or
+  `{:error, %ALLM.Error.SpeechAdapterError{}}` (invariant 1). Anything else
+  raises `ArgumentError` naming the offending adapter rather than being
+  laundered into this function's error union.
+
+  ## `request_id` precedence
+
+  `opts[:request_id]` wins over an auto-generated id. The id is forwarded
+  to the adapter and filled onto `response.request_id` IFF the adapter left
+  it `nil`; an adapter-populated id is preserved.
+
+  ## No streaming yet
+
+  Synthesis is request/response: the whole clip arrives in one response.
+  There is no `stream_synthesize/3` yet, and passing `stream: true` does
+  not error — the opt is ignored.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(speech_adapter: ALLM.Providers.FakeSpeech)
+      iex> {:ok, resp} = ALLM.synthesize(engine, "Hello.", format: :wav)
+      iex> {ALLM.Audio.to_binary(resp.audio), resp.format}
+      {{:ok, "FAKE-AUDIO:Hello."}, :wav}
+
+      iex> {:error, %ALLM.Error.EngineError{reason: :no_speech_adapter}} =
+      ...> ALLM.synthesize(ALLM.Engine.new(), "Hello.")
+      iex> :ok
+      :ok
+  """
+  @spec synthesize(Engine.t(), String.t() | SpeechRequest.t(), keyword()) ::
+          {:ok, SpeechResponse.t()}
+          | {:error, EngineError.t() | ValidationError.t() | SpeechAdapterError.t()}
+  def synthesize(engine, input_or_request, opts \\ [])
+
+  def synthesize(%Engine{} = engine, %SpeechRequest{} = request, opts) when is_list(opts) do
+    do_synthesize(engine, request, opts)
+  end
+
+  def synthesize(%Engine{} = engine, input, opts) when is_binary(input) and is_list(opts) do
+    do_synthesize(engine, speech_request(input, opts), opts)
+  end
+
+  # Symmetry invariant as for `@speech_request_field_opts`: the
+  # `%TranscriptionRequest{}` field set minus `:audio`. Pinned by a test.
+  @transcription_request_field_opts [
+    :model,
+    :language,
+    :prompt,
+    :options,
+    :metadata
+  ]
+
+  @doc """
+  Build an `%ALLM.TranscriptionRequest{}` from an `ALLM.Audio` value.
+
+  ## Options
+
+  Only `ALLM.TranscriptionRequest` field names are read: `:model`,
+  `:language`, `:prompt`, `:options`, `:metadata`. Every other key is
+  ignored, so `transcribe/3` can forward its call-control opts through this
+  function.
+
+  No validation runs here — `transcribe/3` calls
+  `ALLM.Validate.transcription_request/1` for you. Building a request never
+  reads the audio: `ALLM.Audio.from_file/1` stores only the path.
+
+  ## Examples
+
+      iex> req = ALLM.transcription_request(ALLM.Audio.from_file("clip.mp3"), language: "en")
+      iex> {req.audio.mime_type, req.language, req.model}
+      {"audio/mpeg", "en", nil}
+  """
+  @spec transcription_request(Audio.t(), keyword()) :: TranscriptionRequest.t()
+  def transcription_request(audio, opts \\ []) when is_list(opts) do
+    opts
+    |> Keyword.take(@transcription_request_field_opts)
+    |> Keyword.put(:audio, audio)
+    |> TranscriptionRequest.new()
+  end
+
+  @doc """
+  Turn speech into text using the engine's `:transcription_adapter`.
+
+  Layer-C façade. Two input shapes:
+
+    * `%ALLM.Audio{}` — the clip to transcribe. Opts named in
+      `transcription_request/2` (`:model`, `:language`, `:prompt`,
+      `:options`, `:metadata`) lift onto the built request; everything else
+      is a call-control opt.
+    * Pre-built `%ALLM.TranscriptionRequest{}` — dispatched verbatim; opts
+      are NOT merged onto it.
+
+  On success `response.text` is the transcript (possibly `""` for
+  silence). `response.usage` is always an `ALLM.Usage`; providers that bill
+  by the second report `response.duration_seconds` instead of tokens.
+
+  ## Model resolution
+
+  The model comes from the transcription slot, never from the chat model:
+  `request.model`, else `engine.transcription_model`, else the adapter's
+  own default. `engine.model` is not consulted. On the `%Audio{}` shape
+  `opts[:model]` sets `request.model`; a pre-built request's `:model` is
+  authoritative.
+
+  ## Gate order
+
+    1. `{:error, %ALLM.Error.EngineError{reason: :no_transcription_adapter}}`
+       when `engine.transcription_adapter == nil`.
+    2. `ALLM.Validate.transcription_request/1`, returning
+       `{:error, %ALLM.Error.ValidationError{reason: :invalid_transcription_request}}`
+       on failure (an `:audio` that is not an `ALLM.Audio`, …).
+    3. Dispatch to `c:ALLM.TranscriptionAdapter.transcribe/2`. The adapter
+       runs its own gates before any upload — unresolvable audio, audio over
+       `c:ALLM.TranscriptionAdapter.max_audio_bytes/0`, an unsupported MIME
+       type — and returns them as
+       `%ALLM.Error.TranscriptionAdapterError{reason: :invalid_request}`.
+
+  ## Unknown opts — forwarded to the adapter
+
+  Any opt that is neither a request field nor a call-control opt is passed
+  through to `c:ALLM.TranscriptionAdapter.transcribe/2` untouched.
+
+  ## Retry
+
+  `:rate_limited`, `:provider_unavailable`, `:timeout` and `:network_error`
+  are retried under the engine's `:retry` policy; every other
+  `ALLM.Error.TranscriptionAdapterError` reason (including
+  `:content_filter`) surfaces immediately.
+
+  This is the **only** retry loop for transcription. The bundled
+  transcription adapters do not retry on their own, because each attempt
+  re-uploads the whole clip — so with the default 3-attempt policy a clip
+  is uploaded at most 3 times. A third-party adapter that runs its own loop
+  would multiply that budget; calling an adapter's `transcribe/2` directly
+  gets no retries at all.
+
+  ## Non-conforming adapters raise
+
+  `c:ALLM.TranscriptionAdapter.transcribe/2` must return
+  `{:ok, %ALLM.TranscriptionResponse{}}` or
+  `{:error, %ALLM.Error.TranscriptionAdapterError{}}` (invariant 1).
+  Anything else raises `ArgumentError` naming the offending adapter.
+
+  ## `request_id` precedence
+
+  `opts[:request_id]` wins over an auto-generated id; it is forwarded to
+  the adapter and filled onto `response.request_id` IFF the adapter left it
+  `nil`.
+
+  ## No streaming yet
+
+  Transcription is request/response: the transcript arrives in one
+  response. There is no streaming variant yet, and `stream: true` is
+  ignored.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...> transcription_adapter: ALLM.Providers.FakeTranscription,
+      ...> adapter_opts: [transcription_script: [{:ok, "hello there"}]]
+      ...>)
+      iex> audio = ALLM.Audio.from_binary("ID3…", "audio/mpeg")
+      iex> {:ok, %ALLM.TranscriptionResponse{text: text}} = ALLM.transcribe(engine, audio)
+      iex> text
+      "hello there"
+
+      iex> {:error, %ALLM.Error.EngineError{reason: :no_transcription_adapter}} =
+      ...> ALLM.transcribe(ALLM.Engine.new(), ALLM.Audio.from_binary("ID3…", "audio/mpeg"))
+      iex> :ok
+      :ok
+  """
+  @spec transcribe(Engine.t(), Audio.t() | TranscriptionRequest.t(), keyword()) ::
+          {:ok, TranscriptionResponse.t()}
+          | {:error, EngineError.t() | ValidationError.t() | TranscriptionAdapterError.t()}
+  def transcribe(engine, audio_or_request, opts \\ [])
+
+  def transcribe(%Engine{} = engine, %TranscriptionRequest{} = request, opts)
+      when is_list(opts) do
+    do_transcribe(engine, request, opts)
+  end
+
+  def transcribe(%Engine{} = engine, %Audio{} = audio, opts) when is_list(opts) do
+    do_transcribe(engine, transcription_request(audio, opts), opts)
+  end
+
   # ---------------------------------------------------------------------------
   # Internals — image telemetry + preflight + retry wrap.
   # ---------------------------------------------------------------------------
@@ -1463,28 +1769,10 @@ defmodule ALLM do
       # explicitly-set request model.
       request = %{request | model: request.model || resolved_model}
 
-      # Concat engine.adapter_opts with call-site adapter_opts.
-      # `Keyword.get/2` returns the FIRST occurrence on duplicate keys, so
-      # engine wins on collision. Mirrors the chat-side
-      # `StreamRunner.build_dispatch_opts/2` adapter_opts concat (NOT
-      # `Keyword.merge/2`, which would have OPPOSITE precedence — call
-      # wins).
-      #
-      # Then inject the engine's stable `:id` as `adapter_opts[:cursor_key]`
-      # (§6, §31) so `FakeImages` keys its multi-call cursor on engine identity
-      # at the façade — two content-equal engines no longer share a cursor.
-      # `put_cursor_key/2` is `Keyword.put_new/3` (caller-supplied `:cursor_key`
-      # wins) and a no-op for real adapters, which read only named opts. Mirrors
-      # the chat-side injection in `StreamRunner.build_dispatch_opts/2`.
-      merged_adapter_opts =
-        (engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, []))
-        |> Engine.put_cursor_key(engine)
-
-      dispatch_opts =
-        opts
-        |> Keyword.drop([:stream])
-        |> Keyword.put(:request_id, request_id)
-        |> Keyword.put(:adapter_opts, merged_adapter_opts)
+      # Engine-first `adapter_opts` concat + per-engine `:cursor_key`
+      # injection (§6, §31) via the shared capability builder; mirrors the
+      # chat-side `StreamRunner.build_dispatch_opts/2`.
+      dispatch_opts = build_capability_dispatch_opts(engine, opts, request_id)
 
       # Pass `telemetry_metadata` to `Retry.run/3` so any
       # `[:allm, :adapter, :retry]` event shares the surrounding
@@ -1523,7 +1811,8 @@ defmodule ALLM do
     end
   end
 
-  # Shared by the image and embedding call sites: materialise the engine's
+  # Shared by every non-chat capability façade (image, embed, moderate,
+  # synthesize, transcribe): materialise the engine's
   # retry config, then append the capability's closed-enum reason atoms to
   # the chat-side `retry_on` so `ALLM.Retry.error_matches?/2` recognises
   # them. Idempotent — `Enum.uniq/1` keeps the list stable on repeat calls.
@@ -1680,21 +1969,8 @@ defmodule ALLM do
   end
 
   defp build_embed_dispatch_opts(%Engine{} = engine, opts, request_id) do
-    # Concat engine.adapter_opts with call-site adapter_opts. `Keyword.get/2`
-    # returns the FIRST occurrence on duplicate keys, so ENGINE WINS on
-    # collision — NOT `Keyword.merge/2`, which has the opposite precedence.
-    # Then inject the engine's stable `:id` as `adapter_opts[:cursor_key]` so
-    # `FakeEmbeddings` keys its multi-call cursor on engine identity;
-    # `put_cursor_key/2` is `Keyword.put_new/3` and a no-op for real adapters.
-    merged_adapter_opts =
-      (engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, []))
-      |> Engine.put_cursor_key(engine)
-
-    opts
-    |> Keyword.drop([:stream])
-    |> drop_embedding_request_opts()
-    |> Keyword.put(:request_id, request_id)
-    |> Keyword.put(:adapter_opts, merged_adapter_opts)
+    engine
+    |> build_capability_dispatch_opts(drop_embedding_request_opts(opts), request_id)
     |> Keyword.put(:retry_policy, augment_retry_policy(engine.retry, @retryable_embedding_reasons))
   end
 
@@ -1837,7 +2113,9 @@ defmodule ALLM do
       # no batcher downstream to read a `:retry_policy` opt, so the policy is
       # a local binding and never enters the adapter's dispatch opts.
       policy = augment_retry_policy(engine.retry, @retryable_moderation_reasons)
-      dispatch_opts = build_moderate_dispatch_opts(engine, opts, request_id)
+
+      dispatch_opts =
+        build_capability_dispatch_opts(engine, drop_moderation_request_opts(opts), request_id)
 
       policy
       |> ALLM.Retry.run(telemetry_metadata, fn ->
@@ -1845,26 +2123,6 @@ defmodule ALLM do
       end)
       |> fill_moderation_request_id(request_id)
     end
-  end
-
-  defp build_moderate_dispatch_opts(%Engine{} = engine, opts, request_id) do
-    # Concat engine.adapter_opts with call-site adapter_opts. `Keyword.get/2`
-    # returns the FIRST occurrence on duplicate keys, so ENGINE WINS on
-    # collision — NOT `Keyword.merge/2`, which has the opposite precedence.
-    # Then inject the engine's stable `:id` as `adapter_opts[:cursor_key]` so
-    # `FakeModeration` keys its multi-call cursor AND its retry budget on
-    # engine identity; without it two content-equal engines silently share
-    # one slot. `put_cursor_key/2` is `Keyword.put_new/3` (a caller-supplied
-    # `:cursor_key` wins) and a no-op for real adapters.
-    merged_adapter_opts =
-      (engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, []))
-      |> Engine.put_cursor_key(engine)
-
-    opts
-    |> Keyword.drop([:stream])
-    |> drop_moderation_request_opts()
-    |> Keyword.put(:request_id, request_id)
-    |> Keyword.put(:adapter_opts, merged_adapter_opts)
   end
 
   # Per-attempt closure for `Retry.run/3`. Engages the retry loop on the four
@@ -1938,4 +2196,228 @@ defmodule ALLM do
 
     {metadata, %{result_count: 0, flagged_count: 0}}
   end
+
+  # ---------------------------------------------------------------------------
+  # Internals — audio (speech + transcription) telemetry + gates + retry wrap.
+  #
+  # The moderation block above, transcribed per capability. Two deliberate
+  # differences: there is no capability pre-flight step, and the model is the
+  # audio slot's (`request.model || engine.<slot>_model`) — `engine.model` is
+  # the chat model and is never read here.
+  # ---------------------------------------------------------------------------
+
+  @retryable_speech_reasons [:rate_limited, :provider_unavailable, :timeout, :network_error]
+  @retryable_transcription_reasons [:rate_limited, :provider_unavailable, :timeout, :network_error]
+
+  # Outbound counterparts of the two allow-lists: request-field opts already
+  # live on the struct by dispatch time, so they are stripped from the opts
+  # the adapter sees. Everything else is forwarded.
+  defp drop_speech_request_opts(opts) when is_list(opts),
+    do: Keyword.drop(opts, @speech_request_field_opts)
+
+  defp drop_transcription_request_opts(opts) when is_list(opts),
+    do: Keyword.drop(opts, @transcription_request_field_opts)
+
+  # The whole body runs inside the span so `:start` ALWAYS fires, even when
+  # the adapter is missing or validation rejects. Gate order inside:
+  #   (1) adapter-presence pattern match (first `do_synthesize_body/4` clause)
+  #   (2) `Validate.speech_request/1`
+  #   (3) slot-model stamping
+  #   (4) `Retry.run/3`-wrapped dispatch
+  defp do_synthesize(%Engine{} = engine, %SpeechRequest{} = request, opts) do
+    request_id = Keyword.get(opts, :request_id) || ALLM.Telemetry.request_id()
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: request.model || engine.speech_model,
+      input_length: speech_input_length(request)
+    }
+
+    ALLM.Telemetry.span(:synthesize, start_metadata, fn ->
+      result = do_synthesize_body(engine, request, opts, request_id)
+      {extras, measurements} = synthesize_stop_extras(result)
+      {result, measurements, extras}
+    end)
+  end
+
+  # `:start` metadata is built before validation, so a hand-built request
+  # with a non-binary `:input` must not raise here.
+  defp speech_input_length(%SpeechRequest{input: input}) when is_binary(input),
+    do: String.length(input)
+
+  defp speech_input_length(%SpeechRequest{}), do: 0
+
+  defp do_synthesize_body(%Engine{speech_adapter: nil}, _request, _opts, _request_id),
+    do: {:error, EngineError.new(:no_speech_adapter)}
+
+  defp do_synthesize_body(%Engine{speech_adapter: adapter} = engine, request, opts, request_id) do
+    with :ok <- ALLM.Validate.speech_request(request) do
+      request = %{request | model: request.model || engine.speech_model}
+      policy = augment_retry_policy(engine.retry, @retryable_speech_reasons)
+
+      dispatch_opts =
+        build_capability_dispatch_opts(engine, drop_speech_request_opts(opts), request_id)
+
+      policy
+      |> ALLM.Retry.run(%{request_id: request_id, model: request.model}, fn ->
+        dispatch_synthesize_attempt(adapter, request, dispatch_opts)
+      end)
+      |> fill_speech_request_id(request_id)
+    end
+  end
+
+  # Same gate order as `do_synthesize/3`.
+  defp do_transcribe(%Engine{} = engine, %TranscriptionRequest{} = request, opts) do
+    request_id = Keyword.get(opts, :request_id) || ALLM.Telemetry.request_id()
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: request.model || engine.transcription_model,
+      audio_mime: transcription_audio_mime(request)
+    }
+
+    ALLM.Telemetry.span(:transcribe, start_metadata, fn ->
+      result = do_transcribe_body(engine, request, opts, request_id)
+      {extras, measurements} = transcribe_stop_extras(result)
+      {result, measurements, extras}
+    end)
+  end
+
+  # Tolerates a hand-built request whose `:audio` is not an `%Audio{}` —
+  # `:start` metadata is built before validation rejects it.
+  defp transcription_audio_mime(%TranscriptionRequest{audio: %Audio{mime_type: mime}}), do: mime
+  defp transcription_audio_mime(%TranscriptionRequest{}), do: nil
+
+  defp do_transcribe_body(%Engine{transcription_adapter: nil}, _request, _opts, _request_id),
+    do: {:error, EngineError.new(:no_transcription_adapter)}
+
+  defp do_transcribe_body(
+         %Engine{transcription_adapter: adapter} = engine,
+         request,
+         opts,
+         request_id
+       ) do
+    with :ok <- ALLM.Validate.transcription_request(request) do
+      request = %{request | model: request.model || engine.transcription_model}
+      policy = augment_retry_policy(engine.retry, @retryable_transcription_reasons)
+
+      dispatch_opts =
+        build_capability_dispatch_opts(engine, drop_transcription_request_opts(opts), request_id)
+
+      policy
+      |> ALLM.Retry.run(%{request_id: request_id, model: request.model}, fn ->
+        dispatch_transcribe_attempt(adapter, request, dispatch_opts)
+      end)
+      |> fill_transcription_request_id(request_id)
+    end
+  end
+
+  # Shared by every non-chat capability façade (image, embed, moderate,
+  # synthesize, transcribe); the caller has already stripped its own
+  # request-field opts. Engine `adapter_opts` come FIRST so `Keyword.get/2`
+  # makes the ENGINE win on collision (not `Keyword.merge/2`), then the
+  # engine's stable `:id` is injected as `adapter_opts[:cursor_key]` so the
+  # Fakes key their cursor and retry budget on engine identity — without it
+  # two content-equal engines silently share one slot. No `:retry_policy` key:
+  # the `Retry.run/3` wrap is local to the body.
+  defp build_capability_dispatch_opts(%Engine{} = engine, opts, request_id) do
+    merged_adapter_opts =
+      (engine.adapter_opts ++ Keyword.get(opts, :adapter_opts, []))
+      |> Engine.put_cursor_key(engine)
+
+    opts
+    |> Keyword.drop([:stream])
+    |> Keyword.put(:request_id, request_id)
+    |> Keyword.put(:adapter_opts, merged_adapter_opts)
+  end
+
+  # Per-attempt closures for `Retry.run/3`. The final clause is an EXPLICIT
+  # raise: both behaviours are public extension points with an open caller
+  # set, and this raise is what enforces invariant 1 (a `raise` keeps the
+  # façade `@spec` honest and names the offending adapter).
+  defp dispatch_synthesize_attempt(adapter, request, dispatch_opts) do
+    case adapter.synthesize(request, dispatch_opts) do
+      {:ok, %SpeechResponse{}} = ok ->
+        ok
+
+      {:error, %SpeechAdapterError{reason: reason} = err}
+      when reason in @retryable_speech_reasons ->
+        {:retry, err.retry_after_ms || 0, err}
+
+      {:error, %SpeechAdapterError{}} = err ->
+        err
+
+      other ->
+        raise ArgumentError,
+              "#{inspect(adapter)} violated ALLM.SpeechAdapter invariant 1: " <>
+                "synthesize/2 must return {:ok, %ALLM.SpeechResponse{}} or " <>
+                "{:error, %ALLM.Error.SpeechAdapterError{}}, got: #{inspect(other)}"
+    end
+  end
+
+  defp dispatch_transcribe_attempt(adapter, request, dispatch_opts) do
+    case adapter.transcribe(request, dispatch_opts) do
+      {:ok, %TranscriptionResponse{}} = ok ->
+        ok
+
+      {:error, %TranscriptionAdapterError{reason: reason} = err}
+      when reason in @retryable_transcription_reasons ->
+        {:retry, err.retry_after_ms || 0, err}
+
+      {:error, %TranscriptionAdapterError{}} = err ->
+        err
+
+      other ->
+        raise ArgumentError,
+              "#{inspect(adapter)} violated ALLM.TranscriptionAdapter invariant 1: " <>
+                "transcribe/2 must return {:ok, %ALLM.TranscriptionResponse{}} or " <>
+                "{:error, %ALLM.Error.TranscriptionAdapterError{}}, got: #{inspect(other)}"
+    end
+  end
+
+  defp fill_speech_request_id({:ok, %SpeechResponse{request_id: nil} = response}, request_id),
+    do: {:ok, %{response | request_id: request_id}}
+
+  defp fill_speech_request_id(result, _request_id), do: result
+
+  defp fill_transcription_request_id(
+         {:ok, %TranscriptionResponse{request_id: nil} = response},
+         request_id
+       ),
+       do: {:ok, %{response | request_id: request_id}}
+
+  defp fill_transcription_request_id(result, _request_id), do: result
+
+  # `:stop` extras. `audio_bytes` / `text_length` are MEASUREMENTS, present on
+  # both paths (`0` on error) for a stable key set; `:usage`, `:response`,
+  # `:error` are METADATA, with `usage: nil` on error. Returns
+  # `{metadata_extras, extra_measurements}`.
+  defp synthesize_stop_extras({:ok, %SpeechResponse{} = response}) do
+    {%{usage: response.usage, response: response, error: nil},
+     %{audio_bytes: speech_audio_bytes(response.audio)}}
+  end
+
+  defp synthesize_stop_extras({:error, error}),
+    do: {%{usage: nil, response: nil, error: error}, %{audio_bytes: 0}}
+
+  # A conforming adapter returns `{:binary, bytes}` (invariant 2), but a
+  # verbatim scripted response may not — the span must not raise over it.
+  defp speech_audio_bytes(%Audio{} = audio) do
+    case Audio.size(audio) do
+      {:ok, n} -> n
+      {:error, _} -> 0
+    end
+  end
+
+  defp speech_audio_bytes(_other), do: 0
+
+  defp transcribe_stop_extras({:ok, %TranscriptionResponse{text: text} = response}) do
+    length = if is_binary(text), do: String.length(text), else: 0
+    {%{usage: response.usage, response: response, error: nil}, %{text_length: length}}
+  end
+
+  defp transcribe_stop_extras({:error, error}),
+    do: {%{usage: nil, response: nil, error: error}, %{text_length: 0}}
 end

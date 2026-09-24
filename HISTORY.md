@@ -1,3 +1,23 @@
+## [FEAT] Add synthesize/3 and transcribe/3 façades (Phase 25.3)
+*Thursday, September 24th at 2am*
+Adds the Layer C audio façades (spec §37, §29) per 
+steering/2026-09-24_SST_SUPPORT.md Phase 25.3.
+
+- ALLM.speech_request/2, synthesize/3, transcription_request/2 and 
+transcribe/3, transcribed from the moderation façade: allow-listed opts, 
+nil-adapter then validator gates inside a telemetry span, per-slot model 
+resolution (request.model, then engine.speech_model or 
+engine.transcription_model, never the chat engine.model), Retry.run/3, 
+invariant-1 raise, request-id fill.
+- Telemetry gains :synthesize and :transcribe spans; the docs warn that 
+:synthesize :stop metadata carries the audio bytes.
+- The per-call dispatch-opts builder is extracted into one private helper and 
+every non-chat façade (image, embed, moderate, synthesize, transcribe) now 
+uses it; behaviour-preserving, pinned by mutation, and a new embed test closes 
+a pre-existing cursor-key coverage gap.
+
+---
+
 ## [FEAT] Add audio adapter behaviours, engine slots and Fakes (25.2)
 *Thursday, September 24th at 1am*
 Adds Layer B for speech synthesis and transcription (spec §37), per 

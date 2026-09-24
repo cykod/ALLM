@@ -6,7 +6,8 @@ defmodule ALLM.Telemetry do
   Every public Layer-C entry point (`ALLM.generate/3`,
   `ALLM.stream_generate/3`, `ALLM.step/3`, `ALLM.stream_step/3`,
   `ALLM.chat/3`, `ALLM.stream/3`, `ALLM.generate_image/3` &
-  siblings) is wrapped in a span. Attach `:telemetry.attach_many/4`
+  siblings, `ALLM.embed/3`, `ALLM.moderate/3`, `ALLM.synthesize/3`,
+  `ALLM.transcribe/3`) is wrapped in a span. Attach `:telemetry.attach_many/4`
   handlers to observe every execution.
 
   ## Emitted events
@@ -23,6 +24,8 @@ defmodule ALLM.Telemetry do
   | `[:allm, :image, :start \\| :stop \\| :exception]` | image generation | `duration`, plus `image_count` on `:stop` | `request_id`, `engine`, `model`, `operation`, `n`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :embed, :start \\| :stop \\| :exception]` | text embedding | `duration`, plus `chunk_count` and `embedding_count` on `:stop` | `request_id`, `engine`, `model`, `input_count`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :moderate, :start \\| :stop \\| :exception]` | content moderation | `duration`, plus `result_count` and `flagged_count` on `:stop` | `request_id`, `engine`, `model`, `input_count`, `multimodal`, plus `usage`, `response`, `error` on `:stop` |
+  | `[:allm, :synthesize, :start \\| :stop \\| :exception]` | text-to-speech | `duration`, plus `audio_bytes` on `:stop` | `request_id`, `engine`, `model`, `input_length`, plus `usage`, `response`, `error` on `:stop` |
+  | `[:allm, :transcribe, :start \\| :stop \\| :exception]` | speech-to-text | `duration`, plus `text_length` on `:stop` | `request_id`, `engine`, `model`, `audio_mime`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :adapter, :retry]` | per-attempt retry (non-streaming) | `system_time` | `attempt`, `delay_ms`, `reason`, `request_id` |
 
   `[:allm, :embed, :stop]` carries `embedding_count` and `chunk_count` on
@@ -48,6 +51,25 @@ defmodule ALLM.Telemetry do
   without a second measurement. A 40-element input with one `ALLM.ImagePart`
   therefore reports `input_count: 40` and is still accepted by an adapter
   whose `c:ALLM.ModerationAdapter.max_batch_size/0` is `32`.
+
+  `[:allm, :synthesize, :stop]` and `[:allm, :transcribe, :stop]` follow
+  the same stable-key rule: `audio_bytes` / `text_length` are `0` on the
+  error path, and `usage` is `nil` there. `input_length` is
+  `String.length/1` of the request's `:input` (`0` when it is not a
+  binary), and `audio_mime` is the request audio's `:mime_type` (`nil`
+  when there is none). `model` is the audio slot's model
+  (`request.model || engine.speech_model` / `engine.transcription_model`),
+  never the chat `engine.model`, and is `nil` when neither is set — the
+  adapter's own default applies after the span has started.
+
+  **`[:allm, :synthesize, :stop]` metadata carries the audio.** Its
+  `response` is the `ALLM.SpeechResponse`, whose `:audio` holds the full
+  synthesized bytes. A handler that logs or ships `metadata.response`
+  wholesale moves megabytes per call; read the scalar fields you need
+  instead (`ALLM.Audio`'s `Inspect` implementation prints a byte count,
+  not the payload, but a JSON encoder or `:erlang.term_to_binary/1` does
+  not). `[:allm, :transcribe, :start]` metadata does not carry the request
+  audio at all — only its MIME type.
 
   ## Common metadata
 
@@ -91,9 +113,30 @@ defmodule ALLM.Telemetry do
         }
 
   @typedoc "Span suffix; the prefix [:allm] is fixed."
-  @type span_name :: :generate | :stream | :step | :chat | :tool | :image | :embed | :moderate
+  @type span_name ::
+          :generate
+          | :stream
+          | :step
+          | :chat
+          | :tool
+          | :image
+          | :embed
+          | :moderate
+          | :synthesize
+          | :transcribe
 
-  @valid_span_names [:generate, :stream, :step, :chat, :tool, :image, :embed, :moderate]
+  @valid_span_names [
+    :generate,
+    :stream,
+    :step,
+    :chat,
+    :tool,
+    :image,
+    :embed,
+    :moderate,
+    :synthesize,
+    :transcribe
+  ]
 
   @doc """
   Return the fixed event-name prefix for every ALLM telemetry event.

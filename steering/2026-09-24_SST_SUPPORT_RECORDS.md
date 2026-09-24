@@ -8,7 +8,7 @@ Companion to `steering/2026-09-24_SST_SUPPORT.md`. Tick-state, deviations and no
 |-------|--------|
 | 25.1 | Completed |
 | 25.2 | Completed |
-| 25.3 | Not started |
+| 25.3 | Completed |
 | 25.4 | Not started |
 | 25.5 | Not started |
 | 25.6 | Not started |
@@ -119,3 +119,51 @@ Mutation checks (each reverted afterwards):
 - `build_*_dispatch_opts/3` must call `Engine.put_cursor_key/2` (binds 25.3).
 - A real transcription adapter's script hand-off passes its own cap as `adapter_opts[:max_audio_bytes]`. `FakeTranscription` honours that key (pinned by *"adapter_opts[:max_audio_bytes] overrides the cap"*).
 - Transcription case 4 sizes from `max_audio_bytes/0`. Record its run time for each real adapter (binds 25.4, 25.5).
+
+## Phase 25.3 — Façades and spans
+
+Built 2026-09-24 on `abc725b` (uncommitted working tree). Status: built, gates pending.
+
+### Checklist (25.3.2)
+
+- [x] The four public functions with `@doc` sections (input shapes, model resolution, gate order, unknown opts, retry nesting, non-conforming raise, `request_id` precedence, "No streaming yet"; `synthesize/3` also "Telemetry carries the audio") and doctests over the Fakes (`speech_request/2` 1, `synthesize/3` 2, `transcription_request/2` 1, `transcribe/3` 2).
+- [x] Internals per the Layer C contract: `@speech_request_field_opts` / `@transcription_request_field_opts`, `drop_*_request_opts/1`, `do_synthesize/3` + `do_synthesize_body/4`, `do_transcribe/3` + `do_transcribe_body/4`, `dispatch_{synthesize,transcribe}_attempt/3` (invariant-1 `raise ArgumentError`), `fill_{speech,transcription}_request_id/2`, `@retryable_{speech,transcription}_reasons`. Retry reuses `augment_retry_policy/2` (no new variant). Model stamping is `request.model || engine.<slot>_model`; `Engine.resolve_model/2` / `engine.model` is never read.
+- [x] `Telemetry`: `:synthesize`, `:transcribe` in both `@type span_name` and `@valid_span_names`; two table rows plus a paragraph on the stop-key rule and the audio-bytes-in-`:stop`-metadata caution.
+- [x] `@public_facade` +4 (fail-open; counted 22 → 26 tests); "When to reach for what" +2 rows.
+
+### Verification (run 2026-09-24, working tree on `abc725b`)
+
+| Command | Result |
+|---------|--------|
+| `mix test test/allm/allm_synthesize_test.exs test/allm/allm_transcribe_test.exs` | exit 0: 6 doctests, 75 tests, 0 failures |
+| `mix test` | exit 0: 505 doctests, 32 properties, 3897 tests, 0 failures (25.2 end: 493 / 32 / 3818) |
+| `mix test --seed 0` | exit 0 (same counts) |
+| `mix format --check-formatted` | exit 0 |
+| `mix credo --strict` | exit 0, no issues |
+| `mix dialyzer` | exit 0, `Total errors: 0` |
+| `mix docs` | exit 0, no warnings |
+| `mix run scripts/audit_user_docs.exs lib/allm.ex` / `lib/allm/telemetry.ex` | 0 hits each (0 at HEAD too) |
+| `mix test test/allm_facade_doctest_inventory_test.exs` | 22 → 26 tests (+4) |
+| `grep -l 'Keys.put(\\|Logger.configure(\\|System.put_env(\\|:telemetry.attach' test/allm/allm_synthesize_test.exs test/allm/allm_transcribe_test.exs` | no match (exit 1). Both files are `async: true` and use `ALLM.Test.TelemetryCapture`. |
+
+Mutation checks (each reverted): falling back to `engine.model` in the speech model stamp fails exactly *"engine.model (the chat model) never reaches the speech adapter"*; dropping `Engine.put_cursor_key/2` from the shared dispatch-opts builder fails the cursor-key and cursor-isolation tests for all three façades (synthesize, transcribe, moderate — 6 tests).
+
+`README.md` is untouched.
+
+### Deviations and notes
+
+- `[structural, documented]` One private `build_capability_dispatch_opts/3` replaces the design's per-capability `build_*_dispatch_opts/3`, and `moderate/3` now calls it too (its `build_moderate_dispatch_opts/3` is deleted). The three bodies were the same function modulo which request-field allow-list is dropped, so each caller now drops its own list first (`drop_*_request_opts/1`) and passes the result in. This is the "two implementations is the trigger" migration: private, behaviour-preserving, no public name touched, and pinned by `test/allm/allm_moderate_test.exs`'s plumbing block (all green; the mutation check above shows it binds all three callers). The 25.2.4 binding ("must call `Engine.put_cursor_key/2`") holds through the shared helper.
+- `[structural, documented]` The same helper now also serves the image and embeddings paths (25.3 fix pass, code-review F1, per `agent-spec/IMPLEMENTATION.md` "Migration on extraction"). The image body's inline `adapter_opts` concat / `put_cursor_key` / `:stream` drop / `:request_id` + `:adapter_opts` block is replaced by one `build_capability_dispatch_opts/3` call, and `build_embed_dispatch_opts/3` is reduced to that helper plus its trailing `Keyword.put(:retry_policy, …)`. The only difference in the embed path is the order of two `Keyword.drop/2` calls, which commute. That makes five callers: image, embed, moderate, synthesize, transcribe. The change is private and behaviour-preserving, touches no public name, and is pinned by prior-phase tests. Mutation checks on the helper, each reverted: engine-first concat swapped to call-site-first fails `allm_generate_image_test.exs` and `allm_embed_test.exs` precedence tests (2 failures); the `:stream` drop removed fails both files' `:stream` tests (2 failures); `put_cursor_key/2` removed fails `fake_images_test.exs`'s content-equal-engines test, and that mutant **survived every embed test file** (`grep -rlE 'ALLM\.embed\(|embed_many|FakeEmbeddings' test/` → 13 files, 407 tests, 0 failures). Embed's façade-level cursor injection was therefore unpinned before this refactor. The fix pass added `test/allm/allm_embed_test.exs` "two content-equal engines each read their own script from entry 0", which now kills it (2 failures across image + embed). Self-scoring predicate: `grep -n 'Engine.put_cursor_key(engine)' lib/allm.ex` → one hit, inside the helper.
+- `[tactical]` `input_length` on `:synthesize` `:start` is `String.length/1` (graphemes), matching `text_length`'s `String.length(text)` from the design's telemetry table. It is not the code-point count the OpenAI 4096 gate will use (Decision #6); the telemetry moduledoc names `String.length/1` so nobody reads it as the gate's measure.
+- `[tactical]` `usage` on the error path of both `:stop` events is `nil` (key present), matching `:image` / `:embed`. The Test Plan's "`usage` is present on both paths" is read as key presence.
+- `[tactical]` `audio_bytes` is measured through `Audio.size/1` rather than a `{:binary, b}` match, and falls back to `0` for a nil audio or an unresolvable source; `text_length` falls back to `0` for a non-binary `:text`. Both only matter for an adapter (or a verbatim Fake script entry) that breaks invariant 2, and keep the span from raising inside `:stop`. Pinned by one test each.
+- `[tactical]` The `:retry` telemetry metadata passed to `Retry.run/3` is `%{request_id, model}` (moderation also passes `input_count`; there is no count here).
+- `[tactical]` `transcribe/3`'s `## Retry` says "the bundled transcription adapters do not retry on their own", which becomes true when 25.4/25.5 land per the design's Default-timeouts block. Neither bundled STT adapter exists yet. If 25.4/25.5 change that decision, this sentence changes with them.
+- The allow-list symmetry tests bind one direction only (every struct field is reachable, a typo'd entry goes red). An allow-listed *non-field* is not bound; binding it needs a `@doc false` accessor, which the moderation sibling also does not have. Stated in the test comment.
+- HANDOFF `provider: nil` item discharged: the façades never read `error.provider`; pinned by *"a Fake-generated error (provider: nil) reaches :stop without raising"* in both test files.
+
+### Binding on later sub-phases
+
+- `transcribe/3`'s `@doc` promises the bundled STT adapters do not retry (façade's 3 attempts is the only loop). Binds 25.4 (`OpenAI.Transcription`) and 25.5 (`Gemini.Transcription`): no adapter-level `Retry.run/3`, no `{:retry, …}` return.
+- `synthesize/3`'s `@doc` says a speech adapter's own loop multiplies to up to 9 calls. Binds 25.4's `OpenAI.Speech` `@doc` to say which reasons it retries.
+
