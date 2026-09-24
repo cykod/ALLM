@@ -17,5 +17,6 @@ defmodule GuidesDoctestTest do
   doctest_file("guides/multi_tenant_keys.md")
   doctest_file("guides/embeddings.md")
   doctest_file("guides/moderation.md")
+  doctest_file("guides/audio.md")
   doctest_file("guides/fakes.md")
 end

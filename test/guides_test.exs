@@ -31,6 +31,7 @@ defmodule GuidesTest do
     multi_tenant_keys.md
     embeddings.md
     moderation.md
+    audio.md
     fakes.md
   )
 

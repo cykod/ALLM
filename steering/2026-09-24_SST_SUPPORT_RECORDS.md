@@ -11,8 +11,8 @@ Companion to `steering/2026-09-24_SST_SUPPORT.md`. Tick-state, deviations and no
 | 25.3 | Completed |
 | 25.4 | Completed |
 | 25.5 | Completed |
-| 25.6 | Not started |
-| 25.7 | Not started |
+| 25.6 | Completed |
+| 25.7 | Completed |
 
 ## Phase 25.1 — Layer A data
 
@@ -328,3 +328,88 @@ Mutation checks (each reverted; `mix test test/allm/providers/gemini/`): mime ga
 
 - 25.6 (guide + example 24): Gemini transcription accepts `audio/mpeg`, `audio/wav`, `audio/flac`, `audio/aac`, `audio/ogg`, `audio/opus` (probed) and `audio/aiff` (docs); `max_audio_bytes/0` = 15,679,488 (conservative); the default model `gemini-flash-latest` resolved to `gemini-3.8-flash` on 2026-09-24; **silence yields an invented transcript, not `""`** — state it in the fidelity section alongside Decision #8's paraphrase caveat. Example 24 under `ALLM_PROVIDER=gemini` transcribes `examples/fixtures/quick_brown_fox.mp3`, which returned the exact sentence.
 - 25.7: the `API_KEY_INVALID` `[CARRY]` above.
+
+## Phase 25.6 — Spec, guide, examples, release wiring
+
+Built 2026-09-24 on `e91cdb0` (uncommitted working tree). Release is out of scope (design Assumption 7): `scripts/release.exs` / `mix hex.publish` were not run and `mix.exs @version` is untouched.
+
+### Checklist (25.6.2)
+
+- [x] Spec **§37** (inserted before §39; §38 does not exist) with a commit-range stamp `da277bf..e91cdb0; docs land in the 25.6 commit`, and `Phase 25 amendment` blocks on §27, §29, §32.5 and §33. Facts come from the code and this file (post-probe limits, 6-case conformance suites, `API_KEY_INVALID`, the silence finding), not the design's pre-probe estimates.
+- [x] `guides/audio.md`: 17 `iex>` blocks (535 − 518 doctests), all over `FakeSpeech` / `FakeTranscription` except two that call the real adapters keylessly (the `max_audio_bytes/0` values and the OpenAI 4096 gate), 3 ` ```elixir ` fences for live-key snippets, all compiled by `scripts/check_guide_fences.exs`. Sections per the checklist, including the Gemini silence warning (§25.5 binding) and `max_audio_bytes/0` values in an `iex>` block.
+- [x] `examples/_helpers.exs`: `capability_engine/2` spec map gains `:engine_model_field` (default `:model`); four audio keys on all three `@providers` rows (there is no `voyage` row: Voyage is the Anthropic row's embedding adapter); `speech_engine/1`, `transcription_engine/1`.
+- [x] `examples/23_synthesize_speech.exs` (`# Provider: openai`) and `examples/24_transcribe_audio.exs` (`# Provider: openai, gemini`); `examples/README.md` updated.
+- [x] Three guide registrations (`mix.exs @guides`, `test/guides_test.exs @guides`, `doctest_file("guides/audio.md")`). `CHANGELOG.md`: audio lines folded into the unreleased `## [REL] v0.6.0` entry, retitled "Content moderation, compact tools and audio" (`git describe --tags --abbrev=0` → `v0.5.0`; lines derived from `git diff v0.5.0..HEAD lib/`).
+
+### Verification (run 2026-09-24, working tree on `e91cdb0`, shell with `env | grep -c _API_KEY` → 0)
+
+| Command | Result |
+|---------|--------|
+| `mix test` | exit 0 — 535 doctests, 32 properties, 4161 tests, 0 failures (baseline at `e91cdb0`: 518 / 32 / 4157) |
+| `mix test --seed 0` | exit 0 (same counts) |
+| `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict`, `mix dialyzer` | exit 0 each |
+| `mix docs 2>&1 \| grep -cE '(warning\|error)'` | 0 (`mix docs` exit 0) |
+| `mix run scripts/audit_user_docs.exs guides/audio.md` | 0 hits, exit 0 |
+| `mix run scripts/check_guide_fences.exs \| head -1` | `70 fences compiled, 14 skipped.` (was 67 / 14; +3 audio fences) |
+| Guide doctests bind | mutating one expected value in `guides/audio.md` → `55 doctests, 1 failure` in `test/guides_doctest_test.exs`; reverted |
+| `git diff --stat HEAD -- README.md` | empty |
+
+`conformance/` is not touched by 25.6/25.7, so its gates were not re-run.
+
+### Live gates (BLOCKING), keys via subshell `( set -a; . ./.env; set +a; … )`
+
+| Command | Result |
+|---------|--------|
+| `ALLM_PROVIDER=openai mix run examples/23_synthesize_speech.exs` | exit 0 — `OK: synthesize speech — bytes=69120 format=:mp3 mime=audio/mpeg model="gpt-4o-mini-tts"` |
+| `ALLM_PROVIDER=openai mix run examples/24_transcribe_audio.exs` | exit 0 — `text="The quick brown fox jumps over the lazy dog." model="gpt-transcribe" duration_seconds=4` |
+| `ALLM_PROVIDER=gemini mix run examples/24_transcribe_audio.exs` | exit 0 — same text, `model="gemini-flash-latest" input_tokens=107 output_tokens=10` |
+
+**`run_all.exs` per arm, re-characterized (scripts run individually past each halt; 22 does not exist):**
+
+| Arm | `run_all` | Per-script line | Failures resolved to |
+|-----|-----------|-----------------|----------------------|
+| openai | halted at 10, exit 1 | `01–09 OK, 10 FAIL, 11–12 OK, 13 FAIL, 14–21 OK, 23–24 OK` | 10: `Unknown parameter: 'response_format'` — `ASKS.md:313` `[BUG]` (wed 7/29, filed in `2d4b140`). 13: `OpenAI HTTP 404` on `dall-e-2` variations — the same ticket's recorded characterization (`01-09 OK, 10 FAIL, 11 OK, 12 OK, 13 FAIL, …`), originating `a7b934b`. Line unchanged from `steering/2026-08-31_PHASE_22_moderation_RECORDS.md:1571` plus 21, 23, 24 |
+| gemini | 1st run halted at 07, exit 1; **2nd run clean, exit 0** | 1st pass: `01–06 OK, 07 FAIL, 08–12 OK, 13 SKIP, 14 FAIL, 15–18 OK, 19–20 SKIP, 21 OK, 23 SKIP, 24 OK`; 2nd `run_all`: all `[OK]`/`[SKIP]` | 07 and 14: `halted=:completed text="Sunny"` — a case-sensitive `"sunny"` assertion. 07's flake is noted in `steering/2026-07-28_EMBEDDINGS_DESIGN.md:1682` (`2d4b140`) but was never ticketed; 14's is new. Three more individual runs of each passed. **Filed** `.work/ASKS.md` thu 9/24 3am `[BUG]` with a reproducer and a grep predicate |
+| anthropic | halted at 09, exit 1 | `01–08 OK, 09 FAIL, 10–11 SKIP, 12 OK, 13 SKIP, 14–18 OK, 19–20 SKIP, 21 OK, 23–24 SKIP` | 09: `ask_user pass-1 — halted=:completed q=nil` — `ASKS.md:315` `[BUG]` (model drift, filed in `2d4b140`) |
+
+`examples/RUN_OUTPUT_GEMINI.md` is **regenerated** from the clean second Gemini run (last regenerated in `26b7fd5`, Phase 16; checked for key-shaped tokens: 0). `RUN_OUTPUT_OPENAI.md` and `RUN_OUTPUT_ANTHROPIC.md` are untouched (no clean full run).
+
+**Spend:** not metered. Estimated at ≈ $0.40 from `examples/README.md`'s per-arm costs: three partial `run_all` passes, one individual pass per arm past each halt, one clean Gemini `run_all`, six Gemini re-runs of 07/14, and three audio script runs (each well under $0.001). Under the $3 stop.
+
+### Deviations and notes
+
+- `[structural, documented]` `examples/_helpers.exs` `capability_engine/2` is a released helper; its spec map gains an optional `:engine_model_field` (default `:model`) so the two audio engines put the model on `:speech_model` / `:transcription_model` (design Decision #10). `image_engine/1`, `embedding_engine/1` and `moderation_engine/1` do not set it and behave exactly as before. The comment block was rewritten to list five callers.
+- `[tactical]` The provider-row keys are `speech_model` / `transcription_model`, as the design's checklist names them, not `speech_default_model` after the older rows' `*_default_model` pattern. The row key and the engine field therefore share a name.
+- `[tactical]` §32.5 and §33 strike the audio lines with `~~…~~` plus an amendment block instead of deleting them, so the v0.2 record survives (Phase 20 deleted "embeddings" from §32.5 but kept "image generation" as history; strikethrough does both).
+- `[tactical]` §37 is versioned `v0.6`: the unreleased v0.6.0 CHANGELOG entry now carries audio.
+- `[finding]` (guide as first usability test) No API-shape surprises: every `iex>` block passed on first run. Two behaviours worth knowing, both already documented in the moduledocs: the façade resolves `engine.speech_model` onto the request before dispatch, so `FakeSpeech` reports it on `response.model`; and `OpenAI.Speech`'s 4096-code-point gate fires keyless through the façade (used as a guide `iex>` block).
+- The design's "Released via" / release line is out of scope (orchestrator override; design Assumption 7). v0.6.0 remains built but unreleased; the HANDOFF release row gained a 25.6 note.
+
+## Phase 25.7 — `[CHORE]` sweep
+
+Built 2026-09-24 alongside 25.6 (same working tree).
+
+### Checklist
+
+- [x] Superseded banner at the top of `steering/PHASE_19_DESIGN.md` pointing to `steering/2026-09-24_SST_SUPPORT.md` and spec §37.
+- [x] Every ticket this phase filed is closed or re-filed with a predicate (below). No ticket was re-dated: re-filings are new `thu 9/24 3am` entries citing the original's date.
+- [x] `grep -rn 'body_preview:' lib/allm/providers/` → empty, exit 1.
+
+### Ticket ledger (each predicate run from the repo root on 2026-09-24; output pasted)
+
+| Ticket | Disposition | Predicate → measured |
+|--------|-------------|----------------------|
+| `[CARRY]` Gemini `API_KEY_INVALID` (§25.5) | **Filed** `.work/ASKS.md` thu 9/24 3am (released siblings, not fixed) | `grep -L API_KEY_INVALID lib/allm/providers/gemini.ex lib/allm/providers/gemini/{images,embeddings,transcription}.ex` → `gemini/embeddings.ex`, `gemini/images.ex`, `gemini.ex`; exit 0 |
+| `[CARRY]` moderation `decode_error_body/1` drops binaries (§25.4) | **Filed** thu 9/24 3am | `grep -A3 'defp decode_error_body(body) when is_binary' lib/allm/providers/openai/moderation.ex \| grep -c 'Jason.decode'` → `0`, exit 1 (must become ≥ 1) |
+| `[DEFERRED-DRY]` OpenAI helper set (thu 9/24 2am) | **Open**, disposition entry thu 9/24 3am | `grep -roE 'defp (header_value\|…)\(' lib/allm/providers/ \| sort -u \| cut -d: -f2 \| sort \| uniq -c \| awk '$1>1' \| wc -l` → `13` |
+| `[DEFERRED-DRY]` transcription helper clones (thu 9/24 2am, owner was 25.7) | **Open**, re-owned to the first third transcription adapter or a `[REFACTOR]` | ticket's predicate `\| wc -l` → `10` |
+| `[DEFERRED-DRY]` Gemini redactor regex ×3 (thu 9/24 2am, owner was 25.7) | **Open**, re-owned to the `API_KEY_INVALID` fix (same two files) | `grep -c 'AIza\[A-Za-z0-9' lib/allm/providers/gemini/*.ex \| grep -vc ':0'` → `3` (must be 1) |
+| `[CARRY]` Gemini HTTP-date `Retry-After` (HANDOFF, 25.5 fix) | **Filed** thu 9/24 3am, **cause corrected**: no adapter parses HTTP-dates (`openai.ex:747`, `openai/images.ex:1217` are nil stubs; `openai.ex:73` claims otherwise) | (a) `grep -rnE '^\s*defp parse_http_date\(_[a-z]*\), do: nil' lib/allm/providers/` → 2 lines, exit 0; (b) `grep -LE '^\s*defp parse_http_date\(' $(grep -rl 'defp parse_retry_after' lib/allm/providers/) \| wc -l` → `7` |
+| `[CARRY]` `retry_after_ms` unpinned in three façades (HANDOFF, 25.3 fix) | **Filed** thu 9/24 3am | `grep -c 'retry_after_ms: [1-9]' test/allm/allm_synthesize_test.exs test/allm/allm_transcribe_test.exs test/allm/allm_moderate_test.exs \| grep -c ':0$'` → `3` (must be 0) |
+| `[CARRY]` Gemini cap conservative (§25.5) | **Filed** thu 9/24 3am | `grep -lE '"status": *400' test/fixtures/gemini/transcriptions/recorded/probe_boundary_*.json` → nothing, exit 1 |
+| `[DEFERRED-DRY]` `hydrate_usage/1` ×5 and Fake cursor ×5 (HANDOFF only) | **Re-filed** thu 9/24 3am `[DISPOSITION]` | `grep -l 'defp hydrate_usage' lib/allm/*.ex \| wc -l` → `5`; `grep -l 'defp cursor_key_id' lib/allm/providers/*.ex \| wc -l` → `5` |
+| `[BUG]` Gemini examples 07/14 case-sensitive `"sunny"` (new, 25.6 live gate) | **Filed** thu 9/24 3am | `grep -n 'String.contains?(final_text, "sunny")' examples/07_manual_tool_round_trip.exs examples/14_per_tool_manual.exs` → 2 lines, exit 0 |
+| HANDOFF re-record `header_names` row (25.5 fix) | Left **Open** in HANDOFF: it is a procedure for whoever re-records, not a defect | — |
+
+HANDOFF rows re-filed above were moved to `## Discharged` with a `Discharged 25.7` note.
+

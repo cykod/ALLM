@@ -1701,6 +1701,27 @@ lib/
 >
 > Existing modules extended: `ALLM.Tool` (`:compact`, `:summary`), `ALLM.Validate` (`{:summary, :not_a_string}`), `ALLM.Chat` (the wire list goes through `ToolHelp.project/2`; execution sites see the full list plus the meta-tool), `ALLM.ToolRunner` (answers `tool_help`, runs the required-key check for compact tools). No adapter, `ALLM.Event` variant, or `ALLM.Engine` field changes.
 
+> **Phase 25 amendment (commits `da277bf..e91cdb0`; docs land in the 25.6 commit).** The audio capability (§37) adds the following modules, under the shipped `lib/allm/` prefix.
+>
+> ```text
+> lib/allm/audio.ex                      # Layer A — shared audio value (STT input, TTS output)
+> lib/allm/speech_request.ex             # Layer A
+> lib/allm/speech_response.ex            # Layer A
+> lib/allm/transcription_request.ex      # Layer A
+> lib/allm/transcription_response.ex     # Layer A
+> lib/allm/speech_adapter.ex             # Layer B — behaviour
+> lib/allm/transcription_adapter.ex      # Layer B — behaviour
+> lib/allm/error/speech_adapter_error.ex
+> lib/allm/error/transcription_adapter_error.ex
+> lib/allm/providers/fake_speech.ex
+> lib/allm/providers/fake_transcription.ex
+> lib/allm/providers/openai/speech.ex
+> lib/allm/providers/openai/transcription.ex
+> lib/allm/providers/gemini/transcription.ex
+> ```
+>
+> Existing modules extended: `ALLM` (`synthesize/3`, `speech_request/2`, `transcribe/3`, `transcription_request/2`), `ALLM.Engine` (`:speech_adapter`, `:transcription_adapter`, `:speech_model`, `:transcription_model`), `ALLM.Validate` (`speech_request/1`, `transcription_request/1`), `ALLM.Telemetry` (`:synthesize` and `:transcribe` spans), `ALLM.Serializer` (seven registry entries), `ALLM.Error.EngineError` (`:no_speech_adapter`, `:no_transcription_adapter`), `ALLM.Error.ValidationError` (`:invalid_speech_request`, `:invalid_transcription_request`). `ALLM.Capability` is **not** extended (§37.1 item 5). The published conformance suites live in the `conformance/` project: `ALLM.Test.SpeechAdapterConformance`, `ALLM.Test.TranscriptionAdapterConformance`.
+
 ---
 
 ## 28. Implementation guidance
@@ -1777,6 +1798,21 @@ Additional per-span metadata:
 > Both extra measurement keys are present on the success and error paths alike (`0` on error). `:usage` is carried as `nil` unconditionally even though `%ALLM.ModerationResponse{}` has no `:usage` field, so a handler written against the `[:allm, :embed, :stop]` or `[:allm, :image, :stop]` span does not `KeyError` when pointed at this one. `:input_count` is the raw element count, **not** the provider's item count, which is `1` whenever `:multimodal` is true — see §39.9.
 >
 > The namespace note above applies unchanged: these events use `[:allm, …]`.
+
+> **Phase 25 amendment (commits `da277bf..e91cdb0`; docs land in the 25.6 commit).** The audio capability (§37) adds two spans:
+>
+> ```elixir
+> [:allm, :synthesize, :start | :stop | :exception]
+> [:allm, :transcribe, :start | :stop | :exception]
+> ```
+>
+> - `:synthesize` `:start` — measurements `%{system_time: integer()}`; metadata `:request_id`, `:engine`, `:model`, `:input_length` (`String.length/1` of `:input` — graphemes, **not** the code-point count the OpenAI 4096 gate uses; `0` when not a binary).
+> - `:synthesize` `:stop` — measurements `%{duration: integer(), audio_bytes: non_neg_integer()}`; metadata as `:start` plus `:usage`, `:response`, `:error` (`nil` on success).
+> - `:transcribe` `:start` — measurements `%{system_time: integer()}`; metadata `:request_id`, `:engine`, `:model`, `:audio_mime` (the request audio's `:mime_type`; the audio itself is never carried).
+> - `:transcribe` `:stop` — measurements `%{duration: integer(), text_length: non_neg_integer()}`; metadata as `:start` plus `:usage`, `:response`, `:error`.
+> - `:exception` on both — measurements `%{duration: integer()}`; metadata `:kind`, `:reason`, `:stacktrace`.
+>
+> Stable keys as for `:embed` and `:moderate`: `audio_bytes` / `text_length` are `0` and `:usage` is `nil` on the error path. `:model` is the audio slot's model (`request.model || engine.speech_model` / `engine.transcription_model`), never the chat `engine.model`, and is `nil` when neither is set (the adapter default applies after the span starts). **`[:allm, :synthesize, :stop]` metadata carries the audio**: `:response` holds the full synthesized bytes, so a handler that ships it wholesale moves the whole clip per call. The namespace note above applies: these events use `[:allm, …]`.
 
 ### Relationship to `middleware`
 
@@ -1967,10 +2003,12 @@ All three implement `ALLM.Adapter` and `ALLM.StreamAdapter`. Additional provider
 
 ### 32.5 Explicitly out of scope for v0.2
 
-- audio — callers drop down to a provider SDK directly
+- ~~audio — callers drop down to a provider SDK directly~~ (struck by the Phase 25 amendment below)
 - image generation — candidate for a first-class non-streaming primitive in a later version; not shipped in v0.2
 
 > **Phase 20 amendment (commits `ac5d845..c3aefce`; docs land in the 20.7 commit).** **Embeddings are no longer out of scope** — they ship in v0.5 as a first-class non-streaming primitive (`ALLM.embed/3`, `%ALLM.EmbeddingRequest{}` / `%ALLM.EmbeddingResponse{}`, the `ALLM.EmbeddingAdapter` behaviour, and the `:embed_adapter` engine slot). See **§36**. The line above is amended to remove "embeddings"; audio remains out of scope. Image generation likewise shipped in v0.3 (§35) but is left in the list above because that line is scoped to *v0.2* and is preserved as a historical record of what v0.2 excluded.
+
+> **Phase 25 amendment (commits `da277bf..e91cdb0`; docs land in the 25.6 commit).** **Audio is no longer out of scope** — it ships in v0.6 as two first-class non-streaming primitives, `ALLM.synthesize/3` (text-to-speech) and `ALLM.transcribe/3` (speech-to-text), with the `ALLM.SpeechAdapter` / `ALLM.TranscriptionAdapter` behaviours and their own engine slots. See **§37**. The "audio" line above is struck rather than deleted, so the record of what v0.2 excluded survives; callers no longer need to drop down to a provider SDK for request/response TTS and STT. Streaming TTS and real-time STT remain out of scope (§37.10).
 
 ---
 
@@ -1983,7 +2021,7 @@ Out of scope for the initial version:
 - advanced agent planning layers
 - workflow schedulers
 - hard-coded provider-specific abstractions in the core API
-- audio input/output (see §32.5)
+- ~~audio input/output (see §32.5)~~ (struck by the Phase 25 amendment below)
 - dependency on `req_llm` or any other multi-provider HTTP library (see §32.2)
 
 > **Phase 20 amendment (commits `ac5d845..c3aefce`; docs land in the 20.7 commit).** The line above previously read `embeddings, audio input/output, image generation (see §32.5)`. Two of its three entries were stale:
@@ -1992,6 +2030,8 @@ Out of scope for the initial version:
 > - **embeddings** ship in v0.5 (**§36**) — struck here.
 >
 > Audio input/output remains a genuine non-goal.
+
+> **Phase 25 amendment (commits `da277bf..e91cdb0`; docs land in the 25.6 commit).** The sentence above is superseded, and the `audio input/output` line in the list is struck (not deleted): request/response audio ships in v0.6 (**§37**). What remains a non-goal is *streaming* audio (streaming TTS, real-time STT) and audio as a chat `Message` content part (§37.10).
 
 ---
 
@@ -2709,6 +2749,242 @@ Three events, mirroring the image span (§35.9):
 - **`ALLM.Session` integration** — embeddings carry no conversation state
 - **parallel chunk dispatch** — sequential is the safe default under provider rate limits (§36.6)
 - **multi-vector / late-interaction models** — the provider matrix does not support it
+
+---
+
+## 37. v0.6 — Audio: speech synthesis and transcription
+
+> **Phase 25 amendment (commits `da277bf..e91cdb0`; docs land in the 25.6 commit).** This section is new. §37 was reserved for audio when the v0.4-era audio design (`steering/PHASE_19_DESIGN.md`, never built) was written; that design is superseded by `steering/2026-09-24_SST_SUPPORT.md`. This section amends §27 (module tree), §29 (telemetry), §32.5 and §33 (audio struck from out-of-scope). §35.7 is **not** amended: both audio providers are already bundled for chat, so every new adapter qualifies under its existing criterion.
+
+v0.6 adds two request/response audio primitives: `ALLM.synthesize/3` (text-to-speech, TTS) and `ALLM.transcribe/3` (speech-to-text, STT). Structurally the section is the moderation family (§39) twice over — Layer A request/response pair, a per-capability behaviour and error enum, an engine slot, a façade, a telemetry span, a Fake, and a published conformance suite — plus four things that family does not have:
+
+- a **binary payload** crossing the serializer (`ALLM.Audio`, §37.2.1);
+- a **multipart upload** (OpenAI STT);
+- a provider whose **transcription is prompted chat** (Gemini `generateContent`), whose output is a language model's answer rather than a dedicated model's transcript (§37.7.3);
+- **per-slot models on the engine** (§37.4), because an audio model never shares the chat model's namespace.
+
+There is no Layer D: audio carries no conversation state and `ALLM.Session` is untouched.
+
+### 37.1 Design goals
+
+1. **One behaviour per capability.** `ALLM.SpeechAdapter` and `ALLM.TranscriptionAdapter` are separate behaviours with separate engine slots (`:speech_adapter`, `:transcription_adapter`), so one engine can pair providers per direction (e.g. Gemini STT with OpenAI TTS). A single `AudioAdapter` with an operations enum was rejected: one slot could not serve two providers, and every adapter would need an unsupported-operation path.
+2. **Non-streaming.** Both providers can stream TTS audio, but neither shape fits the closed `ALLM.Event` union (§8), and adding a variant breaks every reducer. `SpeechRequest` has no `:stream` field, and a `stream: true` opt is silently ignored, as for `embed/3` and `moderate/3`. Streaming TTS is deferred to its own design.
+3. **Opt-in per engine.** An engine without the slot returns `{:error, %ALLM.Error.EngineError{reason: :no_speech_adapter | :no_transcription_adapter}}` ahead of every other gate. No fallback to `:adapter` or any other slot.
+4. **No voice catalogue.** Voice names are provider strings forwarded verbatim. OpenAI's valid set differs per model (`tts-1` rejects voices the newer models accept) and Gemini's names are disjoint from OpenAI's, so a library-side enum would be wrong for at least one model.
+5. **Reuse engine plumbing.** Keys (§6.4), retries, telemetry (§29) and deterministic fakes (§31) apply unchanged. No capability pre-flight is added: `llm_db` has no audio capability keys to check (§6.3), and inventing them would be speculative.
+
+### 37.2 Data model
+
+#### 37.2.1 `ALLM.Audio`
+
+```elixir
+defmodule ALLM.Audio do
+  @type source :: {:binary, binary()} | {:base64, String.t()} | {:file, Path.t()}
+  @type t :: %__MODULE__{source: source(), mime_type: String.t() | nil, metadata: map()}
+
+  @enforce_keys [:source]
+  defstruct [:source, :mime_type, metadata: %{}]
+
+  @spec from_file(Path.t()) :: t()                 # no I/O; MIME from extension, else nil
+  @spec from_binary(binary(), String.t()) :: t()
+  @spec from_base64(String.t(), String.t()) :: t()
+  @spec to_binary(t()) :: {:ok, binary()} | {:error, :invalid_base64 | :invalid_source | File.posix()}
+  @spec size(t()) :: {:ok, non_neg_integer()} | {:error, :invalid_base64 | :invalid_source | File.posix()}
+end
+```
+
+One value type serves both directions — the STT input and the TTS output — following `ALLM.Image`, which is both the vision input and the image-generation output. It mirrors `ALLM.Image` minus the `{:url, _}` source (neither provider accepts an audio URL). A `{:binary, bytes}` source is base64-encoded on JSON, so non-UTF-8 audio round-trips; invalid base64 in a persisted `"binary"` source decodes to a `ValidationError` naming `[:source]`. `size/1` stats a `{:file, _}` source without reading it and returns `{:error, :eisdir}` for a directory. `Inspect` prints a byte count, never the payload.
+
+#### 37.2.2 `ALLM.SpeechRequest` / `ALLM.SpeechResponse`
+
+```elixir
+defmodule ALLM.SpeechRequest do
+  @type format :: :mp3 | :opus | :aac | :flac | :wav | :pcm
+  defstruct [:model, :voice, :format, :instructions, :speed, input: "", options: %{}, metadata: %{}]
+  @spec formats() :: [format()]
+end
+
+defmodule ALLM.SpeechResponse do
+  defstruct [:audio, :format, :id, :request_id, :model, :provider, :raw,
+             usage: %ALLM.Usage{}, metadata: %{}]
+  @spec mime_to_format(String.t() | nil) :: ALLM.SpeechRequest.format() | nil
+  @spec format_to_mime(ALLM.SpeechRequest.format()) :: String.t()
+end
+```
+
+- `:format` is a closed enum naming **file formats**, not a provider parameter; `nil` means "provider default". The six atoms are exactly OpenAI's `response_format` values; a future adapter maps them onto its own wire or refuses the ones it cannot produce.
+- `SpeechResponse.format` is **derived from the response content type** via `mime_to_format/1`, not echoed from the request, and is `nil` when the MIME type is outside the table. The request says what was asked for; the response says what arrived.
+- `SpeechResponse.usage` is never `nil`. OpenAI's non-streaming TTS body is raw audio with no usage, so its counts are all `nil`.
+- The audio bytes live once, in `:audio`. `:raw` is `nil` for OpenAI TTS.
+
+#### 37.2.3 `ALLM.TranscriptionRequest` / `ALLM.TranscriptionResponse`
+
+```elixir
+defmodule ALLM.TranscriptionRequest do
+  defstruct [:audio, :model, :language, :prompt, options: %{}, metadata: %{}]
+end
+
+defmodule ALLM.TranscriptionResponse do
+  defstruct [:language, :duration_seconds, :id, :request_id, :model, :provider, :raw,
+             text: "", usage: %ALLM.Usage{}, metadata: %{}]
+end
+```
+
+- `:text` is the transcript. Output is **text only**: word/segment timestamps, diarization and `srt`/`vtt` are model-specific and out of scope; the provider body stays on `:raw`.
+- `:usage` is an `%ALLM.Usage{}`, **never `nil`** (the `EmbeddingResponse` rule). Providers that bill by the second report it on the typed `:duration_seconds` field instead of tokens (OpenAI `whisper-1` and `gpt-transcribe`: `{"type": "duration", "seconds": n}`); token-billed models populate `:usage` (OpenAI `gpt-4o-mini-transcribe`, Gemini). A typed field survives JSON round-trip without the atom/string key drift `Usage.extra` would have.
+
+#### 37.2.4 `options` — a raw provider-body passthrough
+
+On both request structs, `:options` reaches provider fields ALLM does not model without a library release. It is merged **under** the fields the adapter sets, so it can never override one. Fields that would change the response *shape* the decoder relies on are also reserved and dropped with a deferred debug log: OpenAI TTS `stream_format`, OpenAI STT `response_format`. Placement per adapter: OpenAI TTS top-level JSON; OpenAI STT one multipart form field per entry; Gemini STT deep-merged into `generationConfig`.
+
+#### 37.2.5 Errors and enum extensions
+
+`ALLM.Error.SpeechAdapterError` (9 reasons) and `ALLM.Error.TranscriptionAdapterError` (the same 9 plus `:content_filter`), one type per capability as for images, embeddings and moderation, so each façade and conformance suite can pattern-match on the error module:
+
+```elixir
+:authentication_failed | :rate_limited | :invalid_request | :context_length_exceeded
+| :provider_unavailable | :timeout | :network_error | :malformed_response | :unknown
+# TranscriptionAdapterError adds :content_filter
+```
+
+There is no `:batch_too_large`: neither endpoint takes more than one input per call, so neither behaviour has a `max_batch_size/0`.
+
+Closed enums extended (breaking for an exhaustive `case`): `EngineError` gains `:no_speech_adapter`, `:no_transcription_adapter`; `ValidationError` gains `:invalid_speech_request`, `:invalid_transcription_request`. `ALLM.Serializer` registers the seven new modules.
+
+#### 37.2.6 Validation
+
+`ALLM.Validate.speech_request/1`: `:input` a non-empty, valid UTF-8 binary (`{:input, :empty}`, `{:input, :invalid_encoding}`; a non-binary hard-rejects as `:invalid_shape`); `:model`, `:voice`, `:instructions` `nil` or binary; `:format` `nil` or in `formats/0` (`{:format, :unknown}`); `:speed` `nil` or a number > 0 (`{:speed, :out_of_range}`). Voice names and per-provider speed ranges are not checked.
+
+`ALLM.Validate.transcription_request/1`: `:audio` an `%ALLM.Audio{}` (hard-reject otherwise) whose `:source` is one of the three shapes with a binary payload; `:model`, `:language`, `:prompt` `nil` or binary. File existence, byte size and MIME type are **adapter** gates (§37.3), because the limits are per provider.
+
+### 37.3 Behaviours
+
+```elixir
+defmodule ALLM.SpeechAdapter do
+  @callback synthesize(ALLM.SpeechRequest.t(), keyword()) ::
+              {:ok, ALLM.SpeechResponse.t()} | {:error, ALLM.Error.SpeechAdapterError.t()}
+  @callback prepare_request(ALLM.SpeechRequest.t(), keyword()) ::
+              {:ok, Req.Request.t()} | {:error, ALLM.Error.SpeechAdapterError.t()}
+  @optional_callbacks prepare_request: 2
+end
+
+defmodule ALLM.TranscriptionAdapter do
+  @callback transcribe(ALLM.TranscriptionRequest.t(), keyword()) ::
+              {:ok, ALLM.TranscriptionResponse.t()} | {:error, ALLM.Error.TranscriptionAdapterError.t()}
+  @callback max_audio_bytes() :: pos_integer()
+  @callback prepare_request(ALLM.TranscriptionRequest.t(), keyword()) ::
+              {:ok, Req.Request.t()} | {:error, ALLM.Error.TranscriptionAdapterError.t()}
+  @optional_callbacks prepare_request: 2
+end
+```
+
+The numbered invariants live in each behaviour's `@moduledoc`; the load-bearing ones:
+
+- **Return shape.** Exactly `{:ok, response}` or `{:error, capability_error}`. The one exception is `ALLM.Keys.fetch!/2` raising `EngineError{reason: :missing_key}`. The façade raises `ArgumentError` on any other shape.
+- **Speech success.** `response.audio` is `%ALLM.Audio{source: {:binary, bytes}}` with `byte_size(bytes) > 0` and a `:mime_type` beginning `audio/`; a successful HTTP response whose payload is not audio is `:malformed_response`. `response.format` is `nil` or in `SpeechRequest.formats/0`, derived via `mime_to_format/1`.
+- **Speech empty input** is `:invalid_request` before any I/O and before `ALLM.Keys.fetch!/2`.
+- **Transcription gate order.** All before `ALLM.Keys.fetch!/2`: **resolvable** (unresolvable audio → `:invalid_request` with `metadata.cause`) → **size** (over `max_audio_bytes/0` → `:invalid_request` with `metadata.count` and `metadata.max`) → **MIME** (adapter-specific) → key. MIME acceptance is not a behaviour invariant because the accepted set differs per provider.
+- `opts[:request_id]` reflects onto `response.request_id`; `request.metadata` round-trips onto `response.metadata`; `opts[:request_timeout]` expiry is `:timeout`.
+- **Cleanup: none.** `Req.request/1` owns the connection lifecycle.
+
+### 37.4 Engine integration
+
+Four `ALLM.Engine` fields, all serializable (no key ever lives on the engine):
+
+| Field | Type |
+|-------|------|
+| `:speech_adapter` | `module() \| nil` |
+| `:transcription_adapter` | `module() \| nil` |
+| `:speech_model` | `String.t() \| nil` |
+| `:transcription_model` | `String.t() \| nil` |
+
+**Each audio slot carries its own model, and the audio façades never read `engine.model`.** `engine.model` is the chat model, and an audio model never shares its namespace: a Gemini chat model sent to a Gemini TTS request returns 200 with a *text* part instead of audio (probed 2026-09-24). Resolution, normative: `request.model || engine.<slot>_model`, then the adapter's own default when still `nil`. On the string/`%Audio{}` call shapes `opts[:model]` reaches `request.model`; a pre-built request is authoritative and not merged. This is the one place the audio façades differ from `generate_image/3`, `embed/3` and `moderate/3`, which fall back to `engine.model`. Per-slot fields keep each adapter's model persisted with its adapter, so a serialized engine pairing a chat provider with two different audio providers round-trips intact.
+
+### 37.5 Public API
+
+```elixir
+@spec speech_request(String.t(), keyword()) :: ALLM.SpeechRequest.t()
+@spec synthesize(ALLM.Engine.t(), String.t() | ALLM.SpeechRequest.t(), keyword()) ::
+        {:ok, ALLM.SpeechResponse.t()}
+        | {:error, ALLM.Error.EngineError.t() | ALLM.Error.ValidationError.t() | ALLM.Error.SpeechAdapterError.t()}
+
+@spec transcription_request(ALLM.Audio.t(), keyword()) :: ALLM.TranscriptionRequest.t()
+@spec transcribe(ALLM.Engine.t(), ALLM.Audio.t() | ALLM.TranscriptionRequest.t(), keyword()) ::
+        {:ok, ALLM.TranscriptionResponse.t()}
+        | {:error, ALLM.Error.EngineError.t() | ALLM.Error.ValidationError.t() | ALLM.Error.TranscriptionAdapterError.t()}
+```
+
+- The `*_request/2` builders read only the struct's own field names from opts (an **allow-list**), so call-control opts (`:request_id`, `:request_timeout`, `:retry`, `:adapter_opts`, `:api_key`, `:stream`) never land on the struct.
+- **Gate order:** empty slot → `EngineError`; `Validate.*_request/1` → `ValidationError`; dispatch under the retry policy. Unknown opts are forwarded to the adapter untouched.
+- **Retry:** `:rate_limited`, `:provider_unavailable`, `:timeout`, `:network_error` are retried under the engine's `:retry` policy; every other reason (including `:content_filter`) surfaces immediately. The bundled transcription adapters make **one** HTTP attempt per call, because each attempt re-uploads the clip, so the façade's loop is the only one (at most 3 uploads at the default policy). `ALLM.Providers.OpenAI.Speech` is the opposite case: it runs its own `ALLM.Retry.run/3` per call (`lib/allm/providers/openai/speech.ex`, moduledoc "Retry"), whose default policy retries `:timeout` only, so through `ALLM.synthesize/3` a synthesis `:timeout` costs up to **9** attempts at the default policy against 3 for the other retryable reasons — the same nested-loop shape as `embed/3`.
+- `opts[:request_id]` wins over a generated id, and fills `response.request_id` only when the adapter left it `nil`.
+
+### 37.6 Limits
+
+| Adapter | Limit | Source |
+|---------|-------|--------|
+| `OpenAI.Speech` | input ≤ **4096 Unicode code points**, gated before key resolution as `:context_length_exceeded` with `metadata.count`/`max`; a provider 400 naming `string_too_long` maps to the same reason | documented limit; unit settled by probe (2049 × `e`+U+0301 rejected, 4096 × U+00E9 accepted) |
+| `OpenAI.Transcription` | `max_audio_bytes/0` = **26,148,864** (25 MiB whole-body cap minus 64 KiB for the rest of the form) | probe ladder: 413 *"Maximum content size limit (26214400) exceeded"*; no duration cap found at 1800 s |
+| `Gemini.Transcription` | `max_audio_bytes/0` = **15,679,488** (the raw size whose base64 fits 20 MiB minus 64 KiB) | documented 20 MB inline limit; a 15,831,040-byte clip was accepted, so the cap is conservative |
+| `FakeTranscription` | `max_audio_bytes/0` = 1024, overridable via `adapter_opts[:max_audio_bytes]` | test vehicle |
+
+Gemini documents no per-request TTS character limit (and Gemini TTS is not bundled). No batching: both endpoints take one input per call.
+
+### 37.7 Provider adapters in v0.6
+
+| Adapter | Endpoint | Default model |
+|---------|----------|---------------|
+| `ALLM.Providers.OpenAI.Speech` | `POST /v1/audio/speech`, JSON | `gpt-4o-mini-tts`; voice `"alloy"` when `nil` |
+| `ALLM.Providers.OpenAI.Transcription` | `POST /v1/audio/transcriptions`, multipart | `gpt-transcribe` |
+| `ALLM.Providers.Gemini.Transcription` | `POST …/models/<model>:generateContent`, inline audio | `gemini-flash-latest` |
+
+Gemini TTS was probed and works, but is **not bundled** in v0.6. Anthropic has no audio endpoint. Every injected default is stated in the adapter's public `@doc` and its body builder's `@doc false`.
+
+#### 37.7.1 OpenAI speech
+
+The 200 body is raw audio; `response.format` comes from its `content-type`. The 401 is sent as `text/plain`. Unknown body fields are **ignored** (200), so on OpenAI request acceptance confirms nothing and only response observables settled wire rows.
+
+#### 37.7.2 OpenAI transcription
+
+`response_format` is always `json`. The upload is named by the file's basename for a `{:file, _}` source, else `audio.<ext>` from the MIME type; OpenAI picks the decoder from the filename extension (a valid MP3 named `audio.bin` got 400 *"Unsupported file format bin"*), so a non-file source whose MIME type maps to no known extension is refused locally. Usage arrives as `{"type": "duration", …}` → `:duration_seconds` or `{"type": "tokens", …}` → `:usage`, per model. `languages[0].code` → `:language` where present.
+
+#### 37.7.3 Gemini transcription — prompted chat
+
+Gemini has no transcription endpoint. The adapter sends a fixed instruction ("Generate a verbatim transcript of this audio. Output only the transcript.") plus the audio as camelCase `inlineData`; `:language` is added as a one-sentence hint and `:prompt` as a context block. Consequences, all documented in the adapter moduledoc and `guides/audio.md`:
+
+- **Not guaranteed verbatim.** An LLM transcript can paraphrase or tidy disfluencies where a Whisper-family model cannot.
+- **Silence is not an empty transcript.** Given ~490 s of digital silence, the model returned fluent, invented speech (observed 2026-09-24 on `gemini-flash-latest`, which then resolved to `gemini-3.8-flash`). Non-empty text is not proof the clip contained speech.
+- **Text** is the concatenation of the first candidate's `text` parts, excluding parts marked `"thought": true`. The decoder does not reuse the chat path's `Gemini.Decode.candidate_parts/1`, which turns every `inlineData` into an image part.
+- **Finish reasons:** `MAX_TOKENS` returns `{:ok, response}` with the partial text and `metadata.finish_reason: :length`; `SAFETY`, `RECITATION` and other content-policy stops, and `promptFeedback.blockReason`, return `:content_filter` (recited material such as lyrics can trip `RECITATION`).
+- **Accepted MIME types:** `audio/wav`, `audio/mpeg`, `audio/aiff`, `audio/aac`, `audio/ogg`, `audio/opus`, `audio/flac` (all but `aiff` probed), after parameter/case normalization.
+- Unknown body fields are **rejected** (400 `Unknown name`), so a mistyped `:options` key surfaces as `:invalid_request`. A bad key is `API_KEY_INVALID` on a 400 and classifies as `:authentication_failed`. No request-id header came back on recorded responses; `responseId` → `:id`.
+- Audio tokenizes at about 25 tokens per second (observed).
+
+### 37.8 Testing
+
+- `ALLM.Providers.FakeSpeech` and `ALLM.Providers.FakeTranscription` ship in `lib/`. With no script, speech returns the bytes `"FAKE-AUDIO:" <> input` (format `request.format || :mp3`) and transcription returns `text: ""`. Scripts under `adapter_opts[:speech_script]` / `[:transcription_script]` accept `{:ok, bytes | text}`, `{:ok, %Response{}}`, `{:error, %AdapterError{}}` and `{:retry_until_call, n}`. A non-empty script that runs dry returns `:unknown` with `metadata.cause: :speech_script_exhausted` / `:transcription_script_exhausted`, never a default answer. Cursors key on engine identity at the façade.
+- The real adapters hand a call carrying a script key to the matching Fake **before** their own gates run; the transcription adapters pass their own cap as `adapter_opts[:max_audio_bytes]` so a real clip is not rejected by the Fake's 1024-byte default.
+- Published conformance suites: `ALLM.Test.SpeechAdapterConformance` (6 cases) and `ALLM.Test.TranscriptionAdapterConformance` (6 cases), run against both Fakes and all three real adapters.
+- Recorded fixtures: OpenAI TTS returns raw audio, so each `recorded/` TTS fixture is a JSON envelope (`status`, `headers`, `body_base64`, `byte_size`, `sha256`). Recorders `scripts/record_openai_audio_fixtures.exs` and `scripts/record_gemini_audio_fixtures.exs` carry the live wire probes.
+
+### 37.9 Telemetry
+
+See the §29 amendment: `[:allm, :synthesize, …]` and `[:allm, :transcribe, …]` spans. The `:synthesize` `:stop` metadata carries the whole response, **including the audio bytes**; handlers should read the `audio_bytes` measurement rather than ship `metadata.response`.
+
+### 37.10 Out of scope for v0.6
+
+- **streaming TTS / real-time STT** — needs an event-protocol decision (§8)
+- **OpenAI `/v1/audio/translations`** — English-only, `whisper-1`-only
+- **timestamps, diarization, `srt`/`vtt`** — model-specific; `response.raw` carries the body
+- **OpenAI custom voices** (`{"id": "voice_…"}`) — gated behind OpenAI's approval process; reachable later through `:options`
+- **Gemini TTS** — probed and working; deferred to a later phase
+- **ElevenLabs TTS / STT** — not bundled for chat, so admission needs a §35.7 criterion; the contracts (string voices, file-format atoms, per-slot models) were checked against its shape
+- **Gemini Files API for audio above the inline cap** — a second upload round trip
+- **`ALLM.Audio.from_url/1`** — neither provider accepts an audio URL
+- **audio as a chat `Message` content part** — a chat-adapter change across both OpenAI translators and Gemini's
+- **capability pre-flight** — no `llm_db` audio capability keys exist
+- **a voice catalogue** — §37.1 item 4
+- **`ALLM.Session` integration** — no conversation state
 
 ---
 

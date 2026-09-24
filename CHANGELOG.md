@@ -1,4 +1,4 @@
-## [REL] v0.6.0 — Content moderation and compact tools
+## [REL] v0.6.0 — Content moderation, compact tools and audio
 
 Breaking changes:
 - An `%ALLM.Image{source: {:base64, _}}` whose data will not decode is now
@@ -6,10 +6,12 @@ Breaking changes:
   carrying `:unresolvable_image`, instead of being forwarded for the provider
   to answer 400. Code matching on the provider's `%AdapterError{}` for this
   case now sees a `%ValidationError{}` from pre-flight
-- `ALLM.Error.EngineError` gains `:no_moderation_adapter` and
-  `ALLM.Error.ValidationError` gains `:invalid_moderation_request`. Both are
-  closed enums, so an exhaustive `case` over either reason union needs a new
-  clause
+- `ALLM.Error.EngineError` gains `:no_moderation_adapter`,
+  `:no_speech_adapter` and `:no_transcription_adapter`, and
+  `ALLM.Error.ValidationError` gains `:invalid_moderation_request`,
+  `:invalid_speech_request` and `:invalid_transcription_request`. Both are
+  closed enums, so an exhaustive `case` over either reason union needs new
+  clauses
 - `ALLM.Providers.OpenAI.Images` and `ALLM.Providers.Gemini.Images` no
   longer put `:body_preview` in an `%ImageAdapterError{}`'s `:metadata`, and
   redact key material from its `:message`. Code reading
@@ -90,6 +92,54 @@ Other changes:
   `ALLM.Chat` compile clean under the Elixir 1.19 type checker
 - Silence every compile, test, docs, and conformance warning across both Mix
   projects
+- Add text-to-speech: `ALLM.synthesize(engine, "Hello.", voice: "coral")`
+  returns `{:ok, %ALLM.SpeechResponse{}}` whose `:audio` holds the bytes, via
+  the engine's new `:speech_adapter` slot. `:format` is one of `:mp3`,
+  `:opus`, `:aac`, `:flac`, `:wav`, `:pcm`, and `response.format` reports
+  what actually arrived, read from the response content type
+- Add speech-to-text: `ALLM.transcribe(engine, ALLM.Audio.from_file("clip.mp3"))`
+  returns `{:ok, %ALLM.TranscriptionResponse{text: …}}` via the new
+  `:transcription_adapter` slot. `response.usage` is never `nil`; models
+  billed by the second report `response.duration_seconds` instead of tokens
+- Add `ALLM.Audio`, one serializable audio value for both directions (file,
+  binary or base64 source; bytes base64-encoded on JSON), plus
+  `ALLM.SpeechRequest` / `ALLM.SpeechResponse`,
+  `ALLM.TranscriptionRequest` / `ALLM.TranscriptionResponse`,
+  `ALLM.Error.SpeechAdapterError` and `ALLM.Error.TranscriptionAdapterError`,
+  and the `speech_request/2` / `transcription_request/2` builders and
+  `ALLM.Validate.speech_request/1` / `transcription_request/1`
+- Add per-slot audio models on the engine: `:speech_model` and
+  `:transcription_model`. The audio calls never read the chat `engine.model`;
+  the model is `request.model`, then the slot's field, then the adapter's
+  default
+- Add `ALLM.Providers.OpenAI.Speech` (`POST /v1/audio/speech`, default
+  `gpt-4o-mini-tts`, voice `"alloy"` when unset), which rejects input over
+  4096 code points locally as `:context_length_exceeded` before any key
+  lookup; and `ALLM.Providers.OpenAI.Transcription`
+  (`POST /v1/audio/transcriptions`, default `gpt-transcribe`), whose
+  `max_audio_bytes/0` is 26,148,864, settled by a live probe against the
+  25 MiB body cap
+- Add `ALLM.Providers.Gemini.Transcription`, which transcribes by prompting
+  a chat model (`gemini-flash-latest` by default) with the audio inline.
+  Its `max_audio_bytes/0` is 15,679,488. Its transcript can paraphrase, and
+  given silence it returned invented speech rather than `""`; both caveats
+  are in its docs and the guide. A safety or recitation stop is
+  `:content_filter`, and a truncated transcript comes back as a success with
+  `metadata.finish_reason: :length`
+- Add the `ALLM.SpeechAdapter` and `ALLM.TranscriptionAdapter` behaviours,
+  `ALLM.Providers.FakeSpeech` and `ALLM.Providers.FakeTranscription`
+  (scripted, with the moderation Fake's run-dry-is-an-error rule), and two
+  published six-case conformance suites in `conformance/`
+- Add the `[:allm, :synthesize, :*]` and `[:allm, :transcribe, :*]`
+  telemetry spans, measuring `audio_bytes` and `text_length`. The synthesis
+  `:stop` metadata carries the whole response, audio bytes included
+- Add `guides/audio.md` (both directions, formats, voices, per-slot models,
+  size limits, Gemini fidelity, pairing providers, and the Fakes), with
+  every runnable example executed as a doctest, and
+  `examples/23_synthesize_speech.exs` (`# Provider: openai`) and
+  `examples/24_transcribe_audio.exs` (`# Provider: openai, gemini`), plus
+  `ExamplesHelpers.speech_engine/1` / `transcription_engine/1` and the
+  `ALLM_SPEECH_MODEL` / `ALLM_TRANSCRIPTION_MODEL` overrides
 
 ## [REL] v0.5.0 — Text embeddings
 

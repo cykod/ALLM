@@ -5,7 +5,7 @@ defmodule ExamplesHelpers do
   adapter + default model + key env var name from the `@providers` table, and
   returns a configured `%ALLM.Engine{}` for use in any script.
 
-  Four constructors are exposed:
+  Six constructors are exposed:
 
     * `engine/1` — chat-adapter engine; reads `:adapter` / `:default_model`
       / `:key_env` from the provider row. Pass `vision: true` to route to
@@ -22,6 +22,14 @@ defmodule ExamplesHelpers do
       `:moderation_adapter` / `:moderation_default_model`. Raises
       `ArgumentError` for providers without a moderation adapter, which
       today is every provider except OpenAI.
+    * `speech_engine/1` — text-to-speech engine; reads `:speech_adapter` /
+      `:speech_model` and sets the engine's `:speech_model` field, not
+      `:model`. Raises `ArgumentError` for providers without a speech
+      adapter, which today is every provider except OpenAI.
+    * `transcription_engine/1` — speech-to-text engine; reads
+      `:transcription_adapter` / `:transcription_model` and sets the
+      engine's `:transcription_model` field. Raises `ArgumentError` for
+      Anthropic, which has no transcription adapter.
 
   ## Why the Anthropic row's embedding adapter is `Voyage`
 
@@ -51,6 +59,20 @@ defmodule ExamplesHelpers do
   of the embedding scripts, which carry no marker because every arm has an
   adapter.
 
+  ## Why the audio rows differ
+
+  OpenAI has both a text-to-speech and a speech-to-text endpoint, so its row
+  carries both audio adapters. Gemini's row carries only a transcription
+  adapter: Gemini text-to-speech works but is not bundled yet. Anthropic ships
+  no audio endpoint in either direction, so both of its audio adapters are
+  `nil`. The speech script therefore carries `# Provider: openai` and the
+  transcription script `# Provider: openai, gemini`, and `run_all.exs` skips
+  each on the arms it cannot run on.
+
+  The audio engines set the slot's own model field (`:speech_model`,
+  `:transcription_model`) rather than `:model`, because `ALLM.synthesize/3`
+  and `ALLM.transcribe/3` never read the chat model.
+
   Auto-loads a project-root `.env` via `:env_loader` (dev-only dep) so reviewers
   who keep both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` in `.env` don't have to
   export them per script.
@@ -72,7 +94,11 @@ defmodule ExamplesHelpers do
       embed_adapter: ALLM.Providers.OpenAI.Embeddings,
       embedding_default_model: "text-embedding-3-small",
       moderation_adapter: ALLM.Providers.OpenAI.Moderation,
-      moderation_default_model: "omni-moderation-latest"
+      moderation_default_model: "omni-moderation-latest",
+      speech_adapter: ALLM.Providers.OpenAI.Speech,
+      speech_model: "gpt-4o-mini-tts",
+      transcription_adapter: ALLM.Providers.OpenAI.Transcription,
+      transcription_model: "gpt-transcribe"
     },
     "anthropic" => %{
       adapter: ALLM.Providers.Anthropic,
@@ -89,7 +115,13 @@ defmodule ExamplesHelpers do
       # Anthropic ships no moderation endpoint and names no partner for it —
       # see the moduledoc. `moderation_engine/1` raises here by design.
       moderation_adapter: nil,
-      moderation_default_model: nil
+      moderation_default_model: nil,
+      # Anthropic ships no audio endpoint in either direction — see the
+      # moduledoc. `speech_engine/1` and `transcription_engine/1` raise here.
+      speech_adapter: nil,
+      speech_model: nil,
+      transcription_adapter: nil,
+      transcription_model: nil
     },
     "gemini" => %{
       adapter: ALLM.Providers.Gemini,
@@ -104,7 +136,13 @@ defmodule ExamplesHelpers do
       # Gemini's safety ratings ride `generateContent` rather than a
       # standalone endpoint — see the moduledoc.
       moderation_adapter: nil,
-      moderation_default_model: nil
+      moderation_default_model: nil,
+      # Gemini transcription is bundled; Gemini text-to-speech is not (yet) —
+      # see the moduledoc. `speech_engine/1` raises here.
+      speech_adapter: nil,
+      speech_model: nil,
+      transcription_adapter: ALLM.Providers.Gemini.Transcription,
+      transcription_model: "gemini-flash-latest"
     }
   }
 
@@ -253,17 +291,81 @@ defmodule ExamplesHelpers do
     )
   end
 
-  # `image_engine/1`, `embedding_engine/1` and `moderation_engine/1` are one
-  # constructor differing only in five values, so they share one body
+  @doc """
+  Build a `%ALLM.Engine{}` for the active provider's speech (text-to-speech)
+  adapter.
+
+  Reads `:speech_adapter` / `:speech_model` from the provider row and puts the
+  model on the engine's `:speech_model` field, never on `:model` —
+  `ALLM.synthesize/3` does not read the chat model. The key comes from the
+  row's chat `:key_env`.
+
+  Raises `ArgumentError` naming the provider when the active row has no speech
+  adapter. Only the OpenAI row has one, so the speech script carries a
+  `# Provider: openai` marker and `run_all.exs` skips it on the other arms.
+
+  `extra_opts` is merged on top of the helper defaults; `ALLM_SPEECH_MODEL`
+  overrides the default model when set.
+  """
+  def speech_engine(extra_opts \\ []) do
+    capability_engine(
+      %{
+        adapter_key: :speech_adapter,
+        model_key: :speech_model,
+        engine_model_field: :speech_model,
+        key_env_key: nil,
+        model_env: "ALLM_SPEECH_MODEL",
+        unavailable: "does not have a speech_adapter; this script is OpenAI-only"
+      },
+      extra_opts
+    )
+  end
+
+  @doc """
+  Build a `%ALLM.Engine{}` for the active provider's transcription
+  (speech-to-text) adapter.
+
+  Reads `:transcription_adapter` / `:transcription_model` from the provider row
+  and puts the model on the engine's `:transcription_model` field, never on
+  `:model`. The key comes from the row's chat `:key_env`.
+
+  Raises `ArgumentError` naming the provider when the active row has no
+  transcription adapter (Anthropic). The transcription script carries a
+  `# Provider: openai, gemini` marker so `run_all.exs` skips it there.
+
+  `extra_opts` is merged on top of the helper defaults;
+  `ALLM_TRANSCRIPTION_MODEL` overrides the default model when set.
+  """
+  def transcription_engine(extra_opts \\ []) do
+    capability_engine(
+      %{
+        adapter_key: :transcription_adapter,
+        model_key: :transcription_model,
+        engine_model_field: :transcription_model,
+        key_env_key: nil,
+        model_env: "ALLM_TRANSCRIPTION_MODEL",
+        unavailable: "does not have a transcription_adapter; this script cannot run on that arm"
+      },
+      extra_opts
+    )
+  end
+
+  # `image_engine/1`, `embedding_engine/1`, `moderation_engine/1`,
+  # `speech_engine/1` and `transcription_engine/1` are one constructor
+  # differing only in a handful of values, so they share one body
   # (`agent-spec/IMPLEMENTATION.md:68` — the second-caller trigger is two
   # implementations and is semantic, not byte-level; `:235` requires every
-  # existing copy migrate in the same commit). A fourth capability is a spec
-  # map, not a fourth copy.
+  # existing copy migrate in the same commit). A new capability is a spec
+  # map, not a new copy.
   #
   #   * `:adapter_key`  — provider-row key AND the `%ALLM.Engine{}` slot; the
-  #     two are the same atom for all three capabilities today.
-  #   * `:model_key`    — provider-row key for the capability's default model,
-  #     which always lands on the engine's single shared `:model` field.
+  #     two are the same atom for every capability today.
+  #   * `:model_key`    — provider-row key for the capability's default model.
+  #   * `:engine_model_field` — optional; the `%ALLM.Engine{}` field the model
+  #     lands on. Defaults to the shared `:model`, which is what images,
+  #     embeddings and moderation read. The audio capabilities set
+  #     `:speech_model` / `:transcription_model`, because their façades never
+  #     read `:model` (a chat model name is never an audio model name).
   #   * `:key_env_key`  — optional provider-row key naming a capability-specific
   #     key env var, falling back to the row's chat `:key_env`. Only embeddings
   #     uses it (the Anthropic row's `VOYAGE_API_KEY`); `nil` for the others.
@@ -308,7 +410,7 @@ defmodule ExamplesHelpers do
 
     model = System.get_env(spec.model_env, default_model)
 
-    base = [{spec.adapter_key, adapter}, {:model, model}]
+    base = [{spec.adapter_key, adapter}, {Map.get(spec, :engine_model_field, :model), model}]
 
     ALLM.Engine.new(Keyword.merge(base, extra_opts))
   end

@@ -1,3 +1,25 @@
+## [DOC] Document audio: spec §37, guide, examples (25.6-25.7)
+*Thursday, September 24th at 3am*
+Documents the speech synthesis and transcription capability per 
+steering/2026-09-24_SST_SUPPORT.md Phases 25.6 and 25.7. Release stays out of 
+scope; the maintainer runs scripts/release.exs separately.
+
+- Spec §37 (data types, behaviours, engine slots, façade, probe-settled 
+limits, providers, testing, telemetry) plus §27/§29/§32.5/§33 amendments.
+- guides/audio.md with executed iex> blocks over the Fakes, registered in all 
+three guide gates; covers per-slot models, Gemini transcript fidelity and 
+silence hallucination, size limits, retry arithmetic, and what scripted 
+adapters do and do not gate.
+- examples 23 (synthesize) and 24 (transcribe), live-verified on OpenAI and 
+Gemini; _helpers.exs capability_engine/2 gains :engine_model_field; Gemini run 
+snapshot regenerated from a clean run.
+- CHANGELOG: audio folded into the unreleased v0.6.0 entry, derived from git 
+diff v0.5.0..HEAD lib/.
+- PHASE_19_DESIGN.md marked superseded; phase tickets swept with self-scoring 
+predicates.
+
+---
+
 ## [FEAT] Add Gemini transcription adapter (Phase 25.5)
 *Thursday, September 24th at 2am*
 Adds ALLM.Providers.Gemini.Transcription (spec §37) per 

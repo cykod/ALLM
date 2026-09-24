@@ -31,7 +31,11 @@ provider table:
     embed_adapter: ALLM.Providers.OpenAI.Embeddings,
     embedding_default_model: "text-embedding-3-small",
     moderation_adapter: ALLM.Providers.OpenAI.Moderation,
-    moderation_default_model: "omni-moderation-latest"
+    moderation_default_model: "omni-moderation-latest",
+    speech_adapter: ALLM.Providers.OpenAI.Speech,
+    speech_model: "gpt-4o-mini-tts",
+    transcription_adapter: ALLM.Providers.OpenAI.Transcription,
+    transcription_model: "gpt-transcribe"
   },
   "anthropic" => %{
     adapter: ALLM.Providers.Anthropic,
@@ -44,7 +48,11 @@ provider table:
     embedding_default_model: "voyage-3.5-lite",
     embedding_key_env: "VOYAGE_API_KEY",
     moderation_adapter: nil,
-    moderation_default_model: nil
+    moderation_default_model: nil,
+    speech_adapter: nil,
+    speech_model: nil,
+    transcription_adapter: nil,
+    transcription_model: nil
   },
   "gemini" => %{
     adapter: ALLM.Providers.Gemini,
@@ -57,7 +65,11 @@ provider table:
     embed_adapter: ALLM.Providers.Gemini.Embeddings,
     embedding_default_model: "gemini-embedding-001",
     moderation_adapter: nil,
-    moderation_default_model: nil
+    moderation_default_model: nil,
+    speech_adapter: nil,
+    speech_model: nil,
+    transcription_adapter: ALLM.Providers.Gemini.Transcription,
+    transcription_model: "gemini-flash-latest"
   }
 }
 ```
@@ -77,6 +89,15 @@ overrides the model independently of `ALLM_MODEL`.
 for a row that has no moderation adapter — which is why scripts 19 and 20
 carry a `# Provider: openai` marker. `ALLM_MODERATION_MODEL` overrides the
 model independently of `ALLM_MODEL`.
+
+`ExamplesHelpers.speech_engine/1` and `ExamplesHelpers.transcription_engine/1`
+read `:speech_adapter` / `:speech_model` and `:transcription_adapter` /
+`:transcription_model`, and raise `ArgumentError` for a row whose adapter is
+`nil`. Unlike the other capability engines, they put the model on the
+engine's per-slot field (`:speech_model`, `:transcription_model`) rather
+than on `:model`, because `ALLM.synthesize/3` and `ALLM.transcribe/3` never
+read the chat model. `ALLM_SPEECH_MODEL` and `ALLM_TRANSCRIPTION_MODEL`
+override them.
 
 Every script's first lines are:
 
@@ -117,11 +138,11 @@ So either:
 
 ### Which keys each provider arm needs
 
-| `ALLM_PROVIDER` | Chat / vision / image scripts | Embedding scripts (16–18) | Moderation scripts (19–20) |
-|---|---|---|---|
-| `openai` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` |
-| `gemini` | `GEMINI_API_KEY` | `GEMINI_API_KEY` | *skipped* |
-| `anthropic` | `ANTHROPIC_API_KEY` | **`VOYAGE_API_KEY`** | *skipped* |
+| `ALLM_PROVIDER` | Chat / vision / image scripts | Embedding scripts (16–18) | Moderation scripts (19–20) | Speech (23) | Transcription (24) |
+|---|---|---|---|---|---|
+| `openai` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` |
+| `gemini` | `GEMINI_API_KEY` | `GEMINI_API_KEY` | *skipped* | *skipped* | `GEMINI_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` | **`VOYAGE_API_KEY`** | *skipped* | *skipped* | *skipped* |
 
 #### Embedding scripts and `VOYAGE_API_KEY`
 
@@ -290,6 +311,26 @@ Neither script costs anything: `/v1/moderations` is free.
 
 No `# Provider:` marker: it runs on every arm.
 
+## Audio (23–24)
+
+- `23_synthesize_speech.exs` — `ALLM.synthesize/3` turns one sentence into
+  MP3 audio and writes it to a temp file (the path is printed, so you can
+  play it). Asserts non-empty bytes, `response.format == :mp3` (read from
+  the response content type, not copied from the request), an
+  `audio/mpeg` MIME type, and an MP3 signature on the first bytes.
+  `# Provider: openai`: Gemini text-to-speech is not bundled yet, and
+  Anthropic has no audio endpoint.
+- `24_transcribe_audio.exs` — `ALLM.transcribe/3` over
+  `fixtures/quick_brown_fox.mp3` (one spoken sentence). Asserts the
+  transcript is non-empty and mentions "fox", and that `response.usage` is
+  an `%ALLM.Usage{}`. `# Provider: openai, gemini`. On Gemini the
+  transcript comes from a chat model prompted to transcribe, so the one
+  content assertion is a case-insensitive "fox" rather than the whole
+  sentence.
+
+Both cost well under $0.001 per run. The script numbers skip 22, which
+another planned example reserves.
+
 ## Running
 
 Single script (default — OpenAI):
@@ -349,6 +390,8 @@ facade (`generate/3`, `stream/3`, `chat/3`, `step/3`, `generate_image/3`,
 | `19_moderate_text.exs` | tight | C | openai | `ALLM.moderate/3` over an all-strings input; asserts batch cardinality, index order, and that a plain threat is flagged while a benign string is not |
 | `20_moderate_image.exs` | tight | C | openai | multimodal `ALLM.moderate/3` — `ModerationRequest.multimodal?/1` derives the result count before the call, and the script asserts it against the count that came back (two elements in, one result out) |
 | `21_compact_tools.exs` | tight | C | all | `compact: true` tools: the model completes a task through stubs + `tool_help`; asserts step-1 input tokens drop versus the same run with full tools |
+| `23_synthesize_speech.exs` | tight | C | openai | `ALLM.synthesize/3` — text to MP3; asserts non-empty bytes, `format: :mp3`, `audio/mpeg`, and an MP3 signature |
+| `24_transcribe_audio.exs` | loose | C | openai, gemini | `ALLM.transcribe/3` over a checked-in MP3; asserts the transcript mentions "fox" and `usage` is an `%ALLM.Usage{}` |
 
 ## Image generation
 
@@ -437,9 +480,9 @@ provider pricing page for any tight budget.
 
 | Provider arm | Approx cost | Notes |
 |--------------|-------------|-------|
-| OpenAI (`gpt-5.4-nano` + `dall-e-2` + `gpt-image-1` + `text-embedding-3-small` + `omni-moderation-latest`) | **~$0.13 USD** | bulk of the cost is `11_edit_image.exs` (~$0.04); the moderation scripts are free |
+| OpenAI (`gpt-5.4-nano` + `dall-e-2` + `gpt-image-1` + `text-embedding-3-small` + `omni-moderation-latest` + `gpt-4o-mini-tts` + `gpt-transcribe`) | **~$0.13 USD** | bulk of the cost is `11_edit_image.exs` (~$0.04); the moderation scripts are free and the audio scripts cost well under $0.001 together |
 | Anthropic (`claude-sonnet-4-6` + `voyage-3.5-lite`) | **~$0.08 USD** | drops to ~$0.01 with `ALLM_MODEL=claude-haiku-4-5` |
-| Gemini (`gemini-3-flash-preview` + image preview + `gemini-embedding-001`) | **~$0.03 USD** | image scripts on Gemini skip variations |
+| Gemini (`gemini-3-flash-preview` + image preview + `gemini-embedding-001` + `gemini-flash-latest` (transcription)) | **~$0.03 USD** | image scripts on Gemini skip variations |
 | **All three combined** | **~$0.24 USD** | per clean dual+gemini pass |
 
 The embedding scripts add well under $0.001 per arm — a few thousand
@@ -492,6 +535,10 @@ Scripts 19–20 likewise ignore `ALLM_MODEL` and read
 `ALLM_MODERATION_MODEL`, which defaults to `omni-moderation-latest` on
 the only arm they run on. The `text-moderation-*` family was shut down on
 2025-10-27 and answers a 400.
+
+Script 23 reads `ALLM_SPEECH_MODEL` (default `gpt-4o-mini-tts`) and
+script 24 reads `ALLM_TRANSCRIPTION_MODEL` (default `gpt-transcribe` on
+OpenAI, `gemini-flash-latest` on Gemini).
 
 The variables are deliberately separate: a chat model id sent to an
 embeddings or moderations endpoint is a guaranteed 400, so the documented
