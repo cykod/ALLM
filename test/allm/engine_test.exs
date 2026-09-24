@@ -378,4 +378,88 @@ defmodule ALLM.EngineTest do
       assert params == %{temperature: 0.4}
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Audio slots — :speech_adapter / :transcription_adapter and their models
+  # ---------------------------------------------------------------------------
+
+  for {field, fake} <- [
+        speech_adapter: ALLM.Providers.FakeSpeech,
+        transcription_adapter: ALLM.Providers.FakeTranscription
+      ] do
+    describe "#{inspect(field)}" do
+      @field field
+      @fake fake
+
+      test "new/1 accepts a module and defaults to nil" do
+        assert Map.fetch!(Engine.new([{@field, @fake}]), @field) == @fake
+        assert Map.fetch!(Engine.new(), @field) == nil
+      end
+
+      test "new/1 with {Mod, []} raises ArgumentError naming the field" do
+        assert_raise ArgumentError, ~r/#{@field}/, fn ->
+          Engine.new([{@field, {@fake, []}}])
+        end
+      end
+
+      test "round-trips through JSON as a module atom" do
+        engine = Engine.new([{@field, @fake}])
+        assert {:ok, decoded} = engine |> ALLM.Serializer.to_json!() |> ALLM.Serializer.from_json()
+        assert Map.fetch!(decoded, @field) == @fake
+        assert decoded == engine
+      end
+
+      test "round-trips through term_to_binary" do
+        engine = Engine.new([{@field, @fake}])
+        assert engine == engine |> :erlang.term_to_binary() |> :erlang.binary_to_term()
+      end
+
+      test "resolve_params/2 does not leak it into params" do
+        params = Engine.resolve_params(Engine.new(), [{@field, @fake}, {:temperature, 0.4}])
+        assert params == %{temperature: 0.4}
+      end
+    end
+  end
+
+  for field <- [:speech_model, :transcription_model] do
+    describe "#{inspect(field)}" do
+      @field field
+
+      test "new/1 accepts a string and defaults to nil" do
+        assert Map.fetch!(Engine.new([{@field, "audio-model-1"}]), @field) == "audio-model-1"
+        assert Map.fetch!(Engine.new(), @field) == nil
+      end
+
+      test "is independent of the chat :model" do
+        engine = Engine.new([{:model, "chat-model"}, {@field, "audio-model-1"}])
+        assert engine.model == "chat-model"
+        assert Map.fetch!(engine, @field) == "audio-model-1"
+      end
+
+      test "JSON round-trip preserves it" do
+        engine = Engine.new([{@field, "audio-model-1"}])
+        assert {:ok, decoded} = engine |> ALLM.Serializer.to_json!() |> ALLM.Serializer.from_json()
+        assert Map.fetch!(decoded, @field) == "audio-model-1"
+        assert decoded == engine
+      end
+
+      test "resolve_params/2 does not leak it into chat params" do
+        params = Engine.resolve_params(Engine.new(), [{@field, "audio-model-1"}, {:top_p, 1.0}])
+        assert params == %{top_p: 1.0}
+      end
+    end
+  end
+
+  test "a serialized engine pairing different speech and transcription slots round-trips intact" do
+    engine =
+      Engine.new(
+        model: "chat-model",
+        speech_adapter: ALLM.Providers.FakeSpeech,
+        speech_model: "tts-model",
+        transcription_adapter: ALLM.Providers.FakeTranscription,
+        transcription_model: "stt-model"
+      )
+
+    assert {:ok, ^engine} = engine |> ALLM.Serializer.to_json!() |> ALLM.Serializer.from_json()
+  end
 end

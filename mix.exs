@@ -116,7 +116,9 @@ defmodule ALLM.MixProject do
           ALLM.ToolResultEncoder,
           ALLM.ImageAdapter,
           ALLM.EmbeddingAdapter,
-          ALLM.ModerationAdapter
+          ALLM.ModerationAdapter,
+          ALLM.SpeechAdapter,
+          ALLM.TranscriptionAdapter
         ],
         Providers: [
           ALLM.Providers.OpenAI,
@@ -133,6 +135,8 @@ defmodule ALLM.MixProject do
           ALLM.Providers.FakeImages,
           ALLM.Providers.FakeEmbeddings,
           ALLM.Providers.FakeModeration,
+          ALLM.Providers.FakeSpeech,
+          ALLM.Providers.FakeTranscription,
           ALLM.Providers.Support.SSE,
           ALLM.Providers.Support.OpenAIHeaders,
           ALLM.Providers.Support.GeminiHeaders,

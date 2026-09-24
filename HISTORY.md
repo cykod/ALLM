@@ -1,3 +1,22 @@
+## [FEAT] Add audio adapter behaviours, engine slots and Fakes (25.2)
+*Thursday, September 24th at 1am*
+Adds Layer B for speech synthesis and transcription (spec §37), per 
+steering/2026-09-24_SST_SUPPORT.md Phase 25.2.
+
+- ALLM.SpeechAdapter and ALLM.TranscriptionAdapter behaviours with numbered 
+invariants; transcription adds max_audio_bytes/0 and a fixed gate order 
+(resolvable, size, mime, key).
+- ALLM.Engine gains :speech_adapter, :transcription_adapter, :speech_model and 
+:transcription_model at every site, so each audio slot carries its own model 
+and serializes intact.
+- FakeSpeech and FakeTranscription: scripted, deterministic, per-engine cursors 
+and retry budgets, loud script exhaustion, gates ahead of the script 
+(FakeTranscription honours adapter_opts[:max_audio_bytes]).
+- Two published conformance suites (6 cases each) with :gate_opts so keyless 
+cases stay keyless in a keyed shell; case 2 asserts an audio/ mime.
+
+---
+
 ## [FEAT] Add Layer A audio data types (Phase 25.1)
 *Thursday, September 24th at 1am*
 Adds the serializable data layer for speech synthesis and transcription (spec 

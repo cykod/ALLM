@@ -35,10 +35,12 @@ defmodule ALLM.Engine do
       re-stamping); a pre-fix serialized engine lacking `"id"` decodes to
       `nil`. Used as the per-engine cursor key for the deterministic
       `ALLM.Providers.Fake`, `ALLM.Providers.FakeImages`,
-      `ALLM.Providers.FakeEmbeddings` and `ALLM.Providers.FakeModeration`
+      `ALLM.Providers.FakeEmbeddings`, `ALLM.Providers.FakeModeration`,
+      `ALLM.Providers.FakeSpeech` and `ALLM.Providers.FakeTranscription`
       adapters (§31).
     * `:adapter`, `:tool_executor`, `:tool_result_encoder`, `:image_adapter`,
-      `:embed_adapter`, `:moderation_adapter` — `module | nil`. Modules are
+      `:embed_adapter`, `:moderation_adapter`, `:speech_adapter`,
+      `:transcription_adapter` — `module | nil`. Modules are
       restored on JSON decode via
       `String.to_existing_atom/1`; an adapter module not loaded in the BEAM
       at decode time surfaces as `{:_unknown, :atom_decode_failed}` via the
@@ -55,7 +57,13 @@ defmodule ALLM.Engine do
       rely on atom values for provider behaviour (e.g. `verify: :peer`)
       should convert at the adapter boundary rather than expect round-trip
       equality through JSON. The same rule applies to kwlist-shaped `:retry`.
-    * `:model` — `String.t | nil`.
+    * `:model` — `String.t | nil`. The chat model; the audio slots never
+      read it.
+    * `:speech_model`, `:transcription_model` — `String.t | nil`. Each audio
+      slot's own model, persisted alongside its adapter because an audio
+      model never shares the chat model's namespace. A request's own
+      `:model` wins over the slot's; when both are `nil` the adapter applies
+      its own default.
     * `:tools` — `[ALLM.Tool.t]` where each tool's `:handler` is `nil` or
       `{Module, :function}`. A tool with an anonymous-function handler is not
       JSON-serializable (see `ALLM.Tool` moduledoc). Each tool's `:manual`
@@ -101,6 +109,10 @@ defmodule ALLM.Engine do
           image_adapter: module() | nil,
           embed_adapter: module() | nil,
           moderation_adapter: module() | nil,
+          speech_adapter: module() | nil,
+          transcription_adapter: module() | nil,
+          speech_model: String.t() | nil,
+          transcription_model: String.t() | nil,
           params: map(),
           context: map(),
           retry: retry(),
@@ -117,6 +129,10 @@ defmodule ALLM.Engine do
     :image_adapter,
     :embed_adapter,
     :moderation_adapter,
+    :speech_adapter,
+    :transcription_adapter,
+    :speech_model,
+    :transcription_model,
     adapter_opts: [],
     tools: [],
     params: %{},
@@ -143,6 +159,10 @@ defmodule ALLM.Engine do
     :image_adapter,
     :embed_adapter,
     :moderation_adapter,
+    :speech_adapter,
+    :transcription_adapter,
+    :speech_model,
+    :transcription_model,
     :params,
     :context,
     :retry,
@@ -162,7 +182,9 @@ defmodule ALLM.Engine do
     :tool_result_encoder,
     :image_adapter,
     :embed_adapter,
-    :moderation_adapter
+    :moderation_adapter,
+    :speech_adapter,
+    :transcription_adapter
   ]
 
   @doc """
@@ -174,8 +196,8 @@ defmodule ALLM.Engine do
   `%EngineError{reason: :missing_adapter}`), not here.
 
   The module-typed fields `:adapter`, `:tool_executor`, `:tool_result_encoder`,
-  `:image_adapter`, `:embed_adapter`, and `:moderation_adapter` must each be a
-  module (a plain atom) or `nil`. A
+  `:image_adapter`, `:embed_adapter`, `:moderation_adapter`, `:speech_adapter`,
+  and `:transcription_adapter` must each be a module (a plain atom) or `nil`. A
   non-atom value — most commonly the unsupported
   `tool_executor: {ALLM.ToolExecutor.Default, tools: %{...}}` form — raises
   `ArgumentError` at construction rather than crashing later inside the tool
@@ -187,7 +209,8 @@ defmodule ALLM.Engine do
   A stable, serializable `:id` is auto-stamped via
   `System.unique_integer([:positive])` when none is supplied — this is the
   per-engine identity used as the
-  `Fake`/`FakeImages`/`FakeEmbeddings`/`FakeModeration` multi-call cursor key
+  `Fake`/`FakeImages`/`FakeEmbeddings`/`FakeModeration`/`FakeSpeech`/
+  `FakeTranscription` multi-call cursor key
   (see §31). Because every constructed engine gets a distinct id,
   `Engine.new(opts) != Engine.new(opts)` by `:id` — each constructed engine
   *is* a distinct instance. An explicitly-passed `id:` opt is preserved
@@ -239,7 +262,8 @@ defmodule ALLM.Engine do
   @doc false
   # Inject the engine's `:id` as `adapter_opts[:cursor_key]` so content-equal
   # engines don't share the `Fake`/`FakeImages`/`FakeEmbeddings`/
-  # `FakeModeration` process-dict cursor (§31).
+  # `FakeModeration`/`FakeSpeech`/`FakeTranscription` process-dict cursor
+  # (§31).
   # `Keyword.put_new/3` — an explicit caller-supplied `:cursor_key` wins;
   # a `nil`-id (hand-built) engine passes through untouched and falls back to
   # the `:erlang.phash2(scripts)` default. Provider-neutral: real adapters
@@ -465,8 +489,9 @@ defmodule ALLM.Engine do
   Returned as a **map** (not a keyword list). Engine-field keys
   (`:adapter`, `:adapter_opts`, `:model`, `:tools`, `:tool_executor`,
   `:tool_result_encoder`, `:image_adapter`, `:embed_adapter`,
-  `:moderation_adapter`, `:params`, `:context`, `:retry`, `:middleware`,
-  `:metadata`, `:api_key`) are never forwarded
+  `:moderation_adapter`, `:speech_adapter`, `:transcription_adapter`,
+  `:speech_model`, `:transcription_model`, `:params`, `:context`, `:retry`,
+  `:middleware`, `:metadata`, `:api_key`) are never forwarded
   they are consumed by the engine layer or by other resolvers. Every
   other opts key flows through unchanged, so provider-specific knobs
   (`:reasoning_effort`) and orchestration knobs (`:max_turns`,
@@ -508,6 +533,10 @@ defmodule ALLM.Engine do
       image_adapter: restore_module(data["image_adapter"]),
       embed_adapter: restore_module(data["embed_adapter"]),
       moderation_adapter: restore_module(data["moderation_adapter"]),
+      speech_adapter: restore_module(data["speech_adapter"]),
+      transcription_adapter: restore_module(data["transcription_adapter"]),
+      speech_model: data["speech_model"],
+      transcription_model: data["transcription_model"],
       params: restore_atom_keyed_map(data["params"] || %{}),
       context: restore_atom_keyed_map(data["context"] || %{}),
       retry: restore_retry(data["retry"]),
