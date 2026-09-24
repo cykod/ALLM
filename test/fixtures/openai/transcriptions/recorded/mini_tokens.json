@@ -1,0 +1,20 @@
+{
+  "body": {
+    "text": "The quick brown fox jumps over the lazy dog.",
+    "usage": {
+      "input_token_details": {
+        "audio_tokens": 37,
+        "text_tokens": 0
+      },
+      "input_tokens": 37,
+      "output_tokens": 12,
+      "total_tokens": 49,
+      "type": "tokens"
+    }
+  },
+  "headers": {
+    "content-type": "application/json",
+    "x-request-id": "req_dde60fe1882f4b9b8ffb29da2dde7e86"
+  },
+  "status": 200
+}

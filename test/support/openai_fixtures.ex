@@ -192,6 +192,91 @@ defmodule ALLM.Providers.OpenAITestFixtures do
   end
 
   @doc """
+  Load a recorded `/v1/audio/speech` fixture envelope by name (Phase 25.4).
+
+  Names map to `test/fixtures/openai/speech/recorded/<name>.json`. Every file
+  is a JSON envelope written by `scripts/record_openai_audio_fixtures.exs`:
+  `{"status", "headers", "body_base64", "byte_size", "sha256"}` for an audio
+  body, `{"status", "headers", "body"}` for a JSON body, or a `probe_*`
+  outcome. Use `envelope_bytes/1` for the audio. `drop_comment/1` is
+  defensive, so provenance is asserted from the raw bytes in the wire test.
+
+  ## Examples
+
+      iex> env = ALLM.Providers.OpenAITestFixtures.speech_recorded(:mp3_default)
+      iex> env["headers"]["content-type"]
+      "audio/mpeg"
+  """
+  @spec speech_recorded(atom()) :: body()
+  def speech_recorded(name) when is_atom(name), do: load_envelope("speech/recorded", name)
+
+  @doc """
+  Load a synthesized `/v1/audio/speech` fixture envelope by name (Phase 25.4),
+  `_comment` marker stripped.
+
+  ## Examples
+
+      iex> env = ALLM.Providers.OpenAITestFixtures.speech_synthesized(:error_401)
+      iex> env["status"]
+      401
+  """
+  @spec speech_synthesized(atom()) :: body()
+  def speech_synthesized(name) when is_atom(name), do: load_envelope("speech/synthesized", name)
+
+  @doc """
+  Load a recorded `/v1/audio/transcriptions` fixture envelope by name
+  (Phase 25.4). Same envelope shapes as `speech_recorded/1`.
+
+  ## Examples
+
+      iex> env = ALLM.Providers.OpenAITestFixtures.transcription_recorded(:gpt_transcribe)
+      iex> env["body"]["usage"]["type"]
+      "duration"
+  """
+  @spec transcription_recorded(atom()) :: body()
+  def transcription_recorded(name) when is_atom(name),
+    do: load_envelope("transcriptions/recorded", name)
+
+  @doc """
+  Load a synthesized `/v1/audio/transcriptions` fixture envelope by name
+  (Phase 25.4), `_comment` marker stripped.
+
+  ## Examples
+
+      iex> env = ALLM.Providers.OpenAITestFixtures.transcription_synthesized(:error_429)
+      iex> env["status"]
+      429
+  """
+  @spec transcription_synthesized(atom()) :: body()
+  def transcription_synthesized(name) when is_atom(name),
+    do: load_envelope("transcriptions/synthesized", name)
+
+  @doc """
+  Decode an audio envelope's `body_base64`, checking it against the recorded
+  `sha256` and `byte_size`, so a corrupted fixture fails here rather than as
+  a confusing decoder assertion.
+
+  ## Examples
+
+      iex> env = ALLM.Providers.OpenAITestFixtures.speech_recorded(:wav)
+      iex> <<"RIFF", _::binary>> = ALLM.Providers.OpenAITestFixtures.envelope_bytes(env)
+  """
+  @spec envelope_bytes(body()) :: binary()
+  def envelope_bytes(%{"body_base64" => b64, "sha256" => sha, "byte_size" => size}) do
+    bytes = Base.decode64!(b64)
+    ^size = byte_size(bytes)
+    ^sha = :sha256 |> :crypto.hash(bytes) |> Base.encode16(case: :lower)
+    bytes
+  end
+
+  defp load_envelope(dir, name) do
+    @fixtures_root
+    |> Path.join([dir, "/", "#{name}.json"])
+    |> load_json()
+    |> drop_comment()
+  end
+
+  @doc """
   Strip the leading `_comment` provenance marker from a decoded fixture map.
 
   Every synthesized fixture carries one; recorded fixtures do not (which is

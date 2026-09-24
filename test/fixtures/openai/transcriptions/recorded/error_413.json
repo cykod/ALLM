@@ -1,0 +1,19 @@
+{
+  "body": {
+    "error": {
+      "code": null,
+      "message": "413: Maximum content size limit (26214400) exceeded (26214850 bytes read)",
+      "param": null,
+      "type": "server_error"
+    },
+    "usage": {
+      "seconds": 0,
+      "type": "duration"
+    }
+  },
+  "headers": {
+    "content-type": "application/json",
+    "x-request-id": "req_c7cf6ed40c7748198f7c2c8f8881b47d"
+  },
+  "status": 413
+}

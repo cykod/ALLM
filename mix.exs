@@ -125,6 +125,8 @@ defmodule ALLM.MixProject do
           ALLM.Providers.OpenAI.Images,
           ALLM.Providers.OpenAI.Embeddings,
           ALLM.Providers.OpenAI.Moderation,
+          ALLM.Providers.OpenAI.Speech,
+          ALLM.Providers.OpenAI.Transcription,
           ALLM.Providers.Anthropic,
           ALLM.Providers.Gemini,
           ALLM.Providers.Gemini.Images,

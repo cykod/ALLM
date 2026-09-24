@@ -1,0 +1,15 @@
+{
+  "body": {
+    "error": {
+      "code": null,
+      "message": "[{'type': 'string_too_long', 'loc': ('body', 'input'), 'msg': 'String should have at most 4096 characters', 'ctx': {'max_length': 4096}}]",
+      "param": null,
+      "type": "invalid_request_error"
+    }
+  },
+  "headers": {
+    "content-type": "application/json",
+    "x-request-id": "req_dac0bd362aef41f6af5e09b7c23648b5"
+  },
+  "status": 400
+}

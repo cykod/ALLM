@@ -104,14 +104,7 @@ defmodule ALLM.SpeechResponse do
   def mime_to_format(nil), do: nil
 
   def mime_to_format(mime) when is_binary(mime) do
-    key =
-      mime
-      |> String.split(";", parts: 2)
-      |> hd()
-      |> String.trim()
-      |> String.downcase()
-
-    Map.get(@mime_to_format, key)
+    Map.get(@mime_to_format, ALLM.Audio.normalize_mime(mime))
   end
 
   @doc """

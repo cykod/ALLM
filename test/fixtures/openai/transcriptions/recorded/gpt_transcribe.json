@@ -1,0 +1,19 @@
+{
+  "body": {
+    "languages": [
+      {
+        "code": "en"
+      }
+    ],
+    "text": "The quick brown fox jumps over the lazy dog.",
+    "usage": {
+      "seconds": 4,
+      "type": "duration"
+    }
+  },
+  "headers": {
+    "content-type": "application/json",
+    "x-request-id": "req_c512be08e0db4ab4886bd42f7719ae28"
+  },
+  "status": 200
+}

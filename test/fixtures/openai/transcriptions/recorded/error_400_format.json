@@ -1,0 +1,15 @@
+{
+  "body": {
+    "error": {
+      "code": "invalid_value",
+      "message": "Audio file might be corrupted or unsupported",
+      "param": "file",
+      "type": "invalid_request_error"
+    }
+  },
+  "headers": {
+    "content-type": "application/json",
+    "x-request-id": "req_5b71149d8bc44dd491dbda0a2ac62832"
+  },
+  "status": 400
+}

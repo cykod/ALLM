@@ -9,7 +9,7 @@ Companion to `steering/2026-09-24_SST_SUPPORT.md`. Tick-state, deviations and no
 | 25.1 | Completed |
 | 25.2 | Completed |
 | 25.3 | Completed |
-| 25.4 | Not started |
+| 25.4 | Completed |
 | 25.5 | Not started |
 | 25.6 | Not started |
 | 25.7 | Not started |
@@ -167,3 +167,89 @@ Mutation checks (each reverted): falling back to `engine.model` in the speech mo
 - `transcribe/3`'s `@doc` promises the bundled STT adapters do not retry (façade's 3 attempts is the only loop). Binds 25.4 (`OpenAI.Transcription`) and 25.5 (`Gemini.Transcription`): no adapter-level `Retry.run/3`, no `{:retry, …}` return.
 - `synthesize/3`'s `@doc` says a speech adapter's own loop multiplies to up to 9 calls. Binds 25.4's `OpenAI.Speech` `@doc` to say which reasons it retries.
 
+
+## Phase 25.4 — OpenAI adapters
+
+Built 2026-09-24 on `75e95b3` (uncommitted working tree). Status: built, gates pending.
+
+### Checklist (25.4.3)
+
+- [x] `openai/speech.ex`, `openai/transcription.ex`: gate order `input shape/length (TTS) | resolvable → size → filename (STT) → Keys.fetch!(:openai) → Req → decode`.
+- [x] Redactor from `openai/moderation.ex` (same `sk-|rk-|org-` pattern, same provider); `sanitize_cause/1` with the 22.7 fix (`%{cause | data: "", position: 0, token: nil}`); no `body_preview`.
+- [x] Recorder `scripts/record_openai_audio_fixtures.exs` + fixtures + loaders in `test/support/openai_fixtures.ex` (`speech_recorded/1`, `speech_synthesized/1`, `transcription_recorded/1`, `transcription_synthesized/1`, `envelope_bytes/1`), all delegating to the existing `drop_comment/1`.
+- [x] Wire-map rows the probe settled, amended in the design at the claim (rows rewritten in place plus one dated `> CORRECTED 2026-09-24:` blockquote under the OpenAI table, and one under the 25.4.1 `to_multipart_body/2` bullet).
+- [x] `groups_for_modules` (2 adapters → `Providers`); `test/fixtures/openai/README.md` sections.
+
+### Live probe (BLOCKING) — `( set -a; . ./.env; set +a; mix run scripts/record_openai_audio_fixtures.exs )`
+
+First run 2026-09-24: exit 0, **24 live calls**, every asserted arm matched, then 30 files written (5 clips, the examples copy, 9 speech + 9 transcription recorded files, plus `error_413.json` from the ladder). Second run (after the expectations were tightened to the observed outcomes, below): exit 0, `0 live calls: every target is already recorded.`
+
+| Arm | Design expectation | Observed | Outcome |
+|-----|--------------------|----------|---------|
+| speech control (unknown field) | 200 | 200 | unknown fields still ignored |
+| tts default / wav / pcm | 200, `audio/mpeg` / `audio/wav` / `audio/pcm`, `x-request-id` | as expected | CONFIRMED |
+| tts 2049 × `e`+U+0301 | 400 if code points | **400** `string_too_long` (*"String should have at most 4096 characters"*) | not graphemes |
+| tts 4096 × U+00E9 | 200 if code points | **200** (4.7 MB mp3 on `tts-1`) | not bytes → **code points** |
+| tts 4097 ASCII | 400 | 400 `string_too_long`, `code: null`, pydantic-shaped message | CONFIRMED; classifier keys on the message |
+| tts bad model | 404 `model_not_found` | as expected (content-type `application/json; charset=utf-8`) | CONFIRMED |
+| clips ×5 | 200 | mp3 59,520 B, wav 182,444, flac 107,311, aac 32,534, opus 34,010 | written |
+| stt control | 200 | 200 | ignored |
+| stt gpt-transcribe | 200, duration usage | `{"type":"duration","seconds":4}`, `languages:[{"code":"en"}]`, exact text | CONFIRMED |
+| stt gpt-4o-mini-transcribe | 200, token usage | `input_tokens 37, output_tokens 12, total_tokens 49` (+ `input_token_details`) | CONFIRMED |
+| stt junk bytes (`junk.mp3`) | 400 | 400 `invalid_value` *"Audio file might be corrupted or unsupported"* | the accepted-format list was **not** re-observed (the extension was valid) |
+| stt `audio.bin` | 200 or 400 | **400** `unsupported_value` *"Unsupported file format bin"* | filename trusted → **filename gate** (design's own outcome rule) |
+| stt size ladder (whisper-1) | rung 1 200, rung 3 400/413, rung 2 settles | **200, 200, 413** *"Maximum content size limit (26214400) exceeded (26214850 bytes read)"* | cap is 25 MiB on the **whole body**; `max_audio_bytes/0` = **26,148,864** (rung 2) |
+| stt duration > 1500 s | 200 or 400 | **200** at 1800 s | no duration cap found; `@doc transcribe/2` says so |
+| bad key ×2 | 401 | 401, `content-type: text/plain`, JSON body | see below |
+
+**401 key echo (HANDOFF item).** The real 401 body on both endpoints echoes a **masked** key: *"Incorrect API key provided: sk-proj-*****************************9900."* The design's claim (inferred until now) is confirmed; the unmasked planted token in `synthesized/error_401.json` stays the redactor's only target. The recorded 401 bodies are safe to commit: the only key they can echo is the recorder's own fake `sk-proj-NOTAREALKEY…`.
+
+**Spend.** OpenAI's pricing page (`https://developers.openai.com/api/docs/pricing`, fetched 2026-09-24): *"`tts-1`: $15.00 / 1M characters"*, *"`gpt-4o-mini-tts`: Audio output at $12.00 per 1M tokens"*, *"`gpt-transcribe`: $0.0045 / minute"*, *"`gpt-4o-mini-transcribe`: $0.003 / minute"*, *"Whisper: $0.006 / minute"*. Estimate for the one live run: `tts-1` ≈ 4,100 billed characters ≈ $0.06; `gpt-4o-mini-tts` 8 short calls < $0.01; whisper-1 ladder rungs 1–2 ≈ 26.6 min ≈ $0.16; gpt-transcribe 1800 s clip ≈ $0.14; four ~4 s clips < $0.01. **Total ≈ $0.37**, one live run only (the second run made 0 calls). Well under the $5 ceiling.
+
+### Verification (run 2026-09-24, working tree on `75e95b3`, shell without any `*_API_KEY`)
+
+| Command | Result |
+|---------|--------|
+| `mix test test/allm/providers/openai/speech_test.exs speech_wire_test.exs speech_conformance_test.exs transcription_test.exs transcription_wire_test.exs transcription_conformance_test.exs` | exit 0 |
+| `mix test` | exit 0: 512 doctests, 32 properties, 4058 tests, 0 failures (baseline at `75e95b3`: 505 / 32 / 3898) |
+| `mix test --seed 0` | exit 0 (same counts) |
+| `mix format --check-formatted` | exit 0 |
+| `mix credo --strict` | exit 0, no issues |
+| `mix dialyzer` | exit 0, `Total errors: 0` |
+| `mix docs 2>&1 \| grep -ciE 'warning\|error'` | 0 |
+| `mix run scripts/audit_user_docs.exs lib/allm/providers/openai/speech.ex` / `…/transcription.ex` | exit 0 each, "No banned-token matches" |
+| `grep -l 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach'` over the 6 new test files + `test/support/openai_fixtures.ex` | no match (exit 1) |
+| `mix test --cover` | `OpenAI.Speech` 99.17%, `OpenAI.Transcription` 100% |
+| raw-bytes provenance | one `refute Map.has_key?(raw, "_comment")` test per `recorded/` file (9 speech + 9 transcription, `probe_*` included) and a positive marker test per `synthesized/` file, each set asserted against `Path.wildcard/1` |
+| Transcription conformance case 4 (`max_audio_bytes() + 1` ≈ 26 MB) | **119 ms** (`--trace`): not tagged `:slow` |
+
+Mutation checks (each reverted; `mix test test/allm/providers/openai/`): `decode_error_body/1` dropping binaries → 3 failures (the recorded text/plain 401 tests); code-point count → `String.length/1` → 1 failure (the `e`+U+0301 falsifier); transcription hand-off without `adapter_opts[:max_audio_bytes]` → 2 failures; `redact_optional/1` as identity (both adapters) → 2 failures; filename gate always `:ok` → 1 failure.
+
+`README.md` is untouched. `conformance/` is untouched.
+
+### Deviations and notes
+
+- `[structural, documented]` **Filename gate** in `OpenAI.Transcription` (gate 3, after size, before the key): a non-file source whose `:mime_type` is `nil` or outside the adapter's mime→extension table → `:invalid_request` with `metadata.mime_type`. The design's outcome rule named a "nil-mime gate" if `audio.bin` 400'd; it did. An unknown mime would have been named `audio.bin` too, so it is gated by the same rule. A `{:file, path}` source is never gated: it is sent under its basename and a bad extension meets the provider's 400. Design wire-map row and 25.4.1 bullet corrected in place.
+- `[tactical]` Every recorded fixture on both endpoints is a JSON envelope (`status`, `headers`, and `body_base64`/`byte_size`/`sha256` or `body`). The design specified the envelope for TTS audio only; using it for JSON bodies too keeps the recorded `content-type` (needed to replay the `text/plain` 401) and `x-request-id`.
+- `[tactical]` The duration arm used an 1800 s **8 kHz 8-bit mono WAV** (≈14.4 MB) instead of a low-bitrate mp3: no ffmpeg/lame in the container. The size ladder used 16 kHz 16-bit mono WAVs as designed. Neither is committed.
+- `[tactical]` The unit-probe arms (and the control and bad-key TTS arms) use `tts-1`, to bill per character rather than per audio token for a 4096-character input.
+- `[tactical]` After the first run, every discovery expectation in the recorder was tightened to the observed status (ladder rung 2 → `[200]`, rung 3 → `[413]`, `audio.bin` → `[400]` + `code: unsupported_value`, duration → `[200]` + text), so a later provider change halts the recorder.
+- `[tactical]` `OpenAI.Speech.decode_response/4` sets `audio.mime_type` to `SpeechResponse.format_to_mime(format)` when the content type maps, and to the raw content type only for an `audio/*` type outside the table. The format is derived only via `SpeechResponse.mime_to_format/1` (HANDOFF item); no `;` stripping in the adapter.
+- `[tactical]` Error classification: 404/413/422 → `:invalid_request` on both adapters; the TTS 400 whose message contains `string_too_long` → `:context_length_exceeded` (the live 400 carries `code: null`). The 413 body says `type: "server_error"`, so the STT classifier keys on status alone.
+- `[tactical]` Both adapters build `Req` with `retry: false`. Req's default only retries idempotent methods, so this changes nothing today; it makes the "one attempt" contract of the STT adapter independent of Req's defaults. The speech adapter's retries come only from `ALLM.Retry.run/3`, and `synthesize/2`'s `@doc` states it retries `:timeout` under the default policy (the 25.3 binding).
+- `[tactical]` `OpenAI.Speech` also rejects a non-UTF-8 `:input` (`:invalid_request`), which would otherwise raise inside `Jason` during `Req` encoding and break invariant 1 on a direct adapter call.
+- `[tactical]` STT `options` values: binaries as-is, numbers/atoms `to_string/1`, lists one field per element, `nil` skipped, anything else `Jason.encode!/1`. Options are emitted in key order after the structural fields.
+- `[DEFERRED-DRY]` The OpenAI error/header helpers (`header_value/2`, `header_value_to_string/1`, `retry_after_ms/1`, `parse_retry_after/1`, `decode_error_body/1`, `error_object/1`, `provider_message/2`, `redact_optional/1`, `redact_key_material/1`, `sanitize_cause/1`, `build_metadata/2`, `maybe_apply_req_test_stub/2`, `apply_receive_timeout/2`) are byte-identical between `openai/speech.ex` and `openai/transcription.ex`, and most have variants in `openai/moderation.ex`, `openai/embeddings.ex`, `openai/images.ex`. The Module Tree lists no shared support module, so no extraction here. ~~Predicate: `grep -l 'defp header_value_to_string' lib/allm/providers/openai/*.ex`~~ — **superseded by the 25.4 fix pass** (code-review F2): it checked one helper of thirteen and its glob missed `openai.ex`, `anthropic.ex`, `gemini.ex`, `gemini/*`, `voyage/*`. **Filed in `.work/ASKS.md` (thu 9/24 2am `[DEFERRED-DRY]`).** Predicate, run from the repo root, must print nothing: `grep -roE 'defp (header_value|header_value_to_string|retry_after_ms|parse_retry_after|decode_error_body|error_object|provider_message|redact_optional|sanitize_cause|build_metadata|maybe_apply_req_test_stub|maybe_apply_request_timeout|apply_receive_timeout)\(' lib/allm/providers/ | sort -u | cut -d: -f2 | sort | uniq -c | awk '$1>1'`. Measured 2026-09-24 (same command, after the fix pass): 13 lines (decode_error_body 11 files, maybe_apply_req_test_stub 11, header_value / header_value_to_string / maybe_apply_request_timeout / parse_retry_after / retry_after_ms 9 each, build_metadata / sanitize_cause 8, provider_message 4, apply_receive_timeout / error_object / redact_optional 2). `redact_key_material/1` stays per-provider and is excluded.
+- `[CARRY]` (unchanged from the design) `openai/moderation.ex` `decode_error_body/1` returns `%{}` for every binary, so its text/plain 401 message never reaches the redactor; the new adapters JSON-decode it. Owned by 25.7.
+
+### Fix pass (2026-09-24) — reviews `.work/{reviews/2026-09-24-sst-25-4/overview.md,code-reviews,security-reviews,design-reviews}/2026-09-24-sst-25-4.md`
+
+- `[structural, documented]` Code-review F1+F3+F4 (one cause: the filename gate had its own table and an exact-match lookup). `ALLM.Audio` (25.1 code, outside 25.4's Module Tree) gains two `@doc false` seams: `normalize_mime/1` (drop `;params`, trim, downcase) and `extension_for_mime/1`, backed by an `@mime_to_ext` **derived** from `@ext_to_mime` plus a three-row preferred-extension override (`audio/mpeg → mp3`, `audio/mp4 → m4a`, `audio/ogg → ogg`). `SpeechResponse.mime_to_format/1` (25.1) now calls `Audio.normalize_mime/1` instead of its inline copy — behaviour-preserving, public name unchanged, pinned by its existing doctest (`"audio/wav; codecs=1"` → `:wav`); recorded under CLAUDE.md's extraction exception. `OpenAI.Transcription` drops its hand-inverted `@mime_to_ext`; the gate and `to_multipart_body/2` share one `upload_filename/2`, so the seam returns the gate's `{:error, …}` for an unmapped mime instead of naming a part `audio.bin` (F4). Pinned: `test/allm/providers/openai/transcription_test.exs` "parameterised and mixed-case mimes pass the filename gate, keyless", "a parameterised or mixed-case mime is named by its bare type, sent verbatim", "a non-file mime with no extension returns the filename gate's error"; `test/allm/audio_test.exs` describe "normalize_mime/1 and extension_for_mime/1". Mutation: reverting `extension_for_mime/1` to an un-normalised `Map.get/2` turned 3 tests red (`mix test test/allm/providers/openai/transcription_test.exs test/allm/audio_test.exs` → `14 doctests, 92 tests, 3 failures`).
+- `[doc]` Functional #1: `speech.ex`'s moduledoc said the error struct "is commonly logged and persisted" as JSON; both moduledocs now carry a warning that `:timeout` / `:network_error` / invalid-JSON `:malformed_response` errors raise on `Jason.encode!/1` (exception struct on `:cause`). The structural fix stays family-wide (HANDOFF row "(from 22.7, for whoever hardens the remaining `Jason.Encoder` error structs)"; `ASKS.md` wed 7/29 3pm `[BUG]`). Not re-filed.
+- `[doc]` Functional #2: both moduledocs now carry moderation's warning that the `x-request-id` fallback is unreachable through `ALLM.synthesize/3` / `ALLM.transcribe/3`.
+- Code-review F5, F6, F7 and functional #3 (Low) stay in their review docs for the phase polish pass.
+
+### Binding on later sub-phases
+
+- `Gemini.Transcription` (25.5): name a non-file upload / set `mimeType` via `ALLM.Audio.extension_for_mime/1` / `normalize_mime/1` (never a local table, never an exact-match lookup); no adapter `Retry.run/3`, no `{:retry, …}` (façade `@doc`); pass `adapter_opts[:max_audio_bytes]` on hand-off; tolerate a non-map `"error"`; redact message **and** metadata strings; `sanitize_cause/1` resets all three `Jason.DecodeError` offsets. The recorded clips `test/fixtures/audio/quick_brown_fox.{mp3,wav,flac,aac,opus}` exist for its mime arms (the `.opus` clip is Ogg-encapsulated Opus from OpenAI).
+- 25.6: `examples/fixtures/quick_brown_fox.mp3` exists. The guide can state: OpenAI TTS input limit is 4096 code points; OpenAI STT cap is `max_audio_bytes/0` = 26,148,864 bytes (25 MiB body cap); no duration cap was found at 1800 s; OpenAI rejects an upload whose filename extension it does not know.

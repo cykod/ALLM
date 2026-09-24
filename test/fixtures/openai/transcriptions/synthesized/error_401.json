@@ -1,0 +1,13 @@
+{
+  "_comment": "Synthesized (Phase 25.4). A 401 envelope carrying a DELIBERATELY PLANTED, unmasked sk-proj- token: the redaction test's only target. OpenAI's real /v1/audio/transcriptions 401 (recorded/error_401_bad_key.json, 2026-09-24) masks the key and is sent as text/plain; the wire test stubs this body the same way.",
+  "status": 401,
+  "headers": {"content-type": "text/plain"},
+  "body": {
+    "error": {
+      "message": "Incorrect API key provided: sk-proj-FAKEKEY000111222333444555. You can find your API key at https://platform.openai.com/account/api-keys.",
+      "type": "invalid_request_error",
+      "param": null,
+      "code": "invalid_api_key"
+    }
+  }
+}

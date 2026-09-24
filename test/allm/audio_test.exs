@@ -55,6 +55,35 @@ defmodule ALLM.AudioTest do
     end
   end
 
+  describe "normalize_mime/1 and extension_for_mime/1" do
+    test "normalize_mime/1 drops parameters, trims and downcases" do
+      assert Audio.normalize_mime("Audio/WebM; codecs=opus") == "audio/webm"
+      assert Audio.normalize_mime(" audio/mpeg ") == "audio/mpeg"
+      assert Audio.normalize_mime(nil) == nil
+    end
+
+    test "every MIME type from_file/1 infers maps back to an extension that infers it" do
+      for {_ext, mime} <- @ext_to_mime do
+        ext = Audio.extension_for_mime(mime)
+        assert is_binary(ext), "no extension for #{mime}"
+        assert Audio.from_file("clip." <> ext).mime_type == mime
+      end
+    end
+
+    test "multi-extension types use the canonical extension" do
+      assert Audio.extension_for_mime("audio/mpeg") == "mp3"
+      assert Audio.extension_for_mime("audio/mp4") == "m4a"
+      assert Audio.extension_for_mime("audio/ogg") == "ogg"
+    end
+
+    test "parameters and case are ignored; unknown, nil and non-binary are nil" do
+      assert Audio.extension_for_mime("Audio/WebM;codecs=opus") == "webm"
+      assert Audio.extension_for_mime("audio/x-unknown") == nil
+      assert Audio.extension_for_mime(nil) == nil
+      assert Audio.extension_for_mime(42) == nil
+    end
+  end
+
   describe "from_binary/2 and from_base64/2" do
     test "from_binary/2 stores bytes verbatim" do
       assert %Audio{source: {:binary, <<0, 255>>}, mime_type: "audio/wav", metadata: %{}} =

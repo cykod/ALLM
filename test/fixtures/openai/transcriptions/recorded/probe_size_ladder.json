@@ -1,0 +1,29 @@
+{
+  "max_accepted_bytes": 26148864,
+  "rungs": [
+    {
+      "expected": [
+        200
+      ],
+      "file_part_bytes": 24934464,
+      "status": 200
+    },
+    {
+      "expected": [
+        200,
+        400,
+        413
+      ],
+      "file_part_bytes": 26148864,
+      "status": 200
+    },
+    {
+      "expected": [
+        400,
+        413
+      ],
+      "file_part_bytes": 26214401,
+      "status": 413
+    }
+  ]
+}

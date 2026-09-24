@@ -1,3 +1,28 @@
+## [FEAT] Add OpenAI speech and transcription adapters (Phase 25.4)
+*Thursday, September 24th at 2am*
+Adds the bundled OpenAI audio adapters (spec §37) per 
+steering/2026-09-24_SST_SUPPORT.md Phase 25.4, settled against a live wire 
+probe.
+
+- ALLM.Providers.OpenAI.Speech (/v1/audio/speech): 4096-code-point input gate 
+before key resolution, defaults gpt-4o-mini-tts / alloy / 60 s, format derived 
+from the response content-type.
+- ALLM.Providers.OpenAI.Transcription (/v1/audio/transcriptions, multipart): 
+resolvable, size (26,148,864 bytes: the probe showed a 413 on the whole 
+multipart body above 25 MiB) and filename gates before key resolution; OpenAI 
+trusts the file extension, so unmapped mimes are refused locally. No 
+adapter-level retry; defaults gpt-transcribe / 120 s.
+- Both decode OpenAI's text/plain 401 body before redacting, tolerate non-map 
+error envelopes, and hand off to the Fakes when scripted.
+- scripts/record_openai_audio_fixtures.exs: four-part live probe (control arm, 
+assert-before-write, recorded bodies incl. errors, overwrite guard over every 
+arm); recorded JSON envelopes plus input clips; wire-map rows amended with the 
+probe's findings.
+- ALLM.Audio gains a shared mime normaliser and extension lookup, reused by 
+SpeechResponse and the transcription filename gate.
+
+---
+
 ## [FEAT] Add synthesize/3 and transcribe/3 façades (Phase 25.3)
 *Thursday, September 24th at 2am*
 Adds the Layer C audio façades (spec §37, §29) per 

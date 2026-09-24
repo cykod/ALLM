@@ -90,6 +90,34 @@ defmodule ALLM.Audio do
     ".aiff" => "audio/aiff"
   }
 
+  # Derived from `@ext_to_mime` so the two directions cannot drift. Where a
+  # MIME type has several extensions, the override picks the canonical one.
+  @preferred_ext %{"audio/mpeg" => "mp3", "audio/mp4" => "m4a", "audio/ogg" => "ogg"}
+  @mime_to_ext @ext_to_mime
+               |> Map.new(fn {"." <> ext, mime} -> {mime, ext} end)
+               |> Map.merge(@preferred_ext)
+
+  @doc false
+  # The one MIME normaliser for audio lookups: drops parameters
+  # (`;codecs=opus`), trims, and downcases, so `"Audio/WebM; codecs=opus"`
+  # and `"audio/webm"` look up the same row. `nil` stays `nil`.
+  @spec normalize_mime(String.t() | nil) :: String.t() | nil
+  def normalize_mime(nil), do: nil
+
+  def normalize_mime(mime) when is_binary(mime) do
+    mime |> String.split(";", parts: 2) |> hd() |> String.trim() |> String.downcase()
+  end
+
+  @doc false
+  # The extension (no dot) for a MIME type, after `normalize_mime/1`, or
+  # `nil` when the type is `nil`, not a binary, or not in the table. The
+  # inverse of the table `from_file/1` infers from.
+  @spec extension_for_mime(term()) :: String.t() | nil
+  def extension_for_mime(mime) when is_binary(mime),
+    do: Map.get(@mime_to_ext, normalize_mime(mime))
+
+  def extension_for_mime(_), do: nil
+
   @doc """
   Build an `%Audio{}` from a local filesystem path.
 

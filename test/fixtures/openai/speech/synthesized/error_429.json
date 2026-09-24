@@ -1,0 +1,13 @@
+{
+  "_comment": "Synthesized (Phase 25.4). OpenAI's standard 429 envelope, paired with a retry-after header in the wire test. No live 429 was provoked.",
+  "status": 429,
+  "headers": {"content-type": "application/json", "retry-after": "7"},
+  "body": {
+    "error": {
+      "message": "Rate limit reached for tts-1 in organization org-xxxx on requests per min (RPM): Limit 3, Used 3, Requested 1.",
+      "type": "requests",
+      "param": null,
+      "code": "rate_limit_exceeded"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "error_body": {
+    "error": {
+      "code": "unsupported_value",
+      "message": "Unsupported file format bin",
+      "param": "file",
+      "type": "invalid_request_error"
+    }
+  },
+  "expected": [
+    200,
+    400
+  ],
+  "status": 400
+}

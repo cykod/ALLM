@@ -418,7 +418,7 @@ Auth: `Authorization: Bearer` via `OpenAIHeaders` (`json_headers/2` for TTS, `mu
 | TTS usage | none in the non-streaming response | CONFIRMED (binary body, no usage headers) |
 | TTS `instructions` on `tts-1` | **accepted silently (200)** despite *"Does not work with `tts-1`"* | CONFIRMED. Forwarded, not gated. The adapter cannot know which models honour it |
 | TTS input limit | 4096; 4097 → 400 `string_too_long` | CONFIRMED |
-| TTS limit unit | code points vs graphemes | **inferred** → probe arm (Decision #6) |
+| TTS limit unit | **code points** (neither graphemes nor bytes) | **CONFIRMED 2026-09-24** by the 25.4 probe: 2049 × `e`+U+0301 (4098 code points) → 400 `string_too_long`; 4096 × U+00E9 (8192 bytes) → 200 |
 | Unknown top-level field | **accepted (200)**, both endpoints | CONFIRMED (Decision #12) |
 | Bad voice / bad format / speed 5 / `""` input | 400 `invalid_request_error` | CONFIRMED |
 | Bad model | **404** `code: "model_not_found"` → `:invalid_request` | CONFIRMED |
@@ -428,11 +428,13 @@ Auth: `Authorization: Bearer` via `OpenAIHeaders` (`json_headers/2` for TTS, `mu
 | STT response | `{"text", "usage": {"type":"duration","seconds"} \| {"type":"tokens",…}, "languages"?: [{"code"}]}` | CONFIRMED (whisper-1, gpt-4o-mini-transcribe, gpt-transcribe) |
 | STT default model | `@default_model "gpt-transcribe"`, which the guide recommends | CONFIRMED 200 |
 | STT `language` on `gpt-transcribe` | singular `language=en` → 200 (guide says `languages` plural) | CONFIRMED (both forms 200). The adapter sends singular because it works on every model probed |
-| STT size limit | 25 MB (guide: *"Files can be up to 25 MB"*). **Inferred:** whether the limit is on the file part or the whole multipart body, and whether it is MiB; an over-limit upload may return **413**, not 400 | probe ladder (25.4.2); `max_audio_bytes/0` starts at `25_000_000 - 64 * 1024` (decimal MB, minus multipart/field headroom), the most conservative reading, and is raised to the largest rung the ladder shows accepted |
-| STT duration limit | gpt-4o-family transcribe models are reported to cap audio *duration* (~1500 s) independently of bytes | **inferred** → probe arm with a > 1500 s low-bitrate clip on `gpt-transcribe`; an observed 400 maps to `:invalid_request` and the limit is documented in `@doc transcribe/2`. No local gate (duration needs decoding) |
-| Over-size status | 413 → `:invalid_request` | **inferred** → probe arm writes `error_413.json` if observed |
+| STT size limit | **25 MiB (26,214,400 bytes) on the whole multipart body** | **CONFIRMED 2026-09-24** by the 25.4 ladder: file parts of 24,934,464 and 26,148,864 bytes → 200; 26,214,401 → 413 *"Maximum content size limit (26214400) exceeded (26214850 bytes read)"*. `max_audio_bytes/0` = **26,148,864** (`25 * 1024 * 1024 - 64 * 1024`), the largest accepted rung |
+| STT duration limit | **none found**: an 1800 s clip → 200 on `gpt-transcribe` | **CONFIRMED 2026-09-24** (25.4 probe; 8 kHz 8-bit WAV silence, since no ffmpeg was available for the planned mp3). `@doc transcribe/2` says no duration cap was found. No local gate |
+| Over-size status | **413** (body `type: "server_error"`, `code: null`) → `:invalid_request`, classified by status | **CONFIRMED 2026-09-24**; recorded at `transcriptions/recorded/error_413.json` |
 | STT accepted formats | flac m4a mp3 mp4 mpeg mpga oga ogg wav webm | CONFIRMED (400 error text for junk bytes) |
-| STT mime gate | **none**; the provider names its accepted list in its 400 (probed with junk bytes) | Decision: forward, map 400 → `:invalid_request`. Whether the provider sniffs content or trusts the filename is **inferred** → probe arm sends valid mp3 bytes as `audio.bin`; if it 400s, `audio.bin` is replaced by a nil-mime `:invalid_request` gate |
+| STT mime gate | **filename gate**: a non-file source whose mime is `nil` or outside the adapter's mime→extension table → `:invalid_request` (`metadata.mime_type`), after the size gate and before `Keys.fetch!/2`. A `{:file, path}` source is sent under its basename and not gated | **CONFIRMED 2026-09-24**: valid mp3 bytes named `audio.bin` → 400 `unsupported_value` *"Unsupported file format bin"*, so the provider trusts the filename extension. Per this row's own outcome rule, `audio.bin` is replaced by the gate (an unknown mime would also have been named `audio.bin`, so it is gated too) |
+
+> CORRECTED 2026-09-24: the five rows above that were **inferred** (TTS limit unit, STT size limit, STT duration limit, over-size status, STT mime gate) were settled by the 25.4 live probe (`scripts/record_openai_audio_fixtures.exs`) and are rewritten in place as observed. The 401 row re-observed: `text/plain`, masked echo `sk-proj-*****************************9900` of the probe's own fake key (`recorded/error_401_bad_key.json` on both endpoints). The "STT accepted formats" row's list comes from the design-time probe; the 25.4 junk-bytes arm sent `junk.mp3` and got *"Audio file might be corrupted or unsupported"* instead, so the list was not re-observed. Full transcript in RECORDS §25.4.
 
 ### Wire-field map — Gemini
 
@@ -783,6 +785,7 @@ Targeted + uniform. **Success criterion:** every gate-order test passes alone an
 `openai/transcription_test.exs`:
 - `options: %{"response_format" => "srt"}` is dropped; the form still carries `response_format=json`
 - `to_multipart_body/2` yields `file` as `{bytes, filename: <name>, content_type: <mime or "application/octet-stream">}`: for `{:file, path}` the name is `Path.basename(path)`; otherwise `"audio." <> ext` from the mime (`audio.mp3` for `audio/mpeg`), and `"audio.bin"` when the mime is nil or unknown, `model`, `response_format: "json"`, `language` / `prompt` only when set, `options` as extra fields
+  > CORRECTED 2026-09-24: there is no `"audio.bin"` case. The probe showed OpenAI rejects `audio.bin` (400 *"Unsupported file format bin"*), so a non-file source with a nil or unknown mime is rejected by a keyless filename gate instead (wire map, "STT mime gate" row).
 - missing-file audio → `{:error, %TranscriptionAdapterError{reason: :invalid_request}}`, keyless
 - oversized → `:invalid_request`, count/max, keyless
 - `decode_response/4`: duration-shape usage → `duration_seconds: 3`, `usage.input_tokens == nil`; token-shape usage → `usage.input_tokens == 27`, `output_tokens == 12`, `total_tokens == 39`, `duration_seconds == nil`; `languages: [%{"code" => "en"}]` → `language: "en"`; missing `"text"` → `:malformed_response`
