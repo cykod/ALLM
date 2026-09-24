@@ -10,7 +10,7 @@ Companion to `steering/2026-09-24_SST_SUPPORT.md`. Tick-state, deviations and no
 | 25.2 | Completed |
 | 25.3 | Completed |
 | 25.4 | Completed |
-| 25.5 | Not started |
+| 25.5 | Completed |
 | 25.6 | Not started |
 | 25.7 | Not started |
 
@@ -253,3 +253,78 @@ Mutation checks (each reverted; `mix test test/allm/providers/openai/`): `decode
 
 - `Gemini.Transcription` (25.5): name a non-file upload / set `mimeType` via `ALLM.Audio.extension_for_mime/1` / `normalize_mime/1` (never a local table, never an exact-match lookup); no adapter `Retry.run/3`, no `{:retry, …}` (façade `@doc`); pass `adapter_opts[:max_audio_bytes]` on hand-off; tolerate a non-map `"error"`; redact message **and** metadata strings; `sanitize_cause/1` resets all three `Jason.DecodeError` offsets. The recorded clips `test/fixtures/audio/quick_brown_fox.{mp3,wav,flac,aac,opus}` exist for its mime arms (the `.opus` clip is Ogg-encapsulated Opus from OpenAI).
 - 25.6: `examples/fixtures/quick_brown_fox.mp3` exists. The guide can state: OpenAI TTS input limit is 4096 code points; OpenAI STT cap is `max_audio_bytes/0` = 26,148,864 bytes (25 MiB body cap); no duration cap was found at 1800 s; OpenAI rejects an upload whose filename extension it does not know.
+
+## Phase 25.5 — Gemini transcription adapter
+
+Built 2026-09-24 on `f17a90b` (uncommitted working tree). Status: built, gates pending.
+
+### Checklist (25.5.3)
+
+- [x] `lib/allm/providers/gemini/transcription.ex` per the wire map and Decisions #8, #12: fixed `@transcription_instruction` + language hint + prompt context block; camelCase `inlineData`; `options` → `generationConfig`; own decoder (text parts concatenated, `"thought": true` parts dropped, `thoughtSignature` parts kept; not `Gemini.Decode.candidate_parts/1`, named in `to_json_body/2`'s `@doc false`); finish reasons via `Gemini.parse_finish_reason/1` (`MAX_TOKENS` → `{:ok, partial}` with `metadata.finish_reason: :length`; `:content_filter` rows and `promptFeedback.blockReason` → `:content_filter`); gate order resolvable → size → mime (`Audio.normalize_mime/1`) → `Keys.fetch!(:gemini)`; no adapter retry, `retry: false`; 120 s default timeout; hand-off to `FakeTranscription` with `adapter_opts[:max_audio_bytes]`.
+- [x] Redactor verbatim from `gemini/embeddings.ex` (`AIza…|ya29.…`), applied to the message AND `metadata.google_status`; `sanitize_cause/1` with `%{cause | data: "", position: 0, token: nil}`; no `body_preview`.
+- [x] Recorder `scripts/record_gemini_audio_fixtures.exs` (four parts) + 10 recorded + 7 synthesized fixtures + `transcription_recorded/1` / `transcription_synthesized/1` in `test/support/gemini_fixtures.ex` (via the existing `load_json/1` → `drop_comment/1`).
+- [x] The `exceeds the maximum number of tokens` → `:context_length_exceeded` arm, pinned by `synthesized/error_400_token_limit.json` (inferred; no probe arm can reach it).
+- [x] `groups_for_modules`: `ALLM.Providers.Gemini.Transcription` → `Providers`.
+- [x] Design wire-map rows the probe settled amended in place, with a dated `> CORRECTED 2026-09-24:` blockquote under the Gemini table and one under the 25.5.2 probe table ("~15.1 MB" reads as MiB).
+
+### Live probe (BLOCKING) — `( set -a; . ./.env; set +a; mix run scripts/record_gemini_audio_fixtures.exs )`
+
+First run 2026-09-24: exit 0, **10 live calls**, every arm matched, 10 files written. Discovery expectations were then tightened to the observed outcomes (opus arms `[200]` + "fox"; over-cap rung `[200]`), and the opus-as-`audio/opus` arm was switched from a hand-rewritten `mimeType` to the adapter's own `to_json_body/2` (now that the mime is in the set); that one file was deleted and re-recorded: exit 0, **1 live call**. Third run: exit 0, `0 live calls: every target is already recorded.`
+
+| Arm | Design expectation | Observed | Outcome |
+|-----|--------------------|----------|---------|
+| control (`notARealField` top-level) | 400 `Unknown name` | 400 *"Invalid JSON payload received. Unknown name \"notARealField\": Cannot find field."* | acceptance is evidence on this provider |
+| mp3 as `audio/mpeg` | 200, "quick brown fox" | 200, *"The quick brown fox jumps over the lazy dog."*, `modelVersion: gemini-3.8-flash`, answer part carries a `thoughtSignature` | CONFIRMED |
+| wav / flac / aac | 200, "fox" | 200 ×3, exact text | CONFIRMED; all stay in the set |
+| opus as `audio/ogg` | settles alias row | 200, exact text | — |
+| opus as `audio/opus` | settles alias row | 200, exact text | **both 200 → `audio/opus` joins the set; no alias table** |
+| at cap (15,679,488 B, 16 kHz 16-bit mono silence WAV) | 200 | 200 | cap not too high |
+| over cap (15,831,040 B, ≈21.1 MB base64) | 400 confirms / 200 = conservative | **200** | cap is **conservative** → `[CARRY]` below, cap unchanged |
+| bad key (`AIzaNOTAREALKEY…`) | 400 `API_KEY_INVALID` | 400 `INVALID_ARGUMENT`, `details[0].reason: "API_KEY_INVALID"`, message *"API key not valid. Please pass a valid API key."*, **no key echo** | CONFIRMED; mapped to `:authentication_failed` |
+
+**Silence is not an empty transcript (new finding).** Both boundary clips were pure digital silence (~490 s each). The model returned fluent, invented speech (*"So, the first thing is we take our three-inch ring…"*, 1,363 output + 6,179 thinking tokens; *"There were several reasons why this might have seemed the wisest choice…"*). Recorded in `probe_boundary_*.json` (`text`, `usage`). The adapter's moduledoc carries a warning; 25.6's guide should repeat it (binding below). Audio tokenisation observed: 12,250 audio tokens for ~490 s ≈ **25 tokens/s** (the design's ~32/s was unverified).
+
+**Spend.** Google's pricing page (`https://ai.google.dev/gemini-api/docs/pricing`, fetched 2026-09-24), Gemini 3.8 Flash (what `gemini-flash-latest` resolved to): input *"$3.00 or $0.005/min (audio)"* per 1M tokens, output *"$12.00"* per 1M tokens (thinking included). Summed from the recorded `usageMetadata`: ≈25.4k input tokens (≈$0.08) + ≈12.1k output+thinking tokens (≈$0.15), dominated by the two silent boundary clips' hallucinated output. **Total ≈ $0.22** across 11 billable calls (the control and bad-key 400s are not billed). The design estimated $0.05/run; the gap is the thinking + hallucinated output on silence. Well under the $2 stop.
+
+### Verification (run 2026-09-24, working tree on `f17a90b`, shell with `env | grep -c _API_KEY` → 0)
+
+| Command | Result |
+|---------|--------|
+| `mix test test/allm/providers/gemini/transcription_test.exs transcription_wire_test.exs transcription_conformance_test.exs` | exit 0: 4 doctests, 92 tests, 0 failures |
+| `mix test` | exit 0: 518 doctests, 32 properties, 4157 tests, 0 failures (baseline at `f17a90b`: 512 / 32 / 4065) |
+| `mix test --seed 0` | exit 0 (same counts) |
+| `mix format --check-formatted` | exit 0 |
+| `mix compile --warnings-as-errors` | exit 0 |
+| `mix credo --strict` | exit 0, no issues |
+| `mix dialyzer` | exit 0, `Total errors: 0` |
+| `mix docs 2>&1 \| grep -ciE 'warning\|error'` | 0 |
+| `mix run scripts/audit_user_docs.exs lib/allm/providers/gemini/transcription.ex` | exit 0, "No banned-token matches" |
+| `grep -l 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test/allm/providers/gemini/transcription*.exs test/support/gemini_fixtures.ex` | no match (exit 1) |
+| `mix test --cover` | `Gemini.Transcription` 98.35% |
+| raw-bytes provenance | one `refute Map.has_key?(raw, "_comment")` per `recorded/` file (10, `probe_*` included) and a positive marker test per `synthesized/` file (7), each set asserted against `Path.wildcard/1` |
+| Conformance case 4 (`max_audio_bytes() + 1` ≈ 15.7 MB) | **73.8 ms** (`--trace`): not tagged `:slow` |
+
+Mutation checks (each reverted; `mix test test/allm/providers/gemini/`): mime gate without `Audio.normalize_mime/1` (exact match) → 2 failures (parameterised-mime gate test + body mime test); `API_KEY_INVALID` rule removed → 3 failures; hand-off without `adapter_opts[:max_audio_bytes]` → 2; redactor as identity → 2; thought parts kept → 2; binary error body decoded to `%{}` → 1.
+
+`README.md` untouched. `conformance/` untouched.
+
+### Deviations and notes
+
+- `[tactical]` Honours `adapter_opts[:endpoint]` (base-URL override), as every released Gemini adapter does; the design did not mention it. A `models/` prefix on `:model` is stripped for the URL.
+- `[tactical]` `response.model` is the model that was **sent** (`request.model || "gemini-flash-latest"`), mirroring `OpenAI.Transcription`, not the body's `modelVersion` (which stays on `:raw`). `:language` and `:duration_seconds` are always `nil`.
+- `[tactical]` `metadata.finish_reason: :length` is an atom key with an atom value, as the design states; like every atom-keyed metadata it comes back string-keyed after a JSON round-trip.
+- `[tactical]` A candidate with no `parts` decodes to `text: ""`; finish reasons other than `:content_filter` (e.g. `OTHER`, `MALFORMED_RESPONSE`) are not errors. Only the rows Decision #8 names are special-cased.
+- `[tactical]` Error classification reuses `ALLM.Providers.Gemini.classify_error/3` (status table + context-length marker) fed a sanitised `%{"error" => map}` body, so a non-map `"error"` or a binary body cannot raise inside it; reasons outside `TranscriptionAdapterError.legal_reasons/0` collapse to `:unknown`. `metadata` = `%{status, google_status}` (redacted).
+- `[tactical]` Recorded fixtures are JSON envelopes (`status`, `headers`, `body`) as in 25.4; `probe_*.json` also keep `text`, `model_version` and `usage` (no audio). The recorder builds every body with the adapter's own `to_json_body/2`.
+- `[tactical]` Two synthesized fixtures beyond the four inferred-only rows: `error_429.json` (Retry-After + one-attempt wire test) and `prompt_blocked.json` (`promptFeedback.blockReason`).
+- `[CARRY]` **Cap conservative.** `max_audio_bytes/0` = 15,679,488 stays (design outcome rule), but 15,831,040 raw bytes (≈21.1 MB base64, over 20 MiB) was accepted on 2026-09-24, so Google's real inline limit is above the documented 20 MB at this size. Raising the cap needs a ladder arm to find the actual limit (and cost ≈$0.13 per ~8-minute silent rung); not in 25.5's scope. Predicate for whoever picks it up: a `probe_boundary_*` rung above the cap returning 400 is recorded, and `max_audio_bytes/0` equals the largest accepted rung.
+- `[CARRY]` (unchanged from the design, for 25.7) `lib/allm/providers/gemini.ex`, `gemini/images.ex`, `gemini/embeddings.ex` still classify a bad key as `:invalid_request`: `grep -L API_KEY_INVALID lib/allm/providers/gemini.ex lib/allm/providers/gemini/{images,embeddings,transcription}.ex` lists those three (transcription passes). A real recorded bad-key body now exists for their tests: `test/fixtures/gemini/transcriptions/recorded/error_400_bad_key.json`.
+- `[DEFERRED-DRY]` Error/header helpers gained one more copy each (`decode_error_body`, `error_object`, `provider_message`, `redact_optional`, `sanitize_cause`, `build_metadata`, `maybe_apply_req_test_stub`, `apply_receive_timeout`). The 25.4 predicate (same command as §25.4) now prints 13 lines: `decode_error_body` / `maybe_apply_req_test_stub` 12, `build_metadata` / `header_value` / `header_value_to_string` / `maybe_apply_request_timeout` / `parse_retry_after` / `retry_after_ms` / `sanitize_cause` 9, `provider_message` 5, `apply_receive_timeout` / `error_object` / `redact_optional` 3. `grep -l 'defp sanitize_cause' lib/allm/providers/*.ex lib/allm/providers/*/*.ex | wc -l` → 9. The Module Tree lists no shared support module.
+- `[DEFERRED-DRY]` (added by the 25.5 fix pass, code-review F1) The transcription-capability helpers are also clones: after replacing `:openai`/`:gemini` with one atom, eleven private functions are byte-identical between `lib/allm/providers/gemini/transcription.ex` and `lib/allm/providers/openai/transcription.ex`: `fetch_transcription_script/1`, `with_own_cap/1`, `measure/2`, `gate_size/2`, `unresolvable_error/2`, `stub_error/1`, `build_metadata/2`, `do_transcribe/2`, `run_one_attempt/3`, `transport_error/4`, `resolve_bytes/2` (re-measured by extracting each body from both files, normalising the provider atom and comparing md5: 11/11 identical). The Module Tree lists no support module, so no extraction here. **Filed in `.work/ASKS.md` (thu 9/24 2am, companion to the 25.4 ticket).** Predicate, run from the repo root, must print nothing: `grep -roE 'defp (with_own_cap|fetch_transcription_script|do_transcribe|run_one_attempt|transport_error|unresolvable_error|gate_size|measure|resolve_bytes|stub_error)\(' lib/allm/providers/*/transcription.ex | cut -d: -f2 | sort | uniq -c | awk '$1>1'`. Measured 2026-09-24 (same command, exit 0): 10 lines (`gate_size` / `measure` 4 each, counted per clause; the other eight 2 each). `build_metadata/2` is scored by the §25.4 predicate instead.
+- `[DEFERRED-DRY]` (added by the 25.5 fix pass, code-review F3; owner the 25.7 `[CHORE]` sweep) The Gemini credential-redactor regex now has three copies inside one provider (`gemini/{transcription,embeddings,images}.ex`). The §25.4 "stays per-provider" exclusion covers different providers' patterns, not copies of the same one. Filed in `.work/ASKS.md` (thu 9/24 2am). Predicate must print `1`: `grep -c 'AIza\[A-Za-z0-9' lib/allm/providers/gemini/*.ex | grep -vc ':0'`. Measured 2026-09-24 (same command): `3`.
+- `[unreviewed]` (25.5 fix pass, code-review F2) The design's `CORRECTED 2026-09-24` note under the Gemini wire-field map (`steering/2026-09-24_SST_SUPPORT.md`, the note after the "Correlation header" row) said "no correlation header (only `content-type` came back)". The recorder keeps only `content-type`, `x-request-id` and `x-goog-request-id`, so that was not observed. It now reads "neither `x-request-id` nor `x-goog-request-id` came back (the recorder kept only those two names plus `content-type`, so no other header was observed either way)". Diff: `git --no-optional-locks diff steering/2026-09-24_SST_SUPPORT.md`, that one sentence. This edit to the design was made by the fix pass and has not been reviewed. The moduledoc and the wire test were reworded to the same claim. The recorder now also writes `header_names` (all response header names, no values), so the next re-record can support a stronger assertion; no live call was made. The wire-field-map row itself ("**none** (no `x-request-id`/`x-goog-request-id`) … CONFIRMED") was left as is.
+
+### Binding on later sub-phases
+
+- 25.6 (guide + example 24): Gemini transcription accepts `audio/mpeg`, `audio/wav`, `audio/flac`, `audio/aac`, `audio/ogg`, `audio/opus` (probed) and `audio/aiff` (docs); `max_audio_bytes/0` = 15,679,488 (conservative); the default model `gemini-flash-latest` resolved to `gemini-3.8-flash` on 2026-09-24; **silence yields an invented transcript, not `""`** — state it in the fidelity section alongside Decision #8's paraphrase caveat. Example 24 under `ALLM_PROVIDER=gemini` transcribes `examples/fixtures/quick_brown_fox.mp3`, which returned the exact sentence.
+- 25.7: the `API_KEY_INVALID` `[CARRY]` above.

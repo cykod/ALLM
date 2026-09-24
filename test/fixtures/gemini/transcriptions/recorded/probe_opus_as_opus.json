@@ -1,0 +1,25 @@
+{
+  "expected": [
+    200
+  ],
+  "model_version": "gemini-3.8-flash",
+  "status": 200,
+  "text": "The quick brown fox jumps over the lazy dog.",
+  "usage": {
+    "candidatesTokenCount": 10,
+    "promptTokenCount": 106,
+    "promptTokensDetails": [
+      {
+        "modality": "AUDIO",
+        "tokenCount": 92
+      },
+      {
+        "modality": "TEXT",
+        "tokenCount": 14
+      }
+    ],
+    "serviceTier": "standard",
+    "thoughtsTokenCount": 31,
+    "totalTokenCount": 147
+  }
+}

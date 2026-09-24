@@ -1,0 +1,42 @@
+{
+  "body": {
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "text": "The quick brown fox jumps over the lazy dog.",
+              "thoughtSignature": "EssDCsgDAWkUfRNbe5uBmGg1FDAYsXZxQJ04x9Sg+iMYgYrjT7OEvaTN95mNTH7NA4B/5hWTeO/zzpzq/Sy6jNCoq+yOGG6/Te3gP7kyAL3fW/KIikDLH7Lf4B+MHPADQe/MtqKsTH+8Mvk8W+iQWLUOxfPakDWGFIj906ABI2U2GXi7mHnWdSU6dfJGu1OLciqbiFCR228KUX1xpLu2aaUv+w2rsEjSkNtxlaPv+awSfFjhethT+z2Q7rQGnSe1Ym0MrE+PrYaD7qJmm/5ryakJM+Fd15gt4usuNX8MovNT/xell6sNhx2uCnuXGFRQmdr3CcBEgKVuNtWMdR8gbxIF4JQXDSETzsOxZH+GXbTRQqqauWP8Ek1plTx1MvFuEnHGuBLllokkbqrbOM/m3YUOoCFdzvJgPqLEjv2gZDpxFhZpQmFAunmL6A3OkouUPwJbXCHZvJSAd5kvDZYSqwbmv4p8ulNljn3WBjGYRwKsgsWr2WQrS6HShbv2enzInrx5qXhiY88wupKychlKZWFEF1iZHGYAG6g/tn8X/zTeeYXZrpoxAWq1D4qj+rMnhDUTSlNl1AYHjTlzoYZbuHzoewGltaPUHja0zD2p"
+            }
+          ],
+          "role": "model"
+        },
+        "finishReason": "STOP",
+        "index": 0
+      }
+    ],
+    "modelVersion": "gemini-3.8-flash",
+    "responseId": "FY60ao3FG_jqjMcP5vmREQ",
+    "usageMetadata": {
+      "candidatesTokenCount": 10,
+      "promptTokenCount": 121,
+      "promptTokensDetails": [
+        {
+          "modality": "TEXT",
+          "tokenCount": 14
+        },
+        {
+          "modality": "AUDIO",
+          "tokenCount": 107
+        }
+      ],
+      "serviceTier": "standard",
+      "thoughtsTokenCount": 128,
+      "totalTokenCount": 259
+    }
+  },
+  "headers": {
+    "content-type": "application/json; charset=UTF-8"
+  },
+  "status": 200
+}

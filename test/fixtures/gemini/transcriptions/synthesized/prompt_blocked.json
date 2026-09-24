@@ -1,0 +1,11 @@
+{
+  "_comment": "Synthesized (Phase 25.5). INFERRED: a prompt blocked before generation (no candidates, promptFeedback.blockReason), the shape the chat adapter handles. Not probed.",
+  "status": 200,
+  "headers": {"content-type": "application/json; charset=UTF-8"},
+  "body": {
+    "promptFeedback": {"blockReason": "PROHIBITED_CONTENT"},
+    "modelVersion": "gemini-3.8-flash",
+    "responseId": "synthesized-prompt-blocked",
+    "usageMetadata": {"promptTokenCount": 107, "totalTokenCount": 107}
+  }
+}

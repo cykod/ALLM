@@ -1,0 +1,42 @@
+{
+  "body": {
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "text": "The quick brown fox jumps over the lazy dog.",
+              "thoughtSignature": "EoICCv8BAWkUfROQLOLxa+e67kDBYHKDLH66eYtf8e+XvcutnFHwO4+ZSuNWis4NPntsRhTg9zsLOqXac+/iDy0vpVfu9yeeFagRuocTTalP+tXQN733FgCWvprpAbD4sjZfUPWnacXJDChGzj84gVUW+kxCBkfWMBoEi1AVcZcQTW/vXG96pYByxScb/30UACNrSye1vxsTe0SVuhDm6UHuMfJMBMx+OY2DRnu22gRZr0R/pVvh/DMCvcHa91HYZYkQ74S/AOiPg2USkHXceqw0F2hI3QWyYPwWW8j1nEMd7I8K2E2HHuWaFVYeRjDrEslCxJkwDycYeaz5kzd8uckrgAoB"
+            }
+          ],
+          "role": "model"
+        },
+        "finishReason": "STOP",
+        "index": 0
+      }
+    ],
+    "modelVersion": "gemini-3.8-flash",
+    "responseId": "Eo60atfVE-rVjMcPkY6q6AQ",
+    "usageMetadata": {
+      "candidatesTokenCount": 10,
+      "promptTokenCount": 107,
+      "promptTokensDetails": [
+        {
+          "modality": "AUDIO",
+          "tokenCount": 93
+        },
+        {
+          "modality": "TEXT",
+          "tokenCount": 14
+        }
+      ],
+      "serviceTier": "standard",
+      "thoughtsTokenCount": 34,
+      "totalTokenCount": 151
+    }
+  },
+  "headers": {
+    "content-type": "application/json; charset=UTF-8"
+  },
+  "status": 200
+}

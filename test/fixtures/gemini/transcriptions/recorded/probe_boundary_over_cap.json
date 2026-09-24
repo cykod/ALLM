@@ -1,0 +1,26 @@
+{
+  "expected": [
+    400,
+    200
+  ],
+  "model_version": "gemini-3.8-flash",
+  "status": 200,
+  "text": "There were several reasons why this might have seemed the wisest choice. First, it allowed a long time for the final selection of candidates, so that none need be chosen who did not measure up to the high standards required. Second, those chosen would have more time to mature. Experience had shown that the years between twenty and thirty saw a profound change in the mind and character. Third, there was not yet any reason to think that there was the slightest chance of the restoration of the mona",
+  "usage": {
+    "candidatesTokenCount": 649,
+    "promptTokenCount": 12382,
+    "promptTokensDetails": [
+      {
+        "modality": "AUDIO",
+        "tokenCount": 12368
+      },
+      {
+        "modality": "TEXT",
+        "tokenCount": 14
+      }
+    ],
+    "serviceTier": "standard",
+    "thoughtsTokenCount": 3479,
+    "totalTokenCount": 16510
+  }
+}

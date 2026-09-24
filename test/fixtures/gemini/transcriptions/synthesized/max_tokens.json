@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthesized (Phase 25.5). INFERRED: a candidate stopped at the output-token limit (finishReason MAX_TOKENS) carrying a partial transcript. Shaped after recorded/mp3.json.",
+  "status": 200,
+  "headers": {"content-type": "application/json; charset=UTF-8"},
+  "body": {
+    "candidates": [
+      {
+        "content": {"parts": [{"text": "The quick brown fox jumps"}], "role": "model"},
+        "finishReason": "MAX_TOKENS",
+        "index": 0
+      }
+    ],
+    "modelVersion": "gemini-3.8-flash",
+    "responseId": "synthesized-max-tokens",
+    "usageMetadata": {"candidatesTokenCount": 5, "promptTokenCount": 107, "thoughtsTokenCount": 0, "totalTokenCount": 112}
+  }
+}

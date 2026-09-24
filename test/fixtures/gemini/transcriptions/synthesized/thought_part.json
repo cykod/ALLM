@@ -1,0 +1,23 @@
+{
+  "_comment": "Synthesized (Phase 25.5). INFERRED: a response carrying a thought part (\"thought\": true) ahead of the answer part. No live transcription response has shown one (per Google's docs, thought parts appear only with thinkingConfig.includeThoughts); the answer part keeps its thoughtSignature as recorded/mp3.json does.",
+  "status": 200,
+  "headers": {"content-type": "application/json; charset=UTF-8"},
+  "body": {
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {"text": "The speaker says a pangram about a fox and a dog.", "thought": true},
+            {"text": "The quick brown fox jumps over the lazy dog.", "thoughtSignature": "c3ludGhlc2l6ZWQ="}
+          ],
+          "role": "model"
+        },
+        "finishReason": "STOP",
+        "index": 0
+      }
+    ],
+    "modelVersion": "gemini-3.8-flash",
+    "responseId": "synthesized-thought-part",
+    "usageMetadata": {"candidatesTokenCount": 10, "promptTokenCount": 107, "thoughtsTokenCount": 34, "totalTokenCount": 151}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "_comment": "Synthesized (Phase 25.5). INFERRED, not observed: the chat adapter's context-length rule (a 400 containing 'exceeds the maximum number of tokens'). No inline-audio probe can reach it, because 20 MB of audio is far below the model's token window.",
+  "status": 400,
+  "headers": {"content-type": "application/json; charset=UTF-8"},
+  "body": {
+    "error": {
+      "code": 400,
+      "message": "The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).",
+      "status": "INVALID_ARGUMENT"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "body": {
+    "error": {
+      "code": 400,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.BadRequest",
+          "fieldViolations": [
+            {
+              "description": "Invalid JSON payload received. Unknown name \"notARealField\": Cannot find field."
+            }
+          ]
+        }
+      ],
+      "message": "Invalid JSON payload received. Unknown name \"notARealField\": Cannot find field.",
+      "status": "INVALID_ARGUMENT"
+    }
+  },
+  "headers": {
+    "content-type": "application/json; charset=UTF-8"
+  },
+  "status": 400
+}

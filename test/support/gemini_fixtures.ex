@@ -99,6 +99,44 @@ defmodule ALLM.Providers.GeminiTestFixtures do
   end
 
   @doc """
+  Load a recorded `generateContent` transcription envelope by name.
+
+  Names map to files under
+  `test/fixtures/gemini/transcriptions/recorded/<name>.json`, written by
+  `scripts/record_gemini_audio_fixtures.exs`. Each is a JSON envelope
+  (`status`, `headers`, `body`) or an assert-only `probe_*` outcome. They
+  carry no `_comment` marker, so a provenance assertion made through this
+  loader cannot bind; `transcription_wire_test.exs` reads the raw bytes.
+
+  ## Examples
+
+      iex> env = ALLM.Providers.GeminiTestFixtures.transcription_recorded(:mp3)
+      iex> env["status"]
+      200
+  """
+  @spec transcription_recorded(atom()) :: body()
+  def transcription_recorded(name) when is_atom(name) do
+    load_json(Path.join([@fixtures_root, "transcriptions", "recorded", "#{name}.json"]))
+  end
+
+  @doc """
+  Load a synthesized transcription envelope by name, `_comment` stripped.
+
+  Names map to files under
+  `test/fixtures/gemini/transcriptions/synthesized/<name>.json`.
+
+  ## Examples
+
+      iex> env = ALLM.Providers.GeminiTestFixtures.transcription_synthesized(:safety)
+      iex> hd(env["body"]["candidates"])["finishReason"]
+      "SAFETY"
+  """
+  @spec transcription_synthesized(atom()) :: body()
+  def transcription_synthesized(name) when is_atom(name) do
+    load_json(Path.join([@fixtures_root, "transcriptions", "synthesized", "#{name}.json"]))
+  end
+
+  @doc """
   Load a recorded or synthesized SSE stream fixture by name (Phase 16.2).
 
   Names resolve as follows: first under

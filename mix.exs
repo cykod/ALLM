@@ -131,6 +131,7 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Gemini,
           ALLM.Providers.Gemini.Images,
           ALLM.Providers.Gemini.Embeddings,
+          ALLM.Providers.Gemini.Transcription,
           ALLM.Providers.Voyage.Embeddings,
           ALLM.Providers.Fake,
           ALLM.Providers.Fake.Script,

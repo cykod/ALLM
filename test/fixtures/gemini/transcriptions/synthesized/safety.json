@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthesized (Phase 25.5). INFERRED: a candidate stopped by the safety filter (finishReason SAFETY, no content), the shape the chat adapter handles. Not probed.",
+  "status": 200,
+  "headers": {"content-type": "application/json; charset=UTF-8"},
+  "body": {
+    "candidates": [
+      {
+        "finishReason": "SAFETY",
+        "index": 0,
+        "safetyRatings": [{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "HIGH", "blocked": true}]
+      }
+    ],
+    "modelVersion": "gemini-3.8-flash",
+    "responseId": "synthesized-safety",
+    "usageMetadata": {"promptTokenCount": 107, "totalTokenCount": 107}
+  }
+}

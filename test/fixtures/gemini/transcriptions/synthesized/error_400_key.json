@@ -1,0 +1,20 @@
+{
+  "_comment": "Synthesized (Phase 25.5). A 400 API_KEY_INVALID envelope whose message carries a DELIBERATELY PLANTED Google-shaped key: the redaction test's only target. Gemini's real bad-key 400 (recorded/error_400_bad_key.json, 2026-09-24) does not echo the key at all.",
+  "status": 400,
+  "headers": {"content-type": "application/json; charset=UTF-8"},
+  "body": {
+    "error": {
+      "code": 400,
+      "message": "API key not valid: AIzaSyFAKEKEY000111222333444555666. Please pass a valid API key.",
+      "status": "INVALID_ARGUMENT",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "reason": "API_KEY_INVALID",
+          "domain": "googleapis.com",
+          "metadata": {"service": "generativelanguage.googleapis.com"}
+        }
+      ]
+    }
+  }
+}

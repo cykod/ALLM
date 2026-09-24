@@ -1,3 +1,26 @@
+## [FEAT] Add Gemini transcription adapter (Phase 25.5)
+*Thursday, September 24th at 2am*
+Adds ALLM.Providers.Gemini.Transcription (spec §37) per 
+steering/2026-09-24_SST_SUPPORT.md Phase 25.5, settled against a live wire 
+probe.
+
+- Transcription as prompted chat on :generateContent: fixed verbatim-transcript 
+instruction plus inline base64 audio; thought parts excluded; MAX_TOKENS 
+returns the partial text with finish_reason :length; SAFETY/RECITATION map to 
+:content_filter.
+- Gates before key resolution: resolvable, size (15,679,488 raw bytes, sized 
+for the 20 MB request; the probe accepted slightly more, recorded as 
+conservative), normalised mime against the probed accepted set (audio/opus 
+accepted, no alias needed).
+- 400 API_KEY_INVALID maps to :authentication_failed (the released Gemini 
+siblings still say :invalid_request, carried to 25.7); Gemini key redaction on 
+message and status; no adapter-level retry.
+- scripts/record_gemini_audio_fixtures.exs: four-part live probe; wire-map rows 
+amended. The probe found that minutes of silence yield a fabricated transcript, 
+now warned about in the moduledoc.
+
+---
+
 ## [FEAT] Add OpenAI speech and transcription adapters (Phase 25.4)
 *Thursday, September 24th at 2am*
 Adds the bundled OpenAI audio adapters (spec §37) per 

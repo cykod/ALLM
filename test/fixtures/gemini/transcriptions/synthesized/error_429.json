@@ -1,0 +1,12 @@
+{
+  "_comment": "Synthesized (Phase 25.5). A RESOURCE_EXHAUSTED 429 with Retry-After, shaped after Google's error envelope; not probed (a live 429 cannot be provoked cheaply).",
+  "status": 429,
+  "headers": {"content-type": "application/json; charset=UTF-8", "retry-after": "7"},
+  "body": {
+    "error": {
+      "code": 429,
+      "message": "Resource has been exhausted (e.g. check quota).",
+      "status": "RESOURCE_EXHAUSTED"
+    }
+  }
+}

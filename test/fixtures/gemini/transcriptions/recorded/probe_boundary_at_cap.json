@@ -1,0 +1,25 @@
+{
+  "expected": [
+    200
+  ],
+  "model_version": "gemini-3.8-flash",
+  "status": 200,
+  "text": "So, the first thing is we take our three-inch ring. You got, you have to find the the where it opens and closes, so you can see that it's right there. And we just put this right in the vise and squeeze it tight. Now, this helps if you do this on the edge of the workbench, so this doesn't hit anything, but I have it out where we can see it with the camera a little bit better. We take our 3/8 wrench, and we put that on the joint, and you just kinda rock it until it opens. And then we're gonna open",
+  "usage": {
+    "candidatesTokenCount": 1363,
+    "promptTokenCount": 12264,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 14
+      },
+      {
+        "modality": "AUDIO",
+        "tokenCount": 12250
+      }
+    ],
+    "serviceTier": "standard",
+    "thoughtsTokenCount": 6179,
+    "totalTokenCount": 19806
+  }
+}
