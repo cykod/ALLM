@@ -38,7 +38,7 @@ defmodule ALLM.ImageRequestTest do
 
   describe "ETF round-trip" do
     test "every operation × source-variant combination" do
-      for op <- [:generate, :edit, :variation],
+      for op <- [:generate, :edit],
           src_image <- [
             Image.from_binary(<<1, 2>>, "image/png"),
             Image.from_base64("aGk=", "image/png"),
@@ -48,7 +48,7 @@ defmodule ALLM.ImageRequestTest do
         req =
           ImageRequest.new(
             operation: op,
-            prompt: if(op == :variation, do: nil, else: "p"),
+            prompt: "p",
             input_images: if(op == :generate, do: [], else: [src_image])
           )
 
@@ -129,11 +129,56 @@ defmodule ALLM.ImageRequestTest do
   end
 
   describe "JSON round-trip — closed-atom fields" do
-    test "operation: :variation round-trips" do
-      req = ImageRequest.new(operation: :variation)
+    test "operation: :edit round-trips" do
+      req = ImageRequest.new(operation: :edit, prompt: "p")
       json = ALLM.Serializer.to_json!(req)
-      assert Jason.decode!(json)["data"]["operation"] == "variation"
+      assert Jason.decode!(json)["data"]["operation"] == "edit"
       assert {:ok, ^req} = ALLM.Serializer.from_json(json)
+    end
+
+    test "absent operation decodes to the :generate default" do
+      json =
+        ImageRequest.new(prompt: "p")
+        |> ALLM.Serializer.to_json!()
+        |> Jason.decode!()
+        |> update_in(["data"], &Map.delete(&1, "operation"))
+        |> Jason.encode!()
+
+      assert {:ok, %ImageRequest{operation: :generate}} = ALLM.Serializer.from_json(json)
+    end
+
+    # The `:variation` operation was removed in v0.6.0. A request persisted
+    # by an earlier version must fail decode with a clean ValidationError —
+    # and must do so whether or not a `:variation` atom exists in the VM,
+    # which is why the decoder does not use `String.to_existing_atom/1`.
+    # `String.to_atom/1` below guarantees the atom exists, so this test
+    # binds the closed-set decoder rather than the atom table.
+    test "legacy persisted operation \"variation\" fails decode deterministically" do
+      _ = String.to_atom("variation")
+
+      json =
+        ImageRequest.new(operation: :edit, prompt: nil, input_images: [])
+        |> ALLM.Serializer.to_json!()
+        |> Jason.decode!()
+        |> put_in(["data", "operation"], "variation")
+        |> Jason.encode!()
+
+      assert {:error, %ValidationError{} = err} = ALLM.Serializer.from_json(json)
+      assert err.errors == [{:_unknown, :atom_decode_failed}]
+    end
+
+    test "any off-enum operation string fails decode" do
+      for op <- ["inpaint", "GENERATE", ""] do
+        json =
+          ImageRequest.new(prompt: "p")
+          |> ALLM.Serializer.to_json!()
+          |> Jason.decode!()
+          |> put_in(["data", "operation"], op)
+          |> Jason.encode!()
+
+        assert {:error, %ValidationError{errors: [{:_unknown, :atom_decode_failed}]}} =
+                 ALLM.Serializer.from_json(json)
+      end
     end
 
     test "style: :natural round-trips via to_atom_field/1" do

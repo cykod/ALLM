@@ -42,8 +42,8 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
   # ---------------------------------------------------------------------------
 
   describe "supported_operations/0" do
-    test "returns the closed list [:generate, :edit, :variation]" do
-      assert Images.supported_operations() == [:generate, :edit, :variation]
+    test "returns the closed list [:generate, :edit]" do
+      assert Images.supported_operations() == [:generate, :edit]
     end
   end
 
@@ -55,7 +55,6 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
     test "returns the correct path for each operation" do
       assert Images.endpoint_for(:generate) == "/images/generations"
       assert Images.endpoint_for(:edit) == "/images/edits"
-      assert Images.endpoint_for(:variation) == "/images/variations"
     end
   end
 
@@ -67,16 +66,13 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
     @legal_pairs [
       {"dall-e-2", :generate},
       {"dall-e-2", :edit},
-      {"dall-e-2", :variation},
       {"dall-e-3", :generate},
       {"gpt-image-1", :generate},
       {"gpt-image-1", :edit}
     ]
 
     @illegal_pairs [
-      {"dall-e-3", :edit},
-      {"dall-e-3", :variation},
-      {"gpt-image-1", :variation}
+      {"dall-e-3", :edit}
     ]
 
     for {model, op} <- @legal_pairs do
@@ -97,15 +93,30 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
       end
     end
 
+    # Pins the whole per-model operation table (`@model_ops`), not just the
+    # sampled pairs above: every known model × every supported operation.
+    test "per-model operation table is exactly the documented matrix" do
+      table =
+        for model <- ["dall-e-2", "dall-e-3", "gpt-image-1"], into: %{} do
+          {model,
+           Enum.filter(Images.supported_operations(), &(Images.gate_model_op(model, &1) == :ok))}
+        end
+
+      assert table == %{
+               "dall-e-2" => [:generate, :edit],
+               "dall-e-3" => [:generate],
+               "gpt-image-1" => [:generate, :edit]
+             }
+    end
+
     test "model: nil → :ok (passthrough; provider decides)" do
       assert Images.gate_model_op(nil, :generate) == :ok
       assert Images.gate_model_op(nil, :edit) == :ok
-      assert Images.gate_model_op(nil, :variation) == :ok
     end
 
     test "unknown model string → :ok (passthrough; provider decides)" do
       assert Images.gate_model_op("dall-e-4-preview", :generate) == :ok
-      assert Images.gate_model_op("dall-e-4-preview", :variation) == :ok
+      assert Images.gate_model_op("dall-e-4-preview", :edit) == :ok
     end
   end
 
@@ -126,22 +137,28 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
   end
 
   describe "generate/2 — model gate" do
-    test "operation: :variation + model: dall-e-3 → :unsupported_operation with model + operation" do
+    # `:variation` was removed in v0.6.0 (OpenAI retired
+    # `/v1/images/variations`). A hand-built legacy request on `dall-e-2` —
+    # formerly the one legal cell — is now rejected by the operation gate
+    # before any HTTP I/O (no stub registered, no key needed).
+    test "legacy operation: :variation + model: dall-e-2 → :unsupported_operation BEFORE HTTP" do
       base = Image.from_binary(<<1>>, "image/png")
 
-      req =
-        ImageRequest.new(
-          operation: :variation,
-          prompt: nil,
-          model: "dall-e-3",
-          input_images: [base]
-        )
+      req = %ImageRequest{
+        operation: :variation,
+        prompt: nil,
+        model: "dall-e-2",
+        input_images: [base]
+      }
 
       assert {:error, %ImageAdapterError{reason: :unsupported_operation} = err} =
                Images.generate(req, [])
 
-      assert err.metadata.model == "dall-e-3"
       assert err.metadata.operation == :variation
+      assert err.provider == :openai
+
+      assert {:error, %ImageAdapterError{reason: :unsupported_operation}} =
+               Images.prepare_request(req, [])
     end
 
     test "operation: :edit + model: dall-e-3 → :unsupported_operation" do
@@ -160,24 +177,6 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
 
       assert err.metadata.model == "dall-e-3"
       assert err.metadata.operation == :edit
-    end
-
-    test "operation: :variation + model: gpt-image-1 → :unsupported_operation" do
-      base = Image.from_binary(<<1>>, "image/png")
-
-      req =
-        ImageRequest.new(
-          operation: :variation,
-          prompt: nil,
-          model: "gpt-image-1",
-          input_images: [base]
-        )
-
-      assert {:error, %ImageAdapterError{reason: :unsupported_operation} = err} =
-               Images.generate(req, [])
-
-      assert err.metadata.model == "gpt-image-1"
-      assert err.metadata.operation == :variation
     end
   end
 
@@ -218,14 +217,20 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
     end
 
     test "model gate failure carries metadata[:request_id]" do
-      req = ImageRequest.new(operation: :variation, prompt: nil, model: "dall-e-3")
+      req =
+        ImageRequest.new(
+          operation: :edit,
+          prompt: "tweak",
+          model: "dall-e-3",
+          input_images: [Image.from_binary(<<1>>, "image/png")]
+        )
 
       assert {:error, %ImageAdapterError{} = err} =
                Images.generate(req, request_id: "rid-model-gate")
 
       assert err.metadata.request_id == "rid-model-gate"
       assert err.metadata.model == "dall-e-3"
-      assert err.metadata.operation == :variation
+      assert err.metadata.operation == :edit
     end
 
     test "gpt-image-1 + :url rejection carries metadata[:request_id]" do
@@ -270,14 +275,14 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
       assert {:ok, %ImageResponse{images: [^out]}} = Images.generate(req, opts)
     end
 
-    test "fires BEFORE pre-flight gates (an unsupported operation under :image_script does NOT hit the operation gate)" do
+    test "fires BEFORE pre-flight gates (an unsupported model × operation under :image_script does NOT hit the model gate)" do
       out = Image.from_binary(<<1>>, "image/png")
       base = Image.from_binary(<<2>>, "image/png")
 
       req =
         ImageRequest.new(
-          operation: :variation,
-          prompt: nil,
+          operation: :edit,
+          prompt: "tweak",
           model: "dall-e-3",
           input_images: [base]
         )
@@ -412,7 +417,7 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
       req =
         ImageRequest.new(
           operation: :generate,
-          prompt: "kestrel variations",
+          prompt: "a kestrel in four poses",
           model: "dall-e-2",
           response_format: :base64,
           size: {256, 256},
@@ -1088,55 +1093,6 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
   end
 
   # ---------------------------------------------------------------------------
-  # generate/2 — :variation routes through the multipart HTTP path (Phase 15.5)
-  # ---------------------------------------------------------------------------
-
-  describe "generate/2 — :variation routes through multipart HTTP path (Phase 15.5)" do
-    # `:edit` was wired in Phase 15.4 and `:variation` in Phase 15.5 —
-    # both flow through the same multipart machinery. Wire-shape tests
-    # for both ops live in `images_multipart_test.exs`; this test
-    # confirms the post-gate path actually reaches HTTP dispatch (not
-    # the prior pending-implementation stub).
-    test ":variation + dall-e-2 (legal model gate) flows through the multipart HTTP path (Phase 15.5)" do
-      # Phase 15.5 wired :variation through the same multipart machinery
-      # as :edit. Stub Req.Test to confirm the path actually reaches HTTP
-      # dispatch rather than returning `:unknown` / "pending implementation"
-      # pre-flight as the 15.4 stub did. The stub responds 200 with the
-      # variation fixture's JSON envelope.
-      stub = String.to_atom("openai_images_variation_routed_#{System.unique_integer([:positive])}")
-
-      Req.Test.stub(stub, fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(
-          200,
-          Jason.encode!(%{
-            "created" => 1,
-            "data" => [%{"b64_json" => Base.encode64(<<1, 2, 3>>)}]
-          })
-        )
-      end)
-
-      base = Image.from_binary(<<1>>, "image/png")
-
-      req =
-        ImageRequest.new(
-          operation: :variation,
-          prompt: nil,
-          model: "dall-e-2",
-          input_images: [base]
-        )
-
-      assert {:ok, %ALLM.ImageResponse{}} =
-               Images.generate(req,
-                 api_key: "sk-test",
-                 retry: false,
-                 adapter_opts: [plug: {Req.Test, stub}]
-               )
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # to_image_adapter_error/4 — direct unit tests for the closed-enum table
   # ---------------------------------------------------------------------------
 
@@ -1546,7 +1502,13 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
     end
 
     test "model-gate failure surfaces from prepare_request/2 too" do
-      req = ImageRequest.new(operation: :variation, prompt: nil, model: "dall-e-3")
+      req =
+        ImageRequest.new(
+          operation: :edit,
+          prompt: "tweak",
+          model: "dall-e-3",
+          input_images: [Image.from_binary(<<1>>, "image/png")]
+        )
 
       assert {:error, %ImageAdapterError{reason: :unsupported_operation} = err} =
                Images.prepare_request(req, [])
@@ -1568,25 +1530,6 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
 
       assert err.metadata.model == "gpt-image-1"
       assert err.metadata.response_format == :url
-    end
-
-    test ":variation returns an unfired Req.Request with multipart body (Phase 15.5)" do
-      base = Image.from_binary(<<1>>, "image/png")
-
-      req =
-        ImageRequest.new(
-          operation: :variation,
-          prompt: nil,
-          model: "dall-e-2",
-          input_images: [base]
-        )
-
-      assert {:ok, %Req.Request{} = http_req} =
-               Images.prepare_request(req, api_key: "sk-prep")
-
-      assert URI.parse(http_req.url).path == "/v1/images/variations"
-      assert http_req.method == :post
-      assert is_list(http_req.options[:form_multipart])
     end
 
     test "image_script + prepare_request/2 returns the stub (no Req.Request analogue)" do

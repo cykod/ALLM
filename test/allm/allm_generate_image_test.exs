@@ -23,7 +23,7 @@ defmodule ALLM.AllmGenerateImageTest do
   defmodule NilReqIdAdapter do
     @moduledoc false
     @behaviour ALLM.ImageAdapter
-    def supported_operations, do: [:generate, :edit, :variation]
+    def supported_operations, do: [:generate, :edit]
 
     def generate(_req, _opts) do
       {:ok, %ALLM.ImageResponse{images: [], usage: %ALLM.ImageUsage{}, request_id: nil}}
@@ -33,7 +33,7 @@ defmodule ALLM.AllmGenerateImageTest do
   defmodule SetReqIdAdapter do
     @moduledoc false
     @behaviour ALLM.ImageAdapter
-    def supported_operations, do: [:generate, :edit, :variation]
+    def supported_operations, do: [:generate, :edit]
 
     def generate(_req, _opts) do
       {:ok,
@@ -131,7 +131,7 @@ defmodule ALLM.AllmGenerateImageTest do
     test "with %ImageRequest{} dispatches the struct verbatim (does NOT re-wrap)" do
       engine = capture_engine()
       img = single_image()
-      input = %ImageRequest{operation: :variation, input_images: [img], prompt: nil}
+      input = %ImageRequest{operation: :edit, input_images: [img], prompt: "make it pink"}
 
       assert {:ok, _} = ALLM.generate_image(engine, input)
       assert_receive {FakeImages, :call, %{request: ^input}}

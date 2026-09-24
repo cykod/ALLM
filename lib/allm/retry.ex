@@ -18,8 +18,8 @@ defmodule ALLM.Retry do
 
   ## Image-side caller class
 
-  The image façade (`ALLM.generate_image/3`, `edit_image/4`,
-  `image_variations/3`) wraps the adapter dispatch in `run/3`. Backoff
+  The image façade (`ALLM.generate_image/3`, `edit_image/4`) wraps the
+  adapter dispatch in `run/3`. Backoff
   timing reuses the chat-side `default_policy/0` unchanged at its
   source; the image façade augments `retry_on` at the call site to
   add the four image-error atoms (`:rate_limited`,

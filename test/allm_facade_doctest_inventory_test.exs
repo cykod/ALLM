@@ -37,7 +37,6 @@ defmodule ALLMFacadeDoctestInventoryTest do
     # Image generation
     generate_image: 3,
     edit_image: 4,
-    image_variations: 3,
     # Embeddings
     embed: 3,
     # Moderation

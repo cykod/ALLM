@@ -37,11 +37,12 @@ defmodule ALLM.AllmImageRequestTest do
     end
 
     test "does NOT call ALLM.Validate.image_request/1 — validator-rejecting opts return a struct" do
-      # `:variation` with a non-empty prompt would be rejected by the
-      # validator (prompt: :not_allowed_for_operation). The facade returns
-      # the struct anyway, mirroring `request/2`'s no-validate precedent.
-      req = ALLM.image_request("would-be-rejected", operation: :variation)
-      assert %ImageRequest{operation: :variation, prompt: "would-be-rejected"} = req
+      # `n: 0` would be rejected by the validator (n: :must_be_positive).
+      # The facade returns the struct anyway, mirroring `request/2`'s
+      # no-validate precedent.
+      req = ALLM.image_request("would-be-rejected", n: 0)
+      assert %ImageRequest{n: 0, prompt: "would-be-rejected"} = req
+      assert {:error, _} = ALLM.Validate.image_request(req)
     end
 
     test "opts may override :operation" do

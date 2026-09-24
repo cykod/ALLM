@@ -102,7 +102,7 @@ defmodule ALLM.Providers.FakeImages do
   alias ALLM.Error.ImageAdapterError
   alias ALLM.{Image, ImageRequest, ImageResponse, ImageUsage}
 
-  @adapter_supported_operations [:generate, :edit, :variation]
+  @adapter_supported_operations [:generate, :edit]
 
   # ---------------------------------------------------------------------------
   # ALLM.ImageAdapter — supported_operations/0
@@ -111,14 +111,14 @@ defmodule ALLM.Providers.FakeImages do
   @doc """
   Return the list of operations FakeImages can perform.
 
-  Defaults to all three image operations; tests asserting per-adapter
+  Defaults to both image operations; tests asserting per-adapter
   rejection paths typically construct a custom `@behaviour
   ALLM.ImageAdapter` module rather than narrowing this list.
 
   ## Examples
 
       iex> ALLM.Providers.FakeImages.supported_operations
-      [:generate, :edit, :variation]
+      [:generate, :edit]
   """
   @impl ALLM.ImageAdapter
   @spec supported_operations() :: [ImageRequest.operation()]

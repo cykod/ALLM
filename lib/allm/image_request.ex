@@ -1,15 +1,12 @@
 defmodule ALLM.ImageRequest do
   @moduledoc """
-  A request for image generation, editing, or variation — Layer A
-  serializable data.
+  A request for image generation or editing — Layer A serializable data.
 
-  Three operations:
+  Two operations:
 
   - `:generate` — text-to-image; requires `:prompt`, `:input_images == []`.
   - `:edit` — modify one or two input images optionally with a `:mask`;
     requires `:prompt` and `length(:input_images) in 1..2`.
-  - `:variation` — generate variants of one input image; requires
-    `length(:input_images) == 1` and `:prompt in [nil, ""]`.
 
   Operation-arity rules are enforced by `ALLM.Validate.image_request/1`;
   construction via `new/1` does not validate.
@@ -32,12 +29,15 @@ defmodule ALLM.ImageRequest do
   `:operation`, `:response_format`, `:style`, and `:background` are closed
   atom enums; an unknown value at decode time raises `ArgumentError` and
   surfaces as `{:_unknown, :atom_decode_failed}` per the serializer's rescue
-  contract.
+  contract. `:operation` is decoded against its closed set explicitly (not
+  via `String.to_existing_atom/1`), so a value outside `:generate | :edit`
+  — including `"variation"` persisted before v0.6.0 removed that operation
+  — always fails decode, whatever atoms happen to exist in the VM.
   """
 
   alias ALLM.{Image, Serializer}
 
-  @type operation :: :generate | :edit | :variation
+  @type operation :: :generate | :edit
   @type size :: {pos_integer(), pos_integer()} | String.t() | :auto
   @type quality :: :low | :standard | :high | :hd | :auto | String.t()
   @type response_format :: :binary | :base64 | :url
@@ -98,7 +98,7 @@ defmodule ALLM.ImageRequest do
   @spec __from_tagged__(map()) :: t()
   def __from_tagged__(data) when is_map(data) do
     %__MODULE__{
-      operation: Serializer.to_atom_field(data["operation"]) || :generate,
+      operation: decode_operation(data["operation"]),
       model: data["model"],
       prompt: data["prompt"],
       n: data["n"] || 1,
@@ -113,6 +113,19 @@ defmodule ALLM.ImageRequest do
       metadata: data["metadata"] || %{}
     }
   end
+
+  # `:operation` decoder — explicit closed set. `Serializer.to_atom_field/1`
+  # would accept any existing atom, so a legacy `"variation"` (removed in
+  # v0.6.0) would decode or not depending on the VM's atom table. Raising
+  # `ArgumentError` routes through the serializer's rescue to
+  # `{:_unknown, :atom_decode_failed}` deterministically.
+  defp decode_operation(nil), do: :generate
+  defp decode_operation("generate"), do: :generate
+  defp decode_operation("edit"), do: :edit
+  defp decode_operation(op) when op in [:generate, :edit], do: op
+
+  defp decode_operation(other),
+    do: raise(ArgumentError, "unknown image operation: #{inspect(other)}")
 
   # `:size` decoder — closed atom branch (`:auto`) + tuple branch + binary
   # fall-through. Mirrors `lib/allm/request.ex:94-99`'s `decode_tool_choice/1`

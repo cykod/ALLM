@@ -29,7 +29,6 @@ Wire-shape fixtures for `ALLM.Providers.OpenAI.Images` — see Phase 15
 | `generate_gpt_image_1_happy.json` | `/v1/images/generations` | `gpt-image-1` | base64 (forced) + token usage (`input_tokens`/`output_tokens`/`input_tokens_details`) |
 | `edit_dall_e_2_happy.json` | `/v1/images/edits` | `dall-e-2` | base64 happy path (multipart body builder + JSON response decode) |
 | `edit_gpt_image_1_happy.json` | `/v1/images/edits` | `gpt-image-1` | base64 (forced) + token usage on edit |
-| `variation_dall_e_2_happy.json` | `/v1/images/variations` | `dall-e-2` | base64 happy path (multipart body builder, no `prompt`/`mask`; same response envelope as `:edit`) |
 
 ### `inputs/`
 
@@ -55,7 +54,7 @@ tests that need a deterministic input image.
 ## Recording
 
 Hand-synthesized fixtures carry a leading `_comment` field. To replace
-them with real OpenAI responses (one-time, ~$0.20 total cost):
+them with real OpenAI responses (one-time, ~$0.18 total cost):
 
 ```bash
 OPENAI_API_KEY=sk-... mix run scripts/record_openai_image_fixtures.exs

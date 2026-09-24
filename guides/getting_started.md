@@ -215,8 +215,8 @@ Pick the path that matches what you're building:
 * **Multi-turn persistence** → `sessions.md` — `%Session{}` and the
   status union.
 * **Multi-modal input** → `vision.md` — `TextPart` and `ImagePart`.
-* **Image generation** → `image_generation.md` — `generate_image/3`,
-  `edit_image/4`, `image_variations/3`.
+* **Image generation** → `image_generation.md` — `generate_image/3`
+  and `edit_image/4`.
 * **Production hardening** → `errors_and_retries.md` and
   `multi_tenant_keys.md`.
 

@@ -12,8 +12,8 @@ defmodule ALLM.Providers.FakeImagesTest do
   use ALLM.Test.ImageAdapterConformance, image_adapter: FakeImages
 
   describe "supported_operations/0" do
-    test "returns the closed list of three image operations" do
-      assert FakeImages.supported_operations() == [:generate, :edit, :variation]
+    test "returns the closed list of two image operations" do
+      assert FakeImages.supported_operations() == [:generate, :edit]
     end
   end
 
@@ -105,14 +105,6 @@ defmodule ALLM.Providers.FakeImagesTest do
       base = Image.from_binary(<<1>>, "image/png")
       out = Image.from_binary(<<2>>, "image/png")
       req = ImageRequest.new(operation: :edit, prompt: "x", input_images: [base])
-      opts = [adapter_opts: [image_script: [{:ok, [out]}]]]
-      assert {:ok, %ImageResponse{images: [^out]}} = FakeImages.generate(req, opts)
-    end
-
-    test ":variation with input_image + 1-image script returns the image (prompt nil)" do
-      base = Image.from_binary(<<1>>, "image/png")
-      out = Image.from_binary(<<2>>, "image/png")
-      req = ImageRequest.new(operation: :variation, prompt: nil, input_images: [base])
       opts = [adapter_opts: [image_script: [{:ok, [out]}]]]
       assert {:ok, %ImageResponse{images: [^out]}} = FakeImages.generate(req, opts)
     end

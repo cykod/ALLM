@@ -14,7 +14,7 @@ defmodule ALLM.Test.Assertions do
   messages.
 
   Per PHASE_6_DESIGN.md Non-obvious Decision #9: the step-equivalence
-  property tolerates `tool_results` order variation. `ALLM.step/3`'s
+  property tolerates differences in `tool_results` order. `ALLM.step/3`'s
   non-streaming path returns `tool_results` sorted by input index, while
   `ALLM.stream_step/3` emits tool-execution completion events in
   `Task.async_stream/5`'s completion order. Every other field is

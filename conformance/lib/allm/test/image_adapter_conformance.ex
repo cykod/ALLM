@@ -14,7 +14,7 @@ defmodule ALLM.Test.ImageAdapterConformance do
       end
 
   Injects a `describe "ALLM.ImageAdapter conformance (MyImageAdapter)"`
-  block with 9 deterministic cases per the v0.3 Phase 14.1 design.
+  block with 8 deterministic cases.
 
   ## Script contract
 
@@ -33,7 +33,7 @@ defmodule ALLM.Test.ImageAdapterConformance do
 
   Case 2 (unsupported operation) requires an adapter whose
   `supported_operations/0` does NOT include `:edit`. The harness uses the
-  caller-supplied `:image_adapter` for cases 1, 3-9, and uses
+  caller-supplied `:image_adapter` for cases 1, 3-8, and uses
   `ALLM.Test.Fixtures.GenerateOnlyImageStub` (defined in the conformance
   package's `test/support/`) for case 2 — the test branches on whether the
   caller-supplied adapter narrows or not.
@@ -41,7 +41,7 @@ defmodule ALLM.Test.ImageAdapterConformance do
 
   use ExUnit.CaseTemplate
 
-  @case_count 9
+  @case_count 8
 
   @doc """
   Return the number of cases injected by `using/1`. Used by harness
@@ -62,7 +62,7 @@ defmodule ALLM.Test.ImageAdapterConformance do
           ops = @__allm_image_conformance_adapter__.supported_operations()
           assert is_list(ops)
           assert ops != []
-          legal = [:generate, :edit, :variation]
+          legal = [:generate, :edit]
           for op <- ops, do: assert(op in legal)
         end
 
@@ -83,7 +83,7 @@ defmodule ALLM.Test.ImageAdapterConformance do
             # Fall through: ensure the contracted adapter at minimum honors
             # the supported_operations gate when narrowed inputs are given.
             ops = @__allm_image_conformance_adapter__.supported_operations()
-            unsupported = Enum.find([:generate, :edit, :variation], &(&1 not in ops))
+            unsupported = Enum.find([:generate, :edit], &(&1 not in ops))
 
             if unsupported do
               req = ImageRequest.new(operation: unsupported, prompt: "x")
@@ -140,17 +140,7 @@ defmodule ALLM.Test.ImageAdapterConformance do
                    @__allm_image_conformance_adapter__.generate(req, opts)
         end
 
-        test "7. variation happy path: returns {:ok, %ImageResponse{}} for :variation with prompt: nil" do
-          base = Image.from_binary(<<1>>, "image/png")
-          out = Image.from_binary(<<2>>, "image/png")
-          req = ImageRequest.new(operation: :variation, prompt: nil, input_images: [base])
-          opts = [adapter_opts: [image_script: [{:ok, [out]}]]]
-
-          assert {:ok, %ImageResponse{images: [_ | _]}} =
-                   @__allm_image_conformance_adapter__.generate(req, opts)
-        end
-
-        test "8. ImageUsage defaults: response.usage.images >= 1 when adapter doesn't supply usage" do
+        test "7. ImageUsage defaults: response.usage.images >= 1 when adapter doesn't supply usage" do
           img = Image.from_binary(<<1>>, "image/png")
           req = ImageRequest.new(prompt: "x")
           opts = [adapter_opts: [image_script: [{:ok, [img]}]]]
@@ -161,7 +151,7 @@ defmodule ALLM.Test.ImageAdapterConformance do
           assert n >= 1
         end
 
-        test "9. n: 4 batch returns response.images with length in 1..4 (open upper bound — providers may cap)" do
+        test "8. n: 4 batch returns response.images with length in 1..4 (open upper bound — providers may cap)" do
           imgs = for _ <- 1..4, do: Image.from_binary(<<1>>, "image/png")
           req = ImageRequest.new(prompt: "x", n: 4)
           opts = [adapter_opts: [image_script: [{:ok, imgs}]]]

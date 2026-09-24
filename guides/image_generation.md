@@ -3,21 +3,19 @@
 Image generation lives on a parallel surface to the text APIs.
 `%ALLM.ImageRequest{}` and `%ALLM.ImageResponse{}` mirror the
 `Request`/`Response` shape; the engine has a separate `:image_adapter`
-slot; and the entry points (`ALLM.generate_image/3`,
-`ALLM.edit_image/4`, `ALLM.image_variations/3`) take the same engine
-and return image responses.
+slot; and the entry points (`ALLM.generate_image/3` and
+`ALLM.edit_image/4`) take the same engine and return image responses.
 
 This guide covers what each entry point does, the parallel adapter
 slot, OpenAI vs Gemini coverage, and the `FakeImages` adapter for
 deterministic testing.
 
-## Three operations
+## Two operations
 
 | Operation | Function | What it does |
 |---|---|---|
 | Generate | `ALLM.generate_image/3` | Produces a new image from a text prompt |
 | Edit (inpaint) | `ALLM.edit_image/4` | Modifies an existing image, optionally masked |
-| Variations | `ALLM.image_variations/3` | Produces visual variations of an existing image |
 
 Each returns `{:ok, %ALLM.ImageResponse{}}` with `:images` (list of
 `%ALLM.Image{}`) and `:usage` (provider-reported counts).
@@ -82,25 +80,12 @@ mask = File.read!("mask.png")  # white = paint here, transparent = keep
 The base and mask can be raw bytes, a file path
 (`{:file, "/path/to/x.png"}`), or an `%ALLM.Image{}`.
 
-## Variations
-
-`ALLM.image_variations/3` produces visual variations of an existing
-image — no prompt:
-
-```elixir
-{:ok, response} = ALLM.image_variations(engine, base_image, n: 3)
-```
-
-OpenAI is the only bundled provider with native variation support, on
-`dall-e-2` at 256×256.
-
 ## Provider coverage
 
 | Operation | OpenAI | Gemini |
 |---|---|---|
 | Generate (`generate_image/3`) | yes (`dall-e-2`, `dall-e-3`, `gpt-image-1`) | yes (`gemini-2.5-flash-image-preview`) |
 | Edit (`edit_image/4`) | yes (`dall-e-2`, `gpt-image-1`) | yes |
-| Variations (`image_variations/3`) | yes (`dall-e-2` only) | no |
 
 Anthropic does not ship an image adapter — set `:image_adapter` to
 OpenAI's or Gemini's even when your chat adapter is Anthropic.
@@ -178,4 +163,3 @@ ALLM.generate_image(engine, prompt, api_key: tenant.openai_key)
 * `vision.md` — sending images TO the model, vs generating new ones.
 * `examples/10_generate_image.exs` — runnable smoke test.
 * `examples/11_edit_image.exs` — inpaint with mask.
-* `examples/13_image_variations.exs` — OpenAI-only variation flow.

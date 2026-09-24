@@ -15,10 +15,8 @@ defmodule ALLM.Providers.OpenAI.ImagesLiveTest do
     * `dall-e-2` `:edit` at 256x256 — ~$0.018
 
   Per Decision #16 in `steering/PHASE_15_image_layer_6.md`, the live
-  smoke test runs both `:generate` and `:edit` cells; `:variation` is a
-  strict subset of `:edit`'s multipart shape (drops `prompt` / `mask`)
-  and is NOT live-tested to keep costs bounded. Both `images_live_test`
-  cells together verify the request-shape contract end-to-end against
+  smoke test runs both `:generate` and `:edit` cells. Both
+  `images_live_test` cells together verify the request-shape contract end-to-end against
   real OpenAI — neither wire-stub fixtures nor synthesized fixtures
   catch per-model rejection or request-side wire-shape divergences
   (per agent-spec/DESIGN.md rule 16).

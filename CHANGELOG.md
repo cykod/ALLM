@@ -16,6 +16,22 @@ Breaking changes:
   longer put `:body_preview` in an `%ImageAdapterError{}`'s `:metadata`, and
   redact key material from its `:message`. Code reading
   `metadata.body_preview` now gets nothing
+- The `ALLM` façade function `image_variations/3` and the `:variation` image
+  operation are removed. OpenAI retired `POST /v1/images/variations` (it now
+  404s for every model) and no other bundled provider supported it.
+  `ALLM.ImageRequest.operation` is now `:generate | :edit`;
+  `supported_operations/0` on `ALLM.Providers.OpenAI.Images` and
+  `ALLM.Providers.FakeImages` returns `[:generate, :edit]`, and
+  `OpenAI.Images.endpoint_for(:variation)` no longer exists. A persisted
+  `ImageRequest` with `operation: :variation` no longer loads: its JSON fails
+  `ALLM.Serializer.from_json/1` with a `%ValidationError{}` (`{:_unknown,
+  :atom_decode_failed}`), and an in-memory or ETF-restored struct fails
+  `ALLM.Validate.image_request/1` with `{:operation, :unknown}` and is
+  rejected by every bundled image adapter as `:unsupported_operation`.
+  `Validate.image_request/1` no longer emits `{:prompt,
+  :not_allowed_for_operation}`, which only `:variation` produced.
+  `allm_conformance`'s `ImageAdapterConformance` drops its variation case (8
+  cases, was 9)
 
 Other changes:
 - Add content moderation: `ALLM.moderate(engine, "…user text…")` returns

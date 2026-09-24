@@ -1,13 +1,12 @@
 defmodule ALLM.Providers.OpenAI.Images do
   @moduledoc """
   OpenAI Images provider adapter — implements `ALLM.ImageAdapter` against
-  OpenAI's `/v1/images/generations`, `/v1/images/edits`, and
-  `/v1/images/variations` endpoints.
+  OpenAI's `/v1/images/generations` and `/v1/images/edits` endpoints.
 
   Layer B — runtime. Constructed via
   `ALLM.Engine.new(image_adapter: ALLM.Providers.OpenAI.Images, model: "dall-e-2")`
-  and consumed through the `ALLM.generate_image/3 · edit_image/4 ·
-  image_variations/3` façade. Keys resolve via
+  and consumed through the `ALLM.generate_image/3 · edit_image/4`
+  façade. Keys resolve via
   `ALLM.Keys.fetch!(:openai, opts)` at request-build time per the documented contract
   no key ever lives on the engine.
 
@@ -19,17 +18,20 @@ defmodule ALLM.Providers.OpenAI.Images do
   (`input_tokens` / `output_tokens`), and `output_format` → `:mime_type`
   mapping per the documented contract. The multipart `:edit` HTTP path is wired for
   `dall-e-2` and `gpt-image-1`, including URL-source eager-download per
-  the documented contract. The `:variation` path is wired for `dall-e-2` via the same
-  multipart machinery as `:edit` — variation drops `prompt` and `mask`
-  fields and otherwise mirrors `:edit`'s wire shape.
+  the documented contract.
+
+  OpenAI has retired `dall-e-2` and `dall-e-3`: neither is listed by
+  `GET /v1/models` as of 2026-09-24. Their rows stay in the matrix below so
+  a request naming them is still gated pre-flight, but new code should use
+  `gpt-image-1`.
 
   ## Model × Operation matrix
 
-  | Model | `:generate` | `:edit` | `:variation` | Wire format | Usage shape |
-  |---------------|:-----------:|:-------:|:------------:|-------------------|------------------------------------------|
-  | `dall-e-2` | yes | yes | yes | `url` or `b64_json` per caller | `images = length(data)` |
-  | `dall-e-3` | yes | no | no | `url` or `b64_json` per caller | `images = length(data)` |
-  | `gpt-image-1` | yes | yes | no | `b64_json` ALWAYS (forced) | `images` + `input_tokens` + `output_tokens` |
+  | Model | `:generate` | `:edit` | Wire format | Usage shape |
+  |---------------|:-----------:|:-------:|-------------------|------------------------------------------|
+  | `dall-e-2` | yes | yes | `url` or `b64_json` per caller | `images = length(data)` |
+  | `dall-e-3` | yes | no | `url` or `b64_json` per caller | `images = length(data)` |
+  | `gpt-image-1` | yes | yes | `b64_json` ALWAYS (forced) | `images` + `input_tokens` + `output_tokens` |
 
   Cells marked "no" produce
   `{:error, %ImageAdapterError{reason: :unsupported_operation,
@@ -66,8 +68,8 @@ defmodule ALLM.Providers.OpenAI.Images do
 
   The `:generate` operation uses an `application/json` body via
   `Req.new(json:...)` and `OpenAIHeaders.json_headers/2`. The `:edit`
-  and `:variation` operations require an actual image upload, so they
-  use `multipart/form-data` via `Req.new(form_multipart:...)` and
+  operation requires an actual image upload, so it uses
+  `multipart/form-data` via `Req.new(form_multipart:...)` and
   `OpenAIHeaders.multipart_headers/2` (which elides `content-type` so
   Req's `:form_multipart` step stamps it with the boundary).
 
@@ -78,7 +80,7 @@ defmodule ALLM.Providers.OpenAI.Images do
 
   ## URL-source resolution
 
-  `:edit` / `:variation` requests carrying `Image.from_url/1` images are
+  `:edit` requests carrying `Image.from_url/1` images are
   eagerly fetched at request-build time. The `Req.get/2` call honors a 30 s
   default `receive_timeout` (override via `opts[:request_timeout]`), a
   5-redirect cap, and a 25 MB body-size cap. Failure modes (closed):
@@ -145,7 +147,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   @base_url "https://api.openai.com/v1"
 
   @model_ops %{
-    "dall-e-2" => [:generate, :edit, :variation],
+    "dall-e-2" => [:generate, :edit],
     "dall-e-3" => [:generate],
     "gpt-image-1" => [:generate, :edit]
   }
@@ -163,11 +165,11 @@ defmodule ALLM.Providers.OpenAI.Images do
   ## Examples
 
       iex> ALLM.Providers.OpenAI.Images.supported_operations
-      [:generate, :edit, :variation]
+      [:generate, :edit]
   """
   @impl ALLM.ImageAdapter
-  @spec supported_operations() :: [:generate | :edit | :variation]
-  def supported_operations, do: [:generate, :edit, :variation]
+  @spec supported_operations() :: [:generate | :edit]
+  def supported_operations, do: [:generate, :edit]
 
   @doc """
   Execute an image-generation request synchronously against OpenAI.
@@ -188,7 +190,7 @@ defmodule ALLM.Providers.OpenAI.Images do
        "gpt-image-1"` and `request.response_format == :url`, the request
        is rejected with `:invalid_request` because gpt-image-1 only
        returns base64.
-    4. **URL-source resolution** — `:edit` / `:variation` requests with
+    4. **URL-source resolution** — `:edit` requests with
        `{:url, _}` source images are eagerly fetched. Not implemented yet
        (lands with the multipart body builder).
 
@@ -259,9 +261,8 @@ defmodule ALLM.Providers.OpenAI.Images do
   would fire it.
 
   Mirrors the chat-adapter `prepare_request/2` shape at
-  `lib/allm/providers/openai.ex:411-435`. The `:generate`, `:edit`, and
-  `:variation` operations are all supported; `:variation` shares the
-  multipart machinery with `:edit` (variation drops `prompt` / `mask`).
+  `lib/allm/providers/openai.ex:411-435`. The `:generate` and `:edit`
+  operations are both supported.
 
   When `opts[:adapter_opts][:image_script]` is set, `prepare_request/2`
   returns the same stub error rather than delegating to `FakeImages`
@@ -302,15 +303,11 @@ defmodule ALLM.Providers.OpenAI.Images do
 
       iex> ALLM.Providers.OpenAI.Images.endpoint_for(:edit)
       "/images/edits"
-
-      iex> ALLM.Providers.OpenAI.Images.endpoint_for(:variation)
-      "/images/variations"
   """
   @doc since: "0.3.0"
   @spec endpoint_for(ImageRequest.operation()) :: String.t()
   def endpoint_for(:generate), do: "/images/generations"
   def endpoint_for(:edit), do: "/images/edits"
-  def endpoint_for(:variation), do: "/images/variations"
 
   @doc false
   @spec gate_model_op(String.t() | nil, ImageRequest.operation()) ::
@@ -428,8 +425,7 @@ defmodule ALLM.Providers.OpenAI.Images do
     end
   end
 
-  defp do_generate(%ImageRequest{operation: op} = request, opts)
-       when op in [:edit, :variation] do
+  defp do_generate(%ImageRequest{operation: :edit} = request, opts) do
     with :ok <- run_gates(request, opts),
          {:ok, http_req} <- build_multipart_request(request, opts) do
       retry_policy = Keyword.get(opts, :retry, :default)
@@ -454,8 +450,7 @@ defmodule ALLM.Providers.OpenAI.Images do
     build_request(request, opts)
   end
 
-  defp do_prepare(%ImageRequest{operation: op} = request, opts)
-       when op in [:edit, :variation] do
+  defp do_prepare(%ImageRequest{operation: :edit} = request, opts) do
     build_multipart_request(request, opts)
   end
 
@@ -504,7 +499,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   # Internals — Multipart request builder
   # ---------------------------------------------------------------------------
 
-  # Builds a `Req.Request` for `:edit` / `:variation`. Returns
+  # Builds a `Req.Request` for `:edit`. Returns
   # `{:error, %ImageAdapterError{}}` when `to_multipart_body/2` rejects an
   # input image (URL fetch failures, missing source bytes, etc.). The
   # `Req.Test.stub` and `:request_timeout` are applied identically to the
@@ -565,13 +560,9 @@ defmodule ALLM.Providers.OpenAI.Images do
   defp fields_for(:edit, "gpt-image-1"),
     do: [:image, :mask, :prompt, :model, :n, :size, :quality, :background, :output_format, :user]
 
-  defp fields_for(:variation, "dall-e-2"),
-    do: [:image, :model, :n, :size, :response_format, :user]
-
   # Unknown model fallback — emit the union of all plain fields and let
   # the provider reject anything it does not recognize, per Decision #3.
-  # For `:edit` / `:variation` the file fields are still required, so we
-  # include them.
+  # For `:edit` the file fields are still required, so we include them.
   defp fields_for(:generate, _model),
     do: [
       :prompt,
@@ -600,9 +591,6 @@ defmodule ALLM.Providers.OpenAI.Images do
       :output_format,
       :user
     ]
-
-  defp fields_for(:variation, _model),
-    do: [:image, :model, :n, :size, :response_format, :user]
 
   # ---------------------------------------------------------------------------
   # Internals — JSON body builder
@@ -720,7 +708,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Build a multipart/form-data field list for `:edit` / `:variation`.
+  Build a multipart/form-data field list for `:edit`.
 
   Returns `{:ok, [{name, content},...]}` ready to hand to `Req.new(...,
   form_multipart: form)`. Plain fields are `{name, value}` 2-tuples;
@@ -731,7 +719,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   All fields are emitted as strings (multipart fields are always strings on
   the wire); integer / atom values are stringified.
 
-  URL-source images on `:edit` / `:variation` are eagerly fetched per
+  URL-source images on `:edit` are eagerly fetched per
   the documented contract. Failure modes (closed): non-2xx, non-image content-type,
   body > 25 MB, > 5 redirects, timeout / network error. Each maps to a
   typed `%ImageAdapterError{}` with metadata describing the URL and the

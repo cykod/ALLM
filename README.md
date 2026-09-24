@@ -221,7 +221,7 @@ For narrative walkthroughs, jump to a guide:
 - [`guides/tools.md`](guides/tools.md) — declaring tools, manual mode, per-tool `manual: true`, ask-user suspension.
 - [`guides/sessions.md`](guides/sessions.md) — multi-turn persistence, manual tool round-trips, ask-user resume.
 - [`guides/vision.md`](guides/vision.md) — multimodal `[TextPart, ImagePart]` content across all three providers.
-- [`guides/image_generation.md`](guides/image_generation.md) — `generate_image/3`, `edit_image/4`, `image_variations/3`.
+- [`guides/image_generation.md`](guides/image_generation.md) — `generate_image/3`, `edit_image/4`.
 - [`guides/errors_and_retries.md`](guides/errors_and_retries.md) — every error struct, retry policy, telemetry observability.
 - [`guides/multi_tenant_keys.md`](guides/multi_tenant_keys.md) — per-call BYOK and the `ALLM.Keys` resolution chain.
 

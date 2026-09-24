@@ -14,7 +14,7 @@ defmodule ALLM.Test.ImageAdapterConformanceTest do
 
   describe "harness meta-invariants" do
     test "the harness declares exactly N cases (case-count stability)" do
-      assert ImageAdapterConformance.case_count() == 9
+      assert ImageAdapterConformance.case_count() == 8
     end
 
     test "the harness macro raises KeyError when the :image_adapter opt is missing" do

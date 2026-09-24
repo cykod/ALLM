@@ -39,9 +39,9 @@ defmodule ALLM.Providers.Gemini.Images do
 
   ## Operation gate
 
-  `supported_operations/0` returns `[:generate, :edit]`. `:variation` is
-  rejected with `:unsupported_operation` BEFORE any HTTP I/O per
-  `ImageAdapter` invariant 4.
+  `supported_operations/0` returns `[:generate, :edit]`. Any other
+  operation is rejected with `:unsupported_operation` BEFORE any HTTP I/O
+  per `ImageAdapter` invariant 4.
 
   ## Test-injection escape hatch
 
@@ -91,8 +91,8 @@ defmodule ALLM.Providers.Gemini.Images do
   @doc """
   Return the closed list of operations Gemini's image adapter supports.
 
-  Per the documented contract — `[:generate, :edit]`. `:variation` is not supported
-  by the Gemini-native image models and is rejected pre-flight.
+  Per the documented contract — `[:generate, :edit]`. Any other operation is
+  rejected pre-flight.
 
   ## Examples
 
@@ -179,7 +179,7 @@ defmodule ALLM.Providers.Gemini.Images do
   #     materializing JSON like OpenAI does. The "request_body" name is
   #     accurate for both; OpenAI's `to_json_body` reflects that the
   #     OpenAI helper only handles the JSON-bodied endpoint (the
-  #     `to_multipart_body/2` sibling handles edits/variations).
+  #     `to_multipart_body/2` sibling handles edits).
   #   * `decode_image_response/4`     ↔ openai/images.ex:1189 `decode_response/4`.
   #     Diverges because Gemini's image decode shares a `Gemini.Decode.candidate_parts/1`
   #     helper with the chat decoder (response-decoder symmetry decision);
@@ -189,8 +189,8 @@ defmodule ALLM.Providers.Gemini.Images do
   #     Identical name; only the visibility differs (Gemini exposes via
   #     `@doc false` test seam; OpenAI keeps it private). Defensible per
   #     CLAUDE.md "Public-test-seam helpers" rule given Gemini's smaller
-  #     operation gate (`:variation` rejected, vs OpenAI's per-model
-  #     matrix) makes the seam useful to exercise directly.
+  #     operation gate (closed `[:generate, :edit]` set, vs OpenAI's
+  #     per-model matrix) makes the seam useful to exercise directly.
   # ---------------------------------------------------------------------------
 
   @doc """
@@ -198,8 +198,8 @@ defmodule ALLM.Providers.Gemini.Images do
   image-generation operation.
 
   Both `:generate` and `:edit` route through `generateContent` (the
-  request body shape differs, the URL path does not). `:variation` is
-  rejected pre-flight by `gate_operation/2`.
+  request body shape differs, the URL path does not). Any other operation
+  is rejected pre-flight by `gate_operation/2`.
 
   ## Examples
 

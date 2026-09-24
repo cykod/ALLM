@@ -22,7 +22,7 @@ defmodule ALLM.Test.Fixtures.ScriptedImageStub do
 
   `supported_operations/0` returns a module attribute. The conformance
   suite uses `ALLM.Test.Fixtures.ScriptedImageStub` for the
-  generate/edit/variation happy paths; for the unsupported-operation
+  generate/edit happy paths; for the unsupported-operation
   case it uses `ALLM.Test.Fixtures.GenerateOnlyImageStub` (defined in
   this same file) which narrows the list to `[:generate]`.
 
@@ -50,7 +50,7 @@ defmodule ALLM.Test.Fixtures.ScriptedImageStub do
 
   @impl ALLM.ImageAdapter
   @spec supported_operations() :: [ImageRequest.operation()]
-  def supported_operations, do: [:generate, :edit, :variation]
+  def supported_operations, do: [:generate, :edit]
 
   @impl ALLM.ImageAdapter
   def generate(%ImageRequest{} = request, opts) when is_list(opts) do

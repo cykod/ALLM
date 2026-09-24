@@ -42,17 +42,6 @@ defmodule ALLM.Validate.ImageRequestTest do
       assert :ok = Validate.image_request(req)
     end
 
-    test ":variation with 1 input_image, prompt nil returns :ok" do
-      req =
-        ImageRequest.new(
-          operation: :variation,
-          prompt: nil,
-          input_images: [img()]
-        )
-
-      assert :ok = Validate.image_request(req)
-    end
-
     test "all response_format values are accepted" do
       for fmt <- [:binary, :base64, :url] do
         assert :ok =
@@ -113,48 +102,6 @@ defmodule ALLM.Validate.ImageRequestTest do
       assert {:error, %ValidationError{errors: errors}} = Validate.image_request(req)
       assert {:input_images, :invalid_count} in errors
     end
-
-    test ":variation with prompt \"non-empty\" → {:prompt, :not_allowed_for_operation}" do
-      req =
-        ImageRequest.new(
-          prompt: "non-empty",
-          operation: :variation,
-          input_images: [img()]
-        )
-
-      assert {:error, %ValidationError{errors: errors}} = Validate.image_request(req)
-      assert {:prompt, :not_allowed_for_operation} in errors
-    end
-
-    test ":variation with input_images == [] → {:input_images, :invalid_count}" do
-      req = ImageRequest.new(operation: :variation, prompt: nil, input_images: [])
-      assert {:error, %ValidationError{errors: errors}} = Validate.image_request(req)
-      assert {:input_images, :invalid_count} in errors
-    end
-
-    test ":variation with input_images of length 2 → {:input_images, :invalid_count}" do
-      req =
-        ImageRequest.new(
-          operation: :variation,
-          prompt: nil,
-          input_images: [img(), img()]
-        )
-
-      assert {:error, %ValidationError{errors: errors}} = Validate.image_request(req)
-      assert {:input_images, :invalid_count} in errors
-    end
-
-    test ":variation with empty-string prompt + 1 valid input_image returns :ok" do
-      # Empty string is treated as absent for `:not_allowed_for_operation`.
-      req =
-        ImageRequest.new(
-          operation: :variation,
-          prompt: "",
-          input_images: [img()]
-        )
-
-      assert :ok = Validate.image_request(req)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -162,10 +109,23 @@ defmodule ALLM.Validate.ImageRequestTest do
   # ---------------------------------------------------------------------------
 
   describe "field rules" do
-    test ":operation not in [:generate, :edit, :variation] → {:operation, :unknown}" do
+    test ":operation not in [:generate, :edit] → {:operation, :unknown}" do
       req = %ImageRequest{operation: :bogus, prompt: "x"}
       assert {:error, %ValidationError{errors: errors}} = Validate.image_request(req)
       assert {:operation, :unknown} in errors
+    end
+
+    # `:variation` was removed in v0.6.0. A struct shaped like a formerly
+    # valid variation request (one input image, no prompt) — e.g. restored
+    # from an ETF blob persisted by an earlier version — now fails with the
+    # off-enum vocabulary and nothing else.
+    test "legacy :variation request (removed in v0.6.0) → exactly [{:operation, :unknown}]" do
+      req = %ImageRequest{operation: :variation, prompt: nil, input_images: [img()]}
+
+      assert {:error, %ValidationError{reason: :invalid_image_request, errors: errors}} =
+               Validate.image_request(req)
+
+      assert errors == [{:operation, :unknown}]
     end
 
     test ":n zero → {:n, :must_be_positive}" do

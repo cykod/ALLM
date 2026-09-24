@@ -42,15 +42,6 @@ defmodule ALLM.Test.FakeImageFixtures do
   end
 
   @doc """
-  Variation fixture — single output image for a `:variation` request.
-  """
-  @spec variation() :: keyword()
-  def variation do
-    img = Image.from_binary(@png_bytes, "image/png")
-    [image_script: [{:ok, [img]}]]
-  end
-
-  @doc """
   Empty script — used to exercise the cursor-exhaustion path.
   """
   @spec exhausted_script() :: keyword()

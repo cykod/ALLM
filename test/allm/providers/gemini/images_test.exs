@@ -5,7 +5,7 @@ defmodule ALLM.Providers.Gemini.ImagesTest do
   Covers Test Plan §16.5.1 first list:
 
     * `supported_operations/0 == [:generate, :edit]` (Decision #6).
-    * `:variation` rejected with `:unsupported_operation` BEFORE I/O.
+    * Off-set operations rejected with `:unsupported_operation` BEFORE I/O.
     * `:generate` sets `responseModalities: ["TEXT", "IMAGE"]`.
     * Decodes `inlineData` parts to `%Image{source: {:binary, ...}, mime_type: ...}`.
     * `n=2` sets `candidateCount: 2` and decodes two `%Image{}` entries.
@@ -119,19 +119,19 @@ defmodule ALLM.Providers.Gemini.ImagesTest do
   # ---------------------------------------------------------------------------
 
   describe "operation gate" do
-    test ":variation → {:error, :unsupported_operation} BEFORE any HTTP I/O" do
+    test "off-set operation → {:error, :unsupported_operation} BEFORE any HTTP I/O" do
       # No stub registered; if the gate were skipped, a Req.TransportError
       # would surface instead of the typed ImageAdapterError.
       req =
         ImageRequest.new(
-          operation: :variation,
+          operation: :inpaint,
           prompt: "x",
           model: "gemini-3.1-flash-image-preview"
         )
 
       assert {:error, %ImageAdapterError{} = err} = Images.generate(req, retry: false)
       assert err.reason == :unsupported_operation
-      assert err.metadata.operation == :variation
+      assert err.metadata.operation == :inpaint
       assert err.provider == :gemini
     end
 
@@ -144,7 +144,7 @@ defmodule ALLM.Providers.Gemini.ImagesTest do
     end
 
     test "gate_operation/2 stamps metadata.request_id when opts[:request_id] is set" do
-      req = ImageRequest.new(operation: :variation, prompt: "x", model: "g")
+      req = ImageRequest.new(operation: :inpaint, prompt: "x", model: "g")
 
       assert {:error, %ImageAdapterError{metadata: meta}} =
                Images.gate_operation(req, request_id: "rq-1")
@@ -525,13 +525,17 @@ defmodule ALLM.Providers.Gemini.ImagesTest do
     end
 
     test "FakeImages enforces its own operation gate independently" do
-      # FakeImages allows :variation; the script path bypasses Gemini.Images's
-      # own gate by design (Decision #20). This test pins that semantics.
+      # The script path bypasses Gemini.Images's own gate by design
+      # (Decision #20), so an off-set operation is rejected by FakeImages
+      # (no `:provider`), not by Gemini's gate (`provider: :gemini`). This
+      # test pins that semantics.
       img = Image.from_binary(<<1>>, "image/png")
-      req = ImageRequest.new(operation: :variation, prompt: "x", model: "g", input_images: [img])
+      req = ImageRequest.new(operation: :inpaint, prompt: "x", model: "g", input_images: [img])
 
-      assert {:ok, %ImageResponse{}} =
+      assert {:error, %ImageAdapterError{reason: :unsupported_operation} = err} =
                Images.generate(req, adapter_opts: [image_script: [{:ok, [img]}]])
+
+      assert err.provider == nil
     end
   end
 
@@ -785,8 +789,8 @@ defmodule ALLM.Providers.Gemini.ImagesTest do
       assert URI.parse(http.url).path =~ ~r{/models/.+:generateContent}
     end
 
-    test "rejects :variation pre-flight without resolving keys" do
-      req = ImageRequest.new(operation: :variation, prompt: "x", model: "g")
+    test "rejects an off-set operation pre-flight without resolving keys" do
+      req = ImageRequest.new(operation: :inpaint, prompt: "x", model: "g")
 
       # Even with no key in the environment, the gate fires first.
       assert {:error, %ImageAdapterError{reason: :unsupported_operation}} =

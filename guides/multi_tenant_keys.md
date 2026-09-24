@@ -39,7 +39,7 @@ across processes, persist it — the key flows in per request.
 Available on every entry point: `generate/3`, `stream_generate/3`,
 `step/3`, `stream_step/3`, `chat/3`, `stream/3`, `Session.start/3`,
 `Session.reply/4`, `Session.continue/3`, `generate_image/3`,
-`edit_image/4`, `image_variations/3`.
+`edit_image/4`.
 
 ## Engine resolver
 

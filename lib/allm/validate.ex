@@ -266,7 +266,9 @@ defmodule ALLM.Validate do
 
     * `:generate` requires non-empty `:prompt` AND `:input_images == []`.
     * `:edit` requires non-empty `:prompt` AND `length(:input_images) in 1..2`.
-    * `:variation` requires `:prompt in [nil, ""]` AND `length(:input_images) == 1`.
+
+  Any other `:operation` (including `:variation`, removed in v0.6.0) fails
+  with `{:operation, :unknown}`.
 
   Field rules: `:n` integer ≥ 1; `:response_format in [:binary, :base64, :url]`;
   `:size in {pos_integer, pos_integer} | String.t | :auto | nil`;
@@ -739,7 +741,7 @@ defmodule ALLM.Validate do
   # Internal: image_request rules
   # ---------------------------------------------------------------------------
 
-  @image_operations [:generate, :edit, :variation]
+  @image_operations [:generate, :edit]
   @image_response_formats [:binary, :base64, :url]
 
   defp validate_image_operation(errs, op) when op in @image_operations, do: errs
@@ -791,12 +793,6 @@ defmodule ALLM.Validate do
     |> require_input_images_count_in_edit(req.input_images)
   end
 
-  defp validate_image_operation_arity(errs, %ImageRequest{operation: :variation} = req) do
-    errs
-    |> reject_prompt_for_variation(req.prompt)
-    |> require_input_images_count_in_variation(req.input_images)
-  end
-
   defp validate_image_operation_arity(errs, _), do: errs
 
   defp require_prompt_for_op(errs, prompt) when is_binary(prompt) and prompt != "", do: errs
@@ -814,17 +810,6 @@ defmodule ALLM.Validate do
   end
 
   defp require_input_images_count_in_edit(errs, _), do: errs
-
-  defp reject_prompt_for_variation(errs, prompt) when is_binary(prompt) and prompt != "",
-    do: [{:prompt, :not_allowed_for_operation} | errs]
-
-  defp reject_prompt_for_variation(errs, _), do: errs
-
-  defp require_input_images_count_in_variation(errs, list) when is_list(list) do
-    if length(list) == 1, do: errs, else: [{:input_images, :invalid_count} | errs]
-  end
-
-  defp require_input_images_count_in_variation(errs, _), do: errs
 
   # ---------------------------------------------------------------------------
   # Internal: capability-neutral field rules

@@ -189,13 +189,13 @@ defmodule ALLM.TelemetryImageTest do
       img = Image.from_binary(<<1>>, "image/png")
       engine = scripted_engine([{:ok, [img]}])
 
-      req = ImageRequest.new(operation: :variation, input_images: [img], n: 3)
+      req = ImageRequest.new(operation: :edit, prompt: "x", input_images: [img], n: 3)
 
       assert {:ok, %ImageResponse{}} =
                ALLM.generate_image(engine, req, request_id: "rid-struct")
 
       [{_, _, meta}] = TelemetryCapture.events()
-      assert meta.operation == :variation
+      assert meta.operation == :edit
       assert meta.n == 3
     end
   end

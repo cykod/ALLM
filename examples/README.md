@@ -251,10 +251,7 @@ union (`:idle`, `:halted_for_tools`, `:halted_for_user`).
 - `12_vision_input.exs` — `ALLM.generate/3` with a multimodal user
   message (`[%TextPart{}, %ImagePart{}]` content).
 
-There is no live example for `ALLM.image_variations/3`: OpenAI retired
-`dall-e-2`, the only model that supported variations, and the endpoint
-now returns 404. The former `13_image_variations.exs` was removed; 13 is
-left unused rather than renumbering later scripts.
+Number 13 is intentionally unused; later scripts were not renumbered.
 
 Per-script details on each are in the dedicated sections further down.
 

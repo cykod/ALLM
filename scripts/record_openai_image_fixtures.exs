@@ -18,8 +18,7 @@
 #   - gpt-image-1 1024x1024 generate (low quality): ~$0.011
 #   - dall-e-2 256x256 edit (b64_json):       ~$0.018
 #   - gpt-image-1 1024x1024 edit (low quality): ~$0.012
-#   - dall-e-2 256x256 variation (b64_json):  ~$0.018
-#   Total: ~$0.20
+#   Total: ~$0.18
 #
 # Verify against current pricing at https://openai.com/api/pricing/.
 #
@@ -120,21 +119,6 @@ defmodule RecordOpenAIImageFixtures do
         "n" => "1",
         "size" => "1024x1024",
         "quality" => "low"
-      }
-    },
-    %{
-      # Phase 15.5 :variation deliverable. Variation is dall-e-2 ONLY (per
-      # the model × operation matrix); drops `prompt` and `mask` from the
-      # multipart body. Output costs match :edit at the same size
-      # (~$0.018 for one 256x256 image).
-      name: "variation_dall_e_2_happy",
-      endpoint: "variations",
-      multipart: true,
-      form: %{
-        "model" => "dall-e-2",
-        "n" => "1",
-        "size" => "256x256",
-        "response_format" => "b64_json"
       }
     }
   ]

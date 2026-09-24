@@ -2,8 +2,8 @@ defmodule ALLM.Providers.GeminiConformanceTest do
   @moduledoc """
   Phase 16.6 — `ALLM.Test.ImageAdapterConformance` invocation against
   `ALLM.Providers.Gemini.Images`, plus targeted assertions on
-  `supported_operations/0` and `:variation` rejection per design lines
-  566–567.
+  `supported_operations/0` and off-set operation rejection per design
+  lines 566–567.
 
   ## Why the chat-adapter conformance is NOT wired here
 
@@ -35,18 +35,16 @@ defmodule ALLM.Providers.GeminiConformanceTest do
   alias ALLM.Providers.Gemini.Images
 
   describe "Gemini.Images supported_operations contract" do
-    test "supported_operations/0 returns [:generate, :edit] (no :variation)" do
+    test "supported_operations/0 returns [:generate, :edit]" do
       assert Images.supported_operations() == [:generate, :edit]
     end
 
-    test ":variation is rejected with %ImageAdapterError{reason: :unsupported_operation}" do
-      # Uses a 1×1 transparent PNG as the input image (matches the
-      # ImageAdapterConformance harness's variation-case fixture shape).
+    test "an operation outside [:generate, :edit] is rejected with %ImageAdapterError{reason: :unsupported_operation}" do
       png_bytes = <<137, 80, 78, 71, 13, 10, 26, 10>>
 
       base = ALLM.Image.from_binary(png_bytes, "image/png")
 
-      req = ImageRequest.new(operation: :variation, prompt: nil, input_images: [base])
+      req = ImageRequest.new(operation: :inpaint, prompt: nil, input_images: [base])
 
       assert {:error, %ImageAdapterError{reason: :unsupported_operation}} =
                Images.generate(req, adapter_opts: [api_key: "test-key"])

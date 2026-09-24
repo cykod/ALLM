@@ -56,7 +56,7 @@ defmodule ALLM do
   | Single round-trip with tool execution | `step/3` / `stream_step/3` | `{:ok, %ALLM.StepResult{}}` |
   | Multi-turn loop with auto tool execution | `chat/3` / `stream/3` | `{:ok, %ALLM.ChatResult{}}` |
   | Multi-turn with persistence between turns | `ALLM.Session` API | `{:ok, %ALLM.Session{}}` |
-  | Generate or edit images | `generate_image/3`, `edit_image/4`, `image_variations/3` | `{:ok, %ALLM.ImageResponse{}}` |
+  | Generate or edit images | `generate_image/3`, `edit_image/4` | `{:ok, %ALLM.ImageResponse{}}` |
   | Turn text into vectors for a vector store | `embed/3` | `{:ok, %ALLM.EmbeddingResponse{}}` |
   | Screen text (or text + images) for policy violations | `moderate/3` | `{:ok, %ALLM.ModerationResponse{}}` |
   | Turn text into spoken audio | `synthesize/3` | `{:ok, %ALLM.SpeechResponse{}}` |
@@ -241,9 +241,6 @@ defmodule ALLM do
   operation-arity and field rules. Mirrors `request/2`'s no-validate
   precedent: construction is composable, validation is an explicit step.
   Unknown opts raise `KeyError` via `struct!/2`.
-
-  Callers wanting `:variation` (which forbids a non-empty `:prompt`) should
-  build the struct directly via `ALLM.ImageRequest.new/1`.
 
   ## Examples
 
@@ -901,50 +898,6 @@ defmodule ALLM do
           prompt: prompt,
           input_images: images,
           mask: nil
-        )
-      )
-
-    do_generate_image(engine, request, opts)
-  end
-
-  @doc """
-  Build variations of a single input image against the engine's
-  `:image_adapter`.
-
-  Builds `%ImageRequest{operation: :variation, input_images: [image],
-  prompt: nil}` and forwards opts. Returns
-  `{:error, %EngineError{reason: :no_image_adapter}}` when the engine
-  has no image adapter (first gate).
-
-  See `generate_image/3` for the full `request_id` and `:stream`-drop
-  semantics.
-
-  ## Examples
-
-      iex> img = ALLM.Image.from_binary(<<137, 80, 78, 71>>, "image/png")
-      iex> engine = ALLM.Engine.new(
-      ...> image_adapter: ALLM.Providers.FakeImages,
-      ...> adapter_opts: [image_script: [{:ok, [img]}]]
-      ...>)
-      iex> input = ALLM.Image.from_binary(<<1, 2, 3>>, "image/png")
-      iex> {:ok, %ALLM.ImageResponse{images: [_]}} = ALLM.image_variations(engine, input)
-      iex> :ok
-      :ok
-  """
-  @spec image_variations(Engine.t(), Image.t(), keyword()) ::
-          {:ok, ImageResponse.t()}
-          | {:error, EngineError.t() | ValidationError.t() | ImageAdapterError.t()}
-  def image_variations(engine, image, opts \\ [])
-
-  def image_variations(%Engine{} = engine, %Image{} = image, opts) do
-    request_opts = drop_request_opts(opts)
-
-    request =
-      ImageRequest.new(
-        Keyword.merge(request_opts,
-          operation: :variation,
-          input_images: [image],
-          prompt: nil
         )
       )
 
@@ -1763,8 +1716,7 @@ defmodule ALLM do
     with :ok <- ALLM.Capability.preflight_image(resolved_model, request) do
       # Stamp the engine-resolved model onto the request so adapters that
       # gate / shape the wire body off `request.model` (e.g. OpenAI's
-      # multipart `:edit` / `:variation`, which require `model` on the
-      # wire) see it. Mirrors the chat-side
+      # multipart `:edit`, which requires `model` on the wire) see it. Mirrors the chat-side
       # `StreamRunner.resolve_request_model/3`. Preserves an
       # explicitly-set request model.
       request = %{request | model: request.model || resolved_model}

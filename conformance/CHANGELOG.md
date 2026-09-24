@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ALLM v0.6.0 — image `:variation` operation removed
+
+#### Removed
+- `ALLM.Test.ImageAdapterConformance` case 7 (variation happy path). ALLM
+  v0.6.0 removed the `:variation` image operation, so the harness now
+  declares 8 cases (`case_count/0` returns 8); the former cases 8 and 9
+  are renumbered 7 and 8. Case 1's legal-operation set is now
+  `[:generate, :edit]`, so an adapter whose `supported_operations/0` still
+  lists `:variation` fails it.
+- `:variation` from `ALLM.Test.Fixtures.ScriptedImageStub.supported_operations/0`,
+  which now returns `[:generate, :edit]`.
+
 ### Phase 14.1 — ALLM.ImageAdapter conformance
 
 #### Added

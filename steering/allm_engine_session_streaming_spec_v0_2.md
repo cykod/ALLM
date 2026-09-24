@@ -2102,11 +2102,11 @@ end
 
 #### 35.2.2 `ALLM.ImageRequest`
 
-Single struct covering generation, edits, and variations. The `operation` field selects between them.
+Single struct covering generation and edits. The `operation` field selects between them.
 
 ```elixir
 defmodule ALLM.ImageRequest do
-  @type operation :: :generate | :edit | :variation
+  @type operation :: :generate | :edit
   @type size :: {pos_integer(), pos_integer()} | String.t() | :auto
   @type quality :: :low | :standard | :high | :hd | :auto | String.t()
   @type response_format :: :binary | :base64 | :url
@@ -2121,7 +2121,7 @@ defmodule ALLM.ImageRequest do
           style: :natural | :vivid | nil,
           background: :transparent | :opaque | nil,
           response_format: response_format(),
-          # inputs for :edit and :variation
+          # inputs for :edit
           input_images: [ALLM.Image.t()],
           mask: ALLM.Image.t() | nil,
           options: map(),
@@ -2148,9 +2148,10 @@ end
 
 - `:generate` — requires `prompt`; `input_images` must be empty.
 - `:edit` — requires `prompt` and exactly one `input_images` entry (two for inpaint-with-mask); `mask` optional.
-- `:variation` — requires exactly one `input_images` entry; `prompt` must be `nil` or ignored.
 
 Validation lives in `ALLM.Validate.image_request/1` (analogous to §14).
+
+> **v0.6.0 amendment:** The `:variation` operation is removed. v0.3 through v0.5 also defined `:variation` (exactly one `input_images` entry; `prompt` `nil` or ignored), served only by OpenAI's `/v1/images/variations` on `dall-e-2`. OpenAI has since retired that endpoint (a bare 404 for every model) and dropped `dall-e-2` and `dall-e-3` from `/v1/models`, and `ALLM.Providers.Gemini.Images` never supported it, so no bundled provider could serve it. `operation` is now the closed set `:generate | :edit`. Legacy data is rejected deterministically rather than migrated: a persisted JSON `ImageRequest` with `"operation": "variation"` fails `ALLM.Serializer.from_json/1` with a `ValidationError` carrying `{:_unknown, :atom_decode_failed}` (the operation is decoded against its closed set, not via `String.to_existing_atom/1`), and an in-memory or ETF-restored struct with `operation: :variation` fails `ALLM.Validate.image_request/1` with `{:operation, :unknown}`.
 
 #### 35.2.3 `ALLM.ImageResponse`
 
@@ -2226,7 +2227,7 @@ defmodule ALLM.ImageAdapter do
 end
 ```
 
-- `generate/2` handles all three operations — adapters switch on `request.operation`.
+- `generate/2` handles both operations — adapters switch on `request.operation`.
 - `supported_operations/0` lets the engine pre-flight before dispatching; a request whose operation isn't in the list returns `{:error, {:unsupported_operation, op}}` before any HTTP call.
 - `prepare_request/2` is the low-level escape hatch (same role as §7.1).
 
@@ -2267,14 +2268,13 @@ defmodule ALLM do
           keyword()
         ) :: {:ok, ALLM.ImageResponse.t()} | {:error, term()}
 
-  @spec image_variations(ALLM.Engine.t(), ALLM.Image.t(), keyword()) ::
-          {:ok, ALLM.ImageResponse.t()} | {:error, term()}
-
   @spec image_request(String.t(), keyword()) :: ALLM.ImageRequest.t()
 end
 ```
 
-`generate_image/3` accepts either a bare prompt string (options form the rest of the request) or a fully constructed `%ALLM.ImageRequest{}`. `edit_image/4` and `image_variations/3` are sugar that build the appropriate `ALLM.ImageRequest` under the hood.
+`generate_image/3` accepts either a bare prompt string (options form the rest of the request) or a fully constructed `%ALLM.ImageRequest{}`. `edit_image/4` is sugar that builds the appropriate `ALLM.ImageRequest` under the hood.
+
+> **v0.6.0 amendment:** `ALLM.image_variations/3` is removed along with the `:variation` operation (§35.2.2). It was sugar for `%ALLM.ImageRequest{operation: :variation, input_images: [image], prompt: nil}`; there is no replacement.
 
 Example:
 
@@ -2337,9 +2337,11 @@ Assistant responses that contain images (rare today, but supported by some model
 
 Concrete consequence: a future `ALLM.Providers.Gemini.Imagen` (covering Imagen `:predict`) is structurally identical to a bundled adapter — same behaviour, same `Engine.image_adapter` plug-in — but ships as a separate package because its translator does not amortize with `Gemini`'s chat translator.
 
-- **`ALLM.Providers.OpenAI.Images`** — wraps `/v1/images/generations`, `/v1/images/edits`, `/v1/images/variations`. Supports `dall-e-2`, `dall-e-3`, and `gpt-image-1`. `supported_operations/0` returns model-aware: `gpt-image-1` supports generate + edit; `dall-e-3` generate only; `dall-e-2` all three.
-- **`ALLM.Providers.Gemini.Images`** (Phase 16.5) — wraps `generateContent` with `responseModalities: ["TEXT", "IMAGE"]`. Supports `gemini-3.1-flash-image-preview` and successors. `supported_operations/0` returns `[:generate, :edit]`; `:variation` is rejected as `:unsupported_operation`. The translator delegates to `ALLM.Providers.Gemini.to_gemini_request_body/2`.
+- **`ALLM.Providers.OpenAI.Images`** — wraps `/v1/images/generations` and `/v1/images/edits`. Supports `dall-e-2`, `dall-e-3`, and `gpt-image-1`. `supported_operations/0` returns `[:generate, :edit]`; per-model gating: `gpt-image-1` and `dall-e-2` support generate + edit; `dall-e-3` generate only.
+- **`ALLM.Providers.Gemini.Images`** (Phase 16.5) — wraps `generateContent` with `responseModalities: ["TEXT", "IMAGE"]`. Supports `gemini-3.1-flash-image-preview` and successors. `supported_operations/0` returns `[:generate, :edit]`; any other operation is rejected as `:unsupported_operation`. The translator delegates to `ALLM.Providers.Gemini.to_gemini_request_body/2`.
 - **No Anthropic image-generation adapter.** Anthropic does not offer image generation as of v0.3. The Anthropic chat adapter continues to accept `ALLM.ImagePart` inputs for vision.
+
+> **v0.6.0 amendment:** `ALLM.Providers.OpenAI.Images` no longer wraps `/v1/images/variations`; through v0.5 it did, for `dall-e-2` only (§35.2.2). Separately, OpenAI has retired `dall-e-2` and `dall-e-3` — neither is listed by `GET /v1/models` as of 2026-09-24. Their per-model gating rows are kept so a request naming them is still gated pre-flight, but `gpt-image-1` is the model to use.
 
 Third-party image providers (Stability, Replicate, Google Imagen `:predict`, fal.ai) remain out of core per the bundled-adapter rule above.
 
