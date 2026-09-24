@@ -1,3 +1,17 @@
+## [TWK] Polish Phase 25 audio after the gate cleared
+*Thursday, September 24th at 3am*
+Phase 25 (steering/2026-09-24_SST_SUPPORT.md) passed its gate review; this 
+sweeps the deferred Low review findings in one pass. It shares 
+ALLM.Audio.valid_source?/1 with the validator, collapses the five 
+fill_*_request_id/2 copies in lib/allm.ex into one private helper, and pins 
+retry_after_ms on the synthesize and transcribe façades. It also adds a 
+byte-size fast path to the TTS length gate, documents bare-key list options and 
+the always-on receive timeout, renames recorder path helpers, extends the 
+redaction companion test to the Voyage pattern, and makes the example helpers' 
+spec maps explicit.
+
+---
+
 ## [DOC] Document audio: spec §37, guide, examples (25.6-25.7)
 *Thursday, September 24th at 3am*
 Documents the speech synthesis and transcription capability per 

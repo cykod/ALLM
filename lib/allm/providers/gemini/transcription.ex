@@ -539,6 +539,9 @@ defmodule ALLM.Providers.Gemini.Transcription do
     end
   end
 
+  # Named after the OpenAI audio adapters' helper, not the family's
+  # `maybe_apply_request_timeout/2`: without `opts[:request_timeout]` it
+  # applies `@default_timeout_ms` rather than leaving `req` unchanged.
   defp apply_receive_timeout(req, opts) do
     case Keyword.get(opts, :request_timeout) do
       ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)

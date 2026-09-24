@@ -398,6 +398,23 @@ defmodule ALLM.ALLMSynthesizeTest do
       assert length(captured_calls()) == 1
     end
 
+    test "a positive retry_after_ms is honoured as the retry delay" do
+      TelemetryCapture.attach([[:allm, :adapter, :retry]])
+      on_exit(&TelemetryCapture.detach/0)
+      err = SpeechAdapterError.new(:rate_limited, retry_after_ms: 50)
+
+      engine =
+        fake_engine(
+          retry: @fast_retry,
+          adapter_opts: [speech_script: [{:error, err}, {:ok, "done"}]]
+        )
+
+      assert {:ok, %SpeechResponse{}} = ALLM.synthesize(engine, "x")
+      # `@fast_retry` backs off 1 ms with no jitter, so a 50 ms delay can only
+      # come from the error's `retry_after_ms`.
+      assert [{[:allm, :adapter, :retry], _, %{delay_ms: 50}}] = TelemetryCapture.events()
+    end
+
     test "each of the four retryable reasons is retried" do
       for reason <- [:rate_limited, :provider_unavailable, :timeout, :network_error] do
         err = SpeechAdapterError.new(reason, retry_after_ms: 0)

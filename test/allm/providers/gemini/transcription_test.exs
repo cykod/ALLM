@@ -74,7 +74,7 @@ defmodule ALLM.Providers.Gemini.TranscriptionTest do
       assert text =~ "Kestrel Ltd"
     end
 
-    test "options are deep-merged into generationConfig, keys stringified" do
+    test "options become generationConfig; top-level atom keys stringified" do
       options = %{:temperature => 0.1, "thinkingConfig" => %{"thinkingBudget" => 0}}
       assert {:ok, body} = Transcription.to_json_body(req(mp3(), options: options), [])
 

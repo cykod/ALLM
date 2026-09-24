@@ -413,3 +413,21 @@ Built 2026-09-24 alongside 25.6 (same working tree).
 
 HANDOFF rows re-filed above were moved to `## Discharged` with a `Discharged 25.7` note.
 
+
+## Phase polish pass (2026-09-24, after gate PASS; working tree on `a01772e`, shell with `env | grep -c _API_KEY` → 0, no live calls)
+
+Scope: the Low findings the batch fix passes deferred, from `.work/reviews/2026-09-24-sst-25-{1..6}/overview.md` and `.work/code-reviews/2026-09-24-sst-25-{1..6}.md`.
+
+- `[structural, documented]` (25.3 code-review F2) The five per-capability `fill_{embedding,moderation,speech,transcription}_request_id/2` helpers and the image body's inline `case` collapse onto one private, struct-agnostic `fill_request_id/2` in `lib/allm.ex`. This touches the released image, embed and moderate paths under the "Migration on extraction" exception: private, behaviour-preserving (each façade's dispatch closure or `ALLM.EmbeddingBatch` has already pinned the response struct), no public name touched. Mutation check (reverted): making the fill clause return the response unchanged fails exactly one test in each of `allm_{synthesize,transcribe,moderate,embed}_test.exs` and `allm_generate_image_test.exs` (5 failures). `grep -c 'fill_[a-z]*_request_id' lib/allm.ex` → `0`.
+- `[tactical]` (25.1 code-review F1) The legal `Audio` source shapes now live in `@doc false ALLM.Audio.valid_source?/1`; `Validate.validate_audio_source/2` calls it. `test/allm/audio_test.exs` "valid_source?/1 agrees with to_binary/1 and size/1 on which shapes are legal" binds the predicate to the two functions' guards.
+- `[tactical]` (25.3 functional F1, the audio half of the thu 9/24 3am `[CARRY]` ticket) `allm_synthesize_test.exs` / `allm_transcribe_test.exs` "a positive retry_after_ms is honoured as the retry delay" assert the `[:allm, :adapter, :retry]` `delay_ms` is 50 for an error carrying `retry_after_ms: 50`. Mutant M11 (`{:retry, 0, err}` in both dispatch closures) now fails both (2 failures; reverted). The moderation third is untouched (released test file): the ticket's predicate `grep -c 'retry_after_ms: [1-9]' test/allm/allm_synthesize_test.exs test/allm/allm_transcribe_test.exs test/allm/allm_moderate_test.exs | grep -c ':0$'` → `1` (was `3`).
+- `[tactical]` (25.4 code-review F7) `OpenAI.Speech.gate_input_length/2` passes an input of at most 4096 bytes without counting code points (every code point is ≥ 1 byte).
+- `[tactical]` (25.4 code-review F5) `apply_receive_timeout/2` keeps its name; the divergence from the family's `maybe_apply_request_timeout/2` (it always applies `@default_timeout_ms`) is now a listed deliberate difference in the seam comments of `openai/speech.ex` and `openai/transcription.ex`, and commented at the `gemini/transcription.ex` definition.
+- (25.4 code-review F6) The OpenAI audio recorder's fixture-path helpers are `speech_path/1` / `stt_path/1`, so they no longer share a name with the billing `stt/6`. Checked by compiling the script's module without running it.
+- (25.4 functional #3) The `OpenAI.Transcription` options row notes that list values go out under the bare key, and that OpenAI's `[]`-suffixed array names are passed as the key.
+- (25.5 code-review F5, F7) Test renamed to "options become generationConfig; top-level atom keys stringified"; the redaction companion test also refutes Voyage's `pa-` pattern.
+- (25.6 code-review F4) `examples/_helpers.exs` spec maps set `engine_model_field:` explicitly in all five callers and read it with `spec.engine_model_field`.
+
+Already resolved at HEAD, no change: 25.3 code F3, 25.4 code F3/F4 and functional #2, 25.5 code F4/F6, 25.6 code F3 and functional #3/#4. No change by design: 25.1 functional K2/K3/K5, 25.2 and 25.3 observations. Skipped, receiver elsewhere: 25.1 code F2 (media-type extraction needs `image.ex` / `openai/images.ex`), 25.1 K4 and 25.5 code F3 (`[DEFERRED-DRY]` tickets), 25.5 HTTP-date `Retry-After` (thu 9/24 3am `[CARRY]`), 25.6 `unwrap/1` table row (thu 9/24 3am `[DOC]` ticket).
+
+Gate (same shell): `mix test` exit 0 (536 doctests, 32 properties, 4164 tests, 0 failures, 14 excluded); `mix test --seed 0` exit 0 (same counts); `mix format --check-formatted` exit 0; `mix credo --strict` exit 0 (no issues); `mix dialyzer` exit 0 (0 errors). `mix run scripts/audit_user_docs.exs <file>` → `Total hits: 0` for each touched `lib/` file. `conformance/` not touched.

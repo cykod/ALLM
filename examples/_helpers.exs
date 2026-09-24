@@ -221,6 +221,7 @@ defmodule ExamplesHelpers do
       %{
         adapter_key: :image_adapter,
         model_key: :image_default_model,
+        engine_model_field: :model,
         key_env_key: nil,
         model_env: "ALLM_MODEL",
         unavailable: "does not have an image_adapter; this script is OpenAI-only"
@@ -252,6 +253,7 @@ defmodule ExamplesHelpers do
       %{
         adapter_key: :embed_adapter,
         model_key: :embedding_default_model,
+        engine_model_field: :model,
         key_env_key: :embedding_key_env,
         model_env: "ALLM_EMBEDDING_MODEL",
         unavailable: "does not have an embed_adapter; this script cannot run on that provider arm"
@@ -283,6 +285,7 @@ defmodule ExamplesHelpers do
       %{
         adapter_key: :moderation_adapter,
         model_key: :moderation_default_model,
+        engine_model_field: :model,
         key_env_key: nil,
         model_env: "ALLM_MODERATION_MODEL",
         unavailable: "does not have a moderation_adapter; this script is OpenAI-only"
@@ -361,12 +364,12 @@ defmodule ExamplesHelpers do
   #   * `:adapter_key`  — provider-row key AND the `%ALLM.Engine{}` slot; the
   #     two are the same atom for every capability today.
   #   * `:model_key`    — provider-row key for the capability's default model.
-  #   * `:engine_model_field` — optional; the `%ALLM.Engine{}` field the model
-  #     lands on. Defaults to the shared `:model`, which is what images,
-  #     embeddings and moderation read. The audio capabilities set
+  #   * `:engine_model_field` — the `%ALLM.Engine{}` field the model lands on.
+  #     Images, embeddings and moderation pass the shared `:model`, which is
+  #     what their façades read. The audio capabilities pass
   #     `:speech_model` / `:transcription_model`, because their façades never
   #     read `:model` (a chat model name is never an audio model name).
-  #   * `:key_env_key`  — optional provider-row key naming a capability-specific
+  #   * `:key_env_key`  — provider-row key naming a capability-specific
   #     key env var, falling back to the row's chat `:key_env`. Only embeddings
   #     uses it (the Anthropic row's `VOYAGE_API_KEY`); `nil` for the others.
   #   * `:model_env`    — env var that overrides the row's default model. Note
@@ -410,7 +413,7 @@ defmodule ExamplesHelpers do
 
     model = System.get_env(spec.model_env, default_model)
 
-    base = [{spec.adapter_key, adapter}, {Map.get(spec, :engine_model_field, :model), model}]
+    base = [{spec.adapter_key, adapter}, {spec.engine_model_field, model}]
 
     ALLM.Engine.new(Keyword.merge(base, extra_opts))
   end

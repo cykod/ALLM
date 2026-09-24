@@ -233,10 +233,11 @@ defmodule ALLM.Providers.Gemini.TranscriptionWireTest do
       refute Map.has_key?(err.metadata, :body_preview)
     end
 
-    test "the OpenAI key pattern matches nothing in the same fixture; Gemini's does" do
+    test "the OpenAI and Voyage key patterns match nothing in the same fixture; Gemini's does" do
       message = Fixtures.transcription_synthesized(:error_400_key)["body"]["error"]["message"]
 
       refute message =~ ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/
+      refute message =~ ~r/\bpa-[A-Za-z0-9_\-]{6,}/
       assert message =~ ~r/\b(?:AIza[A-Za-z0-9_\-]{6,}|ya29\.[A-Za-z0-9_\-.]{6,})/
     end
   end

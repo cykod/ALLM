@@ -57,7 +57,7 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   | `model` | `:model`, or `#{@default_model}` when `nil` |
   | `response_format` | always `json` |
   | `language`, `prompt` | sent when set |
-  | Options | each `ALLM.TranscriptionRequest.options` entry becomes one form field (a list becomes one field per element); never overrides the fields above; `response_format` is dropped |
+  | Options | each `ALLM.TranscriptionRequest.options` entry becomes one form field (a list becomes one field per element, each under the bare key; OpenAI names array parameters with a `[]` suffix, so pass `"timestamp_granularities[]"` as the key where the endpoint expects it); never overrides the fields above; `response_format` is dropped |
   | Response | `{"text", "usage", "languages"?}` |
   | Usage | `{"type": "duration", "seconds"}` (whisper-1, gpt-transcribe) → `:duration_seconds`; `{"type": "tokens", …}` (gpt-4o-mini-transcribe) → `:usage` |
   | Language | `languages[0].code` → `:language` (gpt-transcribe only) |
@@ -249,10 +249,12 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   # `to_multipart_body/2` returns `{:ok, fields} | {:error, _}`, the capability
   # family's shape (`openai/images.ex`'s `to_multipart_body/2`), because
   # building it reads the audio bytes, which can fail. The private helpers
-  # mirror `openai/speech.ex`, including its three deliberate differences
+  # mirror `openai/speech.ex`, including its four deliberate differences
   # from `openai/moderation.ex` (binary error bodies are JSON-decoded,
-  # `sanitize_cause/1` resets every `Jason.DecodeError` offset, and a non-map
-  # `"error"` value is tolerated). The one structural difference from the
+  # `sanitize_cause/1` resets every `Jason.DecodeError` offset, a non-map
+  # `"error"` value is tolerated, and `apply_receive_timeout/2` replaces the
+  # family's `maybe_apply_request_timeout/2` because it always applies a
+  # default timeout). The one structural difference from the
   # speech sibling: there is no `ALLM.Retry.run/3` here, and
   # `run_one_attempt/3` never returns `{:retry, …}`.
   # ---------------------------------------------------------------------------

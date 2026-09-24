@@ -1793,21 +1793,11 @@ defmodule ALLM do
       # without modifying the chat-side default.
       policy = augment_retry_policy(engine.retry, @retryable_image_reasons)
 
-      result =
-        ALLM.Retry.run(policy, telemetry_metadata, fn ->
-          dispatch_image_attempt(adapter, request, dispatch_opts)
-        end)
-
-      case result do
-        {:ok, %ImageResponse{request_id: nil} = response} ->
-          {:ok, %{response | request_id: request_id}}
-
-        {:ok, %ImageResponse{} = response} ->
-          {:ok, response}
-
-        {:error, _} = err ->
-          err
-      end
+      policy
+      |> ALLM.Retry.run(telemetry_metadata, fn ->
+        dispatch_image_attempt(adapter, request, dispatch_opts)
+      end)
+      |> fill_request_id(request_id)
     end
   end
 
@@ -1964,7 +1954,7 @@ defmodule ALLM do
         build_embed_dispatch_opts(engine, opts, request_id),
         telemetry_metadata
       )
-      |> fill_embedding_request_id(request_id)
+      |> fill_request_id(request_id)
     end
   end
 
@@ -1973,11 +1963,6 @@ defmodule ALLM do
     |> build_capability_dispatch_opts(drop_embedding_request_opts(opts), request_id)
     |> Keyword.put(:retry_policy, augment_retry_policy(engine.retry, @retryable_embedding_reasons))
   end
-
-  defp fill_embedding_request_id({:ok, %EmbeddingResponse{request_id: nil} = response}, request_id),
-    do: {:ok, %{response | request_id: request_id}}
-
-  defp fill_embedding_request_id(result, _request_id), do: result
 
   # Compute `:stop`-event extras. `embedding_count` and `chunk_count` are
   # MEASUREMENTS (numeric); `:usage`, `:response`, `:error` are METADATA.
@@ -2121,7 +2106,7 @@ defmodule ALLM do
       |> ALLM.Retry.run(telemetry_metadata, fn ->
         dispatch_moderate_attempt(adapter, request, dispatch_opts)
       end)
-      |> fill_moderation_request_id(request_id)
+      |> fill_request_id(request_id)
     end
   end
 
@@ -2156,14 +2141,6 @@ defmodule ALLM do
                 "{:error, %ALLM.Error.ModerationAdapterError{}}, got: #{inspect(other)}"
     end
   end
-
-  defp fill_moderation_request_id(
-         {:ok, %ModerationResponse{request_id: nil} = response},
-         request_id
-       ),
-       do: {:ok, %{response | request_id: request_id}}
-
-  defp fill_moderation_request_id(result, _request_id), do: result
 
   # Compute `:stop`-event extras. `result_count` and `flagged_count` are
   # MEASUREMENTS (numeric); `:usage`, `:response`, `:error` are METADATA.
@@ -2263,7 +2240,7 @@ defmodule ALLM do
       |> ALLM.Retry.run(%{request_id: request_id, model: request.model}, fn ->
         dispatch_synthesize_attempt(adapter, request, dispatch_opts)
       end)
-      |> fill_speech_request_id(request_id)
+      |> fill_request_id(request_id)
     end
   end
 
@@ -2310,7 +2287,7 @@ defmodule ALLM do
       |> ALLM.Retry.run(%{request_id: request_id, model: request.model}, fn ->
         dispatch_transcribe_attempt(adapter, request, dispatch_opts)
       end)
-      |> fill_transcription_request_id(request_id)
+      |> fill_request_id(request_id)
     end
   end
 
@@ -2377,18 +2354,15 @@ defmodule ALLM do
     end
   end
 
-  defp fill_speech_request_id({:ok, %SpeechResponse{request_id: nil} = response}, request_id),
+  # Shared by every non-chat capability façade (image, embed, moderate,
+  # synthesize, transcribe): stamp the façade's request id onto a success
+  # whose adapter left `:request_id` nil. Struct-agnostic on purpose — each
+  # façade's per-attempt dispatch closure (or `ALLM.EmbeddingBatch`) has
+  # already pinned the response struct type before this runs.
+  defp fill_request_id({:ok, %{request_id: nil} = response}, request_id),
     do: {:ok, %{response | request_id: request_id}}
 
-  defp fill_speech_request_id(result, _request_id), do: result
-
-  defp fill_transcription_request_id(
-         {:ok, %TranscriptionResponse{request_id: nil} = response},
-         request_id
-       ),
-       do: {:ok, %{response | request_id: request_id}}
-
-  defp fill_transcription_request_id(result, _request_id), do: result
+  defp fill_request_id(result, _request_id), do: result
 
   # `:stop` extras. `audio_bytes` / `text_length` are MEASUREMENTS, present on
   # both paths (`0` on error) for a stable key set; `:usage`, `:response`,

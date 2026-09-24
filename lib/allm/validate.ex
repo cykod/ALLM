@@ -932,9 +932,12 @@ defmodule ALLM.Validate do
   # Internal: transcription_request rules
   # ---------------------------------------------------------------------------
 
-  # Caught here so a hand-built bad source never reaches an adapter.
-  defp validate_audio_source(errs, {:binary, b}) when is_binary(b), do: errs
-  defp validate_audio_source(errs, {:base64, s}) when is_binary(s), do: errs
-  defp validate_audio_source(errs, {:file, p}) when is_binary(p), do: errs
-  defp validate_audio_source(errs, _), do: [{[:audio, :source], :invalid_shape} | errs]
+  # Caught here so a hand-built bad source never reaches an adapter. The
+  # legal shapes live in `ALLM.Audio.valid_source?/1`, next to the guards
+  # `to_binary/1` and `size/1` dispatch on.
+  defp validate_audio_source(errs, source) do
+    if ALLM.Audio.valid_source?(source),
+      do: errs,
+      else: [{[:audio, :source], :invalid_shape} | errs]
+  end
 end

@@ -237,7 +237,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
   # funnel is renamed per capability (`to_speech_adapter_error/4`). The
   # private helpers `build_metadata/2`, `retry_after_ms/1`, `header_value/2`,
   # `maybe_apply_req_test_stub/2`, `redact_key_material/1` and
-  # `sanitize_cause/1` mirror the moderation adapter's, with three deliberate
+  # `sanitize_cause/1` mirror the moderation adapter's, with four deliberate
   # differences:
   #
   #   * `decode_error_body/1` JSON-decodes a BINARY body. OpenAI sends its 401
@@ -248,6 +248,9 @@ defmodule ALLM.Providers.OpenAI.Speech do
   #     `:data` leaves `Jason.DecodeError.message/1` raising on the bad offset.
   #   * The error funnel tolerates a non-map `"error"` value, and redacts the
   #     provider's `code` / `type` as well as its message.
+  #   * The family's `maybe_apply_request_timeout/2` is `apply_receive_timeout/2`
+  #     here: without `opts[:request_timeout]` it applies `@default_timeout_ms`
+  #     instead of leaving `req` unchanged, so it always sets a timeout.
   # ---------------------------------------------------------------------------
 
   @doc false
@@ -277,8 +280,14 @@ defmodule ALLM.Providers.OpenAI.Speech do
   @doc false
   # Pre-flight gate 2: more than 4096 CODE POINTS -> :context_length_exceeded.
   # `String.length/1` would count graphemes, and `byte_size/1` bytes; the
-  # 2026-09-24 probe showed the provider counts neither.
+  # 2026-09-24 probe showed the provider counts neither. Every code point is
+  # at least one byte, so an input of at most 4096 bytes passes without the
+  # count (which would otherwise build a list as long as the input).
   @spec gate_input_length(SpeechRequest.t(), keyword()) :: :ok | {:error, SpeechAdapterError.t()}
+  def gate_input_length(%SpeechRequest{input: input}, _opts)
+      when is_binary(input) and byte_size(input) <= @max_input_code_points,
+      do: :ok
+
   def gate_input_length(%SpeechRequest{input: input}, opts) when is_binary(input) do
     count = input |> String.codepoints() |> length()
 

@@ -156,7 +156,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :speech_control,
         label: "CONTROL speech: not_a_real_field is IGNORED (200)",
-        targets: [speech("probe_control")],
+        targets: [speech_path("probe_control")],
         run: fn _ ->
           tts(%{
             "model" => "tts-1",
@@ -172,7 +172,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :mp3_default,
         label: "tts default format (no response_format) -> audio/mpeg + x-request-id",
-        targets: [speech("mp3_default")],
+        targets: [speech_path("mp3_default")],
         run: fn _ -> tts(%{"model" => @tts_model, "input" => "Hello.", "voice" => "alloy"}) end,
         expect: [200],
         verify: &verify_audio(&1, "audio/mpeg"),
@@ -181,7 +181,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :wav,
         label: "tts response_format=wav -> audio/wav",
-        targets: [speech("wav")],
+        targets: [speech_path("wav")],
         run: fn _ ->
           tts(%{
             "model" => @tts_model,
@@ -197,7 +197,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :pcm,
         label: "tts response_format=pcm -> audio/pcm",
-        targets: [speech("pcm")],
+        targets: [speech_path("pcm")],
         run: fn _ ->
           tts(%{
             "model" => @tts_model,
@@ -213,7 +213,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :unit_graphemes,
         label: "tts 2049 x e+U+0301 (4098 code points, 2049 graphemes) -> 400 string_too_long",
-        targets: [speech("probe_unit_graphemes")],
+        targets: [speech_path("probe_unit_graphemes")],
         run: fn _ -> tts(%{"model" => "tts-1", "input" => @graphemes_input, "voice" => "alloy"}) end,
         expect: [400],
         verify: &verify_error_mentions(&1, "string_too_long"),
@@ -222,7 +222,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :unit_bytes,
         label: "tts 4096 x U+00E9 (4096 code points, 8192 bytes) -> 200",
-        targets: [speech("probe_unit_bytes")],
+        targets: [speech_path("probe_unit_bytes")],
         run: fn _ -> tts(%{"model" => "tts-1", "input" => @bytes_input, "voice" => "alloy"}) end,
         expect: [200],
         verify: &verify_audio(&1, "audio/mpeg"),
@@ -231,7 +231,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :too_long,
         label: "tts 4097 ASCII -> 400 string_too_long",
-        targets: [speech("error_400_too_long")],
+        targets: [speech_path("error_400_too_long")],
         run: fn _ ->
           tts(%{"model" => "tts-1", "input" => String.duplicate("a", 4097), "voice" => "alloy"})
         end,
@@ -242,7 +242,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :bad_model,
         label: "tts bad model -> 404 model_not_found",
-        targets: [speech("error_404_model")],
+        targets: [speech_path("error_404_model")],
         run: fn _ ->
           tts(%{"model" => "not-a-real-tts-model", "input" => "Hi.", "voice" => "alloy"})
         end,
@@ -253,7 +253,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :speech_bad_key,
         label: "tts BAD KEY -> 401 (text/plain JSON body; does it echo the key?)",
-        targets: [speech("error_401_bad_key")],
+        targets: [speech_path("error_401_bad_key")],
         run: fn _ -> tts(%{"model" => "tts-1", "input" => "Hi.", "voice" => "alloy"}, :bad) end,
         expect: [401],
         verify: &verify_bad_key/1,
@@ -262,7 +262,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :stt_control,
         label: "CONTROL stt: not_a_real_field is IGNORED (200)",
-        targets: [stt("probe_control")],
+        targets: [stt_path("probe_control")],
         run: fn clips ->
           stt(clips.mp3, "quick_brown_fox.mp3", "audio/mpeg", "whisper-1", [
             {"not_a_real_field", "1"}
@@ -275,7 +275,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :gpt_transcribe,
         label: "stt gpt-transcribe -> text + duration usage",
-        targets: [stt("gpt_transcribe")],
+        targets: [stt_path("gpt_transcribe")],
         run: fn clips -> stt(clips.mp3, "quick_brown_fox.mp3", "audio/mpeg", "gpt-transcribe") end,
         expect: [200],
         verify: &verify_usage(&1, "duration"),
@@ -284,7 +284,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :mini_tokens,
         label: "stt gpt-4o-mini-transcribe -> text + token usage",
-        targets: [stt("mini_tokens")],
+        targets: [stt_path("mini_tokens")],
         run: fn clips ->
           stt(clips.mp3, "quick_brown_fox.mp3", "audio/mpeg", "gpt-4o-mini-transcribe")
         end,
@@ -295,7 +295,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :junk,
         label: "stt junk bytes -> 400",
-        targets: [stt("error_400_format")],
+        targets: [stt_path("error_400_format")],
         run: fn _ ->
           stt(String.duplicate("not audio at all ", 64), "junk.mp3", "audio/mpeg", "gpt-transcribe")
         end,
@@ -306,7 +306,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :audio_bin,
         label: "stt valid mp3 bytes named audio.bin (content sniffing vs filename trust)",
-        targets: [stt("probe_audio_bin")],
+        targets: [stt_path("probe_audio_bin")],
         run: fn clips ->
           stt(clips.mp3, "audio.bin", "application/octet-stream", "gpt-transcribe")
         end,
@@ -321,7 +321,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :size_ladder,
         label: "stt size ladder (whisper-1, 16 kHz silence WAV)",
-        targets: [stt("probe_size_ladder")],
+        targets: [stt_path("probe_size_ladder")],
         run: :ladder,
         expect: [:ladder],
         verify: nil,
@@ -330,7 +330,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :duration,
         label: "stt gpt-transcribe > 1500 s clip (8 kHz 8-bit WAV, #{@duration_seconds} s)",
-        targets: [stt("probe_duration")],
+        targets: [stt_path("probe_duration")],
         run: fn _ ->
           pcm = :binary.copy(<<128>>, 8000 * @duration_seconds)
           stt(wav(pcm, 8000, 8), "long_silence.wav", "audio/wav", "gpt-transcribe")
@@ -342,7 +342,7 @@ defmodule RecordOpenAIAudioFixtures do
       %{
         id: :stt_bad_key,
         label: "stt BAD KEY -> 401",
-        targets: [stt("error_401_bad_key")],
+        targets: [stt_path("error_401_bad_key")],
         run: fn clips ->
           stt(clips.mp3, "quick_brown_fox.mp3", "audio/mpeg", "whisper-1", [], :bad)
         end,
@@ -353,8 +353,8 @@ defmodule RecordOpenAIAudioFixtures do
     ]
   end
 
-  defp speech(name), do: Path.join(@speech_dir, name <> ".json")
-  defp stt(name), do: Path.join(@stt_dir, name <> ".json")
+  defp speech_path(name), do: Path.join(@speech_dir, name <> ".json")
+  defp stt_path(name), do: Path.join(@stt_dir, name <> ".json")
 
   # ---------------------------------------------------------------------------
   # Input clips — five tts calls, each overwrite-guarded. Held in memory until
@@ -612,10 +612,10 @@ defmodule RecordOpenAIAudioFixtures do
 
     case Enum.find(rungs, &(&1.status in [400, 413])) do
       %{status: 413, response: {:ok, resp}} ->
-        write_json(stt("error_413"), json_envelope(resp))
+        write_json(stt_path("error_413"), json_envelope(resp))
 
       %{status: 400, response: {:ok, resp}} ->
-        write_json(stt("error_400_size"), json_envelope(resp))
+        write_json(stt_path("error_400_size"), json_envelope(resp))
 
       _ ->
         :ok

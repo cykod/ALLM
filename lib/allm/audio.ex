@@ -118,6 +118,16 @@ defmodule ALLM.Audio do
 
   def extension_for_mime(_), do: nil
 
+  @doc false
+  # The legal `:source` shapes, owned here so `ALLM.Validate` does not restate
+  # them. Must agree with the guards on `to_binary/1` and `size/1`: a source
+  # this accepts is one they do not answer with `{:error, :invalid_source}`.
+  @spec valid_source?(term()) :: boolean()
+  def valid_source?({tag, value}) when tag in [:binary, :base64, :file] and is_binary(value),
+    do: true
+
+  def valid_source?(_), do: false
+
   @doc """
   Build an `%Audio{}` from a local filesystem path.
 

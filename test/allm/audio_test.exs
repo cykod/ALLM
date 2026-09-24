@@ -171,6 +171,31 @@ defmodule ALLM.AudioTest do
     end
   end
 
+  describe "valid_source?/1" do
+    # The validator's shape list lives in `valid_source?/1`; this binds it to
+    # the guards `to_binary/1` and `size/1` dispatch on, so a new source
+    # variant added to one and not the other goes red.
+    test "agrees with to_binary/1 and size/1 on which shapes are legal" do
+      sources = [
+        {:binary, "x"},
+        {:base64, "eA=="},
+        {:file, "/definitely/not/here.mp3"},
+        {:url, "https://example.com/a.mp3"},
+        {:binary, 42},
+        {:file, nil},
+        :not_a_tuple,
+        nil
+      ]
+
+      for source <- sources do
+        audio = %Audio{source: source, mime_type: "audio/wav"}
+        legal? = Audio.valid_source?(source)
+        assert legal? == (Audio.to_binary(audio) != {:error, :invalid_source}), inspect(source)
+        assert legal? == (Audio.size(audio) != {:error, :invalid_source}), inspect(source)
+      end
+    end
+  end
+
   describe "Inspect" do
     test "renders a binary payload as a size, never the bytes" do
       rendered = inspect(Audio.from_binary(:binary.copy(<<0>>, 10_000), "audio/wav"))
