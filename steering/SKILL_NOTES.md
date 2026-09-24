@@ -25,6 +25,13 @@ Proposed changes to the pipeline skills in `~/.claude/skills/`. This project can
 **Proposed wording:** "Quote the two carve-outs verbatim and leave classification to `/fix`. The brief may name a Low the orchestrator suspects qualifies, phrased as a question, never as a ruling or a prescribed remedy direction."
 **Argument against:** the orchestrator's pre-read made those fix passes fast, and every in-batch Low they fixed was real.
 
+### 4. `_shared/handoff.md` + `/retro`: a re-filed row is not a discharged row
+*Raised 2026-09-24, Phase 25 `/auto-build` run (`.work/retro/2026-09-24-2026-09-24_SST_SUPPORT_applied.md`, "Pipeline note").*
+**Target:** `~/.claude/skills/_shared/handoff.md` (discharge rule) and `~/.claude/skills/retro/SKILL.md` (phase-scope rule that counts carried-and-discharged items as successes).
+**Evidence:** the 25.7 sweep moved HANDOFF rows to `## Discharged` by re-filing them as ASKS tickets. It filed 14 entries and closed 0 code tickets. A retro trusting the "discharged = success" rule would read those re-filings as wins.
+**Proposed wording:** "Discharge a row only when its DONE WHEN predicate passes; a row re-filed to ASKS stays Open with the ASKS pointer."
+**Argument against:** `## Open` then grows across phases, and the phase-end gate counts open non-Low rows, so a phase could fail its gate on debt it correctly filed.
+
 ## Discharged
 
 (none)
