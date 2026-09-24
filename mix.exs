@@ -167,7 +167,12 @@ defmodule ALLM.MixProject do
           ALLM.EmbeddingResponse,
           ALLM.ModerationRequest,
           ALLM.ModerationResult,
-          ALLM.ModerationResponse
+          ALLM.ModerationResponse,
+          ALLM.Audio,
+          ALLM.SpeechRequest,
+          ALLM.SpeechResponse,
+          ALLM.TranscriptionRequest,
+          ALLM.TranscriptionResponse
         ],
         Runtime: [
           ALLM.Engine,
@@ -196,7 +201,9 @@ defmodule ALLM.MixProject do
           ALLM.Error.ValidationError,
           ALLM.Error.ImageAdapterError,
           ALLM.Error.EmbeddingAdapterError,
-          ALLM.Error.ModerationAdapterError
+          ALLM.Error.ModerationAdapterError,
+          ALLM.Error.SpeechAdapterError,
+          ALLM.Error.TranscriptionAdapterError
         ]
       ]
     ]

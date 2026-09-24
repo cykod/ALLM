@@ -1,3 +1,24 @@
+## [FEAT] Add Layer A audio data types (Phase 25.1)
+*Thursday, September 24th at 1am*
+Adds the serializable data layer for speech synthesis and transcription (spec 
+§37, new), per steering/2026-09-24_SST_SUPPORT.md Phase 25.1. No adapter, 
+engine field or façade yet.
+
+- ALLM.Audio value type: binary/base64/file sources, base64-on-JSON encoder, 
+size/1 that stats and never reads (refuses directories), and an Inspect impl 
+that prints payload sizes instead of bytes.
+- SpeechRequest/SpeechResponse and TranscriptionRequest/TranscriptionResponse, 
+with the single mime<->format table on SpeechResponse and never-nil usage.
+- SpeechAdapterError (9 reasons) and TranscriptionAdapterError (10, adds 
+:content_filter).
+- Validate.speech_request/1 and transcription_request/1; EngineError and 
+ValidationError gain two reasons each; Serializer @known_modules +7; 
+groups_for_modules and @layer_a registration.
+- The design doc and its _RECORDS.md companion, including the pre-build 
+devil-review fixes.
+
+---
+
 ## [DOC] Apply the Phase 23 retro — Test Plan rows name their falsifier
 *Tuesday, September 22nd at 9pm*
 DESIGN.md rule 27 now requires every Test Plan invariant and matrix row to name 

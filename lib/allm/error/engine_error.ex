@@ -21,6 +21,8 @@ defmodule ALLM.Error.EngineError do
           | :no_image_adapter
           | :no_embed_adapter
           | :no_moderation_adapter
+          | :no_speech_adapter
+          | :no_transcription_adapter
 
   @type t :: %__MODULE__{
           reason: reason(),
@@ -41,6 +43,8 @@ defmodule ALLM.Error.EngineError do
     no_image_adapter
     no_embed_adapter
     no_moderation_adapter
+    no_speech_adapter
+    no_transcription_adapter
   )a
 
   defexception [:reason, :message, :provider, :cause, metadata: %{}]

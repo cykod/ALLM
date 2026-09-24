@@ -36,13 +36,15 @@ defmodule ALLM.Validate do
 
   Validators are opt-in: constructors like `ALLM.Request.new/2` do not call
   these functions. Users invoke `request/1`, `message/1`, `tool/1`,
-  `thread/1`, `session/1`, `image_request/1`, `embedding_request/1`, or
-  `moderation_request/1` explicitly when they need a check before dispatch.
+  `thread/1`, `session/1`, `image_request/1`, `embedding_request/1`,
+  `moderation_request/1`, `speech_request/1`, or `transcription_request/1`
+  explicitly when they need a check before dispatch.
   """
 
   alias ALLM.Error.ValidationError
 
   alias ALLM.{
+    Audio,
     EmbeddingRequest,
     Image,
     ImagePart,
@@ -51,9 +53,11 @@ defmodule ALLM.Validate do
     ModerationRequest,
     Request,
     Session,
+    SpeechRequest,
     TextPart,
     Thread,
-    Tool
+    Tool,
+    TranscriptionRequest
   }
 
   @legal_roles [:system, :user, :assistant, :tool]
@@ -397,6 +401,100 @@ defmodule ALLM.Validate do
       |> Enum.reverse()
 
     finalize(:invalid_moderation_request, errors)
+  end
+
+  @doc """
+  Validate an `%ALLM.SpeechRequest{}`.
+
+  Returns `:ok` when every rule passes, or
+  `{:error, %ALLM.Error.ValidationError{reason: :invalid_speech_request, errors: [...]}}`.
+
+  All rules accumulate into one error list except `{:input, :invalid_shape}`,
+  which hard-rejects: the other `:input` rules presuppose a binary.
+
+  Field rules: `:input` a non-empty, valid UTF-8 binary (`{:input, :empty}`,
+  `{:input, :invalid_encoding}`); `:model`, `:voice` and `:instructions`
+  each `nil` or a binary (`:invalid_shape`); `:format` `nil` or a member of
+  `ALLM.SpeechRequest.formats/0` (`{:format, :unknown}`); `:speed` `nil` or
+  a number greater than zero (`{:speed, :out_of_range}`).
+
+  Voice names and per-provider speed ranges are deliberately NOT checked:
+  both differ per provider and per model, and the provider's own rejection
+  surfaces as the adapter's `:invalid_request`.
+
+  ## Examples
+
+      iex> ALLM.Validate.speech_request(ALLM.SpeechRequest.new(input: "Hello."))
+      :ok
+
+      iex> {:error, err} = ALLM.Validate.speech_request(ALLM.SpeechRequest.new(input: "", format: :ogg))
+      iex> err.reason
+      :invalid_speech_request
+      iex> err.errors
+      [{:input, :empty}, {:format, :unknown}]
+  """
+  @spec speech_request(SpeechRequest.t()) :: :ok | {:error, ValidationError.t()}
+  def speech_request(%SpeechRequest{input: input}) when not is_binary(input) do
+    finalize(:invalid_speech_request, [{:input, :invalid_shape}])
+  end
+
+  def speech_request(%SpeechRequest{} = req) do
+    errors =
+      []
+      |> validate_speech_input(req.input)
+      |> validate_model_field(req.model)
+      |> validate_nil_or_binary(:voice, req.voice)
+      |> validate_speech_format(req.format)
+      |> validate_nil_or_binary(:instructions, req.instructions)
+      |> validate_speech_speed(req.speed)
+      |> Enum.reverse()
+
+    finalize(:invalid_speech_request, errors)
+  end
+
+  @doc """
+  Validate an `%ALLM.TranscriptionRequest{}`.
+
+  Returns `:ok` when every rule passes, or
+  `{:error, %ALLM.Error.ValidationError{reason: :invalid_transcription_request, errors: [...]}}`.
+
+  All rules accumulate into one error list except `{:audio, :invalid_shape}`,
+  which hard-rejects when `:audio` is not an `%ALLM.Audio{}`.
+
+  Field rules: `:audio`'s `:source` one of the three `t:ALLM.Audio.source/0`
+  shapes with a binary payload (`{[:audio, :source], :invalid_shape}`);
+  `:model`, `:language` and `:prompt` each `nil` or a binary
+  (`:invalid_shape`).
+
+  Whether a file exists, the audio's byte size, and its MIME type are
+  deliberately NOT checked here. The limits differ per provider and need
+  file I/O, so they are the adapter's.
+
+  ## Examples
+
+      iex> req = ALLM.TranscriptionRequest.new(audio: ALLM.Audio.from_file("clip.mp3"))
+      iex> ALLM.Validate.transcription_request(req)
+      :ok
+
+      iex> {:error, err} = ALLM.Validate.transcription_request(ALLM.TranscriptionRequest.new())
+      iex> err.errors
+      [{:audio, :invalid_shape}]
+  """
+  @spec transcription_request(TranscriptionRequest.t()) :: :ok | {:error, ValidationError.t()}
+  def transcription_request(%TranscriptionRequest{audio: audio}) when not is_struct(audio, Audio) do
+    finalize(:invalid_transcription_request, [{:audio, :invalid_shape}])
+  end
+
+  def transcription_request(%TranscriptionRequest{} = req) do
+    errors =
+      []
+      |> validate_audio_source(req.audio.source)
+      |> validate_model_field(req.model)
+      |> validate_nil_or_binary(:language, req.language)
+      |> validate_nil_or_binary(:prompt, req.prompt)
+      |> Enum.reverse()
+
+    finalize(:invalid_transcription_request, errors)
   end
 
   # ---------------------------------------------------------------------------
@@ -747,6 +845,11 @@ defmodule ALLM.Validate do
   defp validate_model_field(errs, m) when is_binary(m), do: errs
   defp validate_model_field(errs, _), do: [{:model, :invalid_shape} | errs]
 
+  # An optional string field: `nil` or a binary.
+  defp validate_nil_or_binary(errs, _field, nil), do: errs
+  defp validate_nil_or_binary(errs, _field, v) when is_binary(v), do: errs
+  defp validate_nil_or_binary(errs, field, _), do: [{field, :invalid_shape} | errs]
+
   # ---------------------------------------------------------------------------
   # Internal: embedding_request rules
   # ---------------------------------------------------------------------------
@@ -802,4 +905,36 @@ defmodule ALLM.Validate do
       {_, idx}, acc -> [{[:input, idx], :invalid_item} | acc]
     end)
   end
+
+  # ---------------------------------------------------------------------------
+  # Internal: speech_request rules
+  # ---------------------------------------------------------------------------
+
+  # A non-UTF-8 input would raise inside the adapter's JSON encoder instead of
+  # returning an error, so it is rejected here.
+  defp validate_speech_input(errs, ""), do: [{:input, :empty} | errs]
+
+  defp validate_speech_input(errs, input) do
+    if String.valid?(input), do: errs, else: [{:input, :invalid_encoding} | errs]
+  end
+
+  defp validate_speech_format(errs, nil), do: errs
+
+  defp validate_speech_format(errs, format) do
+    if format in SpeechRequest.formats(), do: errs, else: [{:format, :unknown} | errs]
+  end
+
+  defp validate_speech_speed(errs, nil), do: errs
+  defp validate_speech_speed(errs, speed) when is_number(speed) and speed > 0, do: errs
+  defp validate_speech_speed(errs, _), do: [{:speed, :out_of_range} | errs]
+
+  # ---------------------------------------------------------------------------
+  # Internal: transcription_request rules
+  # ---------------------------------------------------------------------------
+
+  # Caught here so a hand-built bad source never reaches an adapter.
+  defp validate_audio_source(errs, {:binary, b}) when is_binary(b), do: errs
+  defp validate_audio_source(errs, {:base64, s}) when is_binary(s), do: errs
+  defp validate_audio_source(errs, {:file, p}) when is_binary(p), do: errs
+  defp validate_audio_source(errs, _), do: [{[:audio, :source], :invalid_shape} | errs]
 end

@@ -35,7 +35,12 @@ defmodule LayerADocsTest do
     ALLM.EmbeddingResponse,
     ALLM.ModerationRequest,
     ALLM.ModerationResult,
-    ALLM.ModerationResponse
+    ALLM.ModerationResponse,
+    ALLM.Audio,
+    ALLM.SpeechRequest,
+    ALLM.SpeechResponse,
+    ALLM.TranscriptionRequest,
+    ALLM.TranscriptionResponse
   ]
 
   @audit_paths Enum.map(@layer_a, fn mod ->
