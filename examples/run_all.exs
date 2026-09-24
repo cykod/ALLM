@@ -24,8 +24,68 @@
 # names; otherwise the script is SKIPPED with a `[SKIP]` marker and does
 # NOT count toward `failed`.
 
+#
+# Process isolation
+# -----------------
+#
+# Every example reports failure with `System.halt(1)` (via
+# `ExamplesHelpers.fail!/1`), which stops the whole VM. Running the scripts
+# in-process meant the FIRST failure killed the run: no summary, and every
+# later script went unobserved rather than passing. Each script therefore
+# runs as its own `mix run` OS process; its exit status is the verdict and a
+# halt ends only that script. A script still running after
+# the per-script timeout (180 s, or `ALLM_EXAMPLE_TIMEOUT_MS`) is killed and
+# counted as a timeout.
+
 Application.ensure_all_started(:allm)
 Code.require_file("_helpers.exs", __DIR__)
+
+defmodule RunAll do
+  @moduledoc false
+
+  # Runs one example in a child `mix run` process, streaming its output.
+  # Returns :ok on exit status 0, {:error, {:exit_status, n}} otherwise, or
+  # {:error, :timeout} after killing a script that overran.
+  def run_script(path, timeout_ms) do
+    mix = System.find_executable("mix") || raise "mix not found on PATH"
+
+    port =
+      Port.open({:spawn_executable, mix}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        args: ["run", path],
+        env: [{~c"MIX_ENV", String.to_charlist(to_string(Mix.env()))}]
+      ])
+
+    {:os_pid, os_pid} = Port.info(port, :os_pid)
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    collect(port, os_pid, deadline)
+  end
+
+  defp collect(port, os_pid, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {^port, {:data, data}} ->
+        IO.write(data)
+        collect(port, os_pid, deadline)
+
+      {^port, {:exit_status, 0}} ->
+        :ok
+
+      {^port, {:exit_status, status}} ->
+        {:error, {:exit_status, status}}
+    after
+      remaining ->
+        # Closing the port alone leaves `mix run` running, so kill the OS
+        # process first.
+        System.cmd("kill", ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
+        Port.close(port)
+        {:error, :timeout}
+    end
+  end
+end
 
 # Surface the active provider up-front so the run output is self-describing.
 provider = System.get_env("ALLM_PROVIDER", "openai")
@@ -35,6 +95,11 @@ IO.puts("=== Provider: #{provider} ===")
 # anywhere in the file; comma-separated provider names; matched as a whole
 # line. Script with no marker runs on every provider.
 provider_marker_regex = ~r/^#\s*Provider:\s*([\w, ]+)\s*$/m
+
+# Per-script budget. Image and audio scripts make slow live calls; the
+# child `mix run` also pays its own boot.
+script_timeout_ms =
+  String.to_integer(System.get_env("ALLM_EXAMPLE_TIMEOUT_MS", "180000"))
 
 scripts =
   Path.wildcard(Path.join(__DIR__, "[0-9][0-9]_*.exs"))
@@ -58,13 +123,7 @@ results =
 
     if allowed_providers == :any or provider in allowed_providers do
       IO.puts("--- #{Path.basename(path)} ---")
-      task = Task.async(fn -> Code.eval_file(path) end)
-
-      case Task.yield(task, 180_000) || Task.shutdown(task, :brutal_kill) do
-        {:ok, _} -> {path, :ok}
-        {:exit, reason} -> {path, {:error, reason}}
-        nil -> {path, {:error, :timeout}}
-      end
+      {path, RunAll.run_script(path, script_timeout_ms)}
     else
       IO.puts("[SKIP] #{Path.basename(path)} (provider gate)")
       {path, :skip}
@@ -83,7 +142,14 @@ Enum.each(results, fn {path, status} ->
       _ -> "[FAIL]"
     end
 
-  IO.puts("#{marker} #{Path.basename(path)}")
+  detail =
+    case status do
+      {:error, {:exit_status, n}} -> " (exit #{n})"
+      {:error, :timeout} -> " (timed out after #{div(script_timeout_ms, 1000)}s)"
+      _ -> ""
+    end
+
+  IO.puts("#{marker} #{Path.basename(path)}#{detail}")
 end)
 
 if failed != [], do: System.halt(1)

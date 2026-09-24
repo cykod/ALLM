@@ -2,24 +2,25 @@
 #
 # Provider: openai, gemini
 #
-# Demonstrates: a non-streaming `ALLM.generate_image/3` call against
-#               `dall-e-2` (256x256). The response carries a single image
-#               which is materialized to bytes via `ALLM.Image.to_binary/1`
-#               and written to a tmp file; the script asserts the PNG
+# Demonstrates: a non-streaming `ALLM.generate_image/3` call against the
+#               active provider's default image model (`gpt-image-1` on
+#               OpenAI at low quality, 1024x1024 — the smallest size it
+#               supports). The response carries a single image which is
+#               materialized to bytes via `ALLM.Image.to_binary/1` and
+#               written to a tmp file; the script asserts the PNG/JPEG
 #               magic-number signature on the on-disk bytes.
 # Spec section: §35.7 (OpenAI Images adapter), §35.1 (image data structs).
-# Steering strategy: tight — fixed `size: "256x256"`, fixed prompt, fixed
-#                    model (`dall-e-2`); the assertion is a byte-prefix
-#                    check on the PNG magic number — independent of the
-#                    actual pixel content.
-# Source policy: this script does NOT use `:url` source images. Per the
-#                Phase 15.4 retro / 15.6 design hint, future image-input
-#                examples (`:edit` / `:variation`) should also prefer
-#                `:binary` or `:file` sources so the BLOCKING `/review`
+# Steering strategy: tight — fixed size and prompt; the assertion is a
+#                    byte-prefix check on the image signature, independent
+#                    of pixel content.
+# Source policy: this script does NOT use `:url` source images, so the
 #                examples gate does not depend on third-party URL
-#                availability. The default response format on `dall-e-2`
-#                is `:base64` per the OpenAI Images adapter.
-# Cost: roughly ~$0.016 USD per clean run (dall-e-2 256x256 generate).
+#                availability.
+# Model history: this script used `dall-e-2` (256x256) until OpenAI retired
+#                it; it no longer appears in `/v1/models`, and generation
+#                requests naming it failed with "Unknown parameter:
+#                'response_format'".
+# Cost: roughly ~$0.011 USD per clean run on OpenAI (gpt-image-1, low, 1024x1024).
 # Run with:    OPENAI_API_KEY=sk-... mix run examples/10_generate_image.exs
 #
 # `run_all.exs` skips this script on `ALLM_PROVIDER=anthropic` (provider-arm
@@ -30,7 +31,13 @@ Code.require_file("_helpers.exs", __DIR__)
 
 engine = ExamplesHelpers.image_engine()
 
-case ALLM.generate_image(engine, "a watercolor kestrel in flight", size: "256x256") do
+image_opts =
+  case System.get_env("ALLM_PROVIDER", "openai") do
+    "openai" -> [size: "1024x1024", quality: :low]
+    _ -> [size: "256x256"]
+  end
+
+case ALLM.generate_image(engine, "a watercolor kestrel in flight", image_opts) do
   {:ok, %ALLM.ImageResponse{images: [image | _] = images, usage: usage}} ->
     case ALLM.Image.to_binary(image) do
       {:ok, bytes} when is_binary(bytes) ->

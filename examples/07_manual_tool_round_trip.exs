@@ -75,7 +75,7 @@ augmented_thread =
 final_text = result2.final_response.output_text || ""
 
 ok2? =
-  result2.halted_reason == :completed and String.contains?(final_text, "sunny")
+  result2.halted_reason == :completed and String.contains?(String.downcase(final_text), "sunny")
 
 unless ok2? do
   IO.puts(

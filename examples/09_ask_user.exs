@@ -5,7 +5,8 @@
 #               supplies the user's answer and the loop completes.
 # Spec section: §6 (tool handler returns), §10.5 (chat halt reasons),
 #               §12.3 (ask-user suspension).
-# Steering strategy: loose — first-turn assertion is exact (handler-controlled);
+# Steering strategy: loose — first-turn assertion is exact (handler-controlled,
+#                    with `tool_choice: :required` so a tool call is certain);
 #                    second-turn assertion is shape-only (`:completed`) since
 #                    the model's final phrasing is variable.
 # Natural alternative: this IS the natural form.
@@ -45,7 +46,11 @@ messages = [
   ALLM.user("What's the weather?")
 ]
 
-{:ok, result1} = ALLM.chat(engine, messages, tool_choice: :auto)
+# Pass 1 forces a tool call. Under `:auto`, some models (claude-sonnet-4-6
+# observed) answer "What's the weather?" directly instead of calling the tool,
+# so the ask-user path would depend on the model's choice rather than on the
+# handler this script demonstrates.
+{:ok, result1} = ALLM.chat(engine, messages, tool_choice: :required)
 
 ok1? =
   result1.halted_reason == :ask_user and result1.pending_question == "Which city?"

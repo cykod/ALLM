@@ -27,7 +27,7 @@ provider table:
     vision_default_model: "gpt-4o-mini",
     key_env: "OPENAI_API_KEY",
     image_adapter: ALLM.Providers.OpenAI.Images,
-    image_default_model: "dall-e-2",
+    image_default_model: "gpt-image-1",
     embed_adapter: ALLM.Providers.OpenAI.Embeddings,
     embedding_default_model: "text-embedding-3-small",
     moderation_adapter: ALLM.Providers.OpenAI.Moderation,
@@ -242,7 +242,7 @@ union (`:idle`, `:halted_for_tools`, `:halted_for_user`).
   mode below) drives the partition entirely through `Session.start/3`,
   `Session.submit_tool_result/3`, and `Session.continue/3`.
 
-## Vision and images (10–13)
+## Vision and images (10–12)
 
 - `10_generate_image.exs` — `ALLM.generate_image/3` against the active
   provider's image adapter.
@@ -250,8 +250,11 @@ union (`:idle`, `:halted_for_tools`, `:halted_for_user`).
   (inpainting).
 - `12_vision_input.exs` — `ALLM.generate/3` with a multimodal user
   message (`[%TextPart{}, %ImagePart{}]` content).
-- `13_image_variations.exs` — `ALLM.image_variations/3` against
-  `dall-e-2` 256×256 (OpenAI-only).
+
+There is no live example for `ALLM.image_variations/3`: OpenAI retired
+`dall-e-2`, the only model that supported variations, and the endpoint
+now returns 404. The former `13_image_variations.exs` was removed; 13 is
+left unused rather than renumbering later scripts.
 
 Per-script details on each are in the dedicated sections further down.
 
@@ -354,7 +357,11 @@ ANTHROPIC_API_KEY=sk-ant-... ALLM_PROVIDER=anthropic mix run examples/run_all.ex
 GEMINI_API_KEY=...           ALLM_PROVIDER=gemini    mix run examples/run_all.exs
 ```
 
-`run_all.exs` exits `0` iff every script printed `OK:` and exited `0`. The
+`run_all.exs` runs each script in its own `mix run` process, so one
+script's `System.halt(1)` fails only that script: every later script still
+runs and the per-script summary always prints. It exits `0` iff every
+non-skipped script exited `0`; a script exceeding 180 s
+(`ALLM_EXAMPLE_TIMEOUT_MS`) is killed and reported as timed out. The
 most-recent captured stdouts are committed as `RUN_OUTPUT_OPENAI.md`,
 `RUN_OUTPUT_ANTHROPIC.md`, and `RUN_OUTPUT_GEMINI.md` next to this README.
 
@@ -381,7 +388,6 @@ facade (`generate/3`, `stream/3`, `chat/3`, `step/3`, `generate_image/3`,
 | `10_generate_image.exs` | tight | C | openai, gemini | `ALLM.generate_image/3` |
 | `11_edit_image.exs` | tight | C | openai, gemini | `ALLM.edit_image/4` with mask (inpaint) |
 | `12_vision_input.exs` | loose | C | all | `ALLM.generate/3` with `[%TextPart{}, %ImagePart{}]` content |
-| `13_image_variations.exs` | tight | C | openai | `ALLM.image_variations/3` against `dall-e-2` 256×256 |
 | `14_per_tool_manual.exs` | tight | C | openai, anthropic | per-tool manual mode via `chat/3`: auto tool runs eagerly, manual tool halts with `:manual_tool_calls`, caller appends `:tool` message and re-issues |
 | `15_per_tool_manual_session.exs` | tight | D | openai, anthropic | per-tool manual mode via `Session.start → submit_tool_result → continue` |
 | `16_embed_single.exs` | tight | C | all | `ALLM.embed/3` with one input; asserts vector shape and `dimensions/1` agreement |
@@ -401,8 +407,9 @@ against the active provider's image adapter. The script:
 1. Builds an image-adapter engine via `ExamplesHelpers.image_engine/0`
    (sister to `ExamplesHelpers.engine/0` — looks up `:image_adapter` /
    `:image_default_model` from the provider table).
-2. Calls `ALLM.generate_image(engine, "a watercolor kestrel in flight", size: "256x256")`
-   (size honoured by OpenAI; Gemini ignores it).
+2. Calls `ALLM.generate_image(engine, "a watercolor kestrel in flight", opts)`
+   with `size: "1024x1024", quality: :low` on OpenAI (`gpt-image-1`'s
+   smallest size) and `size: "256x256"` elsewhere (Gemini ignores it).
 3. Materializes `response.images |> hd() |> ALLM.Image.to_binary/1`.
 4. Writes the bytes to `System.tmp_dir!() <> "/10_generate_image_<ts>.png"`.
 5. Asserts the on-disk bytes start with the PNG magic number
@@ -420,14 +427,6 @@ skip it on Anthropic, which has no image adapter. Skipped scripts print
 mask, calls `ALLM.edit_image(engine, base, prompt, mask: mask, size: "1024x1024")`,
 materializes the resulting image to bytes, and asserts the PNG magic
 number on the on-disk bytes. Provider gating: `# Provider: openai, gemini`.
-
-## Image variations
-
-`13_image_variations.exs` exercises `ALLM.image_variations/3` against
-`dall-e-2` 256×256 (the only OpenAI image model that supports the
-variation operation). Same shape as `10_generate_image.exs`: tiny
-synthesized base PNG, byte-prefix assertion. **OpenAI-only**
-(`# Provider: openai`).
 
 ## Vision input
 
@@ -480,9 +479,9 @@ provider pricing page for any tight budget.
 
 | Provider arm | Approx cost | Notes |
 |--------------|-------------|-------|
-| OpenAI (`gpt-5.4-nano` + `dall-e-2` + `gpt-image-1` + `text-embedding-3-small` + `omni-moderation-latest` + `gpt-4o-mini-tts` + `gpt-transcribe`) | **~$0.13 USD** | bulk of the cost is `11_edit_image.exs` (~$0.04); the moderation scripts are free and the audio scripts cost well under $0.001 together |
+| OpenAI (`gpt-5.4-nano` + `gpt-image-1` + `text-embedding-3-small` + `omni-moderation-latest` + `gpt-4o-mini-tts` + `gpt-transcribe`) | **~$0.13 USD** | bulk of the cost is `11_edit_image.exs` (~$0.04); the moderation scripts are free and the audio scripts cost well under $0.001 together |
 | Anthropic (`claude-sonnet-4-6` + `voyage-3.5-lite`) | **~$0.08 USD** | drops to ~$0.01 with `ALLM_MODEL=claude-haiku-4-5` |
-| Gemini (`gemini-3-flash-preview` + image preview + `gemini-embedding-001` + `gemini-flash-latest` (transcription)) | **~$0.03 USD** | image scripts on Gemini skip variations |
+| Gemini (`gemini-3-flash-preview` + image preview + `gemini-embedding-001` + `gemini-flash-latest` (transcription)) | **~$0.03 USD** | |
 | **All three combined** | **~$0.24 USD** | per clean dual+gemini pass |
 
 The embedding scripts add well under $0.001 per arm — a few thousand

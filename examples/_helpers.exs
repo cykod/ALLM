@@ -90,7 +90,7 @@ defmodule ExamplesHelpers do
       vision_default_model: "gpt-4o-mini",
       key_env: "OPENAI_API_KEY",
       image_adapter: ALLM.Providers.OpenAI.Images,
-      image_default_model: "dall-e-2",
+      image_default_model: "gpt-image-1",
       embed_adapter: ALLM.Providers.OpenAI.Embeddings,
       embedding_default_model: "text-embedding-3-small",
       moderation_adapter: ALLM.Providers.OpenAI.Moderation,
