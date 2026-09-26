@@ -1,6 +1,7 @@
 defmodule ALLM.Providers.Support.Transport do
   @moduledoc """
-  Shared HTTP-transport option handling for the streaming provider adapters.
+  Shared HTTP-transport option handling and `Finch` async plumbing for the
+  streaming provider adapters.
 
   Streaming adapters open their request with `Finch.async_request/3` and
   forward a small set of transport opts verbatim (see
@@ -76,6 +77,36 @@ defmodule ALLM.Providers.Support.Transport do
   """
   @spec finch_forwarded_opts() :: [atom()]
   def finch_forwarded_opts, do: @finch_forwarded_opts
+
+  @doc false
+  # The after function of a `Stream.resource/3` over `Finch.async_request/3`.
+  # Cancels the request unless Finch already sent its last message (`:done`
+  # or `{:error, _}`), rescuing a cancel that raises, then drains every
+  # `{ref, _}` Finch had already queued in the reducing process's mailbox,
+  # so a halted stream leaves no stray messages behind. The chat stream
+  # adapters still only cancel; new streaming HTTP adapters call this
+  # instead of hand-rolling their own after function.
+  @spec cancel_and_drain(module(), reference(), boolean()) :: :ok
+  def cancel_and_drain(finch_module, ref, transport_done?)
+      when is_atom(finch_module) and is_boolean(transport_done?) do
+    unless transport_done? do
+      try do
+        finch_module.cancel_async_request(ref)
+      rescue
+        _ -> :ok
+      end
+    end
+
+    drain(ref)
+  end
+
+  defp drain(ref) do
+    receive do
+      {^ref, _message} -> drain(ref)
+    after
+      0 -> :ok
+    end
+  end
 
   # `:infinity` propagates; a finite inter-event budget gets headroom so the
   # ALLM-level timer fires first and produces the documented `:timeout` reason.

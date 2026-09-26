@@ -66,6 +66,15 @@
 # dominated by the two accepted ~13-minute ladder rungs and the ~30-minute
 # duration clip. A fully recorded tree costs $0.00.
 #
+# The four streaming arms (Phase 26.5: `probe_stream_control`, `stream_pcm`,
+# `stream_mp3_tts1`, `stream_error_401`) send about 820 characters in all:
+# two ~405-character clips (one on gpt-4o-mini-tts, one on tts-1), plus
+# "Hi." twice. At the prices above that is under $0.02 per run of those arms.
+#
+# Streamed bodies are recorded as the audio envelope plus
+# `"chunks": [{"byte_size", "t_ms"}]`, one entry per `{:data, _}` message in
+# arrival order, `t_ms` measured from the moment the request was sent.
+#
 # This script is NOT in the published Hex package (`scripts/` is excluded).
 
 defmodule RecordOpenAIAudioFixtures do
@@ -82,6 +91,10 @@ defmodule RecordOpenAIAudioFixtures do
   @tts_model "gpt-4o-mini-tts"
   @clip_text "The quick brown fox jumps over the lazy dog."
   @clip_formats ~w(mp3 wav flac aac opus)
+
+  # ~400 characters for the streaming arms: long enough that synthesis takes
+  # seconds, so a body that really streams arrives spread over that time.
+  @stream_text String.duplicate("The quick brown fox jumps over the lazy dog. ", 9)
 
   # The OpenAI TTS input limit is 4096 "characters". These two arms settle the
   # unit. 2049 x (e + U+0301 COMBINING ACUTE) is 4098 code points but 2049
@@ -258,6 +271,65 @@ defmodule RecordOpenAIAudioFixtures do
         expect: [401],
         verify: &verify_bad_key/1,
         write: :json_envelope
+      },
+      # Streaming arms (Phase 26.5). The body is read through `Finch.stream/5`
+      # on `ALLM.Finch`, the adapter's own transport, so each `{:data, _}`
+      # message is timed as it arrives.
+      %{
+        id: :stream_control,
+        label: "CONTROL stream: not_a_real_field is IGNORED on the streaming path (200)",
+        targets: [speech_path("probe_stream_control")],
+        run: fn _ ->
+          tts_stream(%{
+            "model" => "tts-1",
+            "input" => "Hi.",
+            "voice" => "alloy",
+            "not_a_real_field" => true
+          })
+        end,
+        expect: [200],
+        verify: &verify_audio(&1, "audio/mpeg"),
+        write: :probe
+      },
+      %{
+        id: :stream_chunked,
+        label:
+          "stream #{@tts_model} pcm, ~400 chars -> chunked audio/pcm, >= 2 timed data messages",
+        targets: [speech_path("stream_pcm")],
+        run: fn _ ->
+          tts_stream(%{
+            "model" => @tts_model,
+            "input" => @stream_text,
+            "voice" => "alloy",
+            "response_format" => "pcm"
+          })
+        end,
+        expect: [200],
+        verify: &verify_stream(&1, "audio/pcm"),
+        write: :stream_envelope
+      },
+      %{
+        id: :stream_mp3_tts1,
+        label:
+          "stream tts-1 (legacy) mp3, ~400 chars -> chunked audio/mpeg, >= 2 timed data messages",
+        targets: [speech_path("stream_mp3_tts1")],
+        run: fn _ ->
+          tts_stream(%{"model" => "tts-1", "input" => @stream_text, "voice" => "alloy"})
+        end,
+        expect: [200],
+        verify: &verify_stream(&1, "audio/mpeg"),
+        write: :stream_envelope
+      },
+      %{
+        id: :stream_401,
+        label: "stream BAD KEY -> 401 with a text/plain JSON body on the streaming path",
+        targets: [speech_path("stream_error_401")],
+        run: fn _ ->
+          tts_stream(%{"model" => "tts-1", "input" => "Hi.", "voice" => "alloy"}, :bad)
+        end,
+        expect: [401],
+        verify: &verify_stream_bad_key/1,
+        write: :stream_json_envelope
       },
       %{
         id: :stt_control,
@@ -585,6 +657,45 @@ defmodule RecordOpenAIAudioFixtures do
     %{base | note: base.note <> "  [content-type #{inspect(ct)}; #{echo}]"}
   end
 
+  # Streaming framing (Alternative E of the Phase 26 design). A single-chunk
+  # body, or one whose first byte arrives no earlier than its last, means the
+  # endpoint buffered the whole clip: the recorder halts, and the design falls
+  # back to `stream_format: "sse"`. `transfer-encoding: chunked` is asserted
+  # too. The chunk COUNT alone is weak evidence (TCP splits any large body
+  # into many reads), so the note prints the first-byte and last-byte times.
+  defp verify_stream({:ok, resp} = r, mime_prefix) do
+    base = verify_audio(r, mime_prefix)
+    chunks = Req.Response.get_private(resp, :chunks, [])
+    te = header(resp, "transfer-encoding")
+    first = chunks |> List.first(%{}) |> Map.get("t_ms")
+    last = chunks |> List.last(%{}) |> Map.get("t_ms")
+
+    checks = [
+      {base.ok?, String.trim_leading(base.note, "  <- ")},
+      {length(chunks) >= 2, "only #{length(chunks)} data message(s): the body did not stream"},
+      {is_integer(first) and is_integer(last) and first < last,
+       "first-chunk t_ms #{inspect(first)} is not before last-chunk t_ms #{inspect(last)}"},
+      {te == "chunked", "transfer-encoding is #{inspect(te)}, not chunked"}
+    ]
+
+    verdict(
+      checks,
+      base.note <>
+        "  [#{length(chunks)} data messages; first byte #{inspect(first)} ms, last #{inspect(last)} ms]"
+    )
+  end
+
+  defp verify_stream(_resp, _prefix), do: %{ok?: false, note: "  <- transport error"}
+
+  defp verify_stream_bad_key({:ok, resp} = r) do
+    base = verify_bad_key(r)
+    ct = header(resp, "content-type") || ""
+
+    if base.ok? and String.starts_with?(ct, "text/plain"),
+      do: base,
+      else: %{ok?: false, note: base.note <> "  <- content-type #{inspect(ct)} is not text/plain"}
+  end
+
   defp verdict(checks, extra \\ "") do
     case for({false, why} <- checks, do: why) do
       [] -> %{ok?: true, note: extra}
@@ -641,6 +752,34 @@ defmodule RecordOpenAIAudioFixtures do
     })
   end
 
+  # The Phase 25 audio envelope plus `"chunks": [{"byte_size", "t_ms"}]`, the
+  # arrival time of each `{:data, _}` message since the request was sent.
+  # The chunk sizes sum to `byte_size`, so a test can replay the body in the
+  # recorded framing.
+  defp write_result(%{arm: %{write: :stream_envelope, targets: [path]}, response: {:ok, resp}}) do
+    write_json(path, %{
+      "status" => resp.status,
+      "headers" => picked_headers(resp, ["transfer-encoding"]),
+      "body_base64" => Base.encode64(resp.body),
+      "byte_size" => byte_size(resp.body),
+      "sha256" => :crypto.hash(:sha256, resp.body) |> Base.encode16(case: :lower),
+      "chunks" => Req.Response.get_private(resp, :chunks, [])
+    })
+  end
+
+  defp write_result(%{
+         arm: %{write: :stream_json_envelope, targets: [path]},
+         response: {:ok, resp}
+       }) do
+    write_json(
+      path,
+      resp
+      |> json_envelope()
+      |> Map.put("headers", picked_headers(resp, ["transfer-encoding"]))
+      |> Map.put("chunks", Req.Response.get_private(resp, :chunks, []))
+    )
+  end
+
   defp write_result(%{arm: %{write: :json_envelope, targets: [path]}, response: {:ok, resp}}) do
     write_json(path, json_envelope(resp))
   end
@@ -649,8 +788,11 @@ defmodule RecordOpenAIAudioFixtures do
     %{"status" => resp.status, "headers" => picked_headers(resp), "body" => decode(resp.body)}
   end
 
-  defp picked_headers(resp) do
-    for name <- ["content-type", "x-request-id"], v = header(resp, name), into: %{}, do: {name, v}
+  defp picked_headers(resp, extra \\ []) do
+    for name <- ["content-type", "x-request-id" | extra],
+        v = header(resp, name),
+        into: %{},
+        do: {name, v}
   end
 
   defp trimmed(body) do
@@ -699,6 +841,62 @@ defmodule RecordOpenAIAudioFixtures do
       retry: false,
       decode_body: false
     )
+  end
+
+  # The streaming transport: `Finch.stream/5` on the adapter's own pool
+  # (`ALLM.Finch`, HTTP/1), timing every `{:data, _}` message from the moment
+  # the request is sent. Returns a `%Req.Response{}` so the verdicts and
+  # writers above apply unchanged; the timings ride in `private.chunks`.
+  defp tts_stream(body, key_kind \\ :live) do
+    bump()
+
+    request =
+      Finch.build(
+        :post,
+        @speech_url,
+        [{"authorization", "Bearer " <> key(key_kind)}, {"content-type", "application/json"}],
+        Jason.encode!(body)
+      )
+
+    t0 = System.monotonic_time(:millisecond)
+
+    result =
+      Finch.stream(
+        request,
+        ALLM.Finch,
+        %{status: nil, headers: [], data: [], chunks: []},
+        fn
+          {:status, status}, acc ->
+            %{acc | status: status}
+
+          {:headers, headers}, acc ->
+            %{acc | headers: acc.headers ++ headers}
+
+          {:data, data}, acc ->
+            chunk = %{
+              "byte_size" => byte_size(data),
+              "t_ms" => System.monotonic_time(:millisecond) - t0
+            }
+
+            %{acc | data: [acc.data | data], chunks: [chunk | acc.chunks]}
+        end,
+        receive_timeout: 180_000
+      )
+
+    case result do
+      {:ok, acc} ->
+        resp =
+          Enum.reduce(
+            acc.headers,
+            Req.Response.new(status: acc.status, body: IO.iodata_to_binary(acc.data)),
+            fn {k, v}, r -> Req.Response.put_header(r, k, v) end
+          )
+
+        {:ok, Req.Response.put_private(resp, :chunks, Enum.reverse(acc.chunks))}
+
+      {:error, error, _acc} ->
+        {:error, error}
+    end
   end
 
   defp stt(bytes, filename, content_type, model, extra \\ [], key_kind \\ :live) do

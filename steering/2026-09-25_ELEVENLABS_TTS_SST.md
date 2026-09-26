@@ -592,6 +592,8 @@ Companion files per suite follow the Phase 25 trio: a stub under `conformance/te
 | `sample_rate` reported | `24_000` for `:pcm` and `:wav`; `nil` otherwise | OpenAI guide (Decision #5) |
 | `stream_synthesize_input/3` | **not implemented** (OpenAI's text-in streaming is the Realtime API; out of scope) | — |
 
+> CORRECTED 2026-09-26 (26.5 probe): the Framing row is **CONFIRMED**, no longer inferred. `scripts/record_openai_audio_fixtures.exs` arm `stream_chunked` (gpt-4o-mini-tts, 405 characters, pcm) received `content-type: audio/pcm`, `transfer-encoding: chunked`, 1,600,800 bytes in 90 `{:data, _}` messages, first at 1,728 ms and last at 6,735 ms; arm `stream_mp3_tts1` (tts-1, mp3) 402,048 bytes in 278 messages, 1,353 ms to 2,137 ms. The streaming 401 is `text/plain` JSON with a masked key. Alternative E2 stands; no SSE fallback.
+
 ### Wire-field map — ElevenLabs HTTP (26.6, 26.7)
 
 Base URL: `opts[:base_url] || "https://api.elevenlabs.io"`. Documented residency hosts: `api.us.elevenlabs.io`, `api.eu.residency.elevenlabs.io`, `api.in.residency.elevenlabs.io`, `api.sg.residency.elevenlabs.io` (https://elevenlabs.io/docs/api-reference/text-to-speech/convert). Auth: the `xi-api-key` header (https://elevenlabs.io/docs/api-reference/authentication). Key atom `:elevenlabs`, fetched after every gate.

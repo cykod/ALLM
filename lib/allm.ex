@@ -96,6 +96,7 @@ defmodule ALLM do
   """
 
   alias ALLM.{
+    Adapter,
     Audio,
     ChatResult,
     EmbeddingRequest,
@@ -2735,7 +2736,12 @@ defmodule ALLM do
       result =
         with :ok <- check_stream_slot(spec.adapter, spec.capability, spec.fun, spec.arity),
              :ok <- run_stream_gates(spec.gates) do
+          # Transport opts in `adapter_opts` are hoisted once here, as the chat
+          # runner does, so no streaming adapter re-implements the hoist.
           dispatch_opts = build_capability_dispatch_opts(engine, spec.forward_opts, request_id)
+
+          dispatch_opts =
+            Adapter.hoist_transport_opts(dispatch_opts, dispatch_opts[:adapter_opts])
 
           ctx = %{
             adapter: spec.adapter,

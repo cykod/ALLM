@@ -155,4 +155,23 @@ defmodule ALLM.Adapter do
   """
   @spec transport_opts() :: [atom()]
   def transport_opts, do: @transport_opts
+
+  @doc false
+  # Adapters read HTTP-transport opts (`:receive_timeout`, `:stream_timeout`,
+  # `:finch_name`, …) off the TOP LEVEL of their resolved opts, but the
+  # natural place to configure transport once-per-engine is `adapter_opts:` —
+  # which is exactly what `ALLM.Providers.OpenAI`'s own moduledoc has always
+  # documented for `finch_name:`. Nested there, they were never read. Hoist
+  # them so both routes work; `Keyword.put_new/3` keeps a call-opt or engine
+  # `params:` value winning over the `adapter_opts` fallback. The keys stay in
+  # `adapter_opts` too — `ALLM.Providers.Fake` and friends read named keys
+  # from there and nothing splats the list onto the wire (Decision #2).
+  # Called by the chat runner (`ALLM.StreamRunner`) and the audio stream
+  # façades (`ALLM.stream_synthesize/3` and siblings); adapters never hoist.
+  @spec hoist_transport_opts(keyword(), keyword()) :: keyword()
+  def hoist_transport_opts(kw, adapter_opts) when is_list(kw) and is_list(adapter_opts) do
+    adapter_opts
+    |> Keyword.take(@transport_opts)
+    |> Enum.reduce(kw, fn {k, v}, acc -> Keyword.put_new(acc, k, v) end)
+  end
 end

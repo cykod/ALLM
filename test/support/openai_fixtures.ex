@@ -269,6 +269,37 @@ defmodule ALLM.Providers.OpenAITestFixtures do
     bytes
   end
 
+  @doc """
+  Split a recorded streaming envelope's body into the chunks it arrived in
+  (Phase 26.5).
+
+  A `stream_*.json` envelope carries `"chunks": [{"byte_size", "t_ms"}]`,
+  one entry per `{:data, _}` message the recorder received. For an audio
+  envelope this returns the decoded body cut at those sizes, so a test can
+  replay it through `ALLM.Test.FinchStub` in the framing OpenAI used. A JSON
+  (error) envelope's body was decoded when recorded, so it comes back as one
+  re-encoded chunk.
+
+  ## Examples
+
+      iex> env = ALLM.Providers.OpenAITestFixtures.speech_recorded(:stream_pcm)
+      iex> chunks = ALLM.Providers.OpenAITestFixtures.speech_stream_chunks(env)
+      iex> {length(chunks) == length(env["chunks"]), IO.iodata_to_binary(chunks) == ALLM.Providers.OpenAITestFixtures.envelope_bytes(env)}
+      {true, true}
+  """
+  @spec speech_stream_chunks(body()) :: [binary()]
+  def speech_stream_chunks(%{"body_base64" => _, "chunks" => chunks} = env) do
+    {parts, ""} =
+      Enum.map_reduce(chunks, envelope_bytes(env), fn %{"byte_size" => n}, rest ->
+        <<part::binary-size(n), tail::binary>> = rest
+        {part, tail}
+      end)
+
+    parts
+  end
+
+  def speech_stream_chunks(%{"body" => body}), do: [Jason.encode!(body)]
+
   defp load_envelope(dir, name) do
     @fixtures_root
     |> Path.join([dir, "/", "#{name}.json"])

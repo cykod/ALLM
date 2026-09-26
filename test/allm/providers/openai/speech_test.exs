@@ -278,6 +278,64 @@ defmodule ALLM.Providers.OpenAI.SpeechTest do
     end
   end
 
+  describe "sample_rate gate through synthesize/2 (keyless)" do
+    test "pcm at 16_000 is :unsupported_feature naming the field" do
+      assert {:error,
+              %SpeechAdapterError{
+                reason: :unsupported_feature,
+                metadata: %{field: :sample_rate, sample_rate: 16_000, format: :pcm}
+              }} = Speech.synthesize(req(format: :pcm, sample_rate: 16_000), @flunk_plug)
+    end
+
+    test "mp3 at 24_000 is :unsupported_feature (only pcm and wav carry a rate)" do
+      assert {:error, %SpeechAdapterError{reason: :unsupported_feature}} =
+               Speech.synthesize(req(format: :mp3, sample_rate: 24_000), @flunk_plug)
+    end
+
+    test "a nil format (answered as mp3) with a rate is :unsupported_feature" do
+      assert {:error, %SpeechAdapterError{reason: :unsupported_feature}} =
+               Speech.synthesize(req(sample_rate: 24_000), @flunk_plug)
+    end
+
+    test "prepare_request/2 runs the same gate" do
+      assert {:error, %SpeechAdapterError{reason: :unsupported_feature}} =
+               Speech.prepare_request(req(format: :wav, sample_rate: 44_100), @flunk_plug)
+    end
+
+    # Falsifier: a gate that accepts 24_000 only for :pcm.
+    for format <- [:pcm, :wav] do
+      test "#{format} at 24_000 passes the gate and builds the request" do
+        assert {:ok, %Req.Request{}} =
+                 Speech.prepare_request(
+                   req(format: unquote(format), sample_rate: 24_000),
+                   api_key: "sk-x"
+                 )
+      end
+    end
+
+    test "a nil sample_rate passes for every format" do
+      for format <- SpeechRequest.formats() do
+        assert {:ok, %Req.Request{}} =
+                 Speech.prepare_request(req(format: format), api_key: "sk-x")
+      end
+    end
+  end
+
+  describe "sample_rate reporting (decode_response/4)" do
+    test "pcm and wav report 24_000" do
+      assert {:ok, %SpeechResponse{format: :pcm, sample_rate: 24_000}} =
+               Speech.decode_response("PCM", %{"content-type" => "audio/pcm"}, req([]), [])
+
+      assert {:ok, %SpeechResponse{format: :wav, sample_rate: 24_000}} =
+               Speech.decode_response("RIFF", %{"content-type" => "audio/wav"}, req([]), [])
+    end
+
+    test "every other format reports nil" do
+      assert {:ok, %SpeechResponse{format: :mp3, sample_rate: nil}} =
+               Speech.decode_response("ID3", %{"content-type" => "audio/mpeg"}, req([]), [])
+    end
+  end
+
   describe "prepare_request/2" do
     test "applies the 60 s default receive timeout when request_timeout is absent" do
       assert {:ok, http} = Speech.prepare_request(req([]), api_key: "sk-x")

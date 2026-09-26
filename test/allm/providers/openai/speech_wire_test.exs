@@ -63,7 +63,8 @@ defmodule ALLM.Providers.OpenAI.SpeechWireTest do
 
   describe "fixture provenance" do
     @recorded ~w(mp3_default wav pcm error_400_too_long error_404_model error_401_bad_key
-                 probe_control probe_unit_graphemes probe_unit_bytes)
+                 probe_control probe_unit_graphemes probe_unit_bytes
+                 stream_pcm stream_mp3_tts1 stream_error_401 probe_stream_control)
     @synthesized ~w(error_401 error_429)
 
     defp raw(kind, name),
@@ -100,7 +101,7 @@ defmodule ALLM.Providers.OpenAI.SpeechWireTest do
     end
 
     test "audio envelopes carry no raw audio outside body_base64 and check out" do
-      for name <- [:mp3_default, :wav, :pcm] do
+      for name <- [:mp3_default, :wav, :pcm, :stream_pcm, :stream_mp3_tts1] do
         env = Fixtures.speech_recorded(name)
         assert byte_size(Fixtures.envelope_bytes(env)) == env["byte_size"]
       end

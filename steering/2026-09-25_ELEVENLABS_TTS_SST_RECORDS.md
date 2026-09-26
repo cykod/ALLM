@@ -10,6 +10,7 @@ Companion to `steering/2026-09-25_ELEVENLABS_TTS_SST.md`. Status, ticks, deviati
 | 26.2 | Completed |
 | 26.3 | Completed |
 | 26.4 | Completed |
+| 26.5 | Completed — fix-pass widened-fence edits (`lib/allm/adapter.ex`, `lib/allm/stream_runner.ex`, `lib/allm.ex` `run_audio_stream/3`, `support/transport.ex`) landed after the review checkpoint and are unreviewed; pinned by `test/allm/transport_opts_routing_test.exs` + the mutation table in §26.5 Fix pass |
 
 ## Phase 26.1 — `Support.HTTPResponse` + `Support.TranscriptionAdapter`
 
@@ -368,3 +369,112 @@ Sources: `.work/reviews/2026-09-26-phase-26-4/overview.md`, `.work/code-reviews/
 | `mix docs 2>&1 \| grep -iE 'warning\|error'` | empty |
 | `mix run scripts/audit_user_docs.exs` on the 8 lib files touched | "No banned-token matches" each |
 | async grep `… \| xargs grep -L 'async: false' \| wc -l` | 12, unchanged |
+
+
+## Phase 26.5 — `OpenAI.Speech` HTTP streaming + recorder arms
+
+Built 2026-09-26 on `a44ac31`. The working tree is uncommitted; the orchestrator commits after review.
+
+### Checklist (26.5.3)
+
+- [x] `ALLM.Providers.OpenAI.Speech.stream_synthesize/2` (`@behaviour ALLM.SpeechStreamAdapter`): `Stream.resource/3` over `finch_module.async_request/3` on `ALLM.Finch`, `Transport.finch_opts/2`, `@default_stream_timeout 60_000` stated in the `@doc`. The pre-flight gates are the one shared `run_gates/2` (shape, length, and the new sample-rate gate).
+- [x] Buffered-error-body classification: a status outside 2xx collects `{:data, _}` until `:done`, then calls `to_speech_adapter_error/4`, so the redactor and the `string_too_long` rule see the message.
+- [x] `test/support/finch_stub.ex`: `:initial_headers` and `:error_body` install options, in both modes. Recorder arms, and the stream-fixture replay test.
+- [x] Non-streaming `synthesize/2` / `prepare_request/2` share the sample-rate gate, and `decode_response/4` reports `sample_rate: 24_000` for `:pcm` and `:wav`, `nil` otherwise. `openai/speech_test.exs` gains the gate and reporting rows (a released-behaviour change, as the checklist says).
+- [x] Devil-review rows: the after function cancels, then drains `{ref, _}` in a `receive … after 0` loop (test "a halt drains the request's queued messages from the mailbox"); 24,000 is accepted for both `:pcm` and `:wav` (a row each, in both test files); `synthesize/2` shares the gate.
+
+### Live probe (run 2026-09-26, `( set -a; . ./.env; set +a; mix run scripts/record_openai_audio_fixtures.exs )`)
+
+First run: 4 live calls, exit 0, every arm matched, then 4 files written. Second run: `0 live calls: every target is already recorded`, exit 0.
+
+| Arm | Got | Observation |
+|-----|-----|-------------|
+| `stream_control` (tts-1, `not_a_real_field`) | 200 | `audio/mpeg`, 7,680 bytes: the unknown field is ignored on the streaming path too |
+| `stream_chunked` (gpt-4o-mini-tts, 405 chars, pcm) | 200 | `audio/pcm`, `transfer-encoding: chunked`, 1,600,800 bytes in 90 data messages; first byte 1,728 ms, last 6,735 ms |
+| `stream_mp3_tts1` (tts-1, mp3) | 200 | `audio/mpeg`, chunked, 402,048 bytes in 278 data messages; 1,353 ms to 2,137 ms |
+| `stream_401` | 401 | `text/plain` JSON, `invalid_api_key`, masked key echo (`sk-proj-****…9900`) |
+
+Alternative E2 (raw chunked body) is confirmed and the wire map's Framing row carries a dated correction in the design. The cost is 820 characters, under $0.02 at the Phase 25 RECORDS prices ($15.00 / 1M characters for tts-1; gpt-4o-mini-tts audio at $12.00 / 1M tokens). An exploratory call from a scratchpad script (one 405-character pcm clip) preceded the recorder run, to see the header set before choosing the assertions.
+
+### Deviations
+
+- `[scope]` **A fourth arm, `stream_control`, writes `probe_stream_control.json`.** The design lists three arms. CLAUDE.md's probe rule pairs each run with an invented-field control, and the existing speech control (`probe_control.json`) was already recorded, so the overwrite guard would never re-run it in the same run as the stream arms.
+- `[scope]` **`stream_chunked` also asserts `transfer-encoding: chunked`.** A chunk count alone is weak evidence of streaming: TCP splits any large body into many reads. The note prints first-byte and last-byte times, and the chunked header is a response observable that pins the framing.
+- `[tactical]` **Recorder transport is `Finch.stream/5` on `ALLM.Finch`,** the adapter's own pool, not `Req`. The response is wrapped in a `%Req.Response{}` (timings in `private.chunks`) so the existing verdicts and writers apply unchanged.
+- `[scope]` **`stream_pcm.json` is 2.1 MB** (1.6 MB of pcm, base64). It follows the Phase 25 envelope literally (`body_base64` plus `chunks`), so the replay test can split the real body at the recorded sizes. Precedent: the four `test/fixtures/openai/images/recorded/*_happy.json` files are 1.0–2.1 MB.
+- `[structural]` **`test/allm/providers/openai/speech_wire_test.exs` is modified, and it is not in the Module Tree.** Its "`@recorded` enumerates every file under recorded/" gate is fail-closed and goes red on any new `recorded/` file. `@recorded` gains the four names, which also gives each the raw-bytes `refute Map.has_key?(raw, "_comment")` provenance test. The envelope-integrity test gains the two stream audio envelopes.
+- ~~`[tactical]` **Transport opts are hoisted from `adapter_opts`.** The streaming façade (`run_audio_stream/3`) puts engine `adapter_opts` under `opts[:adapter_opts]` and, unlike the chat runner, does not hoist `Adapter.transport_opts/0`. `stream_synthesize/2` reads each transport key from the top level, then from `adapter_opts` (`Keyword.put_new/3`). This is adapter-local; the façade is not touched.~~ **Superseded in the 26.5 fix pass** (code-review F1): the adapter-local copy was the *second* copy of `StreamRunner`'s hoist, not the first. The one body is now `ALLM.Adapter.hoist_transport_opts/2` (`@doc false` + `@spec`), called by `ALLM.StreamRunner` and once by `run_audio_stream/3` in `lib/allm.ex`; `OpenAI.Speech` reads transport opts from the top level only, as the chat adapters do.
+- `[tactical]` **A 200 with zero audio bytes ends `:invalid_request`, `metadata.cause: :empty_input`**, per the `SpeechEvent` grammar, not `:malformed_response` as `decode_response/4` reports an empty body on the non-streaming path.
+- `[tactical]` **Two flags in the stream state:** `transport_done?` (Finch sent `:done` or `{:error, _}`) and `terminal?` (the stream emitted its terminal). Only a transport that is not done is cancelled, so the bad-content-type and timeout terminals still cancel. A second 2xx `{:headers, _}` (HTTP trailers) does not emit a second `:speech_started`.
+- `[tactical]` **The halt-drain test uses a test-local `BurstFinch`,** which queues every frame synchronously inside `async_request/3`. `FinchStub` sends from a spawned process, so with it the queued-at-halt precondition is a race and the `refute_received` could pass vacuously.
+- `[scope]` The fixture helper is `OpenAITestFixtures.speech_stream_chunks/1`: the name `stream_chunks/1` is already taken by the SSE chat loader in the same module.
+- `[scope]` `openai/speech_stream_conformance_test.exs` passes a raising `:finch_module` as `gate_opts: [finch_module: _]`, so case 4 fails if the gate moves into the stream. *(Fix pass, code-review F5: the two test-local copies became `ALLM.Test.RaisingFinch` in `test/support/raising_finch.ex`.)*
+- `[CARRY]` **Safer than the released chat stream adapters on two axes** (code-review F2). (a) Body-aware error classification: the chat adapters classify a streamed non-2xx from the status alone, dropping the provider message and `retry-after` (`lib/allm/providers/openai.ex:839`, `lib/allm/providers/anthropic.ex:1485`, `lib/allm/providers/gemini.ex:1355`). (b) Mailbox drain: their `stream_after_fun/2` only cancels (`lib/allm/providers/openai.ex:1352-1355`, `lib/allm/providers/anthropic.ex:1857-1860`, `lib/allm/providers/gemini.ex:1692-1695`). Released behaviour, outside 26.5's fence; filed in `.work/ASKS.md` (sat 9/26/2026 9pm `[CARRY]`) with its DONE-WHEN predicate.
+
+### Mutation checks
+
+| Mutant (in `lib/allm/providers/openai/speech.ex`) | Failing tests |
+|--------|---------------|
+| after function does not drain | 1 (the halt-drain test) |
+| sample-rate gate accepts 24,000 only for `:pcm` | 2 (the `:wav` row in `speech_test.exs` and in `speech_stream_test.exs`) |
+| error status classified from `%{}` instead of the buffered body | 3 (planted-token 401, `string_too_long` 400, recorded 401 replay) |
+| after function does not cancel | 4 (malformed content type, timeout, `Enum.take/2`, halt-drain) |
+| `decode_response/4` reports `sample_rate: nil` | 1 |
+
+The file was restored and `cmp`-verified against a saved copy after each run.
+
+### Notes for later sub-phases
+
+- **26.6–26.8:** `FinchStub.install/2` now takes `:initial_headers` (default `[]`) and `:error_body` (a binary or list; status, headers, body parts, `:done`; `chunks` not sent). The ElevenLabs HTTP stream tests can use both. *(Corrected in the 26.5 fix pass. This bullet said the audio façade does not hoist transport opts and that a second streaming HTTP adapter would be the second copy of the hoist. `OpenAI.Speech`'s private hoist was already the second copy, after `ALLM.StreamRunner`'s.)* Since the fix pass: `run_audio_stream/3` hoists `adapter_opts` transport keys once via `ALLM.Adapter.hoist_transport_opts/2`, so a streaming adapter reads them from the top level and never hoists. A Finch-backed stream's after function is `ALLM.Providers.Support.Transport.cancel_and_drain(finch_module, ref, transport_done?)` (cancel unless the transport finished, then drain `{ref, _}`). Keyless gate tests use `ALLM.Test.RaisingFinch`.
+
+### Verification (run 2026-09-26, working tree on `a44ac31`)
+
+| Check | Result |
+|-------|--------|
+| `mix test` | exit 0, 575 doctests, 33 properties, 4448 tests, 0 failures, 14 excluded (26.4: 573 / 33 / 4400) |
+| `mix test --seed 0` | exit 0, same counts |
+| `mix format --check-formatted` | exit 0 |
+| `mix credo --strict` | no issues |
+| `mix dialyzer` | `Total errors: 0` |
+| `mix compile --warnings-as-errors --force` (dev and test) | exit 0 |
+| `mix docs 2>&1 \| grep -iE 'warning\|error'` | empty |
+| `mix run scripts/audit_user_docs.exs lib/allm/providers/openai/speech.ex` (no new `lib/` file) | "No banned-token matches" |
+| async grep `grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test/ \| xargs grep -L 'async: false' \| wc -l` | 12, unchanged; the two new test files use none of the four calls |
+| Pump-protocol guard `grep -lE --exclude=input_pump.ex ':input_error\|crash_info\(\|@input_window' lib/allm/providers/*.ex lib/allm/providers/*/*.ex` | exit 1 (empty) |
+| Targeted | `speech_stream_test.exs` 28 tests; `speech_stream_conformance_test.exs` 6 suite cases + 1; `speech_test.exs` +9 tests; `speech_wire_test.exs` +4 provenance rows |
+| Coverage (`mix test --cover test/allm/providers/openai/`) | `ALLM.Providers.OpenAI.Speech` 97.48% |
+| BLOCKING recorder | exit 0, `stream_chunked` matched; second run `0 live calls` |
+| `conformance/` | not touched, so its gates were not run |
+| `README.md` | not modified |
+
+### Fix pass (2026-09-26)
+
+From `.work/code-reviews/2026-09-26-phase-26-5.md` (the functional, security and design reviews had no findings). F1 and F3 were tagged DEFER→HANDOFF for 26.6 and were fixed now instead, because 26.6/26.7 build on this plumbing.
+
+- `[structural, fix pass]` **F1:** `ALLM.Adapter.hoist_transport_opts/2` (`@doc false` + `@spec`) is the one hoist body. `ALLM.StreamRunner`'s private copy and `OpenAI.Speech`'s private copy are deleted, and `run_audio_stream/3` in `lib/allm.ex` hoists once on its dispatch opts. `lib/allm/adapter.ex` and `lib/allm/stream_runner.ex` are outside the 26.5 Module Tree; the StreamRunner change moves its private body verbatim (behaviour-preserving, pinned by `test/allm/transport_opts_routing_test.exs:109` and `:125`). The speech test "transport opts arriving in adapter_opts are read" now drives `ALLM.stream_synthesize/3` with engine `adapter_opts`, since a direct adapter call no longer hoists (the chat adapters never did).
+- `[structural, fix pass]` **F3:** `ALLM.Providers.Support.Transport.cancel_and_drain/3` (`@doc false` + `@spec`) is the Finch after function: cancel unless `transport_done?` (rescuing a raising cancel), then drain `{ref, _}` with `receive … after 0`. `OpenAI.Speech.stream_after/1` calls it. The three chat adapters are not migrated (the F2 `[CARRY]` above).
+- `[tactical, fix pass]` **F4:** `stream_request_id/2` is renamed `request_id_for/2`, and `decode_response/4` calls it instead of spelling the fallback inline.
+- **F5:** `ALLM.Test.RaisingFinch` in `test/support/raising_finch.ex`, aliased from both speech stream test files.
+- **F2:** `[CARRY]` line in Deviations above, and the `.work/ASKS.md` ticket.
+
+Mutation re-check after the extraction (each file restored and `cmp`-verified):
+
+| Mutant | Failing tests |
+|--------|---------------|
+| `Transport.cancel_and_drain/3` drains nothing (`{^ref, :never}`) | 1 (the halt-drain test) |
+| `Transport.cancel_and_drain/3` never cancels | 4 (malformed content type, timeout, `Enum.take/2`, halt-drain) |
+| `run_audio_stream/3` hoists from `[]` | 1 (the façade `adapter_opts` transport test) |
+
+| Check (after the fix pass) | Result |
+|-------|--------|
+| `mix test` | exit 0, 575 doctests, 33 properties, 4448 tests, 0 failures, 14 excluded |
+| `mix test --seed 0` | exit 0, same counts |
+| `mix format --check-formatted` | exit 0 |
+| `mix credo --strict` | no issues |
+| `mix dialyzer` | `Total errors: 0` |
+| `mix compile --warnings-as-errors --force` (dev and test) | exit 0 |
+| `mix docs 2>&1 \| grep -iE 'warning\|error'` | empty |
+| `mix run scripts/audit_user_docs.exs lib/allm/providers/openai/speech.ex lib/allm/providers/support/transport.ex lib/allm/adapter.ex` | "No banned-token matches" |
+| Pump-protocol guard `grep -lE --exclude=input_pump.ex ':input_error\|crash_info\(\|@input_window' lib/allm/providers/*.ex lib/allm/providers/*/*.ex` | exit 1 (empty) |
+| async grep (as above) | 12, unchanged |
+| Live recorder | not re-run (no live calls needed) |

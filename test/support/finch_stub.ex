@@ -23,7 +23,17 @@ defmodule ALLM.Test.FinchStub do
 
   The stub always sends `{ref, {:status, 200}}` + `{ref, {:headers, []}}`
   BEFORE the first chunk unless the first chunk is itself a terminal_status
-  or terminal_error frame (which acts as a pre-flight failure).
+  or terminal_error frame (which acts as a pre-flight failure). The
+  `:initial_status` and `:initial_headers` install options change those two
+  leading frames.
+
+  ## Error bodies (`:error_body`)
+
+  With `:error_body` set (a binary, or a list of binaries), the stub models
+  an HTTP error response the way Finch delivers one: the leading status and
+  headers frames, then one `{ref, {:data, part}}` per body part, then
+  `{ref, :done}`. The `chunks` list is not sent. Pair it with an
+  `:initial_status` of 400 or above.
 
   After the last chunk the stub sends `{ref, :done}` unless the chunk list
   ends in a terminal frame — terminal frames implicitly close the stream.
@@ -83,21 +93,21 @@ defmodule ALLM.Test.FinchStub do
     * `:delay_ms` — milliseconds to sleep between chunks (default 1).
       Used by stream-timeout tests to slow the producer.
     * `:initial_status` — HTTP status to send on the leading status frame
-      (default 200). When set to a 4xx/5xx, no `{:data, _}` frames follow —
-      the synthetic-status pre-flight failure path.
+      (default 200).
+    * `:initial_headers` — the header list sent on the leading headers
+      frame (default `[]`).
+    * `:error_body` — a binary or list of binaries sent as the response body
+      in place of `chunks`, followed by `:done` (see "Error bodies"). Default
+      `nil`: the chunks are sent.
   """
   @spec install([chunk()], keyword()) :: ref()
   def install(chunks, opts) when is_list(chunks) and is_list(opts) do
     ref = make_ref()
 
-    Process.put({:allm_finch_stub, ref}, %{
-      chunks: chunks,
-      delay_ms: Keyword.get(opts, :delay_ms, 1),
-      initial_status: Keyword.get(opts, :initial_status, 200),
-      cancel_count: 0,
-      captured_opts: nil,
-      caller: self()
-    })
+    Process.put(
+      {:allm_finch_stub, ref},
+      Map.merge(frame_opts(chunks, opts), %{cancel_count: 0, captured_opts: nil, caller: self()})
+    )
 
     ref
   end
@@ -111,17 +121,20 @@ defmodule ALLM.Test.FinchStub do
   def install_shared(chunks, opts) when is_list(chunks) and is_list(opts) do
     {:ok, agent} =
       Agent.start_link(fn ->
-        %{
-          chunks: chunks,
-          delay_ms: Keyword.get(opts, :delay_ms, 1),
-          initial_status: Keyword.get(opts, :initial_status, 200),
-          cancel_count: 0,
-          captured_opts: nil,
-          senders: []
-        }
+        Map.merge(frame_opts(chunks, opts), %{cancel_count: 0, captured_opts: nil, senders: []})
       end)
 
     agent
+  end
+
+  defp frame_opts(chunks, opts) do
+    %{
+      chunks: chunks,
+      delay_ms: Keyword.get(opts, :delay_ms, 1),
+      initial_status: Keyword.get(opts, :initial_status, 200),
+      initial_headers: Keyword.get(opts, :initial_headers, []),
+      error_body: Keyword.get(opts, :error_body)
+    }
   end
 
   @doc """
@@ -171,11 +184,7 @@ defmodule ALLM.Test.FinchStub do
     caller = self()
     state = Agent.get_and_update(agent, fn s -> {s, %{s | captured_opts: opts}} end)
 
-    sender =
-      spawn_link(fn ->
-        send_initial_frames(caller, ref, state.initial_status)
-        send_chunks(caller, ref, state.chunks, state.delay_ms)
-      end)
+    sender = spawn_link(fn -> send_frames(caller, ref, state) end)
 
     Agent.update(agent, fn s -> %{s | senders: s.senders ++ [sender]} end)
     Process.put({:allm_finch_stub_shared, ref}, agent)
@@ -188,14 +197,7 @@ defmodule ALLM.Test.FinchStub do
     Process.put({:allm_finch_stub, stub_ref}, %{state | captured_opts: opts})
 
     caller = state.caller
-    chunks = state.chunks
-    delay_ms = state.delay_ms
-    initial_status = state.initial_status
-
-    spawn(fn ->
-      send_initial_frames(caller, stub_ref, initial_status)
-      send_chunks(caller, stub_ref, chunks, delay_ms)
-    end)
+    spawn(fn -> send_frames(caller, stub_ref, state) end)
 
     stub_ref
   end
@@ -238,9 +240,14 @@ defmodule ALLM.Test.FinchStub do
   # Internals — message delivery
   # ---------------------------------------------------------------------------
 
-  defp send_initial_frames(caller, ref, status) do
-    send(caller, {ref, {:status, status}})
-    send(caller, {ref, {:headers, []}})
+  defp send_frames(caller, ref, state) do
+    send(caller, {ref, {:status, state.initial_status}})
+    send(caller, {ref, {:headers, state.initial_headers}})
+
+    case state.error_body do
+      nil -> send_chunks(caller, ref, state.chunks, state.delay_ms)
+      body -> send_chunks(caller, ref, List.wrap(body), state.delay_ms)
+    end
   end
 
   defp send_chunks(caller, ref, [], _delay_ms) do

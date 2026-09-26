@@ -1,0 +1,22 @@
+{
+  "body": {
+    "error": {
+      "code": "invalid_api_key",
+      "message": "Incorrect API key provided: sk-proj-*****************************9900. You can find your API key at https://platform.openai.com/account/api-keys.",
+      "param": null,
+      "type": "invalid_request_error"
+    },
+    "status": 401
+  },
+  "chunks": [
+    {
+      "byte_size": 287,
+      "t_ms": 127
+    }
+  ],
+  "headers": {
+    "content-type": "text/plain",
+    "x-request-id": "req_9c7cb2bbf9604dea9c09ae7aed87c41f"
+  },
+  "status": 401
+}

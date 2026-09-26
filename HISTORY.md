@@ -1,3 +1,19 @@
+## [FEAT] Stream OpenAI speech synthesis over chunked HTTP
+*Saturday, September 26th at 10pm*
+Phase 26.5 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 streaming audio). 
+OpenAI.Speech implements ALLM.SpeechStreamAdapter: stream_synthesize/2 streams 
+raw chunked audio over Finch HTTP/1. It is live-verified, with the first audio 
+delta at about 750 ms of a 1.5 to 2.5 s response. A streamed error status 
+buffers the body and classifies it through the shared redacting funnel. The 
+speech gates now accept sample_rate 24_000 for pcm and wav, and the 
+non-streaming path reports 24_000. The recorder gains four live stream arms 
+(with a negative control) and four recorded fixtures. The fix pass moved the 
+transport-opt hoist into ALLM.Adapter and the cancel-and-drain after-function 
+into Support.Transport so later streaming adapters share them, and filed a 
+[CARRY] for the chat adapters, which do not yet drain.
+
+---
+
 ## [FEAT] Add stream_synthesize, stream_synthesize_input, stream_transcribe
 *Saturday, September 26th at 9pm*
 Phase 26.4 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 streaming audio, 
