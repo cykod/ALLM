@@ -146,13 +146,15 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   """
 
   @behaviour ALLM.TranscriptionAdapter
+  @behaviour ALLM.Providers.Support.TranscriptionAdapter
 
   require Logger
 
   alias ALLM.{Audio, Keys, TranscriptionRequest, TranscriptionResponse, Usage}
   alias ALLM.Error.TranscriptionAdapterError
   alias ALLM.Providers.FakeTranscription
-  alias ALLM.Providers.Support.OpenAIHeaders
+  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders}
+  alias ALLM.Providers.Support.TranscriptionAdapter, as: TranscriptionSupport
 
   @doc """
   Return the largest audio clip, in bytes, this adapter will upload.
@@ -210,9 +212,15 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   @spec transcribe(TranscriptionRequest.t(), keyword()) ::
           {:ok, TranscriptionResponse.t()} | {:error, TranscriptionAdapterError.t()}
   def transcribe(%TranscriptionRequest{} = request, opts) when is_list(opts) do
-    case fetch_transcription_script(opts) do
-      nil -> do_transcribe(request, opts)
-      _script -> FakeTranscription.transcribe(request, with_own_cap(opts))
+    case TranscriptionSupport.fetch_transcription_script(opts) do
+      nil ->
+        TranscriptionSupport.do_transcribe(__MODULE__, :openai, request, opts)
+
+      _script ->
+        FakeTranscription.transcribe(
+          request,
+          TranscriptionSupport.with_own_cap(opts, @max_audio_bytes)
+        )
     end
   end
 
@@ -235,9 +243,9 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   @spec prepare_request(TranscriptionRequest.t(), keyword()) ::
           {:ok, Req.Request.t()} | {:error, TranscriptionAdapterError.t()}
   def prepare_request(%TranscriptionRequest{} = request, opts) when is_list(opts) do
-    case fetch_transcription_script(opts) do
+    case TranscriptionSupport.fetch_transcription_script(opts) do
       nil -> with :ok <- gate_audio(request, opts), do: build_request(request, opts)
-      _script -> {:error, stub_error(opts)}
+      _script -> {:error, TranscriptionSupport.stub_error(:openai, opts)}
     end
   end
 
@@ -248,25 +256,29 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   # the error funnel is renamed per capability (`to_transcription_adapter_error/4`).
   # `to_multipart_body/2` returns `{:ok, fields} | {:error, _}`, the capability
   # family's shape (`openai/images.ex`'s `to_multipart_body/2`), because
-  # building it reads the audio bytes, which can fail. The private helpers
-  # mirror `openai/speech.ex`, including its four deliberate differences
-  # from `openai/moderation.ex` (binary error bodies are JSON-decoded,
-  # `sanitize_cause/1` resets every `Jason.DecodeError` offset, a non-map
-  # `"error"` value is tolerated, and `apply_receive_timeout/2` replaces the
-  # family's `maybe_apply_request_timeout/2` because it always applies a
-  # default timeout). The one structural difference from the
-  # speech sibling: there is no `ALLM.Retry.run/3` here, and
-  # `run_one_attempt/3` never returns `{:retry, …}`.
+  # building it reads the audio bytes, which can fail. The HTTP helpers are
+  # `openai/speech.ex`'s choices from `ALLM.Providers.Support.HTTPResponse`,
+  # including its four deliberate differences from `openai/moderation.ex`
+  # (binary error bodies are JSON-decoded, every `Jason.DecodeError` offset is
+  # reset, a non-map `"error"` value is tolerated, and
+  # `apply_receive_timeout/3` always applies a default timeout). The
+  # transcription contract (gates, Fake hand-off, dispatch) is shared with the
+  # Gemini sibling through `ALLM.Providers.Support.TranscriptionAdapter`. The
+  # one structural difference from the speech sibling: there is no
+  # `ALLM.Retry.run/3` here, and
+  # `ALLM.Providers.Support.TranscriptionAdapter.run_one_attempt/5` never
+  # returns `{:retry, …}`.
   # ---------------------------------------------------------------------------
 
   @doc false
   # The three pre-flight gates, in their fixed order: resolvable -> size ->
   # filename. All run before `Keys.fetch!/2`.
+  @impl ALLM.Providers.Support.TranscriptionAdapter
   @spec gate_audio(TranscriptionRequest.t(), keyword()) ::
           :ok | {:error, TranscriptionAdapterError.t()}
   def gate_audio(%TranscriptionRequest{audio: audio}, opts) do
-    with {:ok, count} <- measure(audio, opts),
-         :ok <- gate_size(count, opts) do
+    with {:ok, count} <- TranscriptionSupport.measure(audio, :openai, opts),
+         :ok <- TranscriptionSupport.gate_size(count, @max_audio_bytes, :openai, opts) do
       gate_filename(audio, opts)
     end
   end
@@ -280,7 +292,7 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   @spec to_multipart_body(TranscriptionRequest.t(), keyword()) ::
           {:ok, [{String.t(), term()}]} | {:error, TranscriptionAdapterError.t()}
   def to_multipart_body(%TranscriptionRequest{audio: %Audio{} = audio} = request, opts) do
-    with {:ok, bytes} <- resolve_bytes(audio, opts),
+    with {:ok, bytes} <- TranscriptionSupport.resolve_bytes(audio, :openai, opts),
          {:ok, name} <- upload_filename(audio, opts) do
       structural =
         [
@@ -296,9 +308,10 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   end
 
   def to_multipart_body(%TranscriptionRequest{}, opts),
-    do: {:error, unresolvable_error(:invalid_source, opts)}
+    do: {:error, TranscriptionSupport.unresolvable_error(:invalid_source, :openai, opts)}
 
   @doc false
+  @impl ALLM.Providers.Support.TranscriptionAdapter
   @spec decode_response(term(), Enumerable.t() | map(), TranscriptionRequest.t(), keyword()) ::
           {:ok, TranscriptionResponse.t()} | {:error, TranscriptionAdapterError.t()}
   def decode_response(body, headers, request, opts)
@@ -312,7 +325,8 @@ defmodule ALLM.Providers.OpenAI.Transcription do
        text: text,
        language: decode_language(Map.get(body, "languages")),
        duration_seconds: duration,
-       request_id: Keyword.get(opts, :request_id) || header_value(headers, "x-request-id"),
+       request_id:
+         Keyword.get(opts, :request_id) || HTTPResponse.header_value(headers, "x-request-id"),
        model: request.model || @default_model,
        provider: :openai,
        usage: usage,
@@ -327,6 +341,7 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   @doc false
   # `body` may be a decoded map or an undecoded binary: OpenAI's 401 is
   # `text/plain` carrying JSON, which `Req` does not decode.
+  @impl ALLM.Providers.Support.TranscriptionAdapter
   @spec to_transcription_adapter_error(
           non_neg_integer(),
           term(),
@@ -334,8 +349,10 @@ defmodule ALLM.Providers.OpenAI.Transcription do
           keyword()
         ) :: TranscriptionAdapterError.t()
   def to_transcription_adapter_error(status, body, headers, opts) when is_integer(status) do
-    error = body |> decode_error_body() |> error_object()
-    {reason, retry_after} = classify_transcription_reason(status, retry_after_ms(headers))
+    error = body |> HTTPResponse.decode_json_error_body() |> HTTPResponse.error_object()
+
+    {reason, retry_after} =
+      classify_transcription_reason(status, HTTPResponse.retry_after_ms(headers))
 
     TranscriptionAdapterError.new(reason,
       provider: :openai,
@@ -343,7 +360,7 @@ defmodule ALLM.Providers.OpenAI.Transcription do
       retry_after_ms: retry_after,
       message: provider_message(error, status),
       metadata:
-        build_metadata(
+        HTTPResponse.build_metadata(
           %{
             status: status,
             openai_code: redact_optional(Map.get(error, "code")),
@@ -357,41 +374,6 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   # ---------------------------------------------------------------------------
   # Internals — gates
   # ---------------------------------------------------------------------------
-
-  defp fetch_transcription_script(opts) do
-    opts
-    |> Keyword.get(:adapter_opts, [])
-    |> Keyword.get(:transcription_script)
-  end
-
-  defp with_own_cap(opts) do
-    adapter_opts =
-      opts
-      |> Keyword.get(:adapter_opts, [])
-      |> Keyword.put(:max_audio_bytes, @max_audio_bytes)
-
-    Keyword.put(opts, :adapter_opts, adapter_opts)
-  end
-
-  defp measure(%Audio{} = audio, opts) do
-    case Audio.size(audio) do
-      {:ok, count} -> {:ok, count}
-      {:error, cause} -> {:error, unresolvable_error(cause, opts)}
-    end
-  end
-
-  defp measure(_audio, opts), do: {:error, unresolvable_error(:invalid_source, opts)}
-
-  defp gate_size(count, _opts) when count <= @max_audio_bytes, do: :ok
-
-  defp gate_size(count, opts) do
-    {:error,
-     TranscriptionAdapterError.new(:invalid_request,
-       provider: :openai,
-       message: "audio is #{count} bytes, over max_audio_bytes #{@max_audio_bytes}",
-       metadata: build_metadata(%{field: :audio, count: count, max: @max_audio_bytes}, opts)
-     )}
-  end
 
   defp gate_filename(%Audio{} = audio, opts) do
     with {:ok, _name} <- upload_filename(audio, opts), do: :ok
@@ -413,31 +395,8 @@ defmodule ALLM.Providers.OpenAI.Transcription do
            message:
              "audio :mime_type #{inspect(mime)} names no file format OpenAI accepts; " <>
                "set a known audio MIME type or use ALLM.Audio.from_file/1",
-           metadata: build_metadata(%{field: :audio, mime_type: mime}, opts)
+           metadata: HTTPResponse.build_metadata(%{field: :audio, mime_type: mime}, opts)
          )}
-    end
-  end
-
-  defp unresolvable_error(cause, opts) do
-    TranscriptionAdapterError.new(:invalid_request,
-      provider: :openai,
-      message: "audio bytes could not be resolved (#{inspect(cause)})",
-      metadata: build_metadata(%{field: :audio, cause: cause}, opts)
-    )
-  end
-
-  defp stub_error(opts) do
-    TranscriptionAdapterError.new(:unknown,
-      provider: :openai,
-      message: "prepare_request/2 has no analogue under the transcription_script short-circuit",
-      metadata: build_metadata(%{}, opts)
-    )
-  end
-
-  defp build_metadata(metadata, opts) when is_map(metadata) do
-    case Keyword.get(opts, :request_id) do
-      nil -> metadata
-      request_id -> Map.put(metadata, :request_id, request_id)
     end
   end
 
@@ -445,16 +404,14 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   # Internals — dispatch (one attempt, no retry loop)
   # ---------------------------------------------------------------------------
 
-  defp do_transcribe(%TranscriptionRequest{} = request, opts) do
-    with :ok <- gate_audio(request, opts),
-         {:ok, http_req} <- build_request(request, opts) do
-      run_one_attempt(http_req, request, opts)
-    end
-  end
-
+  @doc false
   # `Keys.fetch!/2` raises `%EngineError{reason: :missing_key}` by documented
-  # design and is not rescued. It runs AFTER `gate_audio/2`.
-  defp build_request(%TranscriptionRequest{} = request, opts) do
+  # design and is not rescued. It runs AFTER `gate_audio/2`. Public only so
+  # `ALLM.Providers.Support.TranscriptionAdapter.do_transcribe/4` can call it.
+  @impl ALLM.Providers.Support.TranscriptionAdapter
+  @spec build_request(TranscriptionRequest.t(), keyword()) ::
+          {:ok, Req.Request.t()} | {:error, TranscriptionAdapterError.t()}
+  def build_request(%TranscriptionRequest{} = request, opts) do
     api_key = Keys.fetch!(:openai, opts)
 
     with {:ok, form} <- to_multipart_body(request, opts) do
@@ -467,73 +424,16 @@ defmodule ALLM.Providers.OpenAI.Transcription do
           # One attempt per call: Req's own retry step must not re-upload.
           retry: false
         )
-        |> maybe_apply_req_test_stub(opts)
-        |> apply_receive_timeout(opts)
+        |> HTTPResponse.maybe_apply_req_test_stub(opts)
+        |> HTTPResponse.apply_receive_timeout(opts, @default_timeout_ms)
 
       {:ok, req}
     end
   end
 
-  defp maybe_apply_req_test_stub(req, opts) do
-    case opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  defp apply_receive_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
-      _ -> Req.merge(req, receive_timeout: @default_timeout_ms)
-    end
-  end
-
-  defp run_one_attempt(http_req, request, opts) do
-    case Req.request(http_req) do
-      {:ok, %Req.Response{status: status, body: body, headers: headers}}
-      when status in 200..299 ->
-        decode_response(body, headers, request, opts)
-
-      {:ok, %Req.Response{status: status, body: body, headers: headers}} ->
-        {:error, to_transcription_adapter_error(status, body, headers, opts)}
-
-      {:error, %{__struct__: Req.TransportError, reason: :timeout} = cause} ->
-        {:error, transport_error(:timeout, "request timed out", cause, opts)}
-
-      {:error, %{__struct__: Jason.DecodeError} = cause} ->
-        {:error,
-         %{malformed_error("response body is not valid JSON", opts) | cause: sanitize_cause(cause)}}
-
-      {:error, exception} ->
-        {:error,
-         transport_error(
-           :network_error,
-           "transport failure: " <> Exception.message(exception),
-           exception,
-           opts
-         )}
-    end
-  end
-
-  defp transport_error(reason, message, cause, opts) do
-    TranscriptionAdapterError.new(reason,
-      provider: :openai,
-      message: message,
-      cause: sanitize_cause(cause),
-      metadata: build_metadata(%{}, opts)
-    )
-  end
-
   # ---------------------------------------------------------------------------
   # Internals — multipart fields
   # ---------------------------------------------------------------------------
-
-  defp resolve_bytes(%Audio{} = audio, opts) do
-    case Audio.to_binary(audio) do
-      {:ok, bytes} -> {:ok, bytes}
-      {:error, cause} -> {:error, unresolvable_error(cause, opts)}
-    end
-  end
 
   defp optional_field(_name, nil), do: []
   defp optional_field(name, value), do: [{name, value}]
@@ -594,31 +494,17 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   defp decode_language([%{"code" => code} | _]) when is_binary(code), do: code
   defp decode_language(_languages), do: nil
 
-  defp malformed_error(detail, opts) do
+  @doc false
+  # Public only so `ALLM.Providers.Support.TranscriptionAdapter.run_one_attempt/5`
+  # can build the invalid-JSON error with this adapter's message.
+  @impl ALLM.Providers.Support.TranscriptionAdapter
+  @spec malformed_error(String.t(), keyword()) :: TranscriptionAdapterError.t()
+  def malformed_error(detail, opts) do
     TranscriptionAdapterError.new(:malformed_response,
       provider: :openai,
       message: "could not decode OpenAI transcription response: " <> detail,
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
-  end
-
-  defp decode_error_body(body) when is_map(body), do: body
-
-  defp decode_error_body(body) when is_binary(body) do
-    case Jason.decode(body) do
-      {:ok, decoded} when is_map(decoded) -> decoded
-      _ -> %{}
-    end
-  end
-
-  defp decode_error_body(_body), do: %{}
-
-  defp error_object(body) do
-    case Map.get(body, "error") do
-      e when is_map(e) -> e
-      e when is_binary(e) -> %{"message" => e}
-      _ -> %{}
-    end
   end
 
   defp provider_message(error, status) do
@@ -646,54 +532,9 @@ defmodule ALLM.Providers.OpenAI.Transcription do
 
   defp classify_transcription_reason(_status, _ra), do: {:unknown, nil}
 
-  # `Jason.DecodeError` carries the undecodable payload on `:data`; blanking
-  # only that leaves `message/1` raising on the stale offset.
-  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause),
-    do: %{cause | data: "", position: 0, token: nil}
-
-  defp sanitize_cause(cause), do: cause
-
   # Inherited from `ALLM.Providers.OpenAI.Moderation`: same provider, same key
   # shapes.
   defp redact_key_material(message) when is_binary(message) do
     String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
-  end
-
-  # ---------------------------------------------------------------------------
-  # Internals — headers
-  # ---------------------------------------------------------------------------
-
-  defp retry_after_ms(headers) do
-    case header_value(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_map(headers) do
-    headers |> Map.get(name) |> header_value_to_string()
-  end
-
-  defp header_value(headers, name) when is_list(headers) do
-    Enum.find_value(headers, fn
-      {k, v} when is_binary(k) ->
-        if String.downcase(k) == name, do: header_value_to_string(v), else: nil
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp header_value(_headers, _name), do: nil
-
-  defp header_value_to_string([v | _]) when is_binary(v), do: v
-  defp header_value_to_string(v) when is_binary(v), do: v
-  defp header_value_to_string(_v), do: nil
-
-  defp parse_retry_after(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds * 1_000
-      _ -> nil
-    end
   end
 end

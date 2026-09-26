@@ -287,6 +287,7 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   }
 
   alias ALLM.Providers.FakeModeration
+  alias ALLM.Providers.Support.HTTPResponse
   alias ALLM.Providers.Support.ImageMime
   alias ALLM.Providers.Support.OpenAIHeaders
 
@@ -402,20 +403,21 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   #   IDENTICAL to both siblings (byte-for-byte modulo arity):
   #   * `decode_response/4`             — arg order `(body, headers, request, opts)`
   #   * `to_json_body/2`                — returns a bare `map()`
-  #   * private `build_metadata/2`, `run_one_attempt/3`, `classify_http_error/4`,
-  #     `retry_after_ms/1`, `stub_error/1`, `maybe_apply_req_test_stub/2`,
-  #     `maybe_apply_request_timeout/2`, `header_value/2`
+  #   * private `run_one_attempt/3`, `classify_http_error/4`, `stub_error/1`
+  #   * `build_metadata/2`, `retry_after_ms/1`, `maybe_apply_req_test_stub/2`,
+  #     `maybe_apply_request_timeout/2` and `header_value/2` are shared, from
+  #     `ALLM.Providers.Support.HTTPResponse`
   #
   #   IDENTICAL to `openai/embeddings.ex` ONLY — `openai/images.ex` has NEITHER
   #   function, which is the subject of the standing ticket at `ASKS.md:249`
   #   ("grep -rn 'redact' lib/ hits only the new embeddings module"). Do not
   #   read this block as a claim that the image adapter redacts key material:
   #   it does not:
-  #   * `redact_key_material/1`  — `embeddings.ex:695-699` (differs only in the
+  #   * `redact_key_material/1`  — `openai/embeddings.ex` (differs only in the
   #                                fail-closed fallback string:
   #                                `"OpenAI moderation error"` here vs
   #                                `"OpenAI embeddings error"` there)
-  #   * `sanitize_cause/1`       — `embeddings.ex:689-690`, byte-for-byte
+  #   * `sanitize_cause/1`       — `openai/embeddings.ex`, byte-for-byte
   #
   #   RENAMED for the moderation family (per-capability, not per-provider):
   #   * `to_moderation_adapter_error/4` ↔ embeddings' `to_embedding_adapter_error/4`
@@ -427,13 +429,6 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   #                                       fills with `supported_operations/0`.
   #
   #   DIVERGENT, with justification:
-  #   * `parse_retry_after/1` returns `nil` INLINE for an unparseable value,
-  #     matching `embeddings.ex:738-745`, where `openai/images.ex:1159-1172`
-  #     falls through to a `parse_http_date/1` stub that also returns `nil`
-  #     today (`defp parse_http_date(_value), do: nil`). Behaviour is identical;
-  #     the seam is deliberately omitted here so there is no dead private
-  #     function. If that stub is ever implemented, this clause has to be
-  #     updated with it.
   #   * `redact_key_material/1`'s pattern is inherited from
   #     `openai/embeddings.ex` VERBATIM, which is correct here and only here:
   #     the provider is the same one, so the `sk-`/`rk-`/`org-` prefixes are the
@@ -447,7 +442,7 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   #     carries none, where `/v1/embeddings` carries `data[].index` and its
   #     sibling therefore sorts on it.
   #   * `to_openai_content_blocks/1` and `part_to_block/1` (22.5) are named for
-  #     the CHAT translator's pair at `lib/allm/providers/openai.ex:1839-1893`,
+  #     the CHAT translator's pair in `lib/allm/providers/openai.ex`,
   #     modulo arity: chat's are `/2` because Chat Completions and the Responses
   #     API disagree on the block shape, and moderation has one endpoint. Per
   #     CLAUDE.md's cross-provider alignment rule the names align byte-for-byte
@@ -466,8 +461,8 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   #     the arity and the name were corrected in the design's table in the same
   #     commit as the change — size is one of five things the gate rejects.
   #   * `detail_drop_check/1` / `warn_detail_dropped_once/0` are the THIRD copy
-  #     of this pair, after `lib/allm/providers/anthropic.ex:883-899` and
-  #     `lib/allm/providers/gemini.ex:755-773` — same one-shot-per-process
+  #     of this pair, after the ones in `lib/allm/providers/anthropic.ex` and
+  #     `lib/allm/providers/gemini.ex` — same one-shot-per-process
   #     shape, different process-dictionary key and log string.
   #     `agent-spec/IMPLEMENTATION.md:68` sets the extraction trigger at TWO
   #     implementations; consolidation is deferred because it would edit two
@@ -602,14 +597,16 @@ defmodule ALLM.Providers.OpenAI.Moderation do
       |> Map.get("message", "OpenAI HTTP #{status}")
       |> redact_key_material()
 
-    {reason, retry_after} = classify_moderation_reason(status, code, type, retry_after_ms(headers))
+    {reason, retry_after} =
+      classify_moderation_reason(status, code, type, HTTPResponse.retry_after_ms(headers))
 
     ModerationAdapterError.new(reason,
       provider: :openai,
       status: status,
       retry_after_ms: retry_after,
       message: message,
-      metadata: build_metadata(%{status: status, openai_code: code, openai_type: type}, opts)
+      metadata:
+        HTTPResponse.build_metadata(%{status: status, openai_code: code, openai_type: type}, opts)
     )
   end
 
@@ -625,7 +622,8 @@ defmodule ALLM.Providers.OpenAI.Moderation do
         {:ok,
          %ModerationResponse{
            id: Map.get(body, "id"),
-           request_id: Keyword.get(opts, :request_id) || header_value(headers, "x-request-id"),
+           request_id:
+             Keyword.get(opts, :request_id) || HTTPResponse.header_value(headers, "x-request-id"),
            model: Map.get(body, "model") || request.model,
            provider: :openai,
            results: decoded,
@@ -676,7 +674,7 @@ defmodule ALLM.Providers.OpenAI.Moderation do
      ModerationAdapterError.new(:invalid_request,
        provider: :openai,
        message: "input must not be empty",
-       metadata: build_metadata(%{field: :input}, opts)
+       metadata: HTTPResponse.build_metadata(%{field: :input}, opts)
      )}
   end
 
@@ -696,7 +694,7 @@ defmodule ALLM.Providers.OpenAI.Moderation do
        ModerationAdapterError.new(:batch_too_large,
          provider: :openai,
          message: "input count #{count} exceeds max_batch_size #{max}",
-         metadata: build_metadata(%{count: count, max: max}, opts)
+         metadata: HTTPResponse.build_metadata(%{count: count, max: max}, opts)
        )}
     else
       :ok
@@ -714,7 +712,7 @@ defmodule ALLM.Providers.OpenAI.Moderation do
      ModerationAdapterError.new(:invalid_request,
        provider: :openai,
        message: "input must be a list of items",
-       metadata: build_metadata(%{field: :input}, opts)
+       metadata: HTTPResponse.build_metadata(%{field: :input}, opts)
      )}
   end
 
@@ -751,7 +749,7 @@ defmodule ALLM.Providers.OpenAI.Moderation do
     ModerationAdapterError.new(:invalid_request,
       provider: :openai,
       message: message,
-      metadata: build_metadata(metadata, opts)
+      metadata: HTTPResponse.build_metadata(metadata, opts)
     )
   end
 
@@ -788,17 +786,8 @@ defmodule ALLM.Providers.OpenAI.Moderation do
     ModerationAdapterError.new(:unknown,
       provider: :openai,
       message: "prepare_request/2 has no analogue under the moderation_script short-circuit",
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
-  end
-
-  # Every error this adapter surfaces carries `opts[:request_id]` on its
-  # metadata, whether it came from a pre-flight gate or from the HTTP path.
-  defp build_metadata(metadata, opts) when is_map(metadata) do
-    case Keyword.get(opts, :request_id) do
-      nil -> metadata
-      request_id -> Map.put(metadata, :request_id, request_id)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -830,26 +819,10 @@ defmodule ALLM.Providers.OpenAI.Moderation do
         headers: OpenAIHeaders.json_headers(api_key, opts),
         json: to_json_body(request, opts)
       )
-      |> maybe_apply_req_test_stub(opts)
-      |> maybe_apply_request_timeout(opts)
+      |> HTTPResponse.maybe_apply_req_test_stub(opts)
+      |> HTTPResponse.maybe_apply_request_timeout(opts)
 
     {:ok, req}
-  end
-
-  defp maybe_apply_req_test_stub(req, opts) do
-    case opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  # Invariant 9: `opts[:request_timeout]` is honoured, and its expiry surfaces
-  # as `%ModerationAdapterError{reason: :timeout}` from `run_one_attempt/3`.
-  defp maybe_apply_request_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      nil -> req
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -888,12 +861,12 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   # moderation request shape, so it is dropped. A single deferred-form
   # `Logger.debug/1` per process surfaces the drop — the deferred form skips
   # the interpolation entirely when the level is above `:debug`. Mirrors
-  # `lib/allm/providers/anthropic.ex:883-899`.
+  # `detail_drop_check/1` in `lib/allm/providers/anthropic.ex`.
   # `:auto` is `ALLM.ImagePart`'s DEFAULT (`lib/allm/image_part.ex:39`), so it
   # means "the caller expressed no preference" — nothing was really dropped and
   # logging it would fire on every plainly-constructed `ImagePart.new/1`.
-  # Matches `lib/allm/providers/gemini.ex:755`, which excludes `:auto` for the
-  # same reason. (`lib/allm/providers/anthropic.ex:883` does NOT, and is the
+  # Matches `detail_drop_check/1` in `lib/allm/providers/gemini.ex`, which excludes `:auto` for the
+  # same reason. (Anthropic's `detail_drop_check/1` does NOT, and is the
   # noisier outlier — see the `[DEFERRED-DRY]` ticket in `ASKS.md`.)
   defp detail_drop_check(:auto), do: :ok
   defp detail_drop_check(nil), do: :ok
@@ -956,7 +929,7 @@ defmodule ALLM.Providers.OpenAI.Moderation do
            provider: :openai,
            message: "request timed out",
            cause: sanitize_cause(cause),
-           metadata: build_metadata(%{}, opts)
+           metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
 
       {:error, %{__struct__: Jason.DecodeError} = cause} ->
@@ -969,13 +942,14 @@ defmodule ALLM.Providers.OpenAI.Moderation do
            provider: :openai,
            message: "transport failure: " <> Exception.message(exception),
            cause: sanitize_cause(exception),
-           metadata: build_metadata(%{}, opts)
+           metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
     end
   end
 
   defp classify_http_error(status, body, headers, opts) do
-    classified = to_moderation_adapter_error(status, decode_error_body(body), headers, opts)
+    classified =
+      to_moderation_adapter_error(status, HTTPResponse.decode_error_body(body), headers, opts)
 
     if classified.reason in [:rate_limited, :provider_unavailable] do
       {:retry, classified.retry_after_ms || 0, classified}
@@ -983,9 +957,6 @@ defmodule ALLM.Providers.OpenAI.Moderation do
       {:error, classified}
     end
   end
-
-  defp decode_error_body(body) when is_map(body), do: body
-  defp decode_error_body(_body), do: %{}
 
   # ---------------------------------------------------------------------------
   # Internals — error mapping
@@ -1013,7 +984,7 @@ defmodule ALLM.Providers.OpenAI.Moderation do
       provider: :openai,
       message: "could not parse OpenAI moderations response: " <> detail,
       cause: cause,
-      metadata: build_metadata(metadata, opts)
+      metadata: HTTPResponse.build_metadata(metadata, opts)
     )
   end
 
@@ -1036,48 +1007,6 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   # ---------------------------------------------------------------------------
   # Internals — headers
   # ---------------------------------------------------------------------------
-
-  defp retry_after_ms(headers) do
-    case header_value(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_map(headers) do
-    case Map.get(headers, name) do
-      nil -> nil
-      value -> header_value_to_string(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_list(headers) do
-    Enum.find_value(headers, fn
-      {k, v} when is_binary(k) ->
-        if String.downcase(k) == name, do: header_value_to_string(v), else: nil
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp header_value(_headers, _name), do: nil
-
-  defp header_value_to_string([v | _]) when is_binary(v), do: v
-  defp header_value_to_string(v) when is_binary(v), do: v
-  defp header_value_to_string(_v), do: nil
-
-  # Per RFC 7231 §7.1.3 `Retry-After` is delta-seconds or an HTTP-date. OpenAI
-  # sends delta-seconds; an unparseable value returns `nil` and the retry loop
-  # falls back to its computed exponential backoff.
-  defp parse_retry_after(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds * 1_000
-      _ -> nil
-    end
-  end
-
-  defp parse_retry_after(_value), do: nil
 
   defp build_retry_telemetry_meta(opts) do
     case Keyword.get(opts, :request_id) do

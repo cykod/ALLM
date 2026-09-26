@@ -183,11 +183,13 @@ defmodule ALLM.Providers.Gemini.Transcription do
   """
 
   @behaviour ALLM.TranscriptionAdapter
+  @behaviour ALLM.Providers.Support.TranscriptionAdapter
 
   alias ALLM.{Audio, Keys, TranscriptionRequest, TranscriptionResponse, Usage}
   alias ALLM.Error.TranscriptionAdapterError
   alias ALLM.Providers.{FakeTranscription, Gemini}
-  alias ALLM.Providers.Support.GeminiHeaders
+  alias ALLM.Providers.Support.{GeminiHeaders, HTTPResponse}
+  alias ALLM.Providers.Support.TranscriptionAdapter, as: TranscriptionSupport
 
   @doc """
   Return the largest audio clip, in bytes, this adapter will send.
@@ -248,9 +250,15 @@ defmodule ALLM.Providers.Gemini.Transcription do
   @spec transcribe(TranscriptionRequest.t(), keyword()) ::
           {:ok, TranscriptionResponse.t()} | {:error, TranscriptionAdapterError.t()}
   def transcribe(%TranscriptionRequest{} = request, opts) when is_list(opts) do
-    case fetch_transcription_script(opts) do
-      nil -> do_transcribe(request, opts)
-      _script -> FakeTranscription.transcribe(request, with_own_cap(opts))
+    case TranscriptionSupport.fetch_transcription_script(opts) do
+      nil ->
+        TranscriptionSupport.do_transcribe(__MODULE__, :gemini, request, opts)
+
+      _script ->
+        FakeTranscription.transcribe(
+          request,
+          TranscriptionSupport.with_own_cap(opts, @max_audio_bytes)
+        )
     end
   end
 
@@ -273,9 +281,9 @@ defmodule ALLM.Providers.Gemini.Transcription do
   @spec prepare_request(TranscriptionRequest.t(), keyword()) ::
           {:ok, Req.Request.t()} | {:error, TranscriptionAdapterError.t()}
   def prepare_request(%TranscriptionRequest{} = request, opts) when is_list(opts) do
-    case fetch_transcription_script(opts) do
+    case TranscriptionSupport.fetch_transcription_script(opts) do
       nil -> with :ok <- gate_audio(request, opts), do: build_request(request, opts)
-      _script -> {:error, stub_error(opts)}
+      _script -> {:error, TranscriptionSupport.stub_error(:gemini, opts)}
     end
   end
 
@@ -288,18 +296,20 @@ defmodule ALLM.Providers.Gemini.Transcription do
   # `{:ok, map} | {:error, _}` rather than the bare map the chat and
   # embeddings JSON builders return, because building it base64-encodes the
   # audio bytes, which can fail to resolve. Like the OpenAI sibling there is
-  # no `ALLM.Retry.run/3` here, and `run_one_attempt/3` never returns
+  # no `ALLM.Retry.run/3` here, and
+  # `ALLM.Providers.Support.TranscriptionAdapter.run_one_attempt/5` never returns
   # `{:retry, …}`.
   # ---------------------------------------------------------------------------
 
   @doc false
   # The three pre-flight gates, in their fixed order: resolvable -> size ->
   # mime. All run before `Keys.fetch!/2`.
+  @impl ALLM.Providers.Support.TranscriptionAdapter
   @spec gate_audio(TranscriptionRequest.t(), keyword()) ::
           :ok | {:error, TranscriptionAdapterError.t()}
   def gate_audio(%TranscriptionRequest{audio: audio}, opts) do
-    with {:ok, count} <- measure(audio, opts),
-         :ok <- gate_size(count, opts),
+    with {:ok, count} <- TranscriptionSupport.measure(audio, :gemini, opts),
+         :ok <- TranscriptionSupport.gate_size(count, @max_audio_bytes, :gemini, opts),
          {:ok, _mime} <- wire_mime(audio, opts) do
       :ok
     end
@@ -320,7 +330,7 @@ defmodule ALLM.Providers.Gemini.Transcription do
           {:ok, map()} | {:error, TranscriptionAdapterError.t()}
   def to_json_body(%TranscriptionRequest{audio: %Audio{} = audio} = request, opts) do
     with {:ok, mime} <- wire_mime(audio, opts),
-         {:ok, bytes} <- resolve_bytes(audio, opts) do
+         {:ok, bytes} <- TranscriptionSupport.resolve_bytes(audio, :gemini, opts) do
       parts = [
         %{"text" => instruction_text(request)},
         %{"inlineData" => %{"mimeType" => mime, "data" => Base.encode64(bytes)}}
@@ -332,9 +342,10 @@ defmodule ALLM.Providers.Gemini.Transcription do
   end
 
   def to_json_body(%TranscriptionRequest{}, opts),
-    do: {:error, unresolvable_error(:invalid_source, opts)}
+    do: {:error, TranscriptionSupport.unresolvable_error(:invalid_source, :gemini, opts)}
 
   @doc false
+  @impl ALLM.Providers.Support.TranscriptionAdapter
   @spec decode_response(term(), Enumerable.t() | map(), TranscriptionRequest.t(), keyword()) ::
           {:ok, TranscriptionResponse.t()} | {:error, TranscriptionAdapterError.t()}
   def decode_response(body, headers, request, opts)
@@ -376,6 +387,7 @@ defmodule ALLM.Providers.Gemini.Transcription do
   # rule added here: a 400 whose `details[].reason` is `API_KEY_INVALID` is
   # `:authentication_failed` (the released Gemini siblings still call it
   # `:invalid_request`).
+  @impl ALLM.Providers.Support.TranscriptionAdapter
   @spec to_transcription_adapter_error(
           non_neg_integer(),
           term(),
@@ -383,7 +395,7 @@ defmodule ALLM.Providers.Gemini.Transcription do
           keyword()
         ) :: TranscriptionAdapterError.t()
   def to_transcription_adapter_error(status, body, headers, opts) when is_integer(status) do
-    error = body |> decode_error_body() |> error_object()
+    error = body |> HTTPResponse.decode_json_error_body() |> HTTPResponse.error_object()
     message = provider_message(error, status)
 
     chat_error =
@@ -395,7 +407,7 @@ defmodule ALLM.Providers.Gemini.Transcription do
       retry_after_ms: chat_error.retry_after_ms,
       message: message,
       metadata:
-        build_metadata(
+        HTTPResponse.build_metadata(
           %{status: status, google_status: redact_optional(Map.get(error, "status"))},
           opts
         )
@@ -405,41 +417,6 @@ defmodule ALLM.Providers.Gemini.Transcription do
   # ---------------------------------------------------------------------------
   # Internals — gates
   # ---------------------------------------------------------------------------
-
-  defp fetch_transcription_script(opts) do
-    opts
-    |> Keyword.get(:adapter_opts, [])
-    |> Keyword.get(:transcription_script)
-  end
-
-  defp with_own_cap(opts) do
-    adapter_opts =
-      opts
-      |> Keyword.get(:adapter_opts, [])
-      |> Keyword.put(:max_audio_bytes, @max_audio_bytes)
-
-    Keyword.put(opts, :adapter_opts, adapter_opts)
-  end
-
-  defp measure(%Audio{} = audio, opts) do
-    case Audio.size(audio) do
-      {:ok, count} -> {:ok, count}
-      {:error, cause} -> {:error, unresolvable_error(cause, opts)}
-    end
-  end
-
-  defp measure(_audio, opts), do: {:error, unresolvable_error(:invalid_source, opts)}
-
-  defp gate_size(count, _opts) when count <= @max_audio_bytes, do: :ok
-
-  defp gate_size(count, opts) do
-    {:error,
-     TranscriptionAdapterError.new(:invalid_request,
-       provider: :gemini,
-       message: "audio is #{count} bytes, over max_audio_bytes #{@max_audio_bytes}",
-       metadata: build_metadata(%{field: :audio, count: count, max: @max_audio_bytes}, opts)
-     )}
-  end
 
   # The gate and `to_json_body/2` share this, so the body builder can never
   # send a MIME type the gate would refuse.
@@ -455,31 +432,8 @@ defmodule ALLM.Providers.Gemini.Transcription do
          message:
            "audio :mime_type #{inspect(mime)} is not a type Gemini accepts " <>
              "(#{Enum.join(@accepted_mimes, ", ")})",
-         metadata: build_metadata(%{field: :audio, mime_type: mime}, opts)
+         metadata: HTTPResponse.build_metadata(%{field: :audio, mime_type: mime}, opts)
        )}
-    end
-  end
-
-  defp unresolvable_error(cause, opts) do
-    TranscriptionAdapterError.new(:invalid_request,
-      provider: :gemini,
-      message: "audio bytes could not be resolved (#{inspect(cause)})",
-      metadata: build_metadata(%{field: :audio, cause: cause}, opts)
-    )
-  end
-
-  defp stub_error(opts) do
-    TranscriptionAdapterError.new(:unknown,
-      provider: :gemini,
-      message: "prepare_request/2 has no analogue under the transcription_script short-circuit",
-      metadata: build_metadata(%{}, opts)
-    )
-  end
-
-  defp build_metadata(metadata, opts) when is_map(metadata) do
-    case Keyword.get(opts, :request_id) do
-      nil -> metadata
-      request_id -> Map.put(metadata, :request_id, request_id)
     end
   end
 
@@ -487,16 +441,14 @@ defmodule ALLM.Providers.Gemini.Transcription do
   # Internals — dispatch (one attempt, no retry loop)
   # ---------------------------------------------------------------------------
 
-  defp do_transcribe(%TranscriptionRequest{} = request, opts) do
-    with :ok <- gate_audio(request, opts),
-         {:ok, http_req} <- build_request(request, opts) do
-      run_one_attempt(http_req, request, opts)
-    end
-  end
-
+  @doc false
   # `Keys.fetch!/2` raises `%EngineError{reason: :missing_key}` by documented
-  # design and is not rescued. It runs AFTER `gate_audio/2`.
-  defp build_request(%TranscriptionRequest{} = request, opts) do
+  # design and is not rescued. It runs AFTER `gate_audio/2`. Public only so
+  # `ALLM.Providers.Support.TranscriptionAdapter.do_transcribe/4` can call it.
+  @impl ALLM.Providers.Support.TranscriptionAdapter
+  @spec build_request(TranscriptionRequest.t(), keyword()) ::
+          {:ok, Req.Request.t()} | {:error, TranscriptionAdapterError.t()}
+  def build_request(%TranscriptionRequest{} = request, opts) do
     api_key = Keys.fetch!(:gemini, opts)
 
     with {:ok, body} <- to_json_body(request, opts) do
@@ -509,8 +461,8 @@ defmodule ALLM.Providers.Gemini.Transcription do
           # One attempt per call: Req's own retry step must not re-upload.
           retry: false
         )
-        |> maybe_apply_req_test_stub(opts)
-        |> apply_receive_timeout(opts)
+        |> HTTPResponse.maybe_apply_req_test_stub(opts)
+        |> HTTPResponse.apply_receive_timeout(opts, @default_timeout_ms)
 
       {:ok, req}
     end
@@ -532,69 +484,9 @@ defmodule ALLM.Providers.Gemini.Transcription do
     end
   end
 
-  defp maybe_apply_req_test_stub(req, opts) do
-    case opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  # Named after the OpenAI audio adapters' helper, not the family's
-  # `maybe_apply_request_timeout/2`: without `opts[:request_timeout]` it
-  # applies `@default_timeout_ms` rather than leaving `req` unchanged.
-  defp apply_receive_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
-      _ -> Req.merge(req, receive_timeout: @default_timeout_ms)
-    end
-  end
-
-  defp run_one_attempt(http_req, request, opts) do
-    case Req.request(http_req) do
-      {:ok, %Req.Response{status: status, body: body, headers: headers}}
-      when status in 200..299 ->
-        decode_response(body, headers, request, opts)
-
-      {:ok, %Req.Response{status: status, body: body, headers: headers}} ->
-        {:error, to_transcription_adapter_error(status, body, headers, opts)}
-
-      {:error, %{__struct__: Req.TransportError, reason: :timeout} = cause} ->
-        {:error, transport_error(:timeout, "request timed out", cause, opts)}
-
-      {:error, %{__struct__: Jason.DecodeError} = cause} ->
-        {:error,
-         %{malformed_error("response body is not valid JSON", opts) | cause: sanitize_cause(cause)}}
-
-      {:error, exception} ->
-        {:error,
-         transport_error(
-           :network_error,
-           "transport failure: " <> Exception.message(exception),
-           exception,
-           opts
-         )}
-    end
-  end
-
-  defp transport_error(reason, message, cause, opts) do
-    TranscriptionAdapterError.new(reason,
-      provider: :gemini,
-      message: message,
-      cause: sanitize_cause(cause),
-      metadata: build_metadata(%{}, opts)
-    )
-  end
-
   # ---------------------------------------------------------------------------
   # Internals — request body
   # ---------------------------------------------------------------------------
-
-  defp resolve_bytes(%Audio{} = audio, opts) do
-    case Audio.to_binary(audio) do
-      {:ok, bytes} -> {:ok, bytes}
-      {:error, cause} -> {:error, unresolvable_error(cause, opts)}
-    end
-  end
 
   defp instruction_text(%TranscriptionRequest{language: language, prompt: prompt}) do
     @transcription_instruction <> language_hint(language) <> prompt_block(prompt)
@@ -679,15 +571,20 @@ defmodule ALLM.Providers.Gemini.Transcription do
     TranscriptionAdapterError.new(:content_filter,
       provider: :gemini,
       message: message,
-      metadata: build_metadata(metadata, opts)
+      metadata: HTTPResponse.build_metadata(metadata, opts)
     )
   end
 
-  defp malformed_error(detail, opts) do
+  @doc false
+  # Public only so `ALLM.Providers.Support.TranscriptionAdapter.run_one_attempt/5`
+  # can build the invalid-JSON error with this adapter's message.
+  @impl ALLM.Providers.Support.TranscriptionAdapter
+  @spec malformed_error(String.t(), keyword()) :: TranscriptionAdapterError.t()
+  def malformed_error(detail, opts) do
     TranscriptionAdapterError.new(:malformed_response,
       provider: :gemini,
       message: "could not decode Gemini transcription response: " <> detail,
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
   end
 
@@ -708,25 +605,6 @@ defmodule ALLM.Providers.Gemini.Transcription do
 
   defp api_key_invalid?(_error), do: false
 
-  defp decode_error_body(body) when is_map(body), do: body
-
-  defp decode_error_body(body) when is_binary(body) do
-    case Jason.decode(body) do
-      {:ok, decoded} when is_map(decoded) -> decoded
-      _ -> %{}
-    end
-  end
-
-  defp decode_error_body(_body), do: %{}
-
-  defp error_object(body) do
-    case Map.get(body, "error") do
-      e when is_map(e) -> e
-      e when is_binary(e) -> %{"message" => e}
-      _ -> %{}
-    end
-  end
-
   defp provider_message(error, status) do
     case Map.get(error, "message") do
       m when is_binary(m) -> redact_key_material(m)
@@ -736,13 +614,6 @@ defmodule ALLM.Providers.Gemini.Transcription do
 
   defp redact_optional(value) when is_binary(value), do: redact_key_material(value)
   defp redact_optional(_value), do: nil
-
-  # `Jason.DecodeError` carries the undecodable payload on `:data`; blanking
-  # only that leaves `message/1` raising on the stale offset.
-  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause),
-    do: %{cause | data: "", position: 0, token: nil}
-
-  defp sanitize_cause(cause), do: cause
 
   # Inherited from `ALLM.Providers.Gemini.Embeddings`: same provider, same
   # Google credential shapes (`AIza…` API keys and `ya29.…` OAuth tokens).

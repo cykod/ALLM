@@ -147,6 +147,7 @@ defmodule ALLM.Providers.Gemini do
   alias ALLM.Message
   alias ALLM.Providers.Gemini.Decode
   alias ALLM.Providers.Support.GeminiHeaders
+  alias ALLM.Providers.Support.HTTPResponse
   alias ALLM.Providers.Support.SSE
   alias ALLM.Providers.Support.Transport
   alias ALLM.Request
@@ -216,8 +217,8 @@ defmodule ALLM.Providers.Gemini do
         headers: GeminiHeaders.headers(api_key),
         json: body
       )
-      |> maybe_apply_req_test_stub(opts)
-      |> maybe_apply_request_timeout(opts)
+      |> HTTPResponse.maybe_apply_req_test_stub(opts)
+      |> HTTPResponse.maybe_apply_request_timeout(opts)
 
     {:ok, req}
   end
@@ -226,20 +227,6 @@ defmodule ALLM.Providers.Gemini do
     case Keyword.get(opts, :adapter_opts, []) |> Keyword.get(:endpoint) do
       nil -> @base_url
       url when is_binary(url) -> url
-    end
-  end
-
-  defp maybe_apply_req_test_stub(req, opts) do
-    case Keyword.get(opts, :adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  defp maybe_apply_request_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      nil -> req
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
     end
   end
 
@@ -382,7 +369,7 @@ defmodule ALLM.Providers.Gemini do
   end
 
   defp classify_http_error(status, body, headers) do
-    decoded = decode_error_body(body)
+    decoded = HTTPResponse.decode_error_body(body)
     classified = classify_error(status, decoded, headers)
 
     if classified.reason in [:rate_limited, :provider_unavailable, :timeout] do
@@ -392,14 +379,11 @@ defmodule ALLM.Providers.Gemini do
           metadata: Map.put(classified.metadata, :final_error, classified)
         )
 
-      {:retry, retry_after_ms(headers) || 0, retry_token}
+      {:retry, HTTPResponse.retry_after_ms(headers) || 0, retry_token}
     else
       {:error, classified}
     end
   end
-
-  defp decode_error_body(body) when is_map(body), do: body
-  defp decode_error_body(_), do: %{}
 
   @doc false
   @spec classify_error(non_neg_integer(), map(), Enumerable.t()) :: AdapterError.t()
@@ -409,7 +393,7 @@ defmodule ALLM.Providers.Gemini do
     message = Map.get(error, "message", "Gemini HTTP #{status}")
 
     reason = classify_reason(status, google_status, message)
-    retry_after = retry_after_ms(headers)
+    retry_after = HTTPResponse.retry_after_ms(headers)
 
     AdapterError.new(reason,
       provider: :gemini,
@@ -444,51 +428,6 @@ defmodule ALLM.Providers.Gemini do
     String.contains?(msg, "exceeds the maximum number of tokens") or
       String.contains?(msg, "input token count")
   end
-
-  # Parse `Retry-After` header per RFC 7231 §7.1.3. Decision #16 amendment:
-  # `Retry-After` parsing is a separate concern from the retry-policy
-  # wrapper choice — even though Gemini uses the default policy, the
-  # adapter still honors server-issued back-off hints. Mirrors
-  # `lib/allm/providers/anthropic.ex:515-547` and
-  # `lib/allm/providers/openai.ex:690-737`.
-  defp retry_after_ms(headers) do
-    case header_value(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_map(headers) do
-    case Map.get(headers, name) do
-      nil -> nil
-      value -> header_value_to_string(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_list(headers) do
-    Enum.find_value(headers, fn
-      {k, v} when is_binary(k) ->
-        if String.downcase(k) == name, do: header_value_to_string(v), else: nil
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp header_value(_headers, _name), do: nil
-
-  defp header_value_to_string([v | _]) when is_binary(v), do: v
-  defp header_value_to_string(v) when is_binary(v), do: v
-  defp header_value_to_string(_), do: nil
-
-  defp parse_retry_after(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds * 1_000
-      _ -> nil
-    end
-  end
-
-  defp parse_retry_after(_), do: nil
 
   # ---------------------------------------------------------------------------
   # Request-body composition (Decision #1 — single translator)

@@ -145,7 +145,9 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Support.OpenAIHeaders,
           ALLM.Providers.Support.GeminiHeaders,
           ALLM.Providers.Support.ImageMime,
-          ALLM.Providers.Support.Transport
+          ALLM.Providers.Support.Transport,
+          ALLM.Providers.Support.HTTPResponse,
+          ALLM.Providers.Support.TranscriptionAdapter
         ],
         Defaults: [
           ALLM.ToolExecutor.Default,

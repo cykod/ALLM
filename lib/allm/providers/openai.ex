@@ -164,6 +164,7 @@ defmodule ALLM.Providers.OpenAI do
   alias ALLM.ImagePart
   alias ALLM.Keys
   alias ALLM.Message
+  alias ALLM.Providers.Support.HTTPResponse
   alias ALLM.Providers.Support.ImageMime
   alias ALLM.Providers.Support.OpenAIHeaders
   alias ALLM.Providers.Support.SSE
@@ -444,32 +445,14 @@ defmodule ALLM.Providers.OpenAI do
         headers: OpenAIHeaders.json_headers(api_key, opts),
         json: body
       )
-      |> maybe_apply_req_test_stub(opts)
-      |> maybe_apply_request_timeout(opts)
+      |> HTTPResponse.maybe_apply_req_test_stub(opts)
+      |> HTTPResponse.maybe_apply_request_timeout(opts)
 
     {:ok, req}
   end
 
   defp path_for(:chat_completions), do: "/chat/completions"
   defp path_for(:responses), do: "/responses"
-
-  # `Req.Test.stub` integration: if `adapter_opts[:plug]` is supplied (a
-  # `Req.Test` stub atom or `{Req.Test, atom}` tuple), wire it into the
-  # request via `Req.merge/2`. Used exclusively by
-  # `test/allm/providers/openai_wire_test.exs`.
-  defp maybe_apply_req_test_stub(req, opts) do
-    case Keyword.get(opts, :adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  defp maybe_apply_request_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      nil -> req
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
-    end
-  end
 
   @impl ALLM.Adapter
   @doc """
@@ -629,7 +612,7 @@ defmodule ALLM.Providers.OpenAI do
   # `:provider_unavailable`) is restored on the FINAL attempt's `{:error, _}`
   # surface via the `final_error:` metadata key.
   defp classify_http_error(status, body, headers) do
-    decoded = decode_error_body(body)
+    decoded = HTTPResponse.decode_error_body(body)
     classified = from_openai_error(status, decoded, headers)
 
     if classified.reason in [:rate_limited, :provider_unavailable, :timeout] do
@@ -639,18 +622,11 @@ defmodule ALLM.Providers.OpenAI do
           metadata: Map.put(classified.metadata, :final_error, classified)
         )
 
-      {:retry, retry_after_ms(headers) || 0, retry_token}
+      {:retry, HTTPResponse.retry_after_ms(headers) || 0, retry_token}
     else
       {:error, classified}
     end
   end
-
-  # Req auto-decodes JSON error bodies, so we usually receive a map. Any
-  # non-map (empty body, plain-text error page, malformed JSON Req surfaced
-  # via its content-type fallback) collapses to `%{}` so `from_openai_error/3`
-  # can apply its status-only classifier without crashing.
-  defp decode_error_body(body) when is_map(body), do: body
-  defp decode_error_body(_), do: %{}
 
   @doc false
   @spec from_openai_error(non_neg_integer(), map(), Enumerable.t()) :: AdapterError.t()
@@ -662,7 +638,7 @@ defmodule ALLM.Providers.OpenAI do
     message = Map.get(error, "message", "OpenAI HTTP #{status}")
 
     {reason, retry_after} =
-      classify_reason(status, code, type, retry_after_ms(headers))
+      classify_reason(status, code, type, HTTPResponse.retry_after_ms(headers))
 
     AdapterError.new(reason,
       provider: :openai,
@@ -694,57 +670,6 @@ defmodule ALLM.Providers.OpenAI do
     do: {:provider_unavailable, ra}
 
   defp classify_reason(_status, _code, _type, _ra), do: {:unknown, nil}
-
-  # Parse `Retry-After` header per RFC 7231 §7.1.3. Accepts seconds (int)
-  # or HTTP-date; returns ms-from-now or `nil` when absent/unparseable.
-  defp retry_after_ms(headers) do
-    case header_value(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after(value)
-    end
-  end
-
-  # Req 0.5+ exposes response headers as `%{lowercase_name => [value, ...]}`;
-  # raw transport callbacks may hand us a kwlist or a 2-tuple list. Both
-  # shapes are handled.
-  defp header_value(headers, name) when is_map(headers) do
-    case Map.get(headers, name) do
-      nil -> nil
-      value -> header_value_to_string(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_list(headers) do
-    Enum.find_value(headers, fn
-      {k, v} when is_binary(k) ->
-        if String.downcase(k) == name, do: header_value_to_string(v), else: nil
-
-      _ ->
-        nil
-    end)
-  end
-
-  # Req's header-map values are lists of binaries; raw HTTP libs may hand
-  # us a single binary. Take the first when it's a list.
-  defp header_value_to_string([v | _]) when is_binary(v), do: v
-  defp header_value_to_string(v) when is_binary(v), do: v
-
-  # Per RFC 7231 §7.1.3, Retry-After is either delta-seconds (integer) or
-  # an HTTP-date. OpenAI returns delta-seconds in practice (per the live
-  # API docs accessed 2026-04-26); we accept the integer form and parse
-  # the HTTP-date form via Erlang's `:calendar` if a future provider
-  # adopts the date form. Unparseable values return `nil` and the retry
-  # loop falls back to its computed exponential backoff.
-  defp parse_retry_after(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds * 1_000
-      _ -> parse_http_date(value)
-    end
-  end
-
-  # IMF-fixdate parser without `:inets` dep — handles the most common
-  # `"Sun, 06 Nov 1994 08:49:37 GMT"` form. Unrecognized formats → nil.
-  defp parse_http_date(_value), do: nil
 
   defp build_retry_telemetry_meta(opts) do
     %{provider: :openai}

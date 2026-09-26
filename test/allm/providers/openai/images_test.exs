@@ -1492,6 +1492,16 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
       assert body["response_format"] == "b64_json"
     end
 
+    test "applies opts[:request_timeout] as :receive_timeout, and leaves it unset without one" do
+      req = ImageRequest.new(operation: :generate, prompt: "a kestrel", model: "dall-e-2")
+
+      assert {:ok, http} = Images.prepare_request(req, api_key: "sk-prep", request_timeout: 1234)
+      assert http.options[:receive_timeout] == 1234
+
+      assert {:ok, http} = Images.prepare_request(req, api_key: "sk-prep")
+      refute Map.has_key?(http.options, :receive_timeout)
+    end
+
     test "operation-gate failure surfaces from prepare_request/2 too" do
       req = %ImageRequest{operation: :foo, prompt: "x"}
 

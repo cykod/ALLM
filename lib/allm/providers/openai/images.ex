@@ -142,7 +142,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   alias ALLM.Error.ImageAdapterError
   alias ALLM.{Image, ImageRequest, ImageResponse, ImageUsage, Keys, Retry}
   alias ALLM.Providers.FakeImages
-  alias ALLM.Providers.Support.OpenAIHeaders
+  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders}
 
   @base_url "https://api.openai.com/v1"
 
@@ -260,8 +260,8 @@ defmodule ALLM.Providers.OpenAI.Images do
   Return an unfired `Req.Request` configured exactly as `generate/2`
   would fire it.
 
-  Mirrors the chat-adapter `prepare_request/2` shape at
-  `lib/allm/providers/openai.ex:411-435`. The `:generate` and `:edit`
+  Mirrors the chat-adapter `prepare_request/2` shape in
+  `lib/allm/providers/openai.ex`. The `:generate` and `:edit`
   operations are both supported.
 
   When `opts[:adapter_opts][:image_script]` is set, `prepare_request/2`
@@ -364,7 +364,7 @@ defmodule ALLM.Providers.OpenAI.Images do
        ImageAdapterError.new(:unsupported_operation,
          provider: :openai,
          message: "operation #{inspect(op)} not supported by adapter",
-         metadata: build_metadata(%{operation: op}, opts)
+         metadata: HTTPResponse.build_metadata(%{operation: op}, opts)
        )}
     end
   end
@@ -376,7 +376,7 @@ defmodule ALLM.Providers.OpenAI.Images do
 
       {:error, %ImageAdapterError{} = err} ->
         # Stamp request_id onto metadata uniformly per Invariant 3.
-        {:error, %{err | metadata: build_metadata(err.metadata, opts)}}
+        {:error, %{err | metadata: HTTPResponse.build_metadata(err.metadata, opts)}}
     end
   end
 
@@ -385,7 +385,7 @@ defmodule ALLM.Providers.OpenAI.Images do
      ImageAdapterError.new(:invalid_request,
        provider: :openai,
        message: "gpt-image-1 only returns base64; request response_format: :base64 or :binary",
-       metadata: build_metadata(%{model: "gpt-image-1", response_format: :url}, opts)
+       metadata: HTTPResponse.build_metadata(%{model: "gpt-image-1", response_format: :url}, opts)
      )}
   end
 
@@ -395,18 +395,8 @@ defmodule ALLM.Providers.OpenAI.Images do
     ImageAdapterError.new(:unknown,
       provider: :openai,
       message: "operation pending implementation",
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
-  end
-
-  # Per Invariant 3: when `opts[:request_id]` is present, every error
-  # surfaced from this adapter carries it on `metadata[:request_id]` —
-  # whether the failure is a pre-flight gate or an HTTP path.
-  defp build_metadata(metadata, opts) when is_map(metadata) do
-    case Keyword.get(opts, :request_id) do
-      nil -> metadata
-      request_id -> Map.put(metadata, :request_id, request_id)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -475,24 +465,10 @@ defmodule ALLM.Providers.OpenAI.Images do
         headers: OpenAIHeaders.json_headers(api_key, opts),
         json: body
       )
-      |> maybe_apply_req_test_stub(opts)
-      |> maybe_apply_request_timeout(opts)
+      |> HTTPResponse.maybe_apply_req_test_stub(opts)
+      |> HTTPResponse.maybe_apply_request_timeout(opts)
 
     {:ok, req}
-  end
-
-  defp maybe_apply_req_test_stub(req, opts) do
-    case opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  defp maybe_apply_request_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      nil -> req
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -521,8 +497,8 @@ defmodule ALLM.Providers.OpenAI.Images do
             headers: OpenAIHeaders.multipart_headers(api_key, opts),
             form_multipart: form
           )
-          |> maybe_apply_req_test_stub(opts)
-          |> maybe_apply_request_timeout(opts)
+          |> HTTPResponse.maybe_apply_req_test_stub(opts)
+          |> HTTPResponse.maybe_apply_request_timeout(opts)
 
         {:ok, req}
 
@@ -747,7 +723,7 @@ defmodule ALLM.Providers.OpenAI.Images do
         {:ok, Enum.reverse(list)}
 
       {:error, %ImageAdapterError{} = err} ->
-        {:error, %{err | metadata: build_metadata(err.metadata, opts)}}
+        {:error, %{err | metadata: HTTPResponse.build_metadata(err.metadata, opts)}}
     end
   end
 
@@ -944,7 +920,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   end
 
   defp classify_url_response(url, body, headers) when is_binary(body) do
-    content_type = header_value(headers, "content-type") || ""
+    content_type = HTTPResponse.header_value(headers, "content-type") || ""
     normalized_ct = content_type |> String.split(";") |> List.first() |> String.trim()
 
     cond do
@@ -1007,7 +983,7 @@ defmodule ALLM.Providers.OpenAI.Images do
             provider: :openai,
             message: "request timed out",
             cause: sanitize_cause(cause),
-            metadata: build_metadata(%{}, opts)
+            metadata: HTTPResponse.build_metadata(%{}, opts)
           )
 
         {:retry, 0, err}
@@ -1021,7 +997,7 @@ defmodule ALLM.Providers.OpenAI.Images do
             provider: :openai,
             message: "transport failure: " <> Exception.message(exception),
             cause: sanitize_cause(exception),
-            metadata: build_metadata(%{}, opts)
+            metadata: HTTPResponse.build_metadata(%{}, opts)
           )
 
         {:retry, 0, err}
@@ -1029,7 +1005,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   end
 
   defp classify_http_error(status, body, headers, opts) do
-    decoded = decode_error_body(body)
+    decoded = HTTPResponse.decode_error_body(body)
     classified = to_image_adapter_error(status, decoded, headers, opts)
 
     if classified.reason in [:rate_limited, :provider_unavailable] do
@@ -1039,9 +1015,6 @@ defmodule ALLM.Providers.OpenAI.Images do
       {:error, classified}
     end
   end
-
-  defp decode_error_body(body) when is_map(body), do: body
-  defp decode_error_body(_), do: %{}
 
   # ---------------------------------------------------------------------------
   # Internals — error mapping (error contract table)
@@ -1063,12 +1036,13 @@ defmodule ALLM.Providers.OpenAI.Images do
     message = error |> Map.get("message", "OpenAI HTTP #{status}") |> redact_key_material()
 
     base_metadata =
-      build_metadata(
+      HTTPResponse.build_metadata(
         %{status: status, openai_code: code, openai_type: type},
         opts
       )
 
-    {reason, retry_after} = classify_image_reason(status, code, type, retry_after_ms(headers))
+    {reason, retry_after} =
+      classify_image_reason(status, code, type, HTTPResponse.retry_after_ms(headers))
 
     ImageAdapterError.new(reason,
       provider: :openai,
@@ -1104,7 +1078,7 @@ defmodule ALLM.Providers.OpenAI.Images do
       provider: :openai,
       message: "could not parse OpenAI response: body is not valid JSON",
       cause: sanitize_cause(cause),
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
   end
 
@@ -1152,58 +1126,6 @@ defmodule ALLM.Providers.OpenAI.Images do
   # Internals — Retry-After header parsing
   # ---------------------------------------------------------------------------
 
-  defp retry_after_ms(headers) do
-    case header_value(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_map(headers) do
-    case Map.get(headers, name) do
-      nil -> nil
-      value -> header_value_to_string(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_list(headers) do
-    Enum.find_value(headers, fn
-      {k, v} when is_binary(k) ->
-        if String.downcase(k) == name, do: header_value_to_string(v), else: nil
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp header_value(_headers, _name), do: nil
-
-  defp header_value_to_string([v | _]) when is_binary(v), do: v
-  defp header_value_to_string(v) when is_binary(v), do: v
-  defp header_value_to_string(_), do: nil
-
-  # Per RFC 7231 §7.1.3, Retry-After is either delta-seconds (integer) or
-  # an HTTP-date. OpenAI returns delta-seconds in practice (per the live
-  # API docs accessed 2026-04-26); we accept the integer form and route
-  # the HTTP-date form through `parse_http_date/1` for structural parity
-  # with the chat adapter (`lib/allm/providers/openai.ex:700-709`).
-  # Unparseable values return `nil` and the retry loop falls back to its
-  # computed exponential backoff.
-  defp parse_retry_after(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds * 1_000
-      _ -> parse_http_date(value)
-    end
-  end
-
-  defp parse_retry_after(_), do: nil
-
-  # IMF-fixdate parser stub — same shape as the chat adapter's
-  # `parse_http_date/1` at `lib/allm/providers/openai.ex:709`. v0.3 returns
-  # `nil` for HTTP-date forms on both adapters; future work can fill in
-  # `:calendar`-based parsing without changing the surrounding contract.
-  defp parse_http_date(_value), do: nil
-
   defp build_retry_telemetry_meta(opts) do
     %{provider: :openai}
     |> maybe_put_meta(:request_id, Keyword.get(opts, :request_id))
@@ -1232,7 +1154,7 @@ defmodule ALLM.Providers.OpenAI.Images do
            provider: :openai,
            status: 200,
            message: "OpenAI returned no images (likely content-policy filter)",
-           metadata: build_metadata(%{status: 200}, opts)
+           metadata: HTTPResponse.build_metadata(%{status: 200}, opts)
          )}
 
       {:ok, images} ->
@@ -1261,7 +1183,7 @@ defmodule ALLM.Providers.OpenAI.Images do
      ImageAdapterError.new(:malformed_response,
        provider: :openai,
        message: "could not parse OpenAI response: missing or non-list :data field",
-       metadata: build_metadata(%{}, opts)
+       metadata: HTTPResponse.build_metadata(%{}, opts)
      )}
   end
 
@@ -1270,7 +1192,7 @@ defmodule ALLM.Providers.OpenAI.Images do
      ImageAdapterError.new(:malformed_response,
        provider: :openai,
        message: "could not parse OpenAI response: non-JSON body",
-       metadata: build_metadata(%{}, opts)
+       metadata: HTTPResponse.build_metadata(%{}, opts)
      )}
   end
 
@@ -1419,7 +1341,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   end
 
   defp maybe_put_openai_request_id(map, headers) do
-    case header_value(headers, "x-request-id") do
+    case HTTPResponse.header_value(headers, "x-request-id") do
       nil -> map
       value when is_binary(value) -> Map.put_new(map, :openai_request_id, value)
     end

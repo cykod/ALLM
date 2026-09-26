@@ -171,7 +171,7 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
   alias ALLM.{Embedding, EmbeddingRequest, EmbeddingResponse, Keys, Retry, Usage}
   alias ALLM.Error.EmbeddingAdapterError
   alias ALLM.Providers.FakeEmbeddings
-  alias ALLM.Providers.Support.OpenAIHeaders
+  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders}
 
   @base_url "https://api.openai.com/v1"
   @endpoint "/embeddings"
@@ -294,9 +294,11 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
   #   IDENTICAL to the image adapter (byte-for-byte modulo arity):
   #   * `decode_response/4`            ↔ openai/images.ex `decode_response/4`
   #   * `to_json_body/2`               ↔ openai/images.ex `to_json_body/2`
-  #   * private `build_metadata/2`, `run_one_attempt/3`, `classify_http_error/4`,
-  #     `retry_after_ms/1`, `stub_error/1`, `maybe_apply_req_test_stub/2`,
-  #     `maybe_apply_request_timeout/2`, `user_pair/1`
+  #   * private `run_one_attempt/3`, `classify_http_error/4`, `stub_error/1`,
+  #     `user_pair/1`
+  #   * `build_metadata/2`, `retry_after_ms/1`, `maybe_apply_req_test_stub/2`
+  #     and `maybe_apply_request_timeout/2` are shared, from
+  #     `ALLM.Providers.Support.HTTPResponse`
   #
   #   RENAMED for the embeddings family (per-capability, not per-provider):
   #   * `to_embedding_adapter_error/4` ↔ images' `to_image_adapter_error/4`
@@ -314,12 +316,6 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
   #   * `gate_dimensions_support/2` is OpenAI-only — it encodes the
   #     `text-embedding-3`-and-later `dimensions` rule. Gemini and Voyage
   #     express their own feature gates under the same `gate_*/2` prefix.
-  #   * `parse_retry_after/1` returns `nil` INLINE for an unparseable value,
-  #     where `openai/images.ex` and `openai.ex` fall through to a
-  #     `parse_http_date/1` stub that also returns `nil` today. Behaviour is
-  #     identical; the seam is deliberately omitted here so there is no dead
-  #     private function. If that stub is ever implemented, this clause has to
-  #     be updated with it — same for 20.5 / 20.6.
   #   * `redact_key_material/1`'s pattern is OpenAI-prefix-specific
   #     (`sk-` / `rk-` / `org-`), which is correct scoping because the redacted
   #     text comes from OpenAI. `ALLM.Providers.Gemini.Embeddings` (`AIza…`)
@@ -366,14 +362,16 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
       |> Map.get("message", "OpenAI HTTP #{status}")
       |> redact_key_material()
 
-    {reason, retry_after} = classify_embedding_reason(status, code, type, retry_after_ms(headers))
+    {reason, retry_after} =
+      classify_embedding_reason(status, code, type, HTTPResponse.retry_after_ms(headers))
 
     EmbeddingAdapterError.new(reason,
       provider: :openai,
       status: status,
       retry_after_ms: retry_after,
       message: message,
-      metadata: build_metadata(%{status: status, openai_code: code, openai_type: type}, opts)
+      metadata:
+        HTTPResponse.build_metadata(%{status: status, openai_code: code, openai_type: type}, opts)
     )
   end
 
@@ -389,7 +387,8 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
         {:ok,
          %EmbeddingResponse{
            id: Map.get(body, "id"),
-           request_id: Keyword.get(opts, :request_id) || header_value(headers, "x-request-id"),
+           request_id:
+             Keyword.get(opts, :request_id) || HTTPResponse.header_value(headers, "x-request-id"),
            model: Map.get(body, "model") || request.model,
            # Sorted here, not at the call site: OpenAI documents `index`
            # precisely because array order is not contractual.
@@ -443,7 +442,7 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
      EmbeddingAdapterError.new(:invalid_request,
        provider: :openai,
        message: "input must not be empty",
-       metadata: build_metadata(%{field: :input}, opts)
+       metadata: HTTPResponse.build_metadata(%{field: :input}, opts)
      )}
   end
 
@@ -458,7 +457,7 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
        EmbeddingAdapterError.new(:batch_too_large,
          provider: :openai,
          message: "input count #{count} exceeds max_batch_size #{max}",
-         metadata: build_metadata(%{count: count, max: max}, opts)
+         metadata: HTTPResponse.build_metadata(%{count: count, max: max}, opts)
        )}
     else
       :ok
@@ -477,7 +476,7 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
      EmbeddingAdapterError.new(:invalid_request,
        provider: :openai,
        message: "input must be a list of strings",
-       metadata: build_metadata(%{field: :input}, opts)
+       metadata: HTTPResponse.build_metadata(%{field: :input}, opts)
      )}
   end
 
@@ -489,7 +488,7 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
      EmbeddingAdapterError.new(:unsupported_feature,
        provider: :openai,
        message: "model #{inspect(model)} does not support reduced output dimensions",
-       metadata: build_metadata(%{feature: :dimensions, model: model}, opts)
+       metadata: HTTPResponse.build_metadata(%{feature: :dimensions, model: model}, opts)
      )}
   end
 
@@ -499,17 +498,8 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
     EmbeddingAdapterError.new(:unknown,
       provider: :openai,
       message: "prepare_request/2 has no analogue under the embedding_script short-circuit",
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
-  end
-
-  # Every error this adapter surfaces carries `opts[:request_id]` on its
-  # metadata, whether it came from a pre-flight gate or from the HTTP path.
-  defp build_metadata(metadata, opts) when is_map(metadata) do
-    case Keyword.get(opts, :request_id) do
-      nil -> metadata
-      request_id -> Map.put(metadata, :request_id, request_id)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -541,24 +531,10 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
         headers: OpenAIHeaders.json_headers(api_key, opts),
         json: to_json_body(request, opts)
       )
-      |> maybe_apply_req_test_stub(opts)
-      |> maybe_apply_request_timeout(opts)
+      |> HTTPResponse.maybe_apply_req_test_stub(opts)
+      |> HTTPResponse.maybe_apply_request_timeout(opts)
 
     {:ok, req}
-  end
-
-  defp maybe_apply_req_test_stub(req, opts) do
-    case opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  defp maybe_apply_request_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      nil -> req
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -621,7 +597,7 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
            provider: :openai,
            message: "request timed out",
            cause: sanitize_cause(cause),
-           metadata: build_metadata(%{}, opts)
+           metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
 
       {:error, %{__struct__: Jason.DecodeError} = cause} ->
@@ -634,13 +610,14 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
            provider: :openai,
            message: "transport failure: " <> Exception.message(exception),
            cause: sanitize_cause(exception),
-           metadata: build_metadata(%{}, opts)
+           metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
     end
   end
 
   defp classify_http_error(status, body, headers, opts) do
-    classified = to_embedding_adapter_error(status, decode_error_body(body), headers, opts)
+    classified =
+      to_embedding_adapter_error(status, HTTPResponse.decode_error_body(body), headers, opts)
 
     if classified.reason in [:rate_limited, :provider_unavailable] do
       {:retry, classified.retry_after_ms || 0, classified}
@@ -648,9 +625,6 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
       {:error, classified}
     end
   end
-
-  defp decode_error_body(body) when is_map(body), do: body
-  defp decode_error_body(_body), do: %{}
 
   # ---------------------------------------------------------------------------
   # Internals — error mapping
@@ -678,7 +652,7 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
       provider: :openai,
       message: "could not parse OpenAI embeddings response: " <> detail,
       cause: cause,
-      metadata: build_metadata(metadata, opts)
+      metadata: HTTPResponse.build_metadata(metadata, opts)
     )
   end
 
@@ -701,48 +675,6 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
   # ---------------------------------------------------------------------------
   # Internals — headers
   # ---------------------------------------------------------------------------
-
-  defp retry_after_ms(headers) do
-    case header_value(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_map(headers) do
-    case Map.get(headers, name) do
-      nil -> nil
-      value -> header_value_to_string(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_list(headers) do
-    Enum.find_value(headers, fn
-      {k, v} when is_binary(k) ->
-        if String.downcase(k) == name, do: header_value_to_string(v), else: nil
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp header_value(_headers, _name), do: nil
-
-  defp header_value_to_string([v | _]) when is_binary(v), do: v
-  defp header_value_to_string(v) when is_binary(v), do: v
-  defp header_value_to_string(_v), do: nil
-
-  # Per RFC 7231 §7.1.3 `Retry-After` is delta-seconds or an HTTP-date. OpenAI
-  # sends delta-seconds; an unparseable value returns `nil` and the retry loop
-  # falls back to its computed exponential backoff.
-  defp parse_retry_after(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds * 1_000
-      _ -> nil
-    end
-  end
-
-  defp parse_retry_after(_value), do: nil
 
   defp build_retry_telemetry_meta(opts) do
     case Keyword.get(opts, :request_id) do

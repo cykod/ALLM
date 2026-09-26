@@ -183,6 +183,7 @@ defmodule ALLM.Providers.Anthropic do
   alias ALLM.ImagePart
   alias ALLM.Keys
   alias ALLM.Message
+  alias ALLM.Providers.Support.HTTPResponse
   alias ALLM.Providers.Support.ImageMime
   alias ALLM.Providers.Support.SSE
   alias ALLM.Providers.Support.Transport
@@ -265,8 +266,8 @@ defmodule ALLM.Providers.Anthropic do
         headers: build_headers(api_key),
         json: body
       )
-      |> maybe_apply_req_test_stub(opts)
-      |> maybe_apply_request_timeout(opts)
+      |> HTTPResponse.maybe_apply_req_test_stub(opts)
+      |> HTTPResponse.maybe_apply_request_timeout(opts)
 
     {:ok, req}
   end
@@ -277,20 +278,6 @@ defmodule ALLM.Providers.Anthropic do
       {"anthropic-version", @anthropic_version},
       {"content-type", "application/json"}
     ]
-  end
-
-  defp maybe_apply_req_test_stub(req, opts) do
-    case Keyword.get(opts, :adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  defp maybe_apply_request_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      nil -> req
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
-    end
   end
 
   @impl ALLM.Adapter
@@ -442,7 +429,7 @@ defmodule ALLM.Providers.Anthropic do
   # 4xx/5xx classifier per the design's Error Contract table. Decision #2
   # adds 529 to the retryable set.
   defp classify_http_error(status, body, headers) do
-    decoded = decode_error_body(body)
+    decoded = HTTPResponse.decode_error_body(body)
     classified = from_anthropic_error(status, decoded, headers)
 
     if classified.reason in [:rate_limited, :provider_unavailable, :timeout] do
@@ -452,14 +439,11 @@ defmodule ALLM.Providers.Anthropic do
           metadata: Map.put(classified.metadata, :final_error, classified)
         )
 
-      {:retry, retry_after_ms(headers) || 0, retry_token}
+      {:retry, HTTPResponse.retry_after_ms(headers) || 0, retry_token}
     else
       {:error, classified}
     end
   end
-
-  defp decode_error_body(body) when is_map(body), do: body
-  defp decode_error_body(_), do: %{}
 
   @doc false
   @spec from_anthropic_error(non_neg_integer(), map(), Enumerable.t()) :: AdapterError.t()
@@ -469,7 +453,8 @@ defmodule ALLM.Providers.Anthropic do
     type = Map.get(error, "type")
     message = Map.get(error, "message", "Anthropic HTTP #{status}")
 
-    {reason, retry_after} = classify_reason(status, type, message, retry_after_ms(headers))
+    {reason, retry_after} =
+      classify_reason(status, type, message, HTTPResponse.retry_after_ms(headers))
 
     AdapterError.new(reason,
       provider: :anthropic,
@@ -511,40 +496,6 @@ defmodule ALLM.Providers.Anthropic do
       String.contains?(msg, "max_tokens") or
       String.contains?(msg, "context window") or
       String.contains?(msg, "context length")
-  end
-
-  defp retry_after_ms(headers) do
-    case header_value(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_map(headers) do
-    case Map.get(headers, name) do
-      nil -> nil
-      value -> header_value_to_string(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_list(headers) do
-    Enum.find_value(headers, fn
-      {k, v} when is_binary(k) ->
-        if String.downcase(k) == name, do: header_value_to_string(v), else: nil
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp header_value_to_string([v | _]) when is_binary(v), do: v
-  defp header_value_to_string(v) when is_binary(v), do: v
-
-  defp parse_retry_after(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds * 1_000
-      _ -> nil
-    end
   end
 
   defp build_retry_telemetry_meta(opts) do

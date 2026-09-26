@@ -11,7 +11,7 @@ defmodule ALLM.Providers.Support.OpenAIHeaders do
   the multipart boundary itself (`multipart_headers/2`).
 
   Both functions honor `opts[:adapter_opts][:organization]` per the
-  chat-adapter precedent at `lib/allm/providers/openai.ex:443-446`
+  chat-adapter precedent in `do_prepare/3` of `lib/allm/providers/openai.ex`
   callers wishing to scope a request to an OpenAI org pass
   `adapter_opts: [organization: "org-..."]` in their `opts` keyword list.
 

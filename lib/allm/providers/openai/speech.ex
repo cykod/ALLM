@@ -154,7 +154,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
   alias ALLM.{Audio, Keys, Retry, SpeechRequest, SpeechResponse, Usage}
   alias ALLM.Error.SpeechAdapterError
   alias ALLM.Providers.FakeSpeech
-  alias ALLM.Providers.Support.OpenAIHeaders
+  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders}
 
   @doc """
   Synthesize speech from `request.input` against OpenAI.
@@ -234,23 +234,25 @@ defmodule ALLM.Providers.OpenAI.Speech do
   # Names align with the OpenAI adapter family (`openai/moderation.ex`,
   # `openai/embeddings.ex`): `to_json_body/2` returns a bare `map()`,
   # `decode_response/4` takes `(body, headers, request, opts)`, and the error
-  # funnel is renamed per capability (`to_speech_adapter_error/4`). The
-  # private helpers `build_metadata/2`, `retry_after_ms/1`, `header_value/2`,
-  # `maybe_apply_req_test_stub/2`, `redact_key_material/1` and
-  # `sanitize_cause/1` mirror the moderation adapter's, with four deliberate
-  # differences:
+  # funnel is renamed per capability (`to_speech_adapter_error/4`). The HTTP
+  # helpers come from `ALLM.Providers.Support.HTTPResponse`, and four choices
+  # differ deliberately from the moderation adapter:
   #
-  #   * `decode_error_body/1` JSON-decodes a BINARY body. OpenAI sends its 401
-  #     as `text/plain` carrying JSON, which `Req` leaves undecoded; the
-  #     moderation copy returns `%{}` for every binary and so loses the
-  #     message before the redactor sees it.
-  #   * `sanitize_cause/1` also resets `:position` and `:token`: blanking only
-  #     `:data` leaves `Jason.DecodeError.message/1` raising on the bad offset.
-  #   * The error funnel tolerates a non-map `"error"` value, and redacts the
-  #     provider's `code` / `type` as well as its message.
-  #   * The family's `maybe_apply_request_timeout/2` is `apply_receive_timeout/2`
-  #     here: without `opts[:request_timeout]` it applies `@default_timeout_ms`
-  #     instead of leaving `req` unchanged, so it always sets a timeout.
+  #   * `HTTPResponse.decode_json_error_body/1`, not `decode_error_body/1`:
+  #     it JSON-decodes a BINARY body. OpenAI sends its 401 as `text/plain`
+  #     carrying JSON, which `Req` leaves undecoded; the moderation adapter
+  #     returns `%{}` for every binary and so loses the message before the
+  #     redactor sees it.
+  #   * `HTTPResponse.sanitize_cause/1`, which also resets `:position` and
+  #     `:token`: the moderation adapter's private copy blanks only `:data`,
+  #     which leaves `Jason.DecodeError.message/1` raising on the bad offset.
+  #   * The error funnel tolerates a non-map `"error"` value
+  #     (`HTTPResponse.error_object/1`), and redacts the provider's `code` /
+  #     `type` as well as its message.
+  #   * `HTTPResponse.apply_receive_timeout/3`, not the family's
+  #     `maybe_apply_request_timeout/2`: without `opts[:request_timeout]` it
+  #     applies `@default_timeout_ms` instead of leaving `req` unchanged, so it
+  #     always sets a timeout.
   # ---------------------------------------------------------------------------
 
   @doc false
@@ -296,7 +298,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
        SpeechAdapterError.new(:context_length_exceeded,
          provider: :openai,
          message: "input is #{count} code points, over OpenAI's #{@max_input_code_points}",
-         metadata: build_metadata(%{count: count, max: @max_input_code_points}, opts)
+         metadata: HTTPResponse.build_metadata(%{count: count, max: @max_input_code_points}, opts)
        )}
     else
       :ok
@@ -310,7 +312,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
 
   def decode_response(body, headers, %SpeechRequest{} = request, opts)
       when is_binary(body) and byte_size(body) > 0 do
-    content_type = header_value(headers, "content-type")
+    content_type = HTTPResponse.header_value(headers, "content-type")
 
     if audio_content_type?(content_type) do
       format = SpeechResponse.mime_to_format(content_type)
@@ -320,7 +322,8 @@ defmodule ALLM.Providers.OpenAI.Speech do
        %SpeechResponse{
          audio: Audio.from_binary(body, mime),
          format: format,
-         request_id: Keyword.get(opts, :request_id) || header_value(headers, "x-request-id"),
+         request_id:
+           Keyword.get(opts, :request_id) || HTTPResponse.header_value(headers, "x-request-id"),
          model: request.model || @default_model,
          provider: :openai,
          usage: %Usage{},
@@ -348,18 +351,21 @@ defmodule ALLM.Providers.OpenAI.Speech do
   @spec to_speech_adapter_error(non_neg_integer(), term(), Enumerable.t() | map(), keyword()) ::
           SpeechAdapterError.t()
   def to_speech_adapter_error(status, body, headers, opts) when is_integer(status) do
-    error = body |> decode_error_body() |> error_object()
+    error = body |> HTTPResponse.decode_json_error_body() |> HTTPResponse.error_object()
     message = provider_message(error, status)
     code = redact_optional(Map.get(error, "code"))
     type = redact_optional(Map.get(error, "type"))
-    {reason, retry_after} = classify_speech_reason(status, message, retry_after_ms(headers))
+
+    {reason, retry_after} =
+      classify_speech_reason(status, message, HTTPResponse.retry_after_ms(headers))
 
     SpeechAdapterError.new(reason,
       provider: :openai,
       status: status,
       retry_after_ms: retry_after,
       message: message,
-      metadata: build_metadata(%{status: status, openai_code: code, openai_type: type}, opts)
+      metadata:
+        HTTPResponse.build_metadata(%{status: status, openai_code: code, openai_type: type}, opts)
     )
   end
 
@@ -393,7 +399,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
      SpeechAdapterError.new(:invalid_request,
        provider: :openai,
        message: message,
-       metadata: build_metadata(%{field: :input}, opts)
+       metadata: HTTPResponse.build_metadata(%{field: :input}, opts)
      )}
   end
 
@@ -401,15 +407,8 @@ defmodule ALLM.Providers.OpenAI.Speech do
     SpeechAdapterError.new(:unknown,
       provider: :openai,
       message: "prepare_request/2 has no analogue under the speech_script short-circuit",
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
-  end
-
-  defp build_metadata(metadata, opts) when is_map(metadata) do
-    case Keyword.get(opts, :request_id) do
-      nil -> metadata
-      request_id -> Map.put(metadata, :request_id, request_id)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -440,24 +439,10 @@ defmodule ALLM.Providers.OpenAI.Speech do
         # add attempts behind it.
         retry: false
       )
-      |> maybe_apply_req_test_stub(opts)
-      |> apply_receive_timeout(opts)
+      |> HTTPResponse.maybe_apply_req_test_stub(opts)
+      |> HTTPResponse.apply_receive_timeout(opts, @default_timeout_ms)
 
     {:ok, req}
-  end
-
-  defp maybe_apply_req_test_stub(req, opts) do
-    case opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  defp apply_receive_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
-      _ -> Req.merge(req, receive_timeout: @default_timeout_ms)
-    end
   end
 
   defp run_one_attempt(http_req, request, opts) do
@@ -480,7 +465,10 @@ defmodule ALLM.Providers.OpenAI.Speech do
 
       {:error, %{__struct__: Jason.DecodeError} = cause} ->
         {:error,
-         %{malformed_error("response body is not valid JSON", opts) | cause: sanitize_cause(cause)}}
+         %{
+           malformed_error("response body is not valid JSON", opts)
+           | cause: HTTPResponse.sanitize_cause(cause)
+         }}
 
       {:error, exception} ->
         {:retry, 0,
@@ -497,8 +485,8 @@ defmodule ALLM.Providers.OpenAI.Speech do
     SpeechAdapterError.new(reason,
       provider: :openai,
       message: message,
-      cause: sanitize_cause(cause),
-      metadata: build_metadata(%{}, opts)
+      cause: HTTPResponse.sanitize_cause(cause),
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
   end
 
@@ -553,27 +541,8 @@ defmodule ALLM.Providers.OpenAI.Speech do
     SpeechAdapterError.new(:malformed_response,
       provider: :openai,
       message: "could not decode OpenAI speech response: " <> detail,
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
-  end
-
-  defp decode_error_body(body) when is_map(body), do: body
-
-  defp decode_error_body(body) when is_binary(body) do
-    case Jason.decode(body) do
-      {:ok, decoded} when is_map(decoded) -> decoded
-      _ -> %{}
-    end
-  end
-
-  defp decode_error_body(_body), do: %{}
-
-  defp error_object(body) do
-    case Map.get(body, "error") do
-      e when is_map(e) -> e
-      e when is_binary(e) -> %{"message" => e}
-      _ -> %{}
-    end
   end
 
   defp provider_message(error, status) do
@@ -605,55 +574,9 @@ defmodule ALLM.Providers.OpenAI.Speech do
 
   defp classify_speech_reason(_status, _message, _ra), do: {:unknown, nil}
 
-  # `Jason.DecodeError` carries the undecodable payload on `:data`. Blanking
-  # it alone leaves `:position` pointing past the end, and `message/1` then
-  # raises, so all three offsets are reset together.
-  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause),
-    do: %{cause | data: "", position: 0, token: nil}
-
-  defp sanitize_cause(cause), do: cause
-
   # Inherited from `ALLM.Providers.OpenAI.Moderation`: same provider, same key
   # shapes.
   defp redact_key_material(message) when is_binary(message) do
     String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
-  end
-
-  # ---------------------------------------------------------------------------
-  # Internals — headers
-  # ---------------------------------------------------------------------------
-
-  defp retry_after_ms(headers) do
-    case header_value(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_map(headers) do
-    headers |> Map.get(name) |> header_value_to_string()
-  end
-
-  defp header_value(headers, name) when is_list(headers) do
-    Enum.find_value(headers, fn
-      {k, v} when is_binary(k) ->
-        if String.downcase(k) == name, do: header_value_to_string(v), else: nil
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp header_value(_headers, _name), do: nil
-
-  defp header_value_to_string([v | _]) when is_binary(v), do: v
-  defp header_value_to_string(v) when is_binary(v), do: v
-  defp header_value_to_string(_v), do: nil
-
-  defp parse_retry_after(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds * 1_000
-      _ -> nil
-    end
   end
 end

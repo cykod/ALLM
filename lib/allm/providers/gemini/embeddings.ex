@@ -204,7 +204,7 @@ defmodule ALLM.Providers.Gemini.Embeddings do
   alias ALLM.{Embedding, EmbeddingRequest, EmbeddingResponse, Keys, Retry, Usage}
   alias ALLM.Error.EmbeddingAdapterError
   alias ALLM.Providers.{FakeEmbeddings, Gemini}
-  alias ALLM.Providers.Support.GeminiHeaders
+  alias ALLM.Providers.Support.{GeminiHeaders, HTTPResponse}
 
   @base_url "https://generativelanguage.googleapis.com/v1beta"
   @adapter_max_batch_size 100
@@ -353,10 +353,12 @@ defmodule ALLM.Providers.Gemini.Embeddings do
   # ---- 1. IDENTICAL NAME, IDENTICAL BODY (modulo arity) ---------------------
   #   Copy these verbatim into 20.6.
   #   * SEAM `to_embedding_adapter_error/4`, SEAM `max_batch_size/0`
-  #   * `build_metadata/2`, `run_one_attempt/3`, `classify_http_error/4`,
-  #     `stub_error/1`, `fetch_embedding_script/1`, `maybe_apply_req_test_stub/2`,
-  #     `maybe_apply_request_timeout/2`, `gate_empty_input/2`, `gate_batch_size/2`,
+  #   * `run_one_attempt/3`, `classify_http_error/4`, `stub_error/1`,
+  #     `fetch_embedding_script/1`, `gate_empty_input/2`, `gate_batch_size/2`,
   #     `sanitize_cause/1`, `malformed_error/3`, `build_retry_telemetry_meta/1`
+  #   * `build_metadata/2`, `maybe_apply_req_test_stub/2` and
+  #     `maybe_apply_request_timeout/2` are shared, from
+  #     `ALLM.Providers.Support.HTTPResponse`
   #
   # ---- 2. IDENTICAL NAME, DIVERGENT BODY -----------------------------------
   #   Keep the NAME in 20.6; re-derive the body for the provider.
@@ -433,8 +435,9 @@ defmodule ALLM.Providers.Gemini.Embeddings do
   #     provider text, not on a typed struct field.
   #   * `parse_retry_after/1` does not exist here at all: `Retry-After` parsing
   #     is inherited from `ALLM.Providers.Gemini.classify_error/3`, which
-  #     already reads the header. The OpenAI embeddings adapter carries its own
-  #     because it classifies inline.
+  #     already reads the header. The OpenAI and Voyage siblings call
+  #     `ALLM.Providers.Support.HTTPResponse.retry_after_ms/1` because they
+  #     classify inline.
   # ---------------------------------------------------------------------------
 
   @doc false
@@ -519,7 +522,7 @@ defmodule ALLM.Providers.Gemini.Embeddings do
       status: chat_error.status,
       retry_after_ms: chat_error.retry_after_ms,
       message: body |> provider_message(chat_error.message) |> redact_key_material(),
-      metadata: build_metadata(Map.put(chat_error.metadata, :status, status), opts)
+      metadata: HTTPResponse.build_metadata(Map.put(chat_error.metadata, :status, status), opts)
     )
   end
 
@@ -598,7 +601,7 @@ defmodule ALLM.Providers.Gemini.Embeddings do
        EmbeddingAdapterError.new(:batch_too_large,
          provider: :gemini,
          message: "input count #{count} exceeds max_batch_size #{max}",
-         metadata: build_metadata(%{count: count, max: max}, opts)
+         metadata: HTTPResponse.build_metadata(%{count: count, max: max}, opts)
        )}
     else
       :ok
@@ -638,7 +641,7 @@ defmodule ALLM.Providers.Gemini.Embeddings do
     EmbeddingAdapterError.new(:invalid_request,
       provider: :gemini,
       message: message,
-      metadata: build_metadata(metadata, opts)
+      metadata: HTTPResponse.build_metadata(metadata, opts)
     )
   end
 
@@ -646,17 +649,8 @@ defmodule ALLM.Providers.Gemini.Embeddings do
     EmbeddingAdapterError.new(:unknown,
       provider: :gemini,
       message: "prepare_request/2 has no analogue under the embedding_script short-circuit",
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
-  end
-
-  # Every error this adapter surfaces carries `opts[:request_id]` on its
-  # metadata, whether it came from a pre-flight gate or from the HTTP path.
-  defp build_metadata(metadata, opts) when is_map(metadata) do
-    case Keyword.get(opts, :request_id) do
-      nil -> metadata
-      request_id -> Map.put(metadata, :request_id, request_id)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -689,8 +683,8 @@ defmodule ALLM.Providers.Gemini.Embeddings do
         headers: GeminiHeaders.headers(api_key),
         json: body
       )
-      |> maybe_apply_req_test_stub(opts)
-      |> maybe_apply_request_timeout(opts)
+      |> HTTPResponse.maybe_apply_req_test_stub(opts)
+      |> HTTPResponse.maybe_apply_request_timeout(opts)
 
     {:ok, req}
   end
@@ -703,20 +697,6 @@ defmodule ALLM.Providers.Gemini.Embeddings do
     case opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:endpoint) do
       url when is_binary(url) -> url
       _ -> @base_url
-    end
-  end
-
-  defp maybe_apply_req_test_stub(req, opts) do
-    case opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  defp maybe_apply_request_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      nil -> req
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
     end
   end
 
@@ -809,7 +789,7 @@ defmodule ALLM.Providers.Gemini.Embeddings do
            provider: :gemini,
            message: "request timed out",
            cause: sanitize_cause(cause),
-           metadata: build_metadata(%{}, opts)
+           metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
 
       {:error, %{__struct__: Jason.DecodeError} = cause} ->
@@ -822,13 +802,14 @@ defmodule ALLM.Providers.Gemini.Embeddings do
            provider: :gemini,
            message: "transport failure: " <> Exception.message(exception),
            cause: sanitize_cause(exception),
-           metadata: build_metadata(%{}, opts)
+           metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
     end
   end
 
   defp classify_http_error(status, body, headers, opts) do
-    classified = to_embedding_adapter_error(status, decode_error_body(body), headers, opts)
+    classified =
+      to_embedding_adapter_error(status, HTTPResponse.decode_error_body(body), headers, opts)
 
     if classified.reason in [:rate_limited, :provider_unavailable] do
       {:retry, classified.retry_after_ms || 0, classified}
@@ -836,9 +817,6 @@ defmodule ALLM.Providers.Gemini.Embeddings do
       {:error, classified}
     end
   end
-
-  defp decode_error_body(body) when is_map(body), do: body
-  defp decode_error_body(_body), do: %{}
 
   # ---------------------------------------------------------------------------
   # Internals — error hygiene
@@ -849,7 +827,7 @@ defmodule ALLM.Providers.Gemini.Embeddings do
       provider: :gemini,
       message: "could not parse Gemini embeddings response: " <> detail,
       cause: cause,
-      metadata: build_metadata(metadata, opts)
+      metadata: HTTPResponse.build_metadata(metadata, opts)
     )
   end
 

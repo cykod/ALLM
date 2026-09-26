@@ -216,6 +216,7 @@ defmodule ALLM.Providers.Voyage.Embeddings do
   alias ALLM.{Embedding, EmbeddingRequest, EmbeddingResponse, Keys, Retry, Usage}
   alias ALLM.Error.EmbeddingAdapterError
   alias ALLM.Providers.FakeEmbeddings
+  alias ALLM.Providers.Support.HTTPResponse
 
   @base_url "https://api.voyageai.com/v1"
   @endpoint "/embeddings"
@@ -378,27 +379,22 @@ defmodule ALLM.Providers.Voyage.Embeddings do
   #
   # ---- 1. IDENTICAL NAME, IDENTICAL BODY (modulo arity) ---------------------
   #   Identical with BOTH siblings:
-  #   * `build_metadata/2`, `build_retry_telemetry_meta/1`,
-  #     `classify_http_error/4`, `decode_error_body/1`,
-  #     `fetch_embedding_script/1`, `malformed_error/4`,
-  #     `maybe_apply_req_test_stub/2`, `maybe_apply_request_timeout/2`,
-  #     `non_neg_int/2`, `put_pair/2`, `run_one_attempt/3`, `sanitize_cause/1`,
-  #     `stub_error/1`
+  #   * `build_retry_telemetry_meta/1`, `classify_http_error/4`,
+  #     `fetch_embedding_script/1`, `malformed_error/4`, `non_neg_int/2`,
+  #     `put_pair/2`, `run_one_attempt/3`, `sanitize_cause/1`, `stub_error/1`
   #     (`put_pair/2` differs from Gemini's only in its first parameter's name.)
+  #   * `build_metadata/2`, `decode_error_body/1`,
+  #     `maybe_apply_req_test_stub/2` and `maybe_apply_request_timeout/2` are
+  #     shared, from `ALLM.Providers.Support.HTTPResponse`
   #
   #   Identical with the OpenAI sibling; Gemini has NO function of this name:
-  #   * `decode_data_list/2`, `model_pair/1`, `parse_retry_after/1`,
-  #     `retry_after_ms/1`, `header_value/2`, `header_value_to_string/1`
+  #   * `decode_data_list/2`, `model_pair/1`, and the shared
+  #     `HTTPResponse.retry_after_ms/1` / `HTTPResponse.header_value/2`
   #     Gemini's model rides the URL path, so it carries `prefix_model/1` +
   #     `strip_model_prefix/1` where this module and OpenAI's carry
-  #     `model_pair/1`; and Gemini reads no `Retry-After` header at all, so the
-  #     four retry-header helpers have no Gemini counterpart. Voyage sends
-  #     `Retry-After` in delta-seconds and this adapter classifies inline, as
-  #     OpenAI's does. Like the OpenAI sibling, `parse_retry_after/1` returns
-  #     `nil` INLINE for an unparseable value rather than falling through to the
-  #     `parse_http_date/1` stub that `openai/images.ex` and `openai.ex` carry.
-  #     Behaviour is identical today; if that stub is ever implemented, all
-  #     three embeddings adapters have to be revisited together.
+  #     `model_pair/1`; and Gemini reads no `Retry-After` header at all.
+  #     Voyage sends `Retry-After` in delta-seconds and this adapter classifies
+  #     inline, as OpenAI's does.
   #
   #   Identical with the OpenAI sibling; Gemini shares the NAME with a divergent
   #   body (cross-referenced in list 2):
@@ -580,7 +576,9 @@ defmodule ALLM.Providers.Voyage.Embeddings do
   def to_embedding_adapter_error(status, body, headers, opts)
       when is_integer(status) and is_map(body) do
     detail = Map.get(body, "detail")
-    {reason, retry_after} = classify_embedding_reason(status, detail, retry_after_ms(headers))
+
+    {reason, retry_after} =
+      classify_embedding_reason(status, detail, HTTPResponse.retry_after_ms(headers))
 
     message =
       detail
@@ -594,7 +592,7 @@ defmodule ALLM.Providers.Voyage.Embeddings do
       message: message,
       # Structural only — never a body preview. Voyage's envelope carries no
       # provider code or type to forward, so `:status` is all there is.
-      metadata: build_metadata(%{status: status}, opts)
+      metadata: HTTPResponse.build_metadata(%{status: status}, opts)
     )
   end
 
@@ -618,7 +616,8 @@ defmodule ALLM.Providers.Voyage.Embeddings do
            # not read it" is the same discipline `build_usage/1` applies to
            # `:input_tokens`.
            id: Map.get(body, "id"),
-           request_id: Keyword.get(opts, :request_id) || header_value(headers, "x-request-id"),
+           request_id:
+             Keyword.get(opts, :request_id) || HTTPResponse.header_value(headers, "x-request-id"),
            model: Map.get(body, "model") || request.model,
            # Sorted here, not at the call site: Voyage publishes `index`
            # precisely because array order is not contractual.
@@ -682,7 +681,7 @@ defmodule ALLM.Providers.Voyage.Embeddings do
        EmbeddingAdapterError.new(:batch_too_large,
          provider: :voyage,
          message: "input count #{count} exceeds max_batch_size #{max}",
-         metadata: build_metadata(%{count: count, max: max}, opts)
+         metadata: HTTPResponse.build_metadata(%{count: count, max: max}, opts)
        )}
     else
       :ok
@@ -718,7 +717,7 @@ defmodule ALLM.Providers.Voyage.Embeddings do
     EmbeddingAdapterError.new(:invalid_request,
       provider: :voyage,
       message: message,
-      metadata: build_metadata(metadata, opts)
+      metadata: HTTPResponse.build_metadata(metadata, opts)
     )
   end
 
@@ -726,17 +725,8 @@ defmodule ALLM.Providers.Voyage.Embeddings do
     EmbeddingAdapterError.new(:unknown,
       provider: :voyage,
       message: "prepare_request/2 has no analogue under the embedding_script short-circuit",
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
-  end
-
-  # Every error this adapter surfaces carries `opts[:request_id]` on its
-  # metadata, whether it came from a pre-flight gate or from the HTTP path.
-  defp build_metadata(metadata, opts) when is_map(metadata) do
-    case Keyword.get(opts, :request_id) do
-      nil -> metadata
-      request_id -> Map.put(metadata, :request_id, request_id)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -768,8 +758,8 @@ defmodule ALLM.Providers.Voyage.Embeddings do
         headers: headers(api_key),
         json: to_json_body(request, opts)
       )
-      |> maybe_apply_req_test_stub(opts)
-      |> maybe_apply_request_timeout(opts)
+      |> HTTPResponse.maybe_apply_req_test_stub(opts)
+      |> HTTPResponse.maybe_apply_request_timeout(opts)
 
     {:ok, req}
   end
@@ -787,20 +777,6 @@ defmodule ALLM.Providers.Voyage.Embeddings do
       {"authorization", "Bearer " <> api_key},
       {"content-type", "application/json"}
     ]
-  end
-
-  defp maybe_apply_req_test_stub(req, opts) do
-    case opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  defp maybe_apply_request_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      nil -> req
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -865,7 +841,7 @@ defmodule ALLM.Providers.Voyage.Embeddings do
            provider: :voyage,
            message: "request timed out",
            cause: sanitize_cause(cause),
-           metadata: build_metadata(%{}, opts)
+           metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
 
       {:error, %{__struct__: Jason.DecodeError} = cause} ->
@@ -878,13 +854,14 @@ defmodule ALLM.Providers.Voyage.Embeddings do
            provider: :voyage,
            message: "transport failure: " <> Exception.message(exception),
            cause: sanitize_cause(exception),
-           metadata: build_metadata(%{}, opts)
+           metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
     end
   end
 
   defp classify_http_error(status, body, headers, opts) do
-    classified = to_embedding_adapter_error(status, decode_error_body(body), headers, opts)
+    classified =
+      to_embedding_adapter_error(status, HTTPResponse.decode_error_body(body), headers, opts)
 
     if classified.reason in [:rate_limited, :provider_unavailable] do
       {:retry, classified.retry_after_ms || 0, classified}
@@ -892,9 +869,6 @@ defmodule ALLM.Providers.Voyage.Embeddings do
       {:error, classified}
     end
   end
-
-  defp decode_error_body(body) when is_map(body), do: body
-  defp decode_error_body(_body), do: %{}
 
   # ---------------------------------------------------------------------------
   # Internals — error mapping
@@ -937,7 +911,7 @@ defmodule ALLM.Providers.Voyage.Embeddings do
       provider: :voyage,
       message: "could not parse Voyage embeddings response: " <> detail,
       cause: cause,
-      metadata: build_metadata(metadata, opts)
+      metadata: HTTPResponse.build_metadata(metadata, opts)
     )
   end
 
@@ -967,48 +941,6 @@ defmodule ALLM.Providers.Voyage.Embeddings do
   # ---------------------------------------------------------------------------
   # Internals — headers
   # ---------------------------------------------------------------------------
-
-  defp retry_after_ms(headers) do
-    case header_value(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_map(headers) do
-    case Map.get(headers, name) do
-      nil -> nil
-      value -> header_value_to_string(value)
-    end
-  end
-
-  defp header_value(headers, name) when is_list(headers) do
-    Enum.find_value(headers, fn
-      {k, v} when is_binary(k) ->
-        if String.downcase(k) == name, do: header_value_to_string(v), else: nil
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp header_value(_headers, _name), do: nil
-
-  defp header_value_to_string([v | _]) when is_binary(v), do: v
-  defp header_value_to_string(v) when is_binary(v), do: v
-  defp header_value_to_string(_v), do: nil
-
-  # Per RFC 7231 §7.1.3 `Retry-After` is delta-seconds or an HTTP-date. An
-  # unparseable value returns `nil` and the retry loop falls back to its
-  # computed exponential backoff.
-  defp parse_retry_after(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds * 1_000
-      _ -> nil
-    end
-  end
-
-  defp parse_retry_after(_value), do: nil
 
   defp build_retry_telemetry_meta(opts) do
     case Keyword.get(opts, :request_id) do

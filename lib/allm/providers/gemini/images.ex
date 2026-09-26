@@ -47,14 +47,14 @@ defmodule ALLM.Providers.Gemini.Images do
 
   `opts[:adapter_opts][:image_script]`, when present, delegates to
   `ALLM.Providers.FakeImages.generate/2` BEFORE any pre-flight gate
-  runs. Mirrors the OpenAI.Images precedent at
-  `lib/allm/providers/openai/images.ex:251`.
+  runs. Mirrors the OpenAI.Images precedent in `generate/2` of
+  `lib/allm/providers/openai/images.ex`.
 
   ## Shared response decoder (Cross-function invariant)
 
   Response bodies are decoded via `ALLM.Providers.Gemini.Decode.candidate_parts/1`
   — the same helper `Gemini.generate/2` calls (see
-  `lib/allm/providers/gemini.ex:991` post-Phase-16.5 refactor). The image
+  `decode_with_candidates/2` in `lib/allm/providers/gemini.ex`, post-Phase-16.5 refactor). The image
   adapter consumes the `image_parts` element of the returned tuple while
   the chat adapter consumes `text` + `tool_calls`; both walk the parts
   list once. Per `` cross-function invariants
@@ -80,7 +80,7 @@ defmodule ALLM.Providers.Gemini.Images do
 
   alias ALLM.Providers.{FakeImages, Gemini}
   alias ALLM.Providers.Gemini.Decode
-  alias ALLM.Providers.Support.GeminiHeaders
+  alias ALLM.Providers.Support.{GeminiHeaders, HTTPResponse}
 
   @base_url "https://generativelanguage.googleapis.com/v1beta"
 
@@ -164,15 +164,15 @@ defmodule ALLM.Providers.Gemini.Images do
   # divergences for per-provider invariants:
   #
   #   IDENTICAL (byte-for-byte modulo arity):
-  #   * `endpoint_for/1`              ↔ openai/images.ex:311
-  #   * `to_image_adapter_error/4`    ↔ openai/images.ex:1065
-  #   * `resolve_image_bytes/2`       ↔ openai/images.ex:856
+  #   * `endpoint_for/1`              ↔ openai/images.ex, same name
+  #   * `to_image_adapter_error/4`    ↔ openai/images.ex, same name
+  #   * `resolve_image_bytes/2`       ↔ openai/images.ex, same name
   #   * `to_aspect_ratio/1`           — Gemini-only (Decision #19; no
   #                                     OpenAI counterpart, OpenAI takes
   #                                     literal pixel sizes).
   #
   #   DIVERGENT NAMES (per-provider invariants):
-  #   * `to_image_request_body/2`     ↔ openai/images.ex:613 `to_json_body/2`.
+  #   * `to_image_request_body/2`     ↔ openai/images.ex `to_json_body/2`.
   #     Diverges because the Gemini body is built by delegating to
   #     `Gemini.to_gemini_request_body/2` (Decision #7) — the helper
   #     synthesizes a chat-equivalent `%Request{}` rather than directly
@@ -180,12 +180,12 @@ defmodule ALLM.Providers.Gemini.Images do
   #     accurate for both; OpenAI's `to_json_body` reflects that the
   #     OpenAI helper only handles the JSON-bodied endpoint (the
   #     `to_multipart_body/2` sibling handles edits).
-  #   * `decode_image_response/4`     ↔ openai/images.ex:1189 `decode_response/4`.
+  #   * `decode_image_response/4`     ↔ openai/images.ex `decode_response/4`.
   #     Diverges because Gemini's image decode shares a `Gemini.Decode.candidate_parts/1`
   #     helper with the chat decoder (response-decoder symmetry decision);
   #     the `_image_` infix disambiguates from the chat-side decoder
   #     reachable in the same provider tree.
-  #   * `gate_operation/2`            ↔ openai/images.ex:362.
+  #   * `gate_operation/2`            ↔ openai/images.ex, same name.
   #     Identical name; only the visibility differs (Gemini exposes via
   #     `@doc false` test seam; OpenAI keeps it private). Defensible per
   #     CLAUDE.md "Public-test-seam helpers" rule given Gemini's smaller
@@ -223,7 +223,7 @@ defmodule ALLM.Providers.Gemini.Images do
        ImageAdapterError.new(:unsupported_operation,
          provider: :gemini,
          message: "operation #{inspect(op)} not supported by adapter",
-         metadata: build_metadata(%{operation: op}, opts)
+         metadata: HTTPResponse.build_metadata(%{operation: op}, opts)
        )}
     end
   end
@@ -349,7 +349,7 @@ defmodule ALLM.Providers.Gemini.Images do
      ImageAdapterError.new(:invalid_request,
        provider: :gemini,
        message: "Gemini requires aspect-ratio sizes (1:1, 16:9, 9:16, 4:3, 3:4)",
-       metadata: build_metadata(%{}, opts)
+       metadata: HTTPResponse.build_metadata(%{}, opts)
      )}
   end
 
@@ -400,8 +400,8 @@ defmodule ALLM.Providers.Gemini.Images do
   defp maybe_put_candidate_count(gc, _n), do: gc
 
   @doc """
-  Resolve an `%Image{}` source to raw bytes. Mirrors the OpenAI seam at
-  `lib/allm/providers/openai/images.ex:858`.
+  Resolve an `%Image{}` source to raw bytes. Mirrors the OpenAI seam of the same name in
+  `lib/allm/providers/openai/images.ex`.
 
   For Gemini, this helper exists for parity with the OpenAI image-adapter
   testing surface. The actual `:edit` request build delegates source
@@ -494,8 +494,8 @@ defmodule ALLM.Providers.Gemini.Images do
         headers: GeminiHeaders.headers(api_key),
         json: body
       )
-      |> maybe_apply_req_test_stub(opts)
-      |> maybe_apply_request_timeout(opts)
+      |> HTTPResponse.maybe_apply_req_test_stub(opts)
+      |> HTTPResponse.maybe_apply_request_timeout(opts)
 
     {:ok, req}
   end
@@ -508,20 +508,6 @@ defmodule ALLM.Providers.Gemini.Images do
       end
 
     base <> endpoint_for(model || "gemini-3.1-flash-image-preview")
-  end
-
-  defp maybe_apply_req_test_stub(req, opts) do
-    case Keyword.get(opts, :adapter_opts, []) |> Keyword.get(:plug) do
-      nil -> req
-      plug -> Req.merge(req, plug: plug)
-    end
-  end
-
-  defp maybe_apply_request_timeout(req, opts) do
-    case Keyword.get(opts, :request_timeout) do
-      nil -> req
-      ms when is_integer(ms) and ms > 0 -> Req.merge(req, receive_timeout: ms)
-    end
   end
 
   defp run_one_attempt(http_req, request, opts) do
@@ -539,7 +525,7 @@ defmodule ALLM.Providers.Gemini.Images do
             provider: :gemini,
             message: "request timed out",
             cause: sanitize_cause(cause),
-            metadata: build_metadata(%{}, opts)
+            metadata: HTTPResponse.build_metadata(%{}, opts)
           )
 
         {:retry, 0, err}
@@ -553,7 +539,7 @@ defmodule ALLM.Providers.Gemini.Images do
             provider: :gemini,
             message: "transport failure: " <> Exception.message(exception),
             cause: sanitize_cause(exception),
-            metadata: build_metadata(%{}, opts)
+            metadata: HTTPResponse.build_metadata(%{}, opts)
           )
 
         {:retry, 0, err}
@@ -561,7 +547,7 @@ defmodule ALLM.Providers.Gemini.Images do
   end
 
   defp classify_http_error(status, body, headers, opts) do
-    decoded = decode_error_body(body)
+    decoded = HTTPResponse.decode_error_body(body)
     classified = to_image_adapter_error(status, decoded, headers, opts)
 
     if classified.reason in [:rate_limited, :provider_unavailable] do
@@ -571,9 +557,6 @@ defmodule ALLM.Providers.Gemini.Images do
       {:error, classified}
     end
   end
-
-  defp decode_error_body(body) when is_map(body), do: body
-  defp decode_error_body(_), do: %{}
 
   # ---------------------------------------------------------------------------
   # Error mapping — reuses Gemini.classify_error/3 and rewraps as
@@ -592,7 +575,7 @@ defmodule ALLM.Providers.Gemini.Images do
     chat_err = Gemini.classify_error(status, body, headers)
 
     base_metadata =
-      build_metadata(
+      HTTPResponse.build_metadata(
         Map.merge(chat_err.metadata, %{status: status}),
         opts
       )
@@ -672,7 +655,7 @@ defmodule ALLM.Providers.Gemini.Images do
       provider: :gemini,
       message: "could not parse Gemini response: body is not valid JSON",
       cause: sanitize_cause(cause),
-      metadata: build_metadata(%{}, opts)
+      metadata: HTTPResponse.build_metadata(%{}, opts)
     )
   end
 
@@ -701,7 +684,7 @@ defmodule ALLM.Providers.Gemini.Images do
            provider: :gemini,
            status: 200,
            message: "Gemini blocked the prompt: #{safe_reason}",
-           metadata: build_metadata(%{block_reason: safe_reason}, opts)
+           metadata: HTTPResponse.build_metadata(%{block_reason: safe_reason}, opts)
          )}
 
       {:candidates, []} ->
@@ -710,7 +693,7 @@ defmodule ALLM.Providers.Gemini.Images do
            provider: :gemini,
            status: 200,
            message: "Gemini response carried no candidates",
-           metadata: build_metadata(%{}, opts)
+           metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
 
       {:candidates, candidates} ->
@@ -723,7 +706,7 @@ defmodule ALLM.Providers.Gemini.Images do
      ImageAdapterError.new(:malformed_response,
        provider: :gemini,
        message: "Gemini returned a non-JSON body",
-       metadata: build_metadata(%{}, opts)
+       metadata: HTTPResponse.build_metadata(%{}, opts)
      )}
   end
 
@@ -752,7 +735,7 @@ defmodule ALLM.Providers.Gemini.Images do
            provider: :gemini,
            status: 200,
            message: "Gemini response carried no inlineData parts",
-           metadata: build_metadata(%{}, opts)
+           metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
 
       [_ | _] = imgs ->
@@ -789,16 +772,6 @@ defmodule ALLM.Providers.Gemini.Images do
     opts
     |> Keyword.get(:adapter_opts, [])
     |> Keyword.get(:image_script)
-  end
-
-  # Per `ImageAdapter` invariant 5: when `opts[:request_id]` is present,
-  # every error surfaced from this adapter carries it on
-  # `metadata[:request_id]`.
-  defp build_metadata(metadata, opts) when is_map(metadata) do
-    case Keyword.get(opts, :request_id) do
-      nil -> metadata
-      request_id -> Map.put(metadata, :request_id, request_id)
-    end
   end
 
   defp build_retry_telemetry_meta(opts) do

@@ -780,6 +780,16 @@ defmodule ALLM.Providers.Gemini.ImagesTest do
   end
 
   describe "prepare_request/2" do
+    test "applies opts[:request_timeout] as :receive_timeout, and leaves it unset without one" do
+      assert {:ok, http} =
+               Images.prepare_request(gen_request(), api_key: "AIza-test", request_timeout: 1234)
+
+      assert http.options[:receive_timeout] == 1234
+
+      assert {:ok, http} = Images.prepare_request(gen_request(), api_key: "AIza-test")
+      refute Map.has_key?(http.options, :receive_timeout)
+    end
+
     test "returns an unfired Req.Request configured like generate/2" do
       ALLM.Keys.put(:gemini, "AIza-test-key")
       req = gen_request()

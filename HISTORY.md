@@ -1,3 +1,20 @@
+## [OTHR] Extract shared provider HTTP and transcription helpers
+*Saturday, September 26th at 8pm*
+Phase 26.1 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§27 module tree). 
+This commit extracts ALLM.Providers.Support.HTTPResponse, the provider HTTP 
+helpers (retry-after parsing, error-body decoding, metadata, timeout and 
+Req.Test plumbing), and ALLM.Providers.Support.TranscriptionAdapter, the shared 
+STT-contract helpers. TranscriptionAdapter is now a behaviour with five 
+callbacks. Every copy in the 12 provider adapters is migrated to them, 
+following the documented migration-on-extraction exception. A differential 
+probe of base against the checkpoint (168 end-to-end rows plus 165 header-shape 
+rows) confirmed the behaviour is preserved; the only difference is the declared 
+removal of a FunctionClauseError on non-binary headers. Line-number comments 
+staled by the shrink now point to functions by name. This commit also adds the 
+Phase 26 design doc and its RECORDS companion.
+
+---
+
 ## [TWK] Polish Phase 25 audio after the gate cleared
 *Thursday, September 24th at 3am*
 Phase 25 (steering/2026-09-24_SST_SUPPORT.md) passed its gate review; this 
