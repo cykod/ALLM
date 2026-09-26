@@ -81,6 +81,26 @@ defmodule ALLM.Test.FakeAudioFixtures do
   def transcription_retry_until_call(n, text) when is_integer(n) and n >= 1 and is_binary(text),
     do: [transcription_script: [{:retry_until_call, n}, {:ok, text}]]
 
+  @doc """
+  Streaming script emitting `events` verbatim from
+  `FakeSpeech.stream_synthesize/2` (and `stream_synthesize_input/3`). How a
+  mid-stream error is scripted.
+  """
+  @spec speech_events([ALLM.SpeechEvent.t()]) :: keyword()
+  def speech_events(events) when is_list(events), do: [speech_script: [{:events, events}]]
+
+  @doc """
+  Streaming script emitting `events` verbatim from
+  `FakeTranscription.stream_transcribe/3`.
+  """
+  @spec transcription_events([ALLM.TranscriptionEvent.t()]) :: keyword()
+  def transcription_events(events) when is_list(events),
+    do: [transcription_script: [{:events, events}]]
+
+  @doc "`n` bytes of PCM16 silence, as `stream_transcribe/3` input."
+  @spec pcm_silence(non_neg_integer()) :: binary()
+  def pcm_silence(n) when is_integer(n) and n >= 0, do: :binary.copy(<<0>>, n)
+
   @doc "An in-memory `audio/mpeg` clip of exactly `n` bytes."
   @spec clip(non_neg_integer()) :: Audio.t()
   def clip(n) when is_integer(n) and n >= 0,

@@ -8,6 +8,7 @@ Companion to `steering/2026-09-25_ELEVENLABS_TTS_SST.md`. Status, ticks, deviati
 |-------|--------|
 | 26.1 | Completed |
 | 26.2 | Completed |
+| 26.3 | Completed |
 
 ## Phase 26.1 — `Support.HTTPResponse` + `Support.TranscriptionAdapter`
 
@@ -225,3 +226,69 @@ After the flip, the predicate's hits are the four keep rows plus the new members
 | `conformance/` | not touched, so its gates were not run |
 | `README.md` | not modified |
 
+
+## Phase 26.3 — Behaviours, Fake streaming, conformance
+
+Built 2026-09-26 on `e567f54`. The working tree is uncommitted; the orchestrator commits after review.
+
+### Checklist (26.3.2)
+
+- [x] `lib/allm/speech_stream_adapter.ex`, `lib/allm/transcription_stream_adapter.ex`: callbacks with `@doc`, a minimum skeleton, and numbered invariants. Cleanup (halt-safety) is invariant 4 in both.
+- [x] `lib/allm/providers/support/input_pump.ex` (`spawn_monitor` + linked watchdog + credit window + string-only `:input_error`). `test/support/finch_stub.ex` gains the Agent-backed mode (`install_shared/2`, `senders/1`; `cancel_count/1` and `captured_opts/1` take the Agent pid).
+- [x] `FakeSpeech.stream_synthesize/2` and `stream_synthesize_input/3`, `FakeTranscription.stream_transcribe/3` and `stream_sample_rates/0`. Both input paths reduce through the pump. `{:events, _}` entry, moduledoc script tables. Non-streaming `FakeSpeech.synthesize/2` reports `sample_rate: request.sample_rate`.
+- [x] Three suites under `conformance/lib/allm/test/`, three stubs under `conformance/test/support/fixtures/`, three meta-test files (four meta-invariants each). `lib/allm/speech_adapter.ex` "HTTP transport guidance" now points at `ALLM.SpeechStreamAdapter`.
+- [x] `groups_for_modules`: the two behaviours under `Behaviours`, `InputPump` under `Providers`.
+
+### Deviations
+
+- `[tactical]` **`InputPump.stop/2` kills first, then removes the monitor, then waits.** The contract block reads "`demonitor(ref, [:flush])`; `Process.exit(pid, :kill)`; drain". In that order a pump that has been sent `:kill` but is not yet dead could still deliver an element after the drain. The implementation calls `Process.exit/2`, then `Process.demonitor(ref, [:flush, :info])`; when that returns `true` (the monitor had not fired) it monitors the pid again and waits for that `:DOWN`, which is ordered after every message the pump sent, and only then drains `{ref, _}` and any `:DOWN` for `ref`. Same observable contract, idempotent (pinned by "stop/2 is idempotent, including after the pump finished on its own").
+- `[structural, documented]` **`InputPump.crash_info/1` (public, doctested) is not in the contract block.** It turns a pump's abnormal `:DOWN` reason into the same string-only `%{kind: :exit, message: _}` map an `:input_error` carries, so `err.cause` never holds the raw exit term (Decision #7). Both Fakes use it, and 26.7/26.8 need the identical conversion. *(Fix pass: the Fakes now reach it through `InputPump.classify/2`, which applies it to every pump `:DOWN`.)*
+- `[tactical]` **The Agent-backed FinchStub's pid rides as `finch_stub_ref:`,** not a new key: `ALLM.Providers.Support.Transport.finch_opts/2` forwards only `@finch_forwarded_opts` (`:finch_stub_ref` among them) to `async_request/3`, and a new key would mean editing `transport.ex`, outside this Module Tree. `async_request/3` dispatches on `is_pid/1`; a pid returns a fresh ref per call and delivers to the `async_request/3` caller from a `spawn_link`ed sender. The default `install/2` mode is untouched (pinned by "the default install/2 mode is unchanged…" in `input_pump_test.exs`).
+- `[tactical]` **The Fakes' `capture_pid` seam also fires on the stream callbacks**, with the same `{Module, :call, %{request:, opts:}}` message, so 26.4 can assert what the stream façades dispatch.
+- `[tactical]` **FakeSpeech's input-form gate is `Validate.speech_request(request, input: :streamed)`**, mapped to `%SpeechAdapterError{reason: :invalid_request, metadata: %{errors: errors}}`. `stream_synthesize/2` gates only empty input, matching `synthesize/2`.
+- `[tactical]` **Stream paths that reduce no input return a list** (the Fake has no transport, so a list is already lazy with respect to I/O). Only the input paths are `Stream.resource/3` over the pump.
+- `[tactical]` **`{:ok, %SpeechResponse{}}` / `{:ok, %TranscriptionResponse{}}` script entries on a stream path are emitted from the struct's fields**, and the input form does not reduce input for them (as for `{:error, _}` and `{:events, _}`). The design names only `{:ok, bytes}`/`{:ok, text}`; the struct entries were already in the script grammar, and 26.4's equivalence property can generate them.
+- `[tactical]` **FakeTranscription's committed segment is the script text verbatim** (`" the quick "`); a text with no words emits no partial and no committed segment; `language: nil`. `:transcription_completed.text` is the trimmed join.
+- `[scope]` **The meta-test `KeyError` modules have suite-unique names** (`MissingSpeechStreamAdapterOpt`, `MissingSpeechInputAdapterOpt`, `MissingTranscriptionStreamAdapterOpt`). `__MODULE__` inside the runtime `quote` is `nil`, so the copied name `MissingSpeechAdapterOpt` collided with the Phase 25 suite's module under `async: true` (`cannot define module … because it is currently being defined`, 3 failures in the first full run). The Phase 25 self-tests carry the same latent hazard between themselves only if two suites ever reuse a name.
+- `[scope]` **Each suite's `:gate_opts` meta-test keys its reach marker on the stream transport seam** (`:finch_module` for the speech suite, `:ws_module` for the input and transcription suites), not `:plug`: `:plug` is a `Req` option and the stream paths never reach `Req`.
+- `[scope]` The FinchStub mode tests live in `input_pump_test.exs`; the Module Tree lists no `finch_stub_test.exs`.
+- ~~`[DEFERRED-DRY]` The two Fakes' input loops are parallel … **DONE WHEN** `grep -l 'defp next_input_events' lib/allm/providers/*.ex` lists at most one file.~~ **RESOLVED in the 26.3 fix pass** (code-review F2, `.work/code-reviews/2026-09-26-phase-26-3.md`). The pump-protocol half moved to `ALLM.Providers.Support.InputPump`: `is_pump_message/2` (a `defguard` selecting `{ref, _}` and the pump's `:DOWN` in a selective `receive`), `classify/2` (pure: `{:input, el}` | `:done` | `{:failed, :input_raised | :input_crashed, input_error()}`; `:DOWN` goes through `crash_info/1`) and `default_window/0` (8). Both Fakes migrated; each keeps its own `next_input_events/1` for its element rules and error module, which is what the struck predicate counted — **it measured a proxy** (a function name, not the protocol copy) and could never go below two files without renaming. Replacement predicate, scoring the protocol copy itself: `grep -lE --exclude=input_pump.ex ':input_error|crash_info\(|@input_window' lib/allm/providers/*.ex lib/allm/providers/*/*.ex` must be empty (exit 1 on this tree). The `resolve_script/1` / cursor copies stay under the existing ASKS thu 9/24 3am `[DISPOSITION]` ticket.
+- `[tactical, fix pass]` **FakeSpeech struct entries on the stream paths** (code-review F1 + functional-review Known Issue 1, same site). `{:ok, %SpeechResponse{}}` with zero-byte audio now ends `:speech_started`, `:invalid_request`/`cause: :empty_input` (was `started, completed` with no delta — invariant 3 broken); with unreadable audio (`nil`, missing file) it ends `:speech_started`, `:unknown`/`cause: :unreadable_script_audio` (was a synchronous `FunctionClauseError`/`MatchError` — invariant 1 broken). One `body_events/3` builder now serves the `{:ok, bytes}`, struct and input `{:bytes, _}` paths (code-review F3; `on_input_done/1` no longer `tl/1`s a started event). **Also found:** the `[tactical]` row above ("the input form does not reduce input for them") was FALSE for FakeSpeech — `{:entry, {:ok, bytes}}` had no `is_binary/1` guard, so a struct entry went into input `{:bytes, struct}` mode and crashed at `audio_delta/1`. Guard added; both new tests in `fake_speech_test.exs` drive both callbacks and fail against the unguarded clause (mutation run: 2 failures).
+
+### Mutation checks (binding of the new tests)
+
+| Mutant | Failing tests |
+|--------|---------------|
+| `InputPump.stop/2` skips the drain | behaviour 3 (both tests), FakeSpeech "a halt stops the pump and leaves no pump message…" — 3 |
+| No watchdog | behaviour 3 (linked-process premise), behaviour 5 — 2 |
+| FinchStub shared sender `spawn` instead of `spawn_link` | behaviour 6 (both), "install_shared/2 delivers to whichever process…" — 3 |
+
+Each file was restored and re-verified green after its run. The stream-timeout reset is pinned by "the stream timeout resets on every input message…" (four 60 ms gaps against a 150 ms timeout); a whole-stream deadline would fail it.
+
+### Notes for later sub-phases
+
+- **26.4:** the moduledocs of `test/allm/allm_synthesize_test.exs:6` and `allm_transcribe_test.exs:6` say speech/transcription "has no streaming counterpart"; they become false with the façades. Also still open from 26.2: `lib/allm/speech_request.ex`'s "There is no `:stream` field: speech synthesis is non-streaming."
+- **26.5–26.8:** consume pump messages with `InputPump.is_pump_message/2` (a selective-`receive` guard, beside the socket clauses) + `InputPump.classify/2`, ack `{:input, _}` with `InputPump.ack/2`, and default the window with `InputPump.default_window/0` — never re-match `{ref, {:input_error, _}}` / `:DOWN` by hand (the protocol lives in one place since the 26.3 fix pass; `classify/2` already turns a `:DOWN` into `crash_info/1`'s string-only map). Stop the pump in the after function with `InputPump.stop/2` (it drains `{ref, _}` and the `:DOWN`). A test whose input is an `ALLM.stream_generate/3` over `FinchStub` must use `FinchStub.install_shared/2`.
+- **26.5–26.8 conformance invocations:** the three new suites take `speech_adapter:` / `transcription_adapter:` (the same keys as the Phase 25 suites) and `gate_opts:`.
+
+### Verification (run 2026-09-26, working tree on `e567f54`)
+
+| Check | Result |
+|-------|--------|
+| `mix test` | exit 0, 559 doctests, 31 properties, 4324 tests, 0 failures, 14 excluded (26.2: 554 / 4237) |
+| `mix test --seed 0` | exit 0, same counts |
+| `mix format --check-formatted` | exit 0 |
+| `mix credo --strict` | no issues |
+| `mix dialyzer` | `Total errors: 0` |
+| `mix compile --warnings-as-errors --force` | exit 0 |
+| `mix docs 2>&1 \| grep -iE 'warning\|error'` | empty |
+| `mix run scripts/audit_user_docs.exs <file>` on the 3 new `lib/` files, the 3 new conformance harnesses, and modified `fake_speech.ex`, `fake_transcription.ex`, `speech_adapter.ex` | "No banned-token matches" each |
+| async grep `grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test/ \| xargs grep -L 'async: false' \| wc -l` | 12, unchanged; the new test files use none of the four calls |
+| `cd conformance && mix test` | 186 tests, 0 failures (run three times) |
+| `cd conformance && mix credo --strict` | no issues |
+| `cd conformance && mix format --check-formatted` | exit 0 |
+| Suite results for the Fakes | `FakeSpeech` 6/6 speech stream + 6/6 input; `FakeTranscription` 6/6 transcription stream (`test/allm/speech_stream_adapter_test.exs`, `test/allm/transcription_stream_adapter_test.exs`) |
+| Coverage (`mix test --cover`) | `InputPump` 97.14%, `FakeSpeech` 96.67%, `FakeTranscription` 99.26%, both behaviours 100%, total 94.87% |
+| `README.md` | not modified |
+
+Pre-existing, not this sub-phase: `conformance/test/allm/test/speech_adapter_conformance_test.exs:84` warns `unused alias SpeechAdapterConformance` during `cd conformance && mix test`.

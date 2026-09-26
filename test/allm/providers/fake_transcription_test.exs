@@ -1,7 +1,16 @@
 defmodule ALLM.Providers.FakeTranscriptionTest do
   use ExUnit.Case, async: true
 
-  alias ALLM.{Audio, Engine, TranscriptionRequest, TranscriptionResponse, Usage}
+  alias ALLM.{
+    Audio,
+    Engine,
+    TranscriptionEvent,
+    TranscriptionRequest,
+    TranscriptionResponse,
+    TranscriptionStreamRequest,
+    Usage
+  }
+
   alias ALLM.Error.TranscriptionAdapterError
   alias ALLM.Providers.FakeTranscription
   alias ALLM.Test.FakeAudioFixtures, as: Fixtures
@@ -262,6 +271,210 @@ defmodule ALLM.Providers.FakeTranscriptionTest do
       assert_raise ArgumentError, ~r/invalid FakeTranscription script entry/, fn ->
         FakeTranscription.script([{:nope, 1}])
       end
+    end
+  end
+
+  describe "transcribe/2 streaming-only entries" do
+    test "an {:events, _} entry is :unknown with cause :stream_only_script_entry" do
+      opts = [adapter_opts: Fixtures.transcription_events([])]
+
+      assert {:error, %TranscriptionAdapterError{reason: :unknown, metadata: meta}} =
+               FakeTranscription.transcribe(request(), opts)
+
+      assert meta.cause == :stream_only_script_entry
+    end
+
+    test "script/1 accepts an {:events, list} entry" do
+      assert :ok = FakeTranscription.script([{:events, []}])
+    end
+  end
+
+  defp stream_req(opts \\ []), do: TranscriptionStreamRequest.new(opts)
+
+  defp run_stream(input, opts, req \\ stream_req()) do
+    assert {:ok, stream} = FakeTranscription.stream_transcribe(req, input, opts)
+    Enum.to_list(stream)
+  end
+
+  describe "stream_sample_rates/0" do
+    test "is [8_000, 16_000, 24_000]" do
+      assert FakeTranscription.stream_sample_rates() == [8_000, 16_000, 24_000]
+    end
+  end
+
+  describe "stream_transcribe/3" do
+    test "{:ok, \"the quick fox\"} gives one partial per cumulative word prefix, then one committed segment" do
+      events =
+        run_stream([Fixtures.pcm_silence(320)], adapter_opts: Fixtures.transcript("the quick fox"))
+
+      assert for({:partial_transcript, %{text: t}} <- events, do: t) ==
+               ["the", "the quick", "the quick fox"]
+
+      assert for({:committed_transcript, %{text: t}} <- events, do: t) == ["the quick fox"]
+      assert {:transcription_completed, %{text: "the quick fox"}} = List.last(events)
+    end
+
+    test "32,000 bytes at 16 kHz give duration_seconds == 1.0" do
+      events = run_stream([Fixtures.pcm_silence(16_000), Fixtures.pcm_silence(16_000)], [])
+      assert {:transcription_completed, %{duration_seconds: 1.0}} = List.last(events)
+    end
+
+    test "completed.text is the trimmed join, where transcribe/2 returns the text verbatim" do
+      # Distinct cursors: the two calls script content-equal entries.
+      opts = fn ->
+        cursor = FakeTranscription.start_script_cursor()
+        [adapter_opts: Fixtures.transcript(" the quick ") ++ [script_cursor: cursor]]
+      end
+
+      events = run_stream([Fixtures.pcm_silence(2)], opts.())
+      assert {:transcription_completed, %{text: "the quick"}} = List.last(events)
+
+      assert {:ok, %TranscriptionResponse{text: " the quick "}} =
+               FakeTranscription.transcribe(request(), opts.())
+    end
+
+    test "no script gives only the envelope, with text \"\"" do
+      assert [
+               {:transcription_started, %{provider: :fake, session_id: nil}},
+               {:transcription_completed, %{text: "", usage: %Usage{}}}
+             ] = run_stream([Fixtures.pcm_silence(2)], [])
+    end
+
+    test "an input whose total length is odd ends with :invalid_input_chunk at end of input" do
+      events = run_stream([<<1, 2, 3>>], [])
+
+      assert {:error,
+              %TranscriptionAdapterError{
+                reason: :invalid_request,
+                metadata: %{cause: :invalid_input_chunk}
+              }} = List.last(events)
+    end
+
+    test "an odd-length chunk followed by one that completes the sample succeeds" do
+      events = run_stream([<<1, 2, 3>>, <<4>>], [])
+      assert {:transcription_completed, %{duration_seconds: d}} = List.last(events)
+      assert d == 4 / 32_000
+    end
+
+    test ":commit elements are accepted and carry no bytes" do
+      events = run_stream([Fixtures.pcm_silence(2), :commit], [])
+      assert {:transcription_completed, _} = List.last(events)
+    end
+
+    test "an element that is neither a binary nor :commit ends with :invalid_input_chunk" do
+      events = run_stream([:flush], [])
+
+      assert {:error, %TranscriptionAdapterError{metadata: %{cause: :invalid_input_chunk}}} =
+               List.last(events)
+    end
+
+    test "an input that raises ends with :input_raised and a string-only cause" do
+      input = Stream.map([1], fn _ -> raise "mic unplugged" end)
+
+      assert {:error,
+              %TranscriptionAdapterError{metadata: %{cause: :input_raised}, cause: cause} = err} =
+               run_stream(input, []) |> List.last()
+
+      assert %{kind: :error, message: message} = cause
+      assert message =~ "mic unplugged"
+      assert is_binary(Jason.encode!(err))
+    end
+
+    test "a sample_rate outside the set is a synchronous :invalid_request" do
+      assert {:error, %TranscriptionAdapterError{reason: :invalid_request, metadata: meta}} =
+               FakeTranscription.stream_transcribe(stream_req(sample_rate: 44_100), [], [])
+
+      assert meta.sample_rate == 44_100
+    end
+
+    test "adapter_opts[:stream_sample_rates] overrides the rate set" do
+      opts = [adapter_opts: [stream_sample_rates: [44_100]]]
+
+      assert {:ok, _} =
+               FakeTranscription.stream_transcribe(stream_req(sample_rate: 44_100), [], opts)
+
+      assert {:error, %TranscriptionAdapterError{reason: :invalid_request}} =
+               FakeTranscription.stream_transcribe(stream_req(sample_rate: 16_000), [], opts)
+    end
+
+    test "the sample-rate gate fires before a script entry is consumed" do
+      cursor = FakeTranscription.start_script_cursor()
+      opts = [adapter_opts: [transcription_script: [{:ok, "x"}], script_cursor: cursor]]
+
+      assert {:error, _} =
+               FakeTranscription.stream_transcribe(stream_req(sample_rate: 1), [], opts)
+
+      assert FakeTranscription.cursor_index(cursor) == 0
+    end
+
+    test "an {:events, _} entry is emitted verbatim" do
+      scripted = [TranscriptionEvent.partial_transcript("a")]
+
+      assert run_stream([], adapter_opts: Fixtures.transcription_events(scripted)) == scripted
+    end
+
+    test "an {:error, _} entry emits :transcription_started then the error" do
+      assert [
+               {:transcription_started, _},
+               {:error, %TranscriptionAdapterError{reason: :rate_limited}}
+             ] = run_stream([], adapter_opts: Fixtures.transcription_rate_limited())
+    end
+
+    test "an {:ok, %TranscriptionResponse{}} entry is emitted from the struct" do
+      resp = %TranscriptionResponse{text: "hi", language: "en", duration_seconds: 2.0, id: "s1"}
+
+      events = run_stream([], adapter_opts: [transcription_script: [{:ok, resp}]])
+
+      assert [{:transcription_started, %{session_id: "s1"}} | _] = events
+      assert {:committed_transcript, %{text: "hi", language: "en"}} in events
+
+      assert {:transcription_completed, %{text: "hi", language: "en", duration_seconds: 2.0}} =
+               List.last(events)
+    end
+
+    test "request_id, model and metadata reach the envelope" do
+      req = stream_req(model: "rt", metadata: %{"k" => "v"})
+
+      events = run_stream([], [request_id: "rid"], req)
+
+      assert [{:transcription_started, %{request_id: "rid", model: "rt"}} | _] = events
+
+      assert {:transcription_completed, %{request_id: "rid", metadata: %{"k" => "v"}}} =
+               List.last(events)
+    end
+
+    test "a mailbox-dependent input times out: the input is reduced in another process" do
+      input = Stream.repeatedly(fn -> receive(do: ({:pcm, x} -> x)) end)
+      send(self(), {:pcm, <<0, 0>>})
+
+      assert [
+               {:transcription_started, _},
+               {:error, %TranscriptionAdapterError{reason: :timeout}}
+             ] = run_stream(input, stream_timeout: 100)
+
+      assert_received {:pcm, <<0, 0>>}
+    end
+  end
+
+  describe "stream cursor timing" do
+    test "two unreduced stream calls consume two entries; a third finds the script exhausted" do
+      opts = [adapter_opts: [transcription_script: [{:ok, "one"}, {:ok, "two"}]]]
+
+      assert {:ok, _} = FakeTranscription.stream_transcribe(stream_req(), [], opts)
+      assert {:ok, _} = FakeTranscription.stream_transcribe(stream_req(), [], opts)
+
+      assert {:error,
+              %TranscriptionAdapterError{metadata: %{cause: :transcription_script_exhausted}}} =
+               FakeTranscription.stream_transcribe(stream_req(), [], opts)
+    end
+
+    test "{:retry_until_call, 2}: the first stream is only a :rate_limited error, the second emits the next entry" do
+      opts = [adapter_opts: Fixtures.transcription_retry_until_call(2, "done")]
+
+      assert [{:error, %TranscriptionAdapterError{reason: :rate_limited, retry_after_ms: 0}}] =
+               run_stream([], opts)
+
+      assert {:transcription_completed, %{text: "done"}} = run_stream([], opts) |> List.last()
     end
   end
 end

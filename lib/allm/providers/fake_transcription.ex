@@ -1,7 +1,7 @@
 defmodule ALLM.Providers.FakeTranscription do
   @moduledoc """
   Deterministic, scripted adapter for speech-to-text testing. Implements
-  `ALLM.TranscriptionAdapter`.
+  `ALLM.TranscriptionAdapter` and `ALLM.TranscriptionStreamAdapter`.
 
   Layer B — runtime. FakeTranscription is the canonical testing
   transcription adapter; it ships in `lib/` (not `test/support/`) because
@@ -57,6 +57,26 @@ defmodule ALLM.Providers.FakeTranscription do
   for the first `n - 1` calls against this entry, then advances to the next
   entry on call `n`. Consecutive entries of this shape chain.
 
+  | Entry | `transcribe/2` | `stream_transcribe/3` |
+  |-------|----------------|-----------------------|
+  | `{:ok, text}` | `text` as the transcript | after the input is consumed: one partial per cumulative word prefix, one committed segment, `:transcription_completed` |
+  | `{:ok, %TranscriptionResponse{}}` | the struct | the struct's fields as events |
+  | `{:error, err}` | `{:error, err}` | `:transcription_started`, then `{:error, err}` |
+  | `{:events, events}` | `:unknown` with `metadata.cause: :stream_only_script_entry` | `events`, verbatim |
+  | `{:retry_until_call, n}` | `:rate_limited` error | a stream whose only event is a `:rate_limited` error |
+  | absent or `[]` script | `text: ""` | `:transcription_completed` with `text: ""` |
+
+  ## Streaming
+
+  `stream_transcribe/3` resolves its script entry and advances the cursor
+  **at call time**, before it returns `{:ok, stream}`, so two calls consume
+  two entries even if neither stream is reduced. Streams are never retried,
+  so on the stream path `{:retry_until_call, n}` returns a stream holding
+  only the rate-limit error while the entry's visit counter (shared with
+  `transcribe/2`) is below `n`. The input is reduced through
+  `ALLM.Providers.Support.InputPump`, in another process, as a real adapter
+  reduces it. `stream_sample_rates/0` is `[8_000, 16_000, 24_000]`.
+
   ## Cursor behaviour
 
   Multi-call scripts advance a per-process cursor on every call. The cursor
@@ -85,8 +105,8 @@ defmodule ALLM.Providers.FakeTranscription do
   ## Test-only capture seam
 
   Pass `adapter_opts[:capture_pid]` with a pid to receive a side-channel
-  message every time `transcribe/2` is invoked, BEFORE any gate runs and
-  before the script is consulted:
+  message every time `transcribe/2` or `stream_transcribe/3` is invoked,
+  BEFORE any gate runs and before the script is consulted:
 
       {ALLM.Providers.FakeTranscription, :call, %{request: request, opts: opts}}
 
@@ -101,11 +121,25 @@ defmodule ALLM.Providers.FakeTranscription do
   """
 
   @behaviour ALLM.TranscriptionAdapter
+  @behaviour ALLM.TranscriptionStreamAdapter
 
-  alias ALLM.{Audio, TranscriptionRequest, TranscriptionResponse, Usage}
+  alias ALLM.{
+    Audio,
+    TranscriptionEvent,
+    TranscriptionRequest,
+    TranscriptionResponse,
+    TranscriptionStreamRequest,
+    Usage
+  }
+
   alias ALLM.Error.TranscriptionAdapterError
+  alias ALLM.Providers.Support.InputPump
+
+  require InputPump
 
   @max_audio_bytes 1024
+  @stream_sample_rates [8_000, 16_000, 24_000]
+  @stream_timeout 60_000
 
   # ---------------------------------------------------------------------------
   # ALLM.TranscriptionAdapter — max_audio_bytes/0
@@ -175,9 +209,13 @@ defmodule ALLM.Providers.FakeTranscription do
     maybe_capture(request, opts)
     adapter_opts = Keyword.get(opts, :adapter_opts, [])
 
-    case gate(request, Keyword.get(adapter_opts, :max_audio_bytes) || max_audio_bytes()) do
-      :ok -> run_scripted(request, opts)
-      {:error, _} = error -> error
+    with :ok <- gate(request, Keyword.get(adapter_opts, :max_audio_bytes) || max_audio_bytes()) do
+      case resolve_script(opts) do
+        :default -> {:ok, build_response("", request, opts)}
+        :exhausted -> {:error, exhausted_error()}
+        :retry -> {:error, retry_error()}
+        {:entry, entry} -> interpret_entry(entry, request, opts)
+      end
     end
   end
 
@@ -208,6 +246,269 @@ defmodule ALLM.Providers.FakeTranscription do
   defp measure(_other), do: {:error, :invalid_source}
 
   # ---------------------------------------------------------------------------
+  # ALLM.TranscriptionStreamAdapter
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Return the PCM sample rates `stream_transcribe/3` accepts:
+  `#{inspect(@stream_sample_rates)}`. Override per call with
+  `adapter_opts[:stream_sample_rates]`.
+
+  ## Examples
+
+      iex> ALLM.Providers.FakeTranscription.stream_sample_rates()
+      [8000, 16000, 24000]
+  """
+  @impl ALLM.TranscriptionStreamAdapter
+  @spec stream_sample_rates() :: [pos_integer()]
+  def stream_sample_rates, do: @stream_sample_rates
+
+  @doc """
+  Stream a scripted realtime transcription as `ALLM.TranscriptionEvent`
+  values.
+
+  Gate, before the script is consulted: `request.sample_rate` must be in
+  `adapter_opts[:stream_sample_rates] || stream_sample_rates()`, else a
+  synchronous `{:error, %TranscriptionAdapterError{reason: :invalid_request}}`
+  with `metadata.sample_rate`.
+
+  The script entry is resolved and the cursor advanced **at call time**,
+  before the stream is returned. The input is reduced lazily, when the
+  stream is, through `ALLM.Providers.Support.InputPump`, and every element
+  is checked as a real adapter checks it: a binary or `:commit`, else
+  `metadata.cause: :invalid_input_chunk`. An input whose total length is odd
+  ends the stream with `:invalid_input_chunk` at end of input; an odd-length
+  chunk followed by one that completes the sample is not an error. An input
+  that raises ends it with `:input_raised`, one whose pump dies from an exit
+  signal with `:input_crashed`, each with a string-only `%{kind, message}`
+  map on the error's `:cause`. `opts[:stream_timeout]` (default 60,000 ms)
+  bounds the silence between input chunks.
+
+  Once the input is exhausted:
+
+    * `{:ok, text}` — one `:partial_transcript` per cumulative word prefix
+      of `text`, one `:committed_transcript` of `text`, then
+      `:transcription_completed`. A `text` with no words emits no segment.
+    * absent script — `:transcription_completed` with `text: ""`.
+
+  `:transcription_completed` carries the committed text trimmed (the
+  normative join), `duration_seconds` computed from the bytes consumed as
+  `bytes / (sample_rate * 2)`, `opts[:request_id]` and `request.metadata`.
+
+  `{:error, err}`, `{:events, events}`, `{:ok, %TranscriptionResponse{}}` and
+  `{:retry_until_call, n}` behave as for `ALLM.Providers.FakeSpeech`'s
+  stream callbacks; the input is not reduced.
+
+  ## Examples
+
+      iex> req = ALLM.TranscriptionStreamRequest.new(sample_rate: 16_000)
+      iex> opts = [adapter_opts: [transcription_script: [{:ok, "hi there"}]]]
+      iex> {:ok, events} = ALLM.Providers.FakeTranscription.stream_transcribe(req, [<<0::size(256)-unit(8)>>], opts)
+      iex> for {:partial_transcript, %{text: t}} <- events, do: t
+      ["hi", "hi there"]
+  """
+  @impl ALLM.TranscriptionStreamAdapter
+  @spec stream_transcribe(
+          TranscriptionStreamRequest.t(),
+          Enumerable.t(binary() | :commit),
+          keyword()
+        ) ::
+          {:ok, Enumerable.t(TranscriptionEvent.t())} | {:error, TranscriptionAdapterError.t()}
+  def stream_transcribe(%TranscriptionStreamRequest{} = request, input, opts) when is_list(opts) do
+    maybe_capture(request, opts)
+    adapter_opts = Keyword.get(opts, :adapter_opts, [])
+    rates = Keyword.get(adapter_opts, :stream_sample_rates) || stream_sample_rates()
+
+    with :ok <- gate_sample_rate(request.sample_rate, rates) do
+      case resolve_script(opts) do
+        :exhausted ->
+          {:error, exhausted_error()}
+
+        :retry ->
+          {:ok, [{:error, retry_error()}]}
+
+        :default ->
+          {:ok, input_stream(request, input, opts, "")}
+
+        {:entry, {:ok, text}} when is_binary(text) ->
+          {:ok, input_stream(request, input, opts, text)}
+
+        {:entry, entry} ->
+          {:ok, stream_entry_events(entry, request, opts)}
+      end
+    end
+  end
+
+  defp gate_sample_rate(rate, rates) do
+    if rate in rates do
+      :ok
+    else
+      {:error,
+       TranscriptionAdapterError.new(:invalid_request,
+         message: "sample_rate #{inspect(rate)} is not one of #{inspect(rates)}",
+         metadata: %{field: :sample_rate, sample_rate: rate, supported: rates}
+       )}
+    end
+  end
+
+  defp stream_entry_events({:ok, %TranscriptionResponse{} = response}, _request, opts) do
+    request_id = Keyword.get(opts, :request_id, response.request_id)
+
+    [
+      TranscriptionEvent.transcription_started(%{
+        request_id: request_id,
+        model: response.model,
+        provider: response.provider,
+        session_id: response.id
+      })
+      | segment_events(response.text, response.language)
+    ] ++
+      [
+        TranscriptionEvent.transcription_completed(%{
+          text: String.trim(response.text),
+          language: response.language,
+          duration_seconds: response.duration_seconds,
+          request_id: request_id,
+          usage: response.usage,
+          metadata: response.metadata
+        })
+      ]
+  end
+
+  defp stream_entry_events({:error, %TranscriptionAdapterError{} = err}, request, opts),
+    do: [started_event(request, opts), {:error, err}]
+
+  defp stream_entry_events({:events, events}, _request, _opts) when is_list(events), do: events
+
+  defp started_event(request, opts) do
+    TranscriptionEvent.transcription_started(%{
+      request_id: Keyword.get(opts, :request_id),
+      model: request.model,
+      provider: :fake,
+      session_id: nil
+    })
+  end
+
+  # One partial per cumulative word prefix, then the committed segment. A
+  # text with no words is no segment at all.
+  defp segment_events(text, language) do
+    case String.split(text) do
+      [] ->
+        []
+
+      words ->
+        partials =
+          for n <- 1..length(words),
+              do: TranscriptionEvent.partial_transcript(Enum.join(Enum.take(words, n), " "))
+
+        partials ++ [TranscriptionEvent.committed_transcript(text, language)]
+    end
+  end
+
+  defp input_stream(request, input, opts, text) do
+    adapter_opts = Keyword.get(opts, :adapter_opts, [])
+    window = Keyword.get(adapter_opts, :input_window, InputPump.default_window())
+    timeout = Keyword.get(opts, :stream_timeout, @stream_timeout)
+
+    Stream.resource(
+      fn ->
+        {pid, ref} = InputPump.start(input, self(), window)
+
+        %{
+          pid: pid,
+          ref: ref,
+          text: text,
+          request: request,
+          opts: opts,
+          timeout: timeout,
+          pending: [started_event(request, opts)],
+          bytes: 0,
+          done?: false
+        }
+      end,
+      &next_input_events/1,
+      fn state -> InputPump.stop(state.pid, state.ref) end
+    )
+  end
+
+  defp next_input_events(%{pending: [_ | _] = pending} = state),
+    do: {pending, %{state | pending: []}}
+
+  defp next_input_events(%{done?: true} = state), do: {:halt, state}
+
+  defp next_input_events(%{ref: ref} = state) do
+    receive do
+      message when InputPump.is_pump_message(message, ref) ->
+        case InputPump.classify(message, ref) do
+          {:input, chunk} ->
+            InputPump.ack(state.pid, ref)
+            on_chunk(chunk, state)
+
+          :done ->
+            finish(on_input_done(state), state)
+
+          {:failed, cause, info} ->
+            finish([input_failure(cause, info)], state)
+        end
+    after
+      state.timeout ->
+        err =
+          TranscriptionAdapterError.new(:timeout,
+            message: "stream_timeout exceeded waiting for input",
+            metadata: %{cause: :stream_timeout}
+          )
+
+        finish([{:error, err}], state)
+    end
+  end
+
+  defp on_chunk(:commit, state), do: {[], state}
+
+  defp on_chunk(chunk, state) when is_binary(chunk),
+    do: {[], %{state | bytes: state.bytes + byte_size(chunk)}}
+
+  defp on_chunk(_chunk, state),
+    do: finish([invalid_chunk_error("audio chunks must be binaries or :commit")], state)
+
+  # A PCM16 sample is two bytes; an odd byte left at end of input is half a
+  # sample the provider could never receive.
+  defp on_input_done(%{bytes: bytes}) when rem(bytes, 2) == 1,
+    do: [invalid_chunk_error("the input ended mid-sample (odd total length)")]
+
+  defp on_input_done(%{request: request, opts: opts, text: text, bytes: bytes}) do
+    completed =
+      TranscriptionEvent.transcription_completed(%{
+        text: String.trim(text),
+        language: nil,
+        duration_seconds: bytes / (request.sample_rate * 2),
+        request_id: Keyword.get(opts, :request_id),
+        usage: %Usage{},
+        metadata: request.metadata
+      })
+
+    segment_events(text, nil) ++ [completed]
+  end
+
+  defp finish(events, state), do: {events, %{state | done?: true}}
+
+  defp invalid_chunk_error(message) do
+    {:error,
+     TranscriptionAdapterError.new(:invalid_request,
+       message: message,
+       metadata: %{cause: :invalid_input_chunk}
+     )}
+  end
+
+  defp input_failure(cause, info) do
+    {:error,
+     TranscriptionAdapterError.new(:invalid_request,
+       message: "the input stream failed: #{info.message}",
+       metadata: %{cause: cause},
+       cause: info
+     )}
+  end
+
+  # ---------------------------------------------------------------------------
   # Public helpers
   # ---------------------------------------------------------------------------
 
@@ -216,6 +517,7 @@ defmodule ALLM.Providers.FakeTranscription do
           {:ok, String.t()}
           | {:ok, TranscriptionResponse.t()}
           | {:error, TranscriptionAdapterError.t()}
+          | {:events, [TranscriptionEvent.t()]}
           | {:retry_until_call, pos_integer()}
 
   @doc """
@@ -229,6 +531,9 @@ defmodule ALLM.Providers.FakeTranscription do
     * `{:ok, %ALLM.TranscriptionResponse{}}` — return the struct verbatim.
     * `{:error, %ALLM.Error.TranscriptionAdapterError{}}` — return the struct
       verbatim.
+    * `{:events, events}` — for `stream_transcribe/3`, emit `events`
+      verbatim. `transcribe/2` answers it with `:unknown` and
+      `metadata.cause: :stream_only_script_entry`.
     * `{:retry_until_call, n}` — synthetic `:rate_limited` for the first
       `n - 1` calls against this entry. Consecutive entries of this shape
       chain into a layered budget.
@@ -284,7 +589,7 @@ defmodule ALLM.Providers.FakeTranscription do
   # Internals
   # ---------------------------------------------------------------------------
 
-  defp maybe_capture(%TranscriptionRequest{} = request, opts) do
+  defp maybe_capture(request, opts) do
     adapter_opts = Keyword.get(opts, :adapter_opts, [])
 
     case Keyword.get(adapter_opts, :capture_pid) do
@@ -297,7 +602,14 @@ defmodule ALLM.Providers.FakeTranscription do
     end
   end
 
-  defp run_scripted(%TranscriptionRequest{} = request, opts) do
+  # Resolve the script entry for this call, moving the cursor. Shared by
+  # `transcribe/2` and `stream_transcribe/3`, so a stream call consumes its
+  # entry at call time, before the stream is returned.
+  #
+  # Returns `:default` (absent or `[]` script), `:exhausted` (a spent
+  # non-empty script), `:retry` (inside a `{:retry_until_call, n}` budget), or
+  # `{:entry, entry}`.
+  defp resolve_script(opts) do
     adapter_opts = Keyword.get(opts, :adapter_opts, [])
     script = Keyword.get(adapter_opts, :transcription_script, [])
 
@@ -308,14 +620,38 @@ defmodule ALLM.Providers.FakeTranscription do
     case Enum.at(script, cursor) do
       nil ->
         _ = advance_cursor(script, adapter_opts)
-        spent_or_default(script, request, opts)
+        spent_or_default(script)
 
       {:retry_until_call, n} ->
-        handle_retry_until_call(script, cursor, n, request, opts, adapter_opts)
+        resolve_retry_until_call(script, cursor, n, adapter_opts)
 
       entry ->
         _ = advance_cursor(script, adapter_opts)
-        interpret_entry(entry, request, opts)
+        {:entry, entry}
+    end
+  end
+
+  defp resolve_retry_until_call(script, cursor, n, adapter_opts) do
+    visits = bump_retry_visits(script, cursor, adapter_opts)
+
+    if visits < n do
+      :retry
+    else
+      _ = advance_cursor(script, adapter_opts)
+      next_cursor = cursor + 1
+
+      case Enum.at(script, next_cursor) do
+        nil ->
+          spent_or_default(script)
+
+        {:retry_until_call, m} ->
+          # Chained budgets: land ON the next retry entry and open its budget.
+          resolve_retry_until_call(script, next_cursor, m, adapter_opts)
+
+        next_entry ->
+          _ = advance_cursor(script, adapter_opts)
+          {:entry, next_entry}
+      end
     end
   end
 
@@ -328,32 +664,12 @@ defmodule ALLM.Providers.FakeTranscription do
   defp interpret_entry({:error, %TranscriptionAdapterError{} = err}, _request, _opts),
     do: {:error, err}
 
-  defp handle_retry_until_call(script, cursor, n, request, opts, adapter_opts) do
-    visits = bump_retry_visits(script, cursor, adapter_opts)
-
-    if visits < n do
-      {:error,
-       TranscriptionAdapterError.new(:rate_limited,
-         message: "FakeTranscription retry_until_call hint",
-         retry_after_ms: 0
-       )}
-    else
-      _ = advance_cursor(script, adapter_opts)
-      next_cursor = cursor + 1
-
-      case Enum.at(script, next_cursor) do
-        nil ->
-          spent_or_default(script, request, opts)
-
-        {:retry_until_call, m} ->
-          # Chained budgets: land ON the next retry entry and open its budget.
-          handle_retry_until_call(script, next_cursor, m, request, opts, adapter_opts)
-
-        next_entry ->
-          _ = advance_cursor(script, adapter_opts)
-          interpret_entry(next_entry, request, opts)
-      end
-    end
+  defp interpret_entry({:events, _events}, _request, _opts) do
+    {:error,
+     TranscriptionAdapterError.new(:unknown,
+       message: "FakeTranscription {:events, _} script entries are for stream_transcribe/3 only",
+       metadata: %{cause: :stream_only_script_entry}
+     )}
   end
 
   # MUST key on the SAME identity the cursor helpers use (`cursor_key_id/2`).
@@ -368,14 +684,21 @@ defmodule ALLM.Providers.FakeTranscription do
 
   # An absent (or `[]`) script yields the default empty transcript; a spent
   # NON-EMPTY script is a caller off-by-one and errors.
-  defp spent_or_default([], request, opts), do: {:ok, build_response("", request, opts)}
+  defp spent_or_default([]), do: :default
+  defp spent_or_default(_script), do: :exhausted
 
-  defp spent_or_default(_script, _request, _opts) do
-    {:error,
-     TranscriptionAdapterError.new(:unknown,
-       message: "FakeTranscription script exhausted: no entry at the current cursor position",
-       metadata: %{cause: :transcription_script_exhausted}
-     )}
+  defp exhausted_error do
+    TranscriptionAdapterError.new(:unknown,
+      message: "FakeTranscription script exhausted: no entry at the current cursor position",
+      metadata: %{cause: :transcription_script_exhausted}
+    )
+  end
+
+  defp retry_error do
+    TranscriptionAdapterError.new(:rate_limited,
+      message: "FakeTranscription retry_until_call hint",
+      retry_after_ms: 0
+    )
   end
 
   defp build_response(text, %TranscriptionRequest{} = request, opts) do
@@ -434,12 +757,13 @@ defmodule ALLM.Providers.FakeTranscription do
   defp validate_entry!({:ok, text}) when is_binary(text), do: :ok
   defp validate_entry!({:ok, %TranscriptionResponse{}}), do: :ok
   defp validate_entry!({:error, %TranscriptionAdapterError{}}), do: :ok
+  defp validate_entry!({:events, events}) when is_list(events), do: :ok
   defp validate_entry!({:retry_until_call, n}) when is_integer(n) and n >= 1, do: :ok
 
   defp validate_entry!(other) do
     raise ArgumentError,
           "invalid FakeTranscription script entry: #{inspect(other)} " <>
             "(expected {:ok, text}, {:ok, %TranscriptionResponse{}}, " <>
-            "{:error, %TranscriptionAdapterError{}}, or {:retry_until_call, pos_integer})"
+            "{:error, %TranscriptionAdapterError{}}, {:events, list}, or {:retry_until_call, pos_integer})"
   end
 end

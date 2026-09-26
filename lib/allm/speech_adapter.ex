@@ -37,8 +37,10 @@ defmodule ALLM.SpeechAdapter do
 
   ## HTTP transport guidance
 
-  Use `Req`. Speech synthesis here is request/response: the response body is
-  the finished audio file, and there is no streaming counterpart.
+  Use `Req`. `synthesize/2` is request/response: the response body is the
+  finished audio file. Streaming synthesis, where audio arrives while it is
+  generated, is the separate `ALLM.SpeechStreamAdapter` behaviour, which the
+  same module implements to opt in.
 
   ## Invariants
 

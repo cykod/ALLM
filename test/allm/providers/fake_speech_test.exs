@@ -1,7 +1,7 @@
 defmodule ALLM.Providers.FakeSpeechTest do
   use ExUnit.Case, async: true
 
-  alias ALLM.{Audio, Engine, SpeechRequest, SpeechResponse, Usage}
+  alias ALLM.{Audio, Engine, SpeechEvent, SpeechRequest, SpeechResponse, Usage}
   alias ALLM.Error.SpeechAdapterError
   alias ALLM.Providers.FakeSpeech
   alias ALLM.Test.FakeAudioFixtures, as: Fixtures
@@ -277,5 +277,354 @@ defmodule ALLM.Providers.FakeSpeechTest do
         FakeSpeech.script([{:nope, 1}])
       end
     end
+  end
+
+  describe "synthesize/2 streaming-only entries and sample_rate" do
+    test "reports request.sample_rate on the response" do
+      assert {:ok, resp} = FakeSpeech.synthesize(request(format: :pcm, sample_rate: 16_000), [])
+      assert resp.sample_rate == 16_000
+    end
+
+    test "an {:events, _} entry is :unknown with cause :stream_only_script_entry" do
+      opts = [adapter_opts: Fixtures.speech_events([SpeechEvent.audio_delta("x")])]
+
+      assert {:error, %SpeechAdapterError{reason: :unknown, metadata: meta}} =
+               FakeSpeech.synthesize(request(), opts)
+
+      assert meta.cause == :stream_only_script_entry
+    end
+
+    test "script/1 accepts an {:events, list} entry" do
+      assert :ok = FakeSpeech.script([{:events, []}])
+    end
+  end
+
+  describe "stream_synthesize/2" do
+    test "chunk_bytes: 4 on the 13-byte default audio gives deltas of sizes [4, 4, 4, 1]" do
+      opts = [adapter_opts: [chunk_bytes: 4]]
+      assert {:ok, events} = FakeSpeech.stream_synthesize(request(input: "hi"), opts)
+
+      deltas = for {:audio_delta, b} <- events, do: b
+      assert Enum.map(deltas, &byte_size/1) == [4, 4, 4, 1]
+      assert Enum.join(deltas) == "FAKE-AUDIO:hi"
+    end
+
+    test "the default chunk size is 1,024 bytes" do
+      opts = [adapter_opts: Fixtures.speech_bytes(:binary.copy("a", 2_500))]
+      assert {:ok, events} = FakeSpeech.stream_synthesize(request(), opts)
+
+      assert for({:audio_delta, b} <- events, do: byte_size(b)) == [1_024, 1_024, 452]
+    end
+
+    test "the envelope carries format, mime, sample_rate, model, request_id and metadata" do
+      req = request(format: :pcm, sample_rate: 24_000, model: "m", metadata: %{"k" => "v"})
+      assert {:ok, events} = FakeSpeech.stream_synthesize(req, request_id: "rid")
+
+      assert [{:speech_started, started} | _] = events
+
+      assert started == %{
+               request_id: "rid",
+               model: "m",
+               provider: :fake,
+               format: :pcm,
+               mime_type: "audio/pcm",
+               sample_rate: 24_000
+             }
+
+      assert {:speech_completed, %{request_id: "rid", metadata: %{"k" => "v"}, usage: %Usage{}}} =
+               List.last(events)
+    end
+
+    test "an {:events, _} entry is emitted verbatim" do
+      err = SpeechAdapterError.new(:network_error, metadata: %{bytes_received: 1})
+      scripted = [SpeechEvent.audio_delta("a"), {:error, err}]
+      opts = [adapter_opts: Fixtures.speech_events(scripted)]
+
+      assert {:ok, events} = FakeSpeech.stream_synthesize(request(), opts)
+      assert Enum.to_list(events) == scripted
+    end
+
+    test "an {:error, _} entry emits :speech_started then the error" do
+      opts = [adapter_opts: Fixtures.speech_rate_limited()]
+      assert {:ok, events} = FakeSpeech.stream_synthesize(request(), opts)
+
+      assert [{:speech_started, _}, {:error, %SpeechAdapterError{reason: :rate_limited}}] =
+               events
+    end
+
+    test "an {:ok, %SpeechResponse{}} entry is emitted from the struct" do
+      resp = %SpeechResponse{
+        audio: Audio.from_binary("wav-bytes", "audio/wav"),
+        format: :wav,
+        sample_rate: 8_000,
+        provider: :scripted,
+        metadata: %{a: 1}
+      }
+
+      opts = [adapter_opts: [speech_script: [{:ok, resp}]]]
+      assert {:ok, events} = FakeSpeech.stream_synthesize(request(), opts)
+
+      assert [{:speech_started, %{format: :wav, sample_rate: 8_000, mime_type: "audio/wav"}} | _] =
+               events
+
+      assert for({:audio_delta, b} <- events, into: "", do: b) == "wav-bytes"
+      assert {:speech_completed, %{metadata: %{a: 1}}} = List.last(events)
+    end
+
+    test "an {:ok, %SpeechResponse{}} entry with zero-byte audio ends with :empty_input" do
+      resp = %SpeechResponse{audio: Audio.from_binary("", "audio/mpeg"), format: :mp3}
+      script = [{:ok, resp}]
+
+      for call <- [
+            &FakeSpeech.stream_synthesize(request(), &1),
+            &FakeSpeech.stream_synthesize_input(request(), ["a"], &1)
+          ] do
+        cursor = FakeSpeech.start_script_cursor()
+        assert {:ok, events} = call.(adapter_opts: [speech_script: script, script_cursor: cursor])
+
+        assert [
+                 {:speech_started, %{mime_type: "audio/mpeg"}},
+                 {:error,
+                  %SpeechAdapterError{reason: :invalid_request, metadata: %{cause: :empty_input}}}
+               ] = Enum.to_list(events)
+      end
+    end
+
+    test "an {:ok, %SpeechResponse{}} entry with unreadable audio is a stream error, not a raise" do
+      missing = Path.join(System.tmp_dir!(), "allm-fake-speech-missing-#{System.unique_integer()}")
+
+      for resp <- [
+            SpeechResponse.new(),
+            %SpeechResponse{audio: Audio.from_file(missing <> ".mp3")}
+          ],
+          call <- [
+            &FakeSpeech.stream_synthesize(request(), &1),
+            &FakeSpeech.stream_synthesize_input(request(), ["a"], &1)
+          ] do
+        cursor = FakeSpeech.start_script_cursor()
+        opts = [adapter_opts: [speech_script: [{:ok, resp}], script_cursor: cursor]]
+        assert {:ok, events} = call.(opts)
+
+        assert [
+                 {:speech_started, %{provider: :fake}},
+                 {:error,
+                  %SpeechAdapterError{
+                    reason: :unknown,
+                    metadata: %{cause: :unreadable_script_audio}
+                  }}
+               ] = Enum.to_list(events)
+      end
+    end
+
+    test "empty scripted bytes end with :empty_input" do
+      opts = [adapter_opts: Fixtures.speech_bytes("")]
+      assert {:ok, events} = FakeSpeech.stream_synthesize(request(), opts)
+
+      assert [{:speech_started, _}, {:error, %SpeechAdapterError{metadata: %{cause: :empty_input}}}] =
+               events
+    end
+
+    test "empty input is rejected before a script entry is consumed" do
+      cursor = FakeSpeech.start_script_cursor()
+      opts = [adapter_opts: [speech_script: [{:ok, "x"}], script_cursor: cursor]]
+
+      assert {:error, %SpeechAdapterError{reason: :invalid_request}} =
+               FakeSpeech.stream_synthesize(request(input: ""), opts)
+
+      assert FakeSpeech.cursor_index(cursor) == 0
+    end
+  end
+
+  describe "stream cursor timing" do
+    test "two unreduced stream calls consume two entries; a third finds the script exhausted" do
+      opts = [adapter_opts: [speech_script: [{:ok, "one"}, {:ok, "two"}]]]
+
+      assert {:ok, _unreduced} = FakeSpeech.stream_synthesize(request(), opts)
+      assert {:ok, _unreduced} = FakeSpeech.stream_synthesize_input(request(), ["x"], opts)
+
+      assert {:error, %SpeechAdapterError{metadata: %{cause: :speech_script_exhausted}}} =
+               FakeSpeech.stream_synthesize(request(), opts)
+    end
+
+    test "{:retry_until_call, 2}: the first stream is only a :rate_limited error, the second emits the next entry" do
+      opts = [adapter_opts: Fixtures.speech_retry_until_call(2, "done")]
+
+      assert {:ok, first} = FakeSpeech.stream_synthesize(request(), opts)
+
+      assert [{:error, %SpeechAdapterError{reason: :rate_limited, retry_after_ms: 0}}] =
+               Enum.to_list(first)
+
+      assert {:ok, second} = FakeSpeech.stream_synthesize(request(), opts)
+      assert for({:audio_delta, b} <- second, into: "", do: b) == "done"
+    end
+
+    test "the retry visit counter is shared between synthesize/2 and the stream path" do
+      opts = [adapter_opts: Fixtures.speech_retry_until_call(2, "done")]
+
+      assert {:error, %SpeechAdapterError{reason: :rate_limited}} =
+               FakeSpeech.synthesize(request(), opts)
+
+      assert {:ok, events} = FakeSpeech.stream_synthesize(request(), opts)
+      assert for({:audio_delta, b} <- events, into: "", do: b) == "done"
+    end
+  end
+
+  describe "stream_synthesize_input/3" do
+    test ~s(["a", "", "b"] gives exactly two deltas, one per non-empty chunk) do
+      assert {:ok, stream} = FakeSpeech.stream_synthesize_input(request(), ["a", "", "b"], [])
+
+      assert for({:audio_delta, b} <- stream, do: b) == ["FAKE-AUDIO:a", "FAKE-AUDIO:b"]
+    end
+
+    test "{:ok, bytes} consumes the input, then emits the bytes" do
+      opts = [adapter_opts: Fixtures.speech_bytes("scripted") ++ [chunk_bytes: 3]]
+      assert {:ok, stream} = FakeSpeech.stream_synthesize_input(request(), ["a", "b"], opts)
+
+      assert for({:audio_delta, b} <- stream, do: b) == ["scr", "ipt", "ed"]
+    end
+
+    test "a request shape error is synchronous, before the script and the input" do
+      cursor = FakeSpeech.start_script_cursor()
+      opts = [adapter_opts: [speech_script: [{:ok, "x"}], script_cursor: cursor]]
+      test_pid = self()
+      input = Stream.map(["a"], fn c -> send(test_pid, :reduced) && c end)
+
+      assert {:error, %SpeechAdapterError{reason: :invalid_request, metadata: meta}} =
+               FakeSpeech.stream_synthesize_input(request(format: :bogus), input, opts)
+
+      assert meta.errors == [format: :unknown]
+
+      assert FakeSpeech.cursor_index(cursor) == 0
+      refute_received :reduced
+    end
+
+    test "a non-binary chunk ends the stream with :invalid_input_chunk" do
+      assert {:ok, stream} = FakeSpeech.stream_synthesize_input(request(), ["a", 123], [])
+
+      assert {:error, %SpeechAdapterError{metadata: %{cause: :invalid_input_chunk}}} =
+               stream |> Enum.to_list() |> List.last()
+    end
+
+    test "a non-UTF-8 chunk ends the stream with :invalid_input_chunk" do
+      assert {:ok, stream} = FakeSpeech.stream_synthesize_input(request(), [<<0xFF>>], [])
+
+      assert {:error, %SpeechAdapterError{metadata: %{cause: :invalid_input_chunk}}} =
+               stream |> Enum.to_list() |> List.last()
+    end
+
+    test "an input with no non-empty chunk ends with :empty_input" do
+      assert {:ok, stream} = FakeSpeech.stream_synthesize_input(request(), [], [])
+
+      assert [{:speech_started, _}, {:error, %SpeechAdapterError{metadata: %{cause: :empty_input}}}] =
+               Enum.to_list(stream)
+    end
+
+    test "an input that raises ends with :input_raised and a string-only, encodable cause" do
+      input = Stream.map(["a"], fn _ -> raise "secret-shaped failure" end)
+      assert {:ok, stream} = FakeSpeech.stream_synthesize_input(request(), input, [])
+
+      assert {:error, %SpeechAdapterError{metadata: %{cause: :input_raised}, cause: cause} = err} =
+               stream |> Enum.to_list() |> List.last()
+
+      assert %{kind: :error, message: message} = cause
+      assert message =~ "secret-shaped failure"
+      assert is_binary(Jason.encode!(err))
+    end
+
+    test "an input killed by a linked process's exit ends with :input_crashed; the consumer lives" do
+      input =
+        Stream.resource(
+          fn -> spawn_link(fn -> exit(:boom) end) end,
+          fn pid ->
+            receive do
+            after
+              :infinity -> {[], pid}
+            end
+          end,
+          fn _ -> :ok end
+        )
+
+      assert {:ok, stream} = FakeSpeech.stream_synthesize_input(request(), input, [])
+
+      assert {:error, %SpeechAdapterError{metadata: %{cause: :input_crashed}, cause: cause}} =
+               stream |> Enum.to_list() |> List.last()
+
+      assert cause == %{kind: :exit, message: "** (exit) :boom"}
+      assert Process.alive?(self())
+      refute_received {:DOWN, _, :process, _, _}
+    end
+
+    test "a mailbox-dependent input times out: the input is reduced in another process" do
+      input = Stream.repeatedly(fn -> receive(do: ({:t, x} -> x)) end)
+      send(self(), {:t, "a"})
+
+      assert {:ok, stream} =
+               FakeSpeech.stream_synthesize_input(request(), input, stream_timeout: 100)
+
+      assert [{:speech_started, _}, {:error, %SpeechAdapterError{reason: :timeout}}] =
+               Enum.to_list(stream)
+
+      # The test process's own message was never consumed by the input.
+      assert_received {:t, "a"}
+    end
+
+    test "the stream timeout resets on every input message, so a slow but steady input does not time out" do
+      input = Stream.map(1..4, fn n -> Process.sleep(60) && "w#{n}" end)
+
+      assert {:ok, stream} =
+               FakeSpeech.stream_synthesize_input(request(), input, stream_timeout: 150)
+
+      events = Enum.to_list(stream)
+      assert {:speech_completed, _} = List.last(events)
+      assert length(for {:audio_delta, _} <- events, do: 1) == 4
+    end
+
+    test "a halt stops the pump and leaves no pump message in the consumer's mailbox" do
+      test_pid = self()
+
+      input =
+        Stream.repeatedly(fn ->
+          send(test_pid, {:pump_is, self()})
+          "word"
+        end)
+
+      assert {:ok, stream} = FakeSpeech.stream_synthesize_input(request(), input, [])
+      assert [{:speech_started, _}, {:audio_delta, _}] = Enum.take(stream, 2)
+
+      assert_received {:pump_is, pump}
+      assert wait_until(fn -> not Process.alive?(pump) end)
+      refute_received {_ref, {:input, _}}
+      refute_received {_ref, :input_done}
+      refute_received {:DOWN, _, :process, ^pump, _}
+    end
+
+    test "adapter_opts[:input_window] bounds the unacknowledged input" do
+      test_pid = self()
+
+      input =
+        Stream.map(1..100, fn n ->
+          send(test_pid, {:pulled, n})
+          "w"
+        end)
+
+      opts = [adapter_opts: [input_window: 2]]
+      assert {:ok, stream} = FakeSpeech.stream_synthesize_input(request(), input, opts)
+
+      # Suspend after :speech_started: the pump is running and nothing has
+      # been acknowledged. It pulls a third element, then blocks on credit.
+      assert {:suspended, [{:speech_started, _}], continuation} =
+               Enumerable.reduce(stream, {:cont, []}, fn event, acc -> {:suspend, [event | acc]} end)
+
+      assert_receive {:pulled, 3}
+      refute_receive {:pulled, 4}, 50
+
+      assert {:halted, _} = continuation.({:halt, []})
+    end
+  end
+
+  defp wait_until(fun, ms \\ 500) do
+    Enum.reduce_while(1..div(ms, 5), false, fn _, _ ->
+      if fun.(), do: {:halt, true}, else: Process.sleep(5) && {:cont, false}
+    end)
   end
 end

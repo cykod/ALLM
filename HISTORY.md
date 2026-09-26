@@ -1,3 +1,20 @@
+## [FEAT] Add streaming speech/transcription behaviours and Fakes
+*Saturday, September 26th at 9pm*
+Phase 26.3 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 audio streaming). 
+This commit adds the ALLM.SpeechStreamAdapter and 
+ALLM.TranscriptionStreamAdapter behaviours. It also adds 
+ALLM.Providers.Support.InputPump, which reduces a caller's input enumerable in 
+a monitored, credit-windowed process. The pump is linked to a watchdog and has 
+a selective-receive message classifier, so input failures end the stream as 
+errors with a string-only cause, and a halt leaves no pump or message behind. 
+FakeSpeech and FakeTranscription gain streaming with call-time script cursors. 
+Three conformance suites go into conformance/ with negative-controlled 
+meta-tests. FinchStub gains an Agent-backed mode whose sender is linked like 
+real Finch. The fix pass routed empty or unreadable scripted audio through the 
+invariant-3 terminal and moved the pump-consumer protocol into InputPump.
+
+---
+
 ## [FEAT] Add Layer A types for streaming speech and transcription
 *Saturday, September 26th at 8pm*
 Phase 26.2 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 audio). Adds 

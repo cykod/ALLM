@@ -40,6 +40,20 @@ defmodule ALLM.Test.FinchStub do
   per-install ref. ExUnit `async: true` is safe — each test runs in its own
   process and its own dictionary.
 
+  ## Agent-backed mode (`install_shared/2`)
+
+  The default mode only works when the adapter's stream is reduced in the
+  installing process. An input enumerable reduced by
+  `ALLM.Providers.Support.InputPump` runs in the pump process instead, so
+  `install_shared/2` keeps the state in an `Agent` whose pid is passed as
+  `finch_stub_ref:` (the one stub key `ALLM.Providers.Support.Transport`
+  forwards). In that mode `async_request/3` returns a fresh reference per
+  call, delivers the frames to **the process that called
+  `async_request/3`**, and sends them from a process `spawn_link`ed to that
+  caller, as real Finch's HTTP/1 pool links its request process to the
+  caller. A killed caller therefore takes the sender down with it.
+  `senders/1` lists the sender pids.
+
   ## Worked example
 
       ref = ALLM.Test.FinchStub.install([
@@ -89,11 +103,42 @@ defmodule ALLM.Test.FinchStub do
   end
 
   @doc """
-  Read the cancellation counter for a stub ref.
+  Install a stub whose state lives in an `Agent`, so `async_request/3` may
+  be called from any process. Returns the Agent pid; pass it as
+  `finch_stub_ref:`. Takes the same chunks and options as `install/2`.
+  """
+  @spec install_shared([chunk()], keyword()) :: pid()
+  def install_shared(chunks, opts) when is_list(chunks) and is_list(opts) do
+    {:ok, agent} =
+      Agent.start_link(fn ->
+        %{
+          chunks: chunks,
+          delay_ms: Keyword.get(opts, :delay_ms, 1),
+          initial_status: Keyword.get(opts, :initial_status, 200),
+          cancel_count: 0,
+          captured_opts: nil,
+          senders: []
+        }
+      end)
+
+    agent
+  end
+
+  @doc """
+  The sender pids an Agent-backed stub has spawned, in call order.
+  """
+  @spec senders(pid()) :: [pid()]
+  def senders(agent) when is_pid(agent), do: Agent.get(agent, & &1.senders)
+
+  @doc """
+  Read the cancellation counter for a stub ref (or an Agent-backed stub's
+  pid).
 
   Returns 0 when no cancel has been recorded.
   """
-  @spec cancel_count(ref()) :: non_neg_integer()
+  @spec cancel_count(ref() | pid()) :: non_neg_integer()
+  def cancel_count(agent) when is_pid(agent), do: Agent.get(agent, & &1.cancel_count)
+
   def cancel_count(ref) when is_reference(ref) do
     %{cancel_count: n} = Process.get({:allm_finch_stub, ref})
     n
@@ -114,8 +159,30 @@ defmodule ALLM.Test.FinchStub do
   `:pool_timeout`).
   """
   @spec async_request(any(), atom(), keyword()) :: ref()
-  def async_request(_req, _name, opts) when is_list(opts) do
-    stub_ref = Keyword.fetch!(opts, :finch_stub_ref)
+  def async_request(req, name, opts) when is_list(opts) do
+    case Keyword.fetch!(opts, :finch_stub_ref) do
+      agent when is_pid(agent) -> async_request_shared(agent, opts)
+      stub_ref -> async_request_local(req, name, stub_ref, opts)
+    end
+  end
+
+  defp async_request_shared(agent, opts) do
+    ref = make_ref()
+    caller = self()
+    state = Agent.get_and_update(agent, fn s -> {s, %{s | captured_opts: opts}} end)
+
+    sender =
+      spawn_link(fn ->
+        send_initial_frames(caller, ref, state.initial_status)
+        send_chunks(caller, ref, state.chunks, state.delay_ms)
+      end)
+
+    Agent.update(agent, fn s -> %{s | senders: s.senders ++ [sender]} end)
+    Process.put({:allm_finch_stub_shared, ref}, agent)
+    ref
+  end
+
+  defp async_request_local(_req, _name, stub_ref, opts) do
     state = Process.get({:allm_finch_stub, stub_ref}) || raise "no stub installed for ref"
 
     Process.put({:allm_finch_stub, stub_ref}, %{state | captured_opts: opts})
@@ -138,7 +205,9 @@ defmodule ALLM.Test.FinchStub do
   `async_request/3` call for this ref. Returns `nil` when the adapter
   hasn't called `async_request/3` yet.
   """
-  @spec captured_opts(ref()) :: keyword() | nil
+  @spec captured_opts(ref() | pid()) :: keyword() | nil
+  def captured_opts(agent) when is_pid(agent), do: Agent.get(agent, & &1.captured_opts)
+
   def captured_opts(ref) when is_reference(ref) do
     %{captured_opts: opts} = Process.get({:allm_finch_stub, ref})
     opts
@@ -150,6 +219,16 @@ defmodule ALLM.Test.FinchStub do
   """
   @spec cancel_async_request(ref()) :: :ok
   def cancel_async_request(ref) when is_reference(ref) do
+    case Process.get({:allm_finch_stub_shared, ref}) do
+      agent when is_pid(agent) ->
+        Agent.update(agent, fn s -> %{s | cancel_count: s.cancel_count + 1} end)
+
+      nil ->
+        cancel_local(ref)
+    end
+  end
+
+  defp cancel_local(ref) do
     state = Process.get({:allm_finch_stub, ref})
     Process.put({:allm_finch_stub, ref}, %{state | cancel_count: state.cancel_count + 1})
     :ok

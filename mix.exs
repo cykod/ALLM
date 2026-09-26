@@ -119,7 +119,9 @@ defmodule ALLM.MixProject do
           ALLM.EmbeddingAdapter,
           ALLM.ModerationAdapter,
           ALLM.SpeechAdapter,
-          ALLM.TranscriptionAdapter
+          ALLM.TranscriptionAdapter,
+          ALLM.SpeechStreamAdapter,
+          ALLM.TranscriptionStreamAdapter
         ],
         Providers: [
           ALLM.Providers.OpenAI,
@@ -147,7 +149,8 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Support.ImageMime,
           ALLM.Providers.Support.Transport,
           ALLM.Providers.Support.HTTPResponse,
-          ALLM.Providers.Support.TranscriptionAdapter
+          ALLM.Providers.Support.TranscriptionAdapter,
+          ALLM.Providers.Support.InputPump
         ],
         Defaults: [
           ALLM.ToolExecutor.Default,
