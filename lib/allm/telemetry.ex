@@ -7,7 +7,9 @@ defmodule ALLM.Telemetry do
   `ALLM.stream_generate/3`, `ALLM.step/3`, `ALLM.stream_step/3`,
   `ALLM.chat/3`, `ALLM.stream/3`, `ALLM.generate_image/3` &
   siblings, `ALLM.embed/3`, `ALLM.moderate/3`, `ALLM.synthesize/3`,
-  `ALLM.transcribe/3`) is wrapped in a span. Attach `:telemetry.attach_many/4`
+  `ALLM.transcribe/3`, `ALLM.stream_synthesize/3`,
+  `ALLM.stream_synthesize_input/3`, `ALLM.stream_transcribe/3`) is wrapped
+  in a span. Attach `:telemetry.attach_many/4`
   handlers to observe every execution.
 
   ## Emitted events
@@ -26,6 +28,9 @@ defmodule ALLM.Telemetry do
   | `[:allm, :moderate, :start \\| :stop \\| :exception]` | content moderation | `duration`, plus `result_count` and `flagged_count` on `:stop` | `request_id`, `engine`, `model`, `input_count`, `multimodal`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :synthesize, :start \\| :stop \\| :exception]` | text-to-speech | `duration`, plus `audio_bytes` on `:stop` | `request_id`, `engine`, `model`, `input_length`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :transcribe, :start \\| :stop \\| :exception]` | speech-to-text | `duration`, plus `text_length` on `:stop` | `request_id`, `engine`, `model`, `audio_mime`, plus `usage`, `response`, `error` on `:stop` |
+  | `[:allm, :stream_synthesize, :start \\| :stop \\| :exception]` | streaming text-to-speech (`ALLM.stream_synthesize/3` and `ALLM.stream_synthesize_input/3`) | `duration`; `:stop` fires when the stream is returned, not when it drains | `request_id`, `engine`, `model`, `input_length` (`nil` for the input form), plus `response: nil` on `:stop` |
+  | `[:allm, :stream_transcribe, :start \\| :stop \\| :exception]` | streaming speech-to-text (`ALLM.stream_transcribe/3`) | as above | `request_id`, `engine`, `model`, `sample_rate`, plus `response: nil` on `:stop` |
+  | `[:allm, :audio, :first_chunk]` | once per audio stream, at its first `:audio_delta` or `:partial_transcript` | `latency` (native time units from the façade call) | `request_id`, `capability` (`:speech` or `:transcription`), `provider_model` |
   | `[:allm, :adapter, :retry]` | per-attempt retry (non-streaming) | `system_time` | `attempt`, `delay_ms`, `reason`, `request_id` |
 
   `[:allm, :embed, :stop]` carries `embedding_count` and `chunk_count` on
@@ -70,6 +75,16 @@ defmodule ALLM.Telemetry do
   not the payload, but a JSON encoder or `:erlang.term_to_binary/1` does
   not). `[:allm, :transcribe, :start]` metadata does not carry the request
   audio at all — only its MIME type.
+
+  The streaming audio spans follow the chat `:stream` carve-out: `:stop`
+  carries `response: nil`, because the span closes when the enumerable is
+  returned, before any audio has arrived. `[:allm, :audio, :first_chunk]` is
+  the event that measures time to first audio (or first partial
+  transcript), which is the latency a voice interface is judged by.
+  `provider_model` is the `:model` on the stream's start event, or the
+  dispatched request's model when the adapter reported none (`nil` when
+  neither is known). Neither the spans nor the event carry audio bytes or
+  transcript text.
 
   ## Common metadata
 
@@ -124,6 +139,8 @@ defmodule ALLM.Telemetry do
           | :moderate
           | :synthesize
           | :transcribe
+          | :stream_synthesize
+          | :stream_transcribe
 
   @valid_span_names [
     :generate,
@@ -135,7 +152,9 @@ defmodule ALLM.Telemetry do
     :embed,
     :moderate,
     :synthesize,
-    :transcribe
+    :transcribe,
+    :stream_synthesize,
+    :stream_transcribe
   ]
 
   @doc """
@@ -196,7 +215,8 @@ defmodule ALLM.Telemetry do
   Raises `ArgumentError` for an unrecognised `name` (typo guard against
   `:chats` / `:steps`); valid names are
   `:generate | :stream | :step | :chat | :tool | :image | :embed |
-  :moderate`.
+  :moderate | :synthesize | :transcribe | :stream_synthesize |
+  :stream_transcribe`.
 
   ## Carve-out: `:stream :stop` `:response` is `nil`
 

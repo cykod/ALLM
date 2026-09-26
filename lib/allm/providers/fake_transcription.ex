@@ -280,8 +280,8 @@ defmodule ALLM.Providers.FakeTranscription do
   ends the stream with `:invalid_input_chunk` at end of input; an odd-length
   chunk followed by one that completes the sample is not an error. An input
   that raises ends it with `:input_raised`, one whose pump dies from an exit
-  signal with `:input_crashed`, each with a string-only `%{kind, message}`
-  map on the error's `:cause`. `opts[:stream_timeout]` (default 60,000 ms)
+  signal with `:input_crashed`, each with a `%{kind, message}` map
+  (an atom and a string) on the error's `:cause`. `opts[:stream_timeout]` (default 60,000 ms)
   bounds the silence between input chunks.
 
   Once the input is exhausted:

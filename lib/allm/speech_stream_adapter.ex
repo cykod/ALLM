@@ -98,8 +98,9 @@ defmodule ALLM.SpeechStreamAdapter do
        `:invalid_request` and `metadata.cause: :input_raised`; an input
        whose reducing process dies from an exit signal ends it with
        `metadata.cause: :input_crashed`. In both cases the error's `:cause`
-       field is a string-only `%{kind: kind, message: message}` map, never
-       the raw exception or exit term, and the consuming process is never
+       field is a `%{kind: kind, message: message}` map (`kind` is
+       `:error`, `:throw` or `:exit`, `message` a string), never the raw
+       exception or exit term, and the consuming process is never
        killed.
     8. Concatenating every `:audio_delta` payload gives non-empty audio,
        and the `:mime_type` on `:speech_started` begins `audio/`.

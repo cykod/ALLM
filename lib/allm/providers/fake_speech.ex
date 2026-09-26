@@ -378,8 +378,8 @@ defmodule ALLM.Providers.FakeSpeech do
   non-UTF-8 chunk ends it with `metadata.cause: :invalid_input_chunk`; an
   input with no non-empty chunk ends it with `:empty_input`; an input that
   raises ends it with `:input_raised` and one whose pump dies from an exit
-  signal with `:input_crashed`, each with a string-only
-  `%{kind, message}` map on the error's `:cause`. `opts[:stream_timeout]`
+  signal with `:input_crashed`, each with a
+  `%{kind, message}` map (an atom and a string) on the error's `:cause`. `opts[:stream_timeout]`
   (default 60,000 ms) bounds the silence between input chunks and ends the
   stream with `:timeout`. `adapter_opts[:input_window]` (default 8) is the
   pump's credit window.

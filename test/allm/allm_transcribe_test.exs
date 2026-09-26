@@ -3,8 +3,9 @@ defmodule ALLM.ALLMTranscribeTest do
   Layer-C `ALLM.transcribe/3` and `ALLM.transcription_request/2` over
   `ALLM.Providers.FakeTranscription`.
 
-  Transcription has no streaming counterpart, so there is no
-  stream-equivalence property to write.
+  The streaming façade has its own file (`allm_stream_transcribe_test.exs`),
+  and the equivalence of the two paths is a property in
+  `audio_stream_equivalence_property_test.exs`.
 
   Telemetry assertions use `ALLM.Test.TelemetryCapture`, which filters by
   owner PID; a bare global handler attach in an `async: true` module would

@@ -31,7 +31,7 @@ defmodule ALLM.Providers.Support.InputPump do
   `ref` is the monitor reference `start/3` returns, so every pump message
   and the pump's `:DOWN` share one tag. `:input_error` reports an input that
   raised, threw or exited inside its own reduction; its payload is a
-  string-only map (`kind` is `:error`, `:throw` or `:exit`, `message` is
+  `%{kind, message}` map (`kind` is `:error`, `:throw` or `:exit`, `message` is
   `Exception.format_banner/3`), never the raw exception or exit term, which
   can carry pids and references. A `:DOWN` whose reason is not `:normal`
   and that was not preceded by `:input_done` or `:input_error` means the
@@ -84,7 +84,7 @@ defmodule ALLM.Providers.Support.InputPump do
   caller does not set one.
   """
 
-  @typedoc "An input failure report, string-only so it is safe to encode and persist."
+  @typedoc "An input failure report: an atom `kind` and a string `message`, safe to encode and persist."
   @type input_error :: %{kind: :error | :throw | :exit, message: String.t()}
 
   @typedoc """
@@ -201,7 +201,7 @@ defmodule ALLM.Providers.Support.InputPump do
   end
 
   @doc """
-  Describe a pump's abnormal `:DOWN` reason as the same string-only map an
+  Describe a pump's abnormal `:DOWN` reason as the same `%{kind, message}` map an
   `:input_error` carries, with `kind: :exit`.
 
   An adapter puts it on the error's `:cause` field for an input that

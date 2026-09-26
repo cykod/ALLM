@@ -1,3 +1,19 @@
+## [FEAT] Add stream_synthesize, stream_synthesize_input, stream_transcribe
+*Saturday, September 26th at 9pm*
+Phase 26.4 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 streaming audio, 
+§29 telemetry). Adds three Layer C façades that run the nil-slot, 
+stream-callback, input-shape and validator gates in order through one shared 
+runner, then dispatch to the engine's audio adapter. A dispatched stream can 
+end in {:error, _}, so an audio stream never finishes with a half-rendered 
+clip. ALLM.AudioStream adds collect_speech/1, collect_transcription/1 and 
+text_deltas/1. text_deltas/1 raises on a chat error (owner decision) so the TTS 
+stream fails visibly, with cause :input_raised. The change adds 
+:stream_synthesize and :stream_transcribe spans plus a one-shot [:allm, :audio, 
+:first_chunk] event, and an equivalence property ties the streaming and 
+non-streaming Fake paths together. The cause map's docs now say kind is an atom.
+
+---
+
 ## [FEAT] Add streaming speech/transcription behaviours and Fakes
 *Saturday, September 26th at 9pm*
 Phase 26.3 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 audio streaming). 

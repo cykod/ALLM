@@ -43,7 +43,10 @@ defmodule ALLMFacadeDoctestInventoryTest do
     moderate: 3,
     # Audio
     synthesize: 3,
-    transcribe: 3
+    transcribe: 3,
+    stream_synthesize: 3,
+    stream_synthesize_input: 3,
+    stream_transcribe: 3
   ]
 
   describe "every public ALLM function has a doctest" do

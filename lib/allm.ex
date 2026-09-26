@@ -61,6 +61,9 @@ defmodule ALLM do
   | Screen text (or text + images) for policy violations | `moderate/3` | `{:ok, %ALLM.ModerationResponse{}}` |
   | Turn text into spoken audio | `synthesize/3` | `{:ok, %ALLM.SpeechResponse{}}` |
   | Turn recorded speech into text | `transcribe/3` | `{:ok, %ALLM.TranscriptionResponse{}}` |
+  | Play speech while it is still being synthesized | `stream_synthesize/3` | `{:ok, Enumerable.t}` of `t:ALLM.SpeechEvent.t/0` |
+  | Speak text as it is produced (e.g. a chat stream) | `stream_synthesize_input/3` | `{:ok, Enumerable.t}` of `t:ALLM.SpeechEvent.t/0` |
+  | Transcribe live audio (e.g. a microphone) | `stream_transcribe/3` | `{:ok, Enumerable.t}` of `t:ALLM.TranscriptionEvent.t/0` |
   | Fold `generate/3` result into `{:ok, text}` | `unwrap/1` | `{:ok, String.t()} \| {:error, term()}` |
 
   Stateless calls (`generate/3` / `chat/3` / etc.) are pure functions of
@@ -105,13 +108,16 @@ defmodule ALLM do
     ModerationRequest,
     ModerationResponse,
     Request,
+    SpeechEvent,
     SpeechRequest,
     SpeechResponse,
     StepResult,
     Thread,
     Tool,
+    TranscriptionEvent,
     TranscriptionRequest,
-    TranscriptionResponse
+    TranscriptionResponse,
+    TranscriptionStreamRequest
   }
 
   alias ALLM.Error.{
@@ -1366,11 +1372,10 @@ defmodule ALLM do
 
   Only `ALLM.SpeechRequest` field names are read: `:model`, `:voice`,
   `:format`, `:instructions`, `:speed`, `:sample_rate`, `:options`,
-  `:metadata`. Every other
-  key is ignored, which is what lets `synthesize/3` forward its own
-  call-control opts (`:request_id`, `:request_timeout`, `:retry`,
-  `:adapter_opts`, `:api_key`, `:stream`) through this function without
-  them landing on the struct.
+  `:metadata`. Every other key is ignored, which is what lets
+  `synthesize/3` forward its own call-control opts (`:request_id`,
+  `:request_timeout`, `:retry`, `:adapter_opts`, `:api_key`, `:stream`)
+  through this function without them landing on the struct.
 
   No validation runs here — call `ALLM.Validate.speech_request/1` if you
   want the field rules checked before dispatch. `synthesize/3` calls it for
@@ -1397,8 +1402,8 @@ defmodule ALLM do
 
     * Binary — the text to speak. Opts named in `speech_request/2`
       (`:model`, `:voice`, `:format`, `:instructions`, `:speed`,
-      `:sample_rate`, `:options`, `:metadata`) lift onto the built request; everything else is a
-      call-control opt.
+      `:sample_rate`, `:options`, `:metadata`) lift onto the built
+      request; everything else is a call-control opt.
     * Pre-built `%ALLM.SpeechRequest{}` — dispatched verbatim; opts are NOT
       merged onto it.
 
@@ -1466,11 +1471,13 @@ defmodule ALLM do
   to the adapter and filled onto `response.request_id` IFF the adapter left
   it `nil`; an adapter-populated id is preserved.
 
-  ## No streaming yet
+  ## Streaming
 
-  Synthesis is request/response: the whole clip arrives in one response.
-  There is no `stream_synthesize/3` yet, and passing `stream: true` does
-  not error — the opt is ignored.
+  Synthesis here is request/response: the whole clip arrives in one
+  response, and passing `stream: true` does not error — the opt is ignored.
+  To play audio while it is still being synthesized, call
+  `stream_synthesize/3` (whole text) or `stream_synthesize_input/3` (text
+  that arrives in chunks) instead.
 
   ## Examples
 
@@ -1604,11 +1611,11 @@ defmodule ALLM do
   the adapter and filled onto `response.request_id` IFF the adapter left it
   `nil`.
 
-  ## No streaming yet
+  ## Streaming
 
-  Transcription is request/response: the transcript arrives in one
-  response. There is no streaming variant yet, and `stream: true` is
-  ignored.
+  Transcription here is request/response: the transcript arrives in one
+  response, and `stream: true` is ignored. To transcribe audio while it is
+  still arriving (a microphone, a call), use `stream_transcribe/3`.
 
   ## Examples
 
@@ -1638,6 +1645,285 @@ defmodule ALLM do
 
   def transcribe(%Engine{} = engine, %Audio{} = audio, opts) when is_list(opts) do
     do_transcribe(engine, transcription_request(audio, opts), opts)
+  end
+
+  @doc """
+  Stream speech for a whole text using the engine's `:speech_adapter`.
+
+  Layer-C façade. Returns `{:ok, events}`, a lazy enumerable of
+  `t:ALLM.SpeechEvent.t/0`: `:speech_started`, one or more `:audio_delta`
+  events carrying the next bytes of audio, then `:speech_completed`. Play or
+  forward each delta as it arrives; `ALLM.AudioStream.collect_speech/1`
+  folds the stream into the `ALLM.SpeechResponse` `synthesize/3` returns.
+
+  Streaming uses the same `:speech_adapter` slot as `synthesize/3`. The
+  adapter opts in by also implementing `ALLM.SpeechStreamAdapter`.
+
+  ## Input shapes
+
+  The same two as `synthesize/3`: a binary, with the `speech_request/2`
+  opts lifted onto the built request, or a pre-built
+  `%ALLM.SpeechRequest{}`, dispatched verbatim.
+
+  ## Gate order
+
+  Each gate returns synchronously, before any I/O:
+
+    1. `{:error, %ALLM.Error.EngineError{reason: :no_speech_adapter}}` when
+       `engine.speech_adapter == nil`.
+    2. `{:error, %ALLM.Error.EngineError{reason: :missing_stream_adapter}}`
+       when the slot's adapter does not export
+       `c:ALLM.SpeechStreamAdapter.stream_synthesize/2`.
+    3. `ALLM.Validate.speech_request/1`, returning
+       `{:error, %ALLM.Error.ValidationError{reason: :invalid_speech_request}}`.
+    4. Dispatch. The adapter runs its own gates and may return
+       `{:error, %ALLM.Error.SpeechAdapterError{}}` before opening anything.
+
+  ## Model resolution
+
+  As `synthesize/3`: `request.model`, else `engine.speech_model`, else the
+  adapter's default. `engine.model` is never consulted.
+
+  ## No retry after open
+
+  Streams are not retried. A synchronous `{:error, _}` from the adapter is
+  returned as-is, and an error after the stream opened ends the stream with
+  `{:error, %ALLM.Error.SpeechAdapterError{}}` — nothing follows it. Retry by
+  calling again.
+
+  ## Laziness and halting
+
+  No audio is requested until the enumerable is reduced. Halting it early
+  (`Enum.take/2`, a `Stream.take_while/2` that stops) releases the
+  adapter's connection. `opts[:stream_timeout]` (milliseconds of silence,
+  default 60,000) is forwarded to the adapter.
+
+  ## Time to first audio
+
+  `[:allm, :audio, :first_chunk]` fires once per stream, at the first
+  `:audio_delta`, with `measurements.latency` in native time units measured
+  from this call. See `ALLM.Telemetry`.
+
+  ## Telemetry carries no audio
+
+  The call runs inside an `[:allm, :stream_synthesize, …]` span. It stops
+  when the enumerable is returned, so its `:stop` metadata has
+  `response: nil`, and neither it nor the first-chunk event carries audio.
+
+  ## Non-conforming adapters raise
+
+  An adapter that returns anything but `{:ok, enumerable}` or
+  `{:error, %ALLM.Error.SpeechAdapterError{}}` raises `ArgumentError` naming
+  it. So does an element of the stream that is not a
+  `t:ALLM.SpeechEvent.t/0`, when it is reduced.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(speech_adapter: ALLM.Providers.FakeSpeech)
+      iex> {:ok, events} = ALLM.stream_synthesize(engine, "Hello.", format: :pcm)
+      iex> {:ok, resp} = ALLM.AudioStream.collect_speech(events)
+      iex> {ALLM.Audio.to_binary(resp.audio), resp.format}
+      {{:ok, "FAKE-AUDIO:Hello."}, :pcm}
+
+      iex> {:error, %ALLM.Error.EngineError{reason: :no_speech_adapter}} =
+      ...> ALLM.stream_synthesize(ALLM.Engine.new(), "Hello.")
+      iex> :ok
+      :ok
+  """
+  @spec stream_synthesize(Engine.t(), String.t() | SpeechRequest.t(), keyword()) ::
+          {:ok, Enumerable.t(SpeechEvent.t())}
+          | {:error, EngineError.t() | ValidationError.t() | SpeechAdapterError.t()}
+  def stream_synthesize(engine, input_or_request, opts \\ [])
+
+  def stream_synthesize(%Engine{} = engine, %SpeechRequest{} = request, opts)
+      when is_list(opts) do
+    do_stream_synthesize(engine, request, opts)
+  end
+
+  def stream_synthesize(%Engine{} = engine, input, opts) when is_binary(input) and is_list(opts) do
+    do_stream_synthesize(engine, speech_request(input, opts), opts)
+  end
+
+  @doc """
+  Stream speech for text that arrives in chunks, using the engine's
+  `:speech_adapter`.
+
+  Layer-C façade. `input` is an enumerable of strings, typically an LLM's
+  output as it is generated:
+
+      {:ok, chat} = ALLM.stream(engine, [ALLM.user("Tell me a story.")])
+      {:ok, audio} = ALLM.stream_synthesize_input(engine, ALLM.AudioStream.text_deltas(chat))
+
+  Returns `{:ok, events}` with the same `t:ALLM.SpeechEvent.t/0` grammar as
+  `stream_synthesize/3`. Audio for the first words can arrive before the
+  input has finished.
+
+  ## Input shapes
+
+  The request is built with `speech_request("", opts)`, so the same
+  request-field opts apply, or taken from `opts[:request]`, a pre-built
+  `%ALLM.SpeechRequest{}` that is authoritative (other request-field opts
+  are ignored, and its `:input` is not used).
+
+  The adapter reduces `input` in a separate process, so an input that reads
+  the calling process's mailbox or process dictionary must be relayed. An
+  empty string chunk is skipped. A chunk that is not a UTF-8 string ends the
+  stream with `metadata.cause: :invalid_input_chunk`, and an input that
+  raises ends it with `metadata.cause: :input_raised` (see
+  `ALLM.AudioStream`).
+
+  ## Gate order
+
+  Each gate returns synchronously, before `input` is touched:
+
+    1. `{:error, %ALLM.Error.EngineError{reason: :no_speech_adapter}}` when
+       `engine.speech_adapter == nil`.
+    2. `{:error, %ALLM.Error.EngineError{reason: :missing_stream_adapter}}`
+       when the adapter does not export
+       `c:ALLM.SpeechStreamAdapter.stream_synthesize_input/3` — including
+       an adapter that streams whole texts only.
+    3. `{:error, %ALLM.Error.ValidationError{reason: :invalid_speech_request}}`
+       with `{:input, :invalid_shape}` when `input` is a binary or not an
+       enumerable.
+    4. `ALLM.Validate.speech_request(request, input: :streamed)`, which
+       checks every field except `:input`.
+    5. Dispatch; the adapter's own gates may return
+       `{:error, %ALLM.Error.SpeechAdapterError{}}`.
+
+  ## Model resolution, retry, halting, telemetry
+
+  As `stream_synthesize/3`: `engine.speech_model` fills a nil
+  `request.model`; nothing is retried; halting releases the connection and
+  stops the input's reduction; `[:allm, :audio, :first_chunk]` fires at the
+  first `:audio_delta`. The span is `[:allm, :stream_synthesize, …]` with
+  `input_length: nil`, and carries no audio.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(speech_adapter: ALLM.Providers.FakeSpeech)
+      iex> {:ok, events} = ALLM.stream_synthesize_input(engine, ["Hel", "", "lo."])
+      iex> for {:audio_delta, bytes} <- events, do: bytes
+      ["FAKE-AUDIO:Hel", "FAKE-AUDIO:lo."]
+  """
+  @spec stream_synthesize_input(Engine.t(), Enumerable.t(String.t()), keyword()) ::
+          {:ok, Enumerable.t(SpeechEvent.t())}
+          | {:error, EngineError.t() | ValidationError.t() | SpeechAdapterError.t()}
+  def stream_synthesize_input(%Engine{} = engine, input, opts \\ []) when is_list(opts) do
+    request =
+      case Keyword.get(opts, :request) do
+        nil -> speech_request("", opts)
+        %SpeechRequest{} = request -> request
+      end
+
+    do_stream_synthesize_input(engine, request, input, opts)
+  end
+
+  # Symmetry invariant as for `@speech_request_field_opts`:
+  # `%TranscriptionStreamRequest{}` has no positional field, so this list is
+  # its whole field set. Pinned by a test computing from `Map.keys/1`.
+  @transcription_stream_request_field_opts [
+    :model,
+    :language,
+    :sample_rate,
+    :commit_strategy,
+    :options,
+    :metadata
+  ]
+
+  @doc """
+  Transcribe audio as it arrives, using the engine's
+  `:transcription_adapter`.
+
+  Layer-C façade. `input` is an enumerable of PCM16 little-endian mono audio
+  chunks at `:sample_rate` (default 16,000 Hz), and the atom `:commit` to
+  force a segment boundary. Returns `{:ok, events}`, a lazy enumerable of
+  `t:ALLM.TranscriptionEvent.t/0`: `:transcription_started`, then
+  `:partial_transcript` events (each replaces the previous partial) and
+  `:committed_transcript` segments (final, appended), then
+  `:transcription_completed`, whose `:text` is the whole transcript.
+  `ALLM.AudioStream.collect_transcription/1` folds the stream into an
+  `ALLM.TranscriptionResponse`.
+
+  The adapter opts in by implementing `ALLM.TranscriptionStreamAdapter`
+  alongside `ALLM.TranscriptionAdapter`; check
+  `c:ALLM.TranscriptionStreamAdapter.stream_sample_rates/0` before opening a
+  microphone.
+
+  ## Input shapes
+
+  The request is built from the `ALLM.TranscriptionStreamRequest` field
+  opts (`:model`, `:language`, `:sample_rate`, `:commit_strategy`,
+  `:options`, `:metadata`), or taken from `opts[:request]`, a pre-built
+  `%ALLM.TranscriptionStreamRequest{}` that is authoritative.
+
+  The adapter reduces `input` in a separate process, so an input that reads
+  the calling process's mailbox must be relayed. Chunk boundaries are free:
+  a chunk may split a sample. An element that is neither a binary nor
+  `:commit`, or an input whose total length is odd, ends the stream with
+  `metadata.cause: :invalid_input_chunk`.
+
+  ## Gate order
+
+  Each gate returns synchronously, before `input` is touched:
+
+    1. `{:error, %ALLM.Error.EngineError{reason: :no_transcription_adapter}}`
+       when `engine.transcription_adapter == nil`.
+    2. `{:error, %ALLM.Error.EngineError{reason: :missing_stream_adapter}}`
+       when the adapter does not export
+       `c:ALLM.TranscriptionStreamAdapter.stream_transcribe/3`.
+    3. `{:error, %ALLM.Error.ValidationError{reason: :invalid_transcription_request}}`
+       with `{:input, :invalid_shape}` when `input` is a binary or not an
+       enumerable.
+    4. `ALLM.Validate.transcription_stream_request/1`.
+    5. Dispatch; the adapter's own gates (an unsupported `:sample_rate`, …)
+       may return `{:error, %ALLM.Error.TranscriptionAdapterError{}}`.
+
+  ## Model resolution
+
+  `request.model`, else the adapter's own realtime default.
+  `engine.transcription_model` is **not** used: a provider's batch and
+  realtime transcription models are different models, so an engine
+  configured for `transcribe/3` would break this call.
+
+  ## Retry, halting, telemetry
+
+  Streams are not retried, and an error after the stream opened ends it with
+  `{:error, %ALLM.Error.TranscriptionAdapterError{}}`. Halting the
+  enumerable closes the connection and stops the input's reduction.
+  `opts[:stream_timeout]` (default 60,000 ms of silence) is forwarded to the
+  adapter. The call runs inside an `[:allm, :stream_transcribe, …]` span
+  whose `:stop` has `response: nil`, and `[:allm, :audio, :first_chunk]`
+  fires at the first `:partial_transcript`. Neither carries audio or
+  transcript text.
+
+  ## Examples
+
+      iex> engine = ALLM.Engine.new(
+      ...> transcription_adapter: ALLM.Providers.FakeTranscription,
+      ...> adapter_opts: [transcription_script: [{:ok, "hello there"}]]
+      ...>)
+      iex> pcm = :binary.copy(<<0>>, 3_200)
+      iex> {:ok, events} = ALLM.stream_transcribe(engine, [pcm], sample_rate: 16_000)
+      iex> {:ok, resp} = ALLM.AudioStream.collect_transcription(events)
+      iex> resp.text
+      "hello there"
+  """
+  @spec stream_transcribe(Engine.t(), Enumerable.t(binary() | :commit), keyword()) ::
+          {:ok, Enumerable.t(TranscriptionEvent.t())}
+          | {:error, EngineError.t() | ValidationError.t() | TranscriptionAdapterError.t()}
+  def stream_transcribe(%Engine{} = engine, input, opts \\ []) when is_list(opts) do
+    request =
+      case Keyword.get(opts, :request) do
+        nil ->
+          opts
+          |> Keyword.take(@transcription_stream_request_field_opts)
+          |> TranscriptionStreamRequest.new()
+
+        %TranscriptionStreamRequest{} = request ->
+          request
+      end
+
+    do_stream_transcribe(engine, request, input, opts)
   end
 
   # ---------------------------------------------------------------------------
@@ -2348,4 +2634,256 @@ defmodule ALLM do
 
   defp transcribe_stop_extras({:error, error}),
     do: {%{usage: nil, response: nil, error: error}, %{text_length: 0}}
+
+  # ---------------------------------------------------------------------------
+  # Internals — streaming audio (`stream_synthesize/3`,
+  # `stream_synthesize_input/3`, `stream_transcribe/3`).
+  #
+  # Each body runs inside its span so `:start` always fires. Gate order:
+  #   (1) nil slot                          → :no_*_adapter
+  #   (2) slot lacks the stream callback    → :missing_stream_adapter
+  #   (3) input forms: input not enumerable → ValidationError {:input, :invalid_shape}
+  #   (4) validator
+  #   (5) slot-model stamping (speech only; transcription never reads the slot)
+  #   (6) dispatch — NO `Retry.run/3`: streams are never retried.
+  # The span closes when the enumerable is returned, so `:stop` carries
+  # `response: nil` (the chat `:stream` carve-out).
+  # ---------------------------------------------------------------------------
+
+  defp do_stream_synthesize(%Engine{} = engine, %SpeechRequest{} = request, opts) do
+    model = request.model || engine.speech_model
+
+    run_audio_stream(engine, opts, %{
+      span: :stream_synthesize,
+      capability: :speech,
+      adapter: engine.speech_adapter,
+      fun: :stream_synthesize,
+      arity: 2,
+      model: model,
+      metadata: %{model: model, input_length: speech_input_length(request)},
+      gates: [fn -> ALLM.Validate.speech_request(request) end],
+      forward_opts: drop_speech_stream_opts(opts),
+      dispatch: fn adapter, dispatch_opts ->
+        adapter.stream_synthesize(%{request | model: model}, dispatch_opts)
+      end
+    })
+  end
+
+  defp do_stream_synthesize_input(%Engine{} = engine, %SpeechRequest{} = request, input, opts) do
+    model = request.model || engine.speech_model
+
+    run_audio_stream(engine, opts, %{
+      span: :stream_synthesize,
+      capability: :speech,
+      adapter: engine.speech_adapter,
+      fun: :stream_synthesize_input,
+      arity: 3,
+      model: model,
+      metadata: %{model: model, input_length: nil},
+      gates: [
+        fn -> check_stream_input(input, :invalid_speech_request) end,
+        fn -> ALLM.Validate.speech_request(request, input: :streamed) end
+      ],
+      forward_opts: drop_speech_stream_opts(opts),
+      dispatch: fn adapter, dispatch_opts ->
+        adapter.stream_synthesize_input(%{request | model: model}, input, dispatch_opts)
+      end
+    })
+  end
+
+  defp do_stream_transcribe(
+         %Engine{} = engine,
+         %TranscriptionStreamRequest{} = request,
+         input,
+         opts
+       ) do
+    # No slot-model stamping: `engine.transcription_model` names a batch
+    # model, and batch and realtime model namespaces are disjoint.
+    run_audio_stream(engine, opts, %{
+      span: :stream_transcribe,
+      capability: :transcription,
+      adapter: engine.transcription_adapter,
+      fun: :stream_transcribe,
+      arity: 3,
+      model: request.model,
+      metadata: %{model: request.model, sample_rate: request.sample_rate},
+      gates: [
+        fn -> check_stream_input(input, :invalid_transcription_request) end,
+        fn -> ALLM.Validate.transcription_stream_request(request) end
+      ],
+      forward_opts: Keyword.drop(opts, [:request | @transcription_stream_request_field_opts]),
+      dispatch: fn adapter, dispatch_opts ->
+        adapter.stream_transcribe(request, input, dispatch_opts)
+      end
+    })
+  end
+
+  # The one skeleton the three streaming façades share. `spec` carries what
+  # varies per façade: the span name, the slot's adapter and the stream
+  # callback it must export (gate 2), the façade's remaining gates in order
+  # (zero-arity funs returning `:ok` or `{:error, _}`), the opts forwarded
+  # to the adapter, and `dispatch`, which receives the adapter and the built
+  # dispatch opts and makes the call. `spec.model` is the resolved model
+  # (slot-stamped for speech) that the start metadata and first-chunk event
+  # report until the stream's start event names the provider's model.
+  defp run_audio_stream(%Engine{} = engine, opts, spec) do
+    started_at = System.monotonic_time()
+    request_id = Keyword.get(opts, :request_id) || ALLM.Telemetry.request_id()
+    start_metadata = Map.merge(%{request_id: request_id, engine: engine}, spec.metadata)
+
+    ALLM.Telemetry.span(spec.span, start_metadata, fn ->
+      result =
+        with :ok <- check_stream_slot(spec.adapter, spec.capability, spec.fun, spec.arity),
+             :ok <- run_stream_gates(spec.gates) do
+          dispatch_opts = build_capability_dispatch_opts(engine, spec.forward_opts, request_id)
+
+          ctx = %{
+            adapter: spec.adapter,
+            capability: spec.capability,
+            fun: spec.fun,
+            request_id: request_id,
+            started_at: started_at,
+            model: spec.model
+          }
+
+          spec.adapter
+          |> spec.dispatch.(dispatch_opts)
+          |> handle_audio_stream_dispatch(ctx)
+        end
+
+      {result, %{response: nil}}
+    end)
+  end
+
+  defp run_stream_gates(gates) do
+    Enum.reduce_while(gates, :ok, fn gate, :ok ->
+      case gate.() do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  # `:request` (the input forms' pre-built request) is consumed here, never
+  # forwarded, alongside the request-field opts.
+  defp drop_speech_stream_opts(opts),
+    do: opts |> drop_speech_request_opts() |> Keyword.delete(:request)
+
+  defp check_stream_slot(nil, :speech, _fun, _arity),
+    do: {:error, EngineError.new(:no_speech_adapter)}
+
+  defp check_stream_slot(nil, :transcription, _fun, _arity),
+    do: {:error, EngineError.new(:no_transcription_adapter)}
+
+  defp check_stream_slot(adapter, capability, fun, arity) when is_atom(adapter) do
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, fun, arity) do
+      :ok
+    else
+      {:error,
+       EngineError.new(:missing_stream_adapter,
+         message: missing_stream_message(adapter, capability, fun, arity)
+       )}
+    end
+  end
+
+  defp missing_stream_message(adapter, :speech, :stream_synthesize_input, 3) do
+    base =
+      "engine.speech_adapter #{inspect(adapter)} does not export stream_synthesize_input/3; " <>
+        "use an adapter that implements the optional input callback of ALLM.SpeechStreamAdapter"
+
+    if function_exported?(adapter, :stream_synthesize, 2),
+      do: base <> " (it streams whole texts only: use ALLM.stream_synthesize/3)",
+      else: base
+  end
+
+  defp missing_stream_message(adapter, :speech, fun, arity),
+    do:
+      "engine.speech_adapter #{inspect(adapter)} does not export #{fun}/#{arity}; " <>
+        "use an adapter that implements ALLM.SpeechStreamAdapter"
+
+  defp missing_stream_message(adapter, :transcription, fun, arity),
+    do:
+      "engine.transcription_adapter #{inspect(adapter)} does not export #{fun}/#{arity}; " <>
+        "use an adapter that implements ALLM.TranscriptionStreamAdapter"
+
+  # Binaries have no `Enumerable` implementation, so the `is_binary/1` test is
+  # belt and braces: it states that a whole clip or text passed where a chunk
+  # stream belongs is a shape error, reported synchronously rather than as an
+  # `:input_raised` when the stream is reduced.
+  defp check_stream_input(input, reason) do
+    if is_binary(input) or is_nil(Enumerable.impl_for(input)),
+      do: {:error, ValidationError.new(reason, [{:input, :invalid_shape}])},
+      else: :ok
+  end
+
+  # Invariant 1 of both stream behaviours: the synchronous return is exactly
+  # `{:ok, enumerable}` or the family's error struct. Anything else raises,
+  # naming the adapter, as the non-streaming façades do.
+  defp handle_audio_stream_dispatch({:ok, events}, ctx), do: {:ok, wrap_audio_stream(events, ctx)}
+
+  defp handle_audio_stream_dispatch({:error, %SpeechAdapterError{}} = err, %{capability: :speech}),
+    do: err
+
+  defp handle_audio_stream_dispatch(
+         {:error, %TranscriptionAdapterError{}} = err,
+         %{capability: :transcription}
+       ),
+       do: err
+
+  defp handle_audio_stream_dispatch(other, ctx) do
+    {behaviour, error_module} = stream_behaviour(ctx.capability)
+
+    raise ArgumentError,
+          "#{inspect(ctx.adapter)} violated #{inspect(behaviour)} invariant 1: " <>
+            "#{ctx.fun} must return {:ok, enumerable} or " <>
+            "{:error, %#{inspect(error_module)}{}}, got: #{inspect(other)}"
+  end
+
+  defp stream_behaviour(:speech), do: {ALLM.SpeechStreamAdapter, SpeechAdapterError}
+
+  defp stream_behaviour(:transcription),
+    do: {ALLM.TranscriptionStreamAdapter, TranscriptionAdapterError}
+
+  # Wrapped once per stream. Binds invariant 3 (every element belongs to the
+  # capability's event union) on third-party adapters, and emits
+  # `[:allm, :audio, :first_chunk]` at the first audio delta / partial
+  # transcript. A raise here propagates through the inner stream, whose own
+  # after function still runs (`Stream.resource/3` guarantees it).
+  defp wrap_audio_stream(events, ctx) do
+    Stream.transform(events, %{fired?: false, model: ctx.model}, fn event, state ->
+      unless audio_event?(ctx.capability, event) do
+        {behaviour, _} = stream_behaviour(ctx.capability)
+
+        raise ArgumentError,
+              "#{inspect(ctx.adapter)} violated #{inspect(behaviour)} invariant 3: " <>
+                "the stream emitted #{inspect(event)}, which is not a " <>
+                "#{inspect(event_module(ctx.capability))} event"
+      end
+
+      {[event], observe_audio_event(event, state, ctx)}
+    end)
+  end
+
+  defp audio_event?(:speech, event), do: SpeechEvent.event?(event)
+  defp audio_event?(:transcription, event), do: TranscriptionEvent.event?(event)
+
+  defp event_module(:speech), do: SpeechEvent
+  defp event_module(:transcription), do: TranscriptionEvent
+
+  defp observe_audio_event({started, %{model: model}}, state, _ctx)
+       when started in [:speech_started, :transcription_started] and is_binary(model),
+       do: %{state | model: model}
+
+  defp observe_audio_event({first, _}, %{fired?: false} = state, ctx)
+       when first in [:audio_delta, :partial_transcript] do
+    ALLM.Telemetry.execute(
+      [:audio, :first_chunk],
+      %{latency: System.monotonic_time() - ctx.started_at},
+      %{request_id: ctx.request_id, capability: ctx.capability, provider_model: state.model}
+    )
+
+    %{state | fired?: true}
+  end
+
+  defp observe_audio_event(_event, state, _ctx), do: state
 end

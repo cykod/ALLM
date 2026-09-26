@@ -40,7 +40,9 @@ defmodule ALLM.SpeechRequest do
   - `:metadata`: caller-owned. Use string keys when it will round-trip
     through JSON.
 
-  There is no `:stream` field: speech synthesis is non-streaming.
+  There is no `:stream` field. Streaming is a separate call, not a request
+  flag: the same request goes to `ALLM.stream_synthesize/3`, and
+  `ALLM.stream_synthesize_input/3` takes one whose `:input` is ignored.
 
   ## Construction
 

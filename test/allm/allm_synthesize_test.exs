@@ -3,8 +3,9 @@ defmodule ALLM.ALLMSynthesizeTest do
   Layer-C `ALLM.synthesize/3` and `ALLM.speech_request/2` over
   `ALLM.Providers.FakeSpeech`.
 
-  Speech has no streaming counterpart, so there is no stream-equivalence
-  property to write, exactly as for images, embeddings and moderation.
+  The streaming façades have their own file
+  (`allm_stream_synthesize_test.exs`), and the equivalence of the two paths
+  is a property in `audio_stream_equivalence_property_test.exs`.
 
   Telemetry assertions use `ALLM.Test.TelemetryCapture`, which filters by
   owner PID; a bare global handler attach in an `async: true` module would

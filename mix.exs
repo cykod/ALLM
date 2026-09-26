@@ -198,6 +198,7 @@ defmodule ALLM.MixProject do
           ALLM.Retry,
           ALLM.Telemetry,
           ALLM.StreamCollector,
+          ALLM.AudioStream,
           ALLM.Serializer,
           ALLM.Sandbox,
           ALLM.ToolHelp

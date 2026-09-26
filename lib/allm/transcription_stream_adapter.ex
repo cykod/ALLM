@@ -83,8 +83,9 @@ defmodule ALLM.TranscriptionStreamAdapter do
        input that raises or crashes, ends the stream with
        `:invalid_request` and `metadata.cause` one of
        `:invalid_input_chunk`, `:input_raised` or `:input_crashed`. For the
-       last two, the error's `:cause` field is a string-only
-       `%{kind: kind, message: message}` map, and the consuming process is
+       last two, the error's `:cause` field is a
+       `%{kind: kind, message: message}` map (`kind` is `:error`, `:throw`
+       or `:exit`, `message` a string), and the consuming process is
        never killed. **Chunk boundaries are the caller's, not the
        protocol's:** a chunk may split a 16-bit sample, and the adapter
        carries the odd byte into the next chunk. An input whose total

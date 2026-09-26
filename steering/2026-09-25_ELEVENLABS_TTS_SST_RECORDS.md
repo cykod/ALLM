@@ -9,6 +9,7 @@ Companion to `steering/2026-09-25_ELEVENLABS_TTS_SST.md`. Status, ticks, deviati
 | 26.1 | Completed |
 | 26.2 | Completed |
 | 26.3 | Completed |
+| 26.4 | Completed |
 
 ## Phase 26.1 — `Support.HTTPResponse` + `Support.TranscriptionAdapter`
 
@@ -292,3 +293,78 @@ Each file was restored and re-verified green after its run. The stream-timeout r
 | `README.md` | not modified |
 
 Pre-existing, not this sub-phase: `conformance/test/allm/test/speech_adapter_conformance_test.exs:84` warns `unused alias SpeechAdapterConformance` during `cd conformance && mix test`.
+
+
+## Phase 26.4 — Façades, `AudioStream`, telemetry
+
+Built 2026-09-26 on `762a66e`. The working tree is uncommitted; the orchestrator commits after review.
+
+### Checklist (26.4.2)
+
+- [x] `ALLM.stream_synthesize/3`, `ALLM.stream_synthesize_input/3`, `ALLM.stream_transcribe/3` (`lib/allm.ex`), each with `@doc` sections for input shapes, gate order, model resolution, no retry after open, laziness/halting, the first-chunk event and "telemetry carries no audio", plus runnable doctests over the Fakes. Internals: `do_stream_synthesize/3`, `do_stream_synthesize_input/4`, `do_stream_transcribe/4`, one shared `check_stream_slot/4` (gates 1–2), `check_stream_input/2` (gate 3), `handle_audio_stream_dispatch/2` (invariant 1) and `wrap_audio_stream/2` (invariant 3 + `[:allm, :audio, :first_chunk]`). No `Retry.run/3`. `@transcription_stream_request_field_opts` added. "When to reach for what" gains three rows.
+- [x] `lib/allm/audio_stream.ex` (`collect_speech/1`, `collect_transcription/1`, `text_deltas/1`) + doctests; `mix.exs` `groups_for_modules` `Runtime` (the group holding `ALLM.StreamCollector`).
+- [x] `ALLM.Telemetry`: `:stream_synthesize` / `:stream_transcribe` in `@type span_name` and `@valid_span_names`; moduledoc table rows for both spans and `[:allm, :audio, :first_chunk]`, plus a paragraph on the carve-out and `provider_model`.
+- [x] `@public_facade` +3 (`test/allm_facade_doctest_inventory_test.exs`). Both "## No streaming yet" sections in `lib/allm.ex` are replaced by "## Streaming" pointers.
+- [x] Carry-overs from RECORDS §26.2/§26.3: `lib/allm/speech_request.ex` moduledoc reworded (streaming is a separate call, not a request flag); the moduledocs of `test/allm/allm_synthesize_test.exs` and `allm_transcribe_test.exs` no longer say "no streaming counterpart"; the ragged `:sample_rate` lists in the `speech_request/2` and `synthesize/3` `@doc`s are reflowed.
+- [x] Owner decision on `text_deltas/1`: a chat `{:error, err}` raises `ALLM.AudioStream.ChatStreamError` (reason + message, never the struct). Pinned by `audio_stream_test.exs` "a chat error ends the speech stream with :input_raised, never a successful clip". **Mutation run:** `{:error, _err} -> []` (the halting/dropping implementation) → that test and the Jason round-trip test fail (2 failures); restored green.
+
+### Deviations
+
+- `[structural, documented]` **`ALLM.AudioStream.ChatStreamError` lives in its own file, `lib/allm/audio_stream/chat_stream_error.ex` (`@moduledoc false`),** not in `audio_stream.ex` as the Module Tree implies. `test/groups_for_modules_audit_test.exs` excludes a whole file that contains `@moduledoc false` (its moduledoc's "Multi-module files" limitation), so a private exception inside `audio_stream.ex` would have hidden `ALLM.AudioStream` from the audit — the same reasoning the design applies to `Support.WebSocket` / `WebSocket.Mint`.
+- `[scope]` **The stream façades raise `ArgumentError` on an adapter's synchronous return that is not `{:ok, enumerable}` or the family's error struct** ("violated ALLM.SpeechStreamAdapter invariant 1" / "…TranscriptionStreamAdapter invariant 1"). The design names only the invariant-3 raise; this mirrors the non-streaming façades' invariant-1 raise. Tested in both façade files.
+- `[scope]` **`collect_transcription/1` sets `metadata.committed_text` on an error** (the trimmed single-space join of the committed segments so far). Decision #7 names it; the 26.4 contract bullet for `collect_transcription/1` does not.
+- `[scope]` **`collect_speech/1` returns `:malformed_response` for a `:speech_completed` with no preceding `:speech_started`** (there is no MIME type to build the `ALLM.Audio` from), as well as for a stream with no terminal event. It stops reducing at the first terminal event.
+- `[scope]` **`provider_model` on `[:allm, :audio, :first_chunk]`** is the `:model` of the stream's start event when the adapter reports a binary one, else the dispatched `request.model` (after slot stamping for speech; `nil` possible). The design names the key without defining it; the definition is in the `ALLM.Telemetry` moduledoc.
+- `[tactical]` **`Stream.transform/3`, not `/4`.** The wrapper has no cleanup of its own; the inner stream's after function runs on a wrapper raise (pinned: "the inner stream's after function still runs when the invariant-3 raise fires").
+- `[tactical]` **The two span `:stop` events carry `%{response: nil}` only** — no `error`/`usage` keys, matching the chat `:stream` span rather than the non-streaming audio spans.
+- `[tactical]` **`opts[:request]` on the input forms must be the capability's request struct;** any other non-nil value raises `CaseClauseError`. `:request` is dropped from the dispatch opts.
+- `[tactical]` **Allow-list symmetry tests use a per-field table of valid values rather than a sentinel.** The stream façades validate before dispatch, so a sentinel never reaches the capture seam. The table is keyed by `Map.keys/1` of the struct and the test fails naming any field missing from it, so a new struct field still goes red. The `stream_synthesize*` test covers both speech façades; `speech_request/2`'s existing sentinel test still covers the shared allow-list.
+- `[tactical]` **`ALLM.Telemetry.span/3`'s `@doc` list of valid names** was stale since the non-streaming audio spans (it ended at `:moderate`); it now lists all twelve.
+- `[scope]` **Equivalence property notes.** (a) `language` is compared as the design requires but binds nothing: neither Fake reports a language (mutating `collect_transcription/1` to drop it left the property green); the collector's own test pins it, and the property moduledoc says so. (b) The transcription generator's PCM length is bounded to ≤ 1,000 bytes because `FakeTranscription.max_audio_bytes/0` (1,024) gates the non-streaming path. (c) Mutation: dropping `sample_rate` in `collect_speech/1` fails the speech property.
+
+### Verification (run 2026-09-26, working tree on `762a66e`)
+
+| Check | Result |
+|-------|--------|
+| `mix test` | exit 0, 573 doctests, 33 properties, 4400 tests, 0 failures, 14 excluded (26.3: 559 / 31 / 4324) |
+| `mix test --seed 0` | exit 0, same counts |
+| `mix format --check-formatted` | exit 0 |
+| `mix credo --strict` | no issues |
+| `mix dialyzer` | `Total errors: 0` |
+| `mix compile --warnings-as-errors --force` | exit 0 |
+| `mix docs 2>&1 \| grep -iE 'warning\|error'` | empty |
+| `mix run scripts/audit_user_docs.exs <file>` on new `lib/allm/audio_stream.ex`, `lib/allm/audio_stream/chat_stream_error.ex`, and modified `lib/allm.ex`, `lib/allm/telemetry.ex`, `lib/allm/speech_request.ex` | "No banned-token matches" each |
+| async grep `grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test/ \| xargs grep -L 'async: false' \| wc -l` | 12, unchanged; the four new test files use `ALLM.Test.TelemetryCapture` only |
+| Pump-protocol guard `grep -lE --exclude=input_pump.ex ':input_error\|crash_info\(\|@input_window' lib/allm/providers/*.ex lib/allm/providers/*/*.ex lib/allm.ex lib/allm/audio_stream.ex` | exit 1 (empty); the façade layer consumes no pump messages |
+| Equivalence property | 2 properties × 100 runs each, green on three consecutive runs |
+| Targeted files | `allm_stream_synthesize_test.exs` 3 doctests + 33 tests; `allm_stream_transcribe_test.exs` 1 doctest + 24 tests; `audio_stream_test.exs` 4 doctests + 12 tests |
+| Coverage (`mix test --cover`) | `ALLM.AudioStream` 97.67%, `ChatStreamError` 75.00% (the non-map `reason_of/1` and non-exception `detail_of/1` fallbacks), total 94.99% |
+| `conformance/` | not touched, so its gates were not run |
+| `README.md` | not modified |
+
+### Fix pass (2026-09-26)
+
+Sources: `.work/reviews/2026-09-26-phase-26-4/overview.md`, `.work/code-reviews/2026-09-26-phase-26-4.md`, `.work/security-reviews/2026-09-26-phase-26-4.md` (clean), `.work/design-reviews/2026-09-26-phase-26-4.md` (N/A).
+
+- **Code-review F1 (Medium) fixed.** The three `do_stream_*` bodies now build a spec map and call one private runner, `run_audio_stream/3` (`lib/allm.ex`). The runner owns `started_at`, `request_id`, the span, gate 2 (`check_stream_slot/4`), the façade's remaining gates in order (`run_stream_gates/1`, a list of zero-arity funs), `build_capability_dispatch_opts/3`, the ctx map (a map literal: the positional `stream_ctx/6` is gone), `handle_audio_stream_dispatch/2`, and the `{result, %{response: nil}}` return. Each façade supplies the span name, slot adapter, callback name/arity, resolved model, extra start metadata, gates, forwarded opts, and a `dispatch` fun. The refactor is behaviour-preserving and private. **Mutation:** swapping `stream_transcribe/3`'s two gates fails "gate order the input-shape gate wins over an invalid request" (1 failure). Restored green.
+- **Functional-review Low 2 fixed (false-sentence carve-out, per the orchestrator's ruling).** The input-failure `:cause` map is `%{kind: atom, message: String.t()}` (`InputPump`'s `@type input_error`). `lib/allm/audio_stream.ex` called it "a map of two strings", and six 26.3/26.4 sites called it "string-only". Reworded in `audio_stream.ex`, `audio_stream/chat_stream_error.ex`, `speech_stream_adapter.ex`, `transcription_stream_adapter.ex`, `providers/fake_speech.ex`, `providers/fake_transcription.ex` and `providers/support/input_pump.ex` (moduledoc, `@typedoc`, `crash_info/1` doc). `grep -rn "string-only\|two strings" lib/` → exit 1. The design's Decision #7 carries a dated `> CORRECTED` line. The later "string-only" mentions in the design (lines 395, 455, 570, 957, 1172, 1212) are covered by that line and were not edited.
+- **Code-review F4 / functional-review Low 3 (a wrong-typed `opts[:request]` raises a bare `CaseClauseError`) was not fixed here.** Both lanes reached it independently. The ruling is that this is not a gate-logic carve-out. The case refuses the bad value loudly, as `FunctionClauseError` does for `stream_synthesize(engine, nil)`. It is the façade's ordinary input handling, not the accept/refuse path of a check that later work is measured against. It stays a Low for the phase-end polish pass.
+- **Functional-review Low 1 (`FakeSpeech` batch `{:ok, ""}` returns an empty clip where the stream returns `:empty_input`) was filed, not fixed.** It is outside 26.4's fence (pre-26.4 Fake code) and is filed as a `.work/ASKS.md` `[BUG]` (sat 9/26 9pm) with a self-scoring predicate. Measured today: `MIX_ENV=test mix run -e 'IO.inspect(ALLM.synthesize(ALLM.Engine.new(speech_adapter: ALLM.Providers.FakeSpeech, adapter_opts: [speech_script: [{:ok, ""}]]), "x") |> elem(0))'` → `:ok`. It is done when that prints `:error`.
+- Code-review F2, F3 and F5 are Lows and were left for the polish pass. After F1, F2 (an `error:` key on the stream spans' `:stop`) is a one-line change in `run_audio_stream/3`.
+
+### Notes for later sub-phases (26.4)
+
+- **26.5–26.8 and any later streaming capability:** the streaming façades share `run_audio_stream/3`. A change to span shape, gate plumbing or dispatch wrapping goes there once. Do not reintroduce a per-façade copy of the skeleton.
+
+### Fix-pass verification (2026-09-26, working tree on `762a66e`)
+
+| Check | Result |
+|-------|--------|
+| `mix test` | exit 0, 573 doctests, 33 properties, 4400 tests, 0 failures, 14 excluded |
+| `mix test --seed 0` | exit 0, same counts |
+| `mix format --check-formatted` | exit 0 |
+| `mix credo --strict` | no issues |
+| `mix dialyzer` | `Total errors: 0` |
+| `mix docs 2>&1 \| grep -iE 'warning\|error'` | empty |
+| `mix run scripts/audit_user_docs.exs` on the 8 lib files touched | "No banned-token matches" each |
+| async grep `… \| xargs grep -L 'async: false' \| wc -l` | 12, unchanged |
