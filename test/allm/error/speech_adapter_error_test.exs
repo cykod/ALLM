@@ -14,21 +14,25 @@ defmodule ALLM.Error.SpeechAdapterErrorTest do
     :timeout,
     :network_error,
     :malformed_response,
+    :unsupported_feature,
     :unknown
   ]
 
   describe "legal_reasons/0" do
-    test "returns the 9-atom closed set" do
+    test "returns the 10-atom closed set" do
       reasons = SpeechAdapterError.legal_reasons()
-      assert length(reasons) == 9
+      assert length(reasons) == 10
       assert MapSet.new(reasons) == MapSet.new(@legal_reasons)
     end
 
-    test "drops :batch_too_large, :unsupported_feature and :content_filter" do
+    test "drops :batch_too_large and :content_filter" do
       reasons = SpeechAdapterError.legal_reasons()
       refute :batch_too_large in reasons
-      refute :unsupported_feature in reasons
       refute :content_filter in reasons
+    end
+
+    test "carries :unsupported_feature" do
+      assert :unsupported_feature in SpeechAdapterError.legal_reasons()
     end
   end
 

@@ -3,15 +3,12 @@ defmodule ALLM.Error.SpeechAdapterError do
   Errors returned by speech-synthesis adapters.
 
   Layer A — serializable (no PIDs, refs, funs, or raw API keys). A
-  closed-enum exception struct with nine reasons.
+  closed-enum exception struct with ten reasons.
 
   There is no `:batch_too_large`: a speech request carries one input, and
-  there is no multi-input form to overflow. There is no
-  `:unsupported_feature` either, because no bundled speech adapter refuses a
-  request field. An adapter that must refuse one adds the reason when it
-  lands, which is additive for callers matching on the struct. There is no
-  `:content_filter`, which only the transcription sibling
-  `ALLM.Error.TranscriptionAdapterError` carries.
+  there is no multi-input form to overflow. There is no `:content_filter`,
+  which only the transcription sibling `ALLM.Error.TranscriptionAdapterError`
+  carries.
 
   ## Error reasons
 
@@ -25,6 +22,7 @@ defmodule ALLM.Error.SpeechAdapterError do
   | `:timeout` | — | Adapter `request_timeout` exceeded. Retried automatically. |
   | `:network_error` | — | TCP/TLS/DNS failure. Retried automatically. |
   | `:malformed_response` | — | 200 without the expected audio payload. No retry; file a bug. |
+  | `:unsupported_feature` | — | The request sets a field the adapter's provider cannot express (for example `:instructions`, a `:format` it cannot produce, or a `:sample_rate` outside the format's set). Refused locally, before the API key is resolved. Drop or change the field; no retry. |
   | `:unknown` | any | Catch-all for shapes the adapter cannot classify; non-retryable. |
   """
 
@@ -38,6 +36,7 @@ defmodule ALLM.Error.SpeechAdapterError do
           | :timeout
           | :network_error
           | :malformed_response
+          | :unsupported_feature
           | :unknown
 
   @type t :: %__MODULE__{
@@ -59,6 +58,7 @@ defmodule ALLM.Error.SpeechAdapterError do
     timeout
     network_error
     malformed_response
+    unsupported_feature
     unknown
   )a
 
@@ -70,8 +70,11 @@ defmodule ALLM.Error.SpeechAdapterError do
       iex> :context_length_exceeded in ALLM.Error.SpeechAdapterError.legal_reasons()
       true
 
+      iex> :unsupported_feature in ALLM.Error.SpeechAdapterError.legal_reasons()
+      true
+
       iex> length(ALLM.Error.SpeechAdapterError.legal_reasons())
-      9
+      10
   """
   @spec legal_reasons() :: [reason()]
   def legal_reasons, do: @legal_reasons

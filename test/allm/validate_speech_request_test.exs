@@ -81,6 +81,51 @@ defmodule ALLM.ValidateSpeechRequestTest do
     end
   end
 
+  describe "speech_request/1 — :sample_rate" do
+    test "nil and positive integers pass" do
+      for rate <- [nil, 8_000, 24_000, 48_000] do
+        assert Validate.speech_request(SpeechRequest.new(input: "x", sample_rate: rate)) == :ok
+      end
+    end
+
+    test "a non-positive or non-integer :sample_rate yields {:sample_rate, :out_of_range}" do
+      for rate <- [0, -1, 24_000.0, "24000"] do
+        assert errors_for(input: "x", sample_rate: rate) == [{:sample_rate, :out_of_range}]
+      end
+    end
+  end
+
+  describe "speech_request/2 — input: :streamed" do
+    test ~s(input: "" is :ok when streamed) do
+      assert Validate.speech_request(%SpeechRequest{input: ""}, input: :streamed) == :ok
+    end
+
+    test ~s(input: "" is still rejected by default, and by speech_request/2 with []) do
+      assert Validate.speech_request(%SpeechRequest{input: ""}) != :ok
+      assert Validate.speech_request(%SpeechRequest{input: ""}, []) != :ok
+    end
+
+    test "a non-binary or non-UTF-8 :input is ignored when streamed" do
+      for input <- [nil, 42, <<0xFF, 0xFE>>] do
+        req = struct!(SpeechRequest, input: input)
+        assert Validate.speech_request(req, input: :streamed) == :ok
+      end
+    end
+
+    test "the non-:input rules still run when streamed" do
+      req = struct!(SpeechRequest, input: nil, format: :ogg, sample_rate: 0)
+
+      assert {:error, %ValidationError{errors: errors}} =
+               Validate.speech_request(req, input: :streamed)
+
+      assert errors == [{:format, :unknown}, {:sample_rate, :out_of_range}]
+    end
+
+    test "any other :input option value leaves the default rules on" do
+      assert Validate.speech_request(%SpeechRequest{input: ""}, input: :other) != :ok
+    end
+  end
+
   describe "speech_request/1 — accumulation" do
     test "every non-hard rule accumulates into one error list" do
       errors =
@@ -90,7 +135,8 @@ defmodule ALLM.ValidateSpeechRequestTest do
           voice: 2,
           format: :ogg,
           instructions: 3,
-          speed: 0
+          speed: 0,
+          sample_rate: 0
         )
 
       assert MapSet.new(errors) ==
@@ -100,10 +146,11 @@ defmodule ALLM.ValidateSpeechRequestTest do
                  {:voice, :invalid_shape},
                  {:format, :unknown},
                  {:instructions, :invalid_shape},
-                 {:speed, :out_of_range}
+                 {:speed, :out_of_range},
+                 {:sample_rate, :out_of_range}
                ])
 
-      assert length(errors) == 6
+      assert length(errors) == 7
     end
   end
 

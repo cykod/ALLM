@@ -37,8 +37,8 @@ defmodule ALLM.Validate do
   Validators are opt-in: constructors like `ALLM.Request.new/2` do not call
   these functions. Users invoke `request/1`, `message/1`, `tool/1`,
   `thread/1`, `session/1`, `image_request/1`, `embedding_request/1`,
-  `moderation_request/1`, `speech_request/1`, or `transcription_request/1`
-  explicitly when they need a check before dispatch.
+  `moderation_request/1`, `speech_request/1`, `transcription_request/1`, or
+  `transcription_stream_request/1` explicitly when they need a check before dispatch.
   """
 
   alias ALLM.Error.ValidationError
@@ -57,7 +57,8 @@ defmodule ALLM.Validate do
     TextPart,
     Thread,
     Tool,
-    TranscriptionRequest
+    TranscriptionRequest,
+    TranscriptionStreamRequest
   }
 
   @legal_roles [:system, :user, :assistant, :tool]
@@ -418,11 +419,18 @@ defmodule ALLM.Validate do
   `{:input, :invalid_encoding}`); `:model`, `:voice` and `:instructions`
   each `nil` or a binary (`:invalid_shape`); `:format` `nil` or a member of
   `ALLM.SpeechRequest.formats/0` (`{:format, :unknown}`); `:speed` `nil` or
-  a number greater than zero (`{:speed, :out_of_range}`).
+  a number greater than zero (`{:speed, :out_of_range}`); `:sample_rate`
+  `nil` or a positive integer (`{:sample_rate, :out_of_range}`).
 
-  Voice names and per-provider speed ranges are deliberately NOT checked:
-  both differ per provider and per model, and the provider's own rejection
-  surfaces as the adapter's `:invalid_request`.
+  Voice names, per-provider speed ranges and per-provider sample-rate sets
+  are deliberately NOT checked here: they differ per provider and per
+  model, and the adapter or the provider rejects them.
+
+  ## Options
+
+  - `input: :streamed`: the text arrives as a separate enumerable, not in
+    `:input`. The three `:input` rules are skipped, and whatever `:input`
+    holds is ignored.
 
   ## Examples
 
@@ -434,24 +442,30 @@ defmodule ALLM.Validate do
       :invalid_speech_request
       iex> err.errors
       [{:input, :empty}, {:format, :unknown}]
+
+      iex> ALLM.Validate.speech_request(ALLM.SpeechRequest.new(input: ""), input: :streamed)
+      :ok
   """
-  @spec speech_request(SpeechRequest.t()) :: :ok | {:error, ValidationError.t()}
-  def speech_request(%SpeechRequest{input: input}) when not is_binary(input) do
-    finalize(:invalid_speech_request, [{:input, :invalid_shape}])
-  end
+  @spec speech_request(SpeechRequest.t(), keyword()) :: :ok | {:error, ValidationError.t()}
+  def speech_request(%SpeechRequest{} = req, opts \\ []) when is_list(opts) do
+    streamed? = Keyword.get(opts, :input) == :streamed
 
-  def speech_request(%SpeechRequest{} = req) do
-    errors =
-      []
-      |> validate_speech_input(req.input)
-      |> validate_model_field(req.model)
-      |> validate_nil_or_binary(:voice, req.voice)
-      |> validate_speech_format(req.format)
-      |> validate_nil_or_binary(:instructions, req.instructions)
-      |> validate_speech_speed(req.speed)
-      |> Enum.reverse()
+    if not streamed? and not is_binary(req.input) do
+      finalize(:invalid_speech_request, [{:input, :invalid_shape}])
+    else
+      errors =
+        []
+        |> validate_speech_input(req.input, streamed?)
+        |> validate_model_field(req.model)
+        |> validate_nil_or_binary(:voice, req.voice)
+        |> validate_speech_format(req.format)
+        |> validate_nil_or_binary(:instructions, req.instructions)
+        |> validate_speech_speed(req.speed)
+        |> validate_nil_or_pos_integer(:sample_rate, req.sample_rate)
+        |> Enum.reverse()
 
-    finalize(:invalid_speech_request, errors)
+      finalize(:invalid_speech_request, errors)
+    end
   end
 
   @doc """
@@ -494,6 +508,49 @@ defmodule ALLM.Validate do
       |> validate_model_field(req.model)
       |> validate_nil_or_binary(:language, req.language)
       |> validate_nil_or_binary(:prompt, req.prompt)
+      |> Enum.reverse()
+
+    finalize(:invalid_transcription_request, errors)
+  end
+
+  @doc """
+  Validate an `%ALLM.TranscriptionStreamRequest{}`.
+
+  Returns `:ok` when every rule passes, or
+  `{:error, %ALLM.Error.ValidationError{reason: :invalid_transcription_request, errors: [...]}}`.
+  All rules accumulate into one error list.
+
+  Field rules: `:sample_rate` a positive integer
+  (`{:sample_rate, :out_of_range}`); `:commit_strategy` a member of
+  `ALLM.TranscriptionStreamRequest.commit_strategies/0`
+  (`{:commit_strategy, :unknown}`); `:model` and `:language` each `nil` or
+  a binary (`:invalid_shape`); `:options` and `:metadata` each a map
+  (`:invalid_shape`).
+
+  Which sample rates a provider accepts is deliberately NOT checked here;
+  the adapter checks it.
+
+  ## Examples
+
+      iex> ALLM.Validate.transcription_stream_request(ALLM.TranscriptionStreamRequest.new())
+      :ok
+
+      iex> cfg = ALLM.TranscriptionStreamRequest.new(sample_rate: 0, commit_strategy: :never)
+      iex> {:error, err} = ALLM.Validate.transcription_stream_request(cfg)
+      iex> err.errors
+      [{:sample_rate, :out_of_range}, {:commit_strategy, :unknown}]
+  """
+  @spec transcription_stream_request(TranscriptionStreamRequest.t()) ::
+          :ok | {:error, ValidationError.t()}
+  def transcription_stream_request(%TranscriptionStreamRequest{} = req) do
+    errors =
+      []
+      |> validate_pos_integer(:sample_rate, req.sample_rate)
+      |> validate_commit_strategy(req.commit_strategy)
+      |> validate_model_field(req.model)
+      |> validate_nil_or_binary(:language, req.language)
+      |> validate_map_field(:options, req.options)
+      |> validate_map_field(:metadata, req.metadata)
       |> Enum.reverse()
 
     finalize(:invalid_transcription_request, errors)
@@ -835,6 +892,17 @@ defmodule ALLM.Validate do
   defp validate_nil_or_binary(errs, _field, v) when is_binary(v), do: errs
   defp validate_nil_or_binary(errs, field, _), do: [{field, :invalid_shape} | errs]
 
+  # A sample rate in Hz: a positive integer, optional where `nil` means the
+  # adapter's default.
+  defp validate_nil_or_pos_integer(errs, _field, nil), do: errs
+  defp validate_nil_or_pos_integer(errs, field, v), do: validate_pos_integer(errs, field, v)
+
+  defp validate_pos_integer(errs, _field, v) when is_integer(v) and v > 0, do: errs
+  defp validate_pos_integer(errs, field, _), do: [{field, :out_of_range} | errs]
+
+  defp validate_map_field(errs, _field, v) when is_map(v), do: errs
+  defp validate_map_field(errs, field, _), do: [{field, :invalid_shape} | errs]
+
   # ---------------------------------------------------------------------------
   # Internal: embedding_request rules
   # ---------------------------------------------------------------------------
@@ -897,9 +965,10 @@ defmodule ALLM.Validate do
 
   # A non-UTF-8 input would raise inside the adapter's JSON encoder instead of
   # returning an error, so it is rejected here.
-  defp validate_speech_input(errs, ""), do: [{:input, :empty} | errs]
+  defp validate_speech_input(errs, _input, true = _streamed?), do: errs
+  defp validate_speech_input(errs, "", false), do: [{:input, :empty} | errs]
 
-  defp validate_speech_input(errs, input) do
+  defp validate_speech_input(errs, input, false) do
     if String.valid?(input), do: errs, else: [{:input, :invalid_encoding} | errs]
   end
 
@@ -924,5 +993,15 @@ defmodule ALLM.Validate do
     if ALLM.Audio.valid_source?(source),
       do: errs,
       else: [{[:audio, :source], :invalid_shape} | errs]
+  end
+
+  # ---------------------------------------------------------------------------
+  # Internal: transcription_stream_request rules
+  # ---------------------------------------------------------------------------
+
+  defp validate_commit_strategy(errs, strategy) do
+    if strategy in TranscriptionStreamRequest.commit_strategies(),
+      do: errs,
+      else: [{:commit_strategy, :unknown} | errs]
   end
 end

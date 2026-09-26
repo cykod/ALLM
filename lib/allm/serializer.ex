@@ -102,7 +102,8 @@ defmodule ALLM.Serializer do
     ALLM.SpeechRequest,
     ALLM.SpeechResponse,
     ALLM.TranscriptionRequest,
-    ALLM.TranscriptionResponse
+    ALLM.TranscriptionResponse,
+    ALLM.TranscriptionStreamRequest
   ]
 
   @type_tag_index Map.new(@known_modules, fn mod -> {inspect(mod), mod} end)

@@ -7,6 +7,7 @@ Companion to `steering/2026-09-25_ELEVENLABS_TTS_SST.md`. Status, ticks, deviati
 | Phase | Status |
 |-------|--------|
 | 26.1 | Completed |
+| 26.2 | Completed |
 
 ## Phase 26.1 — `Support.HTTPResponse` + `Support.TranscriptionAdapter`
 
@@ -159,4 +160,68 @@ Sources: `.work/reviews/2026-09-26-phase-26-1/overview.md`, `.work/code-reviews/
 | `mix docs` | exit 0, no warnings |
 | `mix run scripts/audit_user_docs.exs` on each new `lib/` file | "No banned-token matches" ×2 |
 | async grep (as above) `\| wc -l` | 12, unchanged |
+
+## Phase 26.2 — Layer A: events, stream request, fields, reasons
+
+Built 2026-09-26 on `6167d79`. The working tree is uncommitted; the orchestrator commits after review.
+
+### Checklist (26.2.2)
+
+- [x] Three new modules: `lib/allm/speech_event.ex`, `lib/allm/transcription_event.ex`, `lib/allm/transcription_stream_request.ex`. `SpeechRequest` and `SpeechResponse` gain `:sample_rate` (default `nil`, decoded as `data["sample_rate"]`). `:unsupported_feature` is added to both error enums: `@type reason`, `@legal_reasons`, the moduledoc reason table and count sentence, and a `legal_reasons/0` doctest.
+- [x] `Validate.speech_request/2` (with `speech_request/1` kept through a `\\ []` default) and `Validate.transcription_stream_request/1`.
+- [x] `lib/allm.ex` `@speech_request_field_opts` gains `:sample_rate`, and the two `@doc` prose lists naming those opts (`speech_request/2`, `synthesize/3`) gain it too. `test/allm/allm_synthesize_test.exs`'s symmetry test is green.
+- [x] `@known_modules` +1 (`ALLM.TranscriptionStreamRequest`; the events are ETF-only and not registered). `@layer_a` +3. `mix.exs` `groups_for_modules` `"Data types"` +3.
+- [x] Contract-flip dispositions: below.
+
+### Constructor guards (CLAUDE.md Layer-A constructor rule)
+
+- `SpeechRequest.new/1`, `SpeechResponse.new/1`, `TranscriptionStreamRequest.new/1` stay bare `struct!/2`. No guard on `:sample_rate`, `:commit_strategy` or any other new field. Pinned by `speech_request_test.exs` ("sample_rate is unguarded") and `transcription_stream_request_test.exs` ("fields are unguarded").
+- The event constructors are functions, not struct constructors. They check required payload keys (`ArgumentError` naming the missing keys), and `SpeechEvent.audio_delta("")` raises `ArgumentError`, per the design's contract block.
+- `TranscriptionStreamRequest.__from_tagged__/1` uses `decode_sample_rate/1` and `decode_commit_strategy/1` pairs, not `||`. Pinned by the JSON round-trip with `sample_rate: 8_000, commit_strategy: :manual`, and by "a JSON payload lacking both keys decodes to the defaults".
+
+### Contract-flip audit (`git grep -n 'unsupported_feature' test/allm/error/ lib/allm/error/speech_adapter_error.ex lib/allm/error/transcription_adapter_error.ex`)
+
+| Hit (before) | Disposition |
+|-----|-------------|
+| `speech_adapter_error_test.exs` `@legal_reasons` literal (had no `:unsupported_feature`) | flipped: `:unsupported_feature` added, so the MapSet comparison and the per-reason `new/2` tests cover it |
+| `speech_adapter_error_test.exs` "returns the 9-atom closed set" (`== 9`) | flipped: 10 |
+| `speech_adapter_error_test.exs` "drops :batch_too_large, :unsupported_feature and :content_filter" (`refute :unsupported_feature`) | flipped: the refute is removed, the test renamed to "drops :batch_too_large and :content_filter", and a new "carries :unsupported_feature" test asserts membership |
+| `transcription_adapter_error_test.exs` `@legal_reasons` literal | flipped, as above |
+| `transcription_adapter_error_test.exs` "returns the 10-atom closed set" (`== 10`) | flipped: 11 |
+| `transcription_adapter_error_test.exs` "drops :batch_too_large and :unsupported_feature" | flipped: renamed "drops :batch_too_large"; new "carries :unsupported_feature" test |
+| `speech_adapter_error.ex` moduledoc "nine reasons" and the "There is no `:unsupported_feature` either, because no bundled speech adapter refuses a request field" sentence | flipped: "ten reasons"; the sentence is removed and the reason gets a table row |
+| `transcription_adapter_error.ex` moduledoc "ten reasons: the nine that …" and the matching "There is no `:unsupported_feature`" sentence | flipped: "eleven reasons: the ten that …"; sentence removed; table row added |
+| `legal_reasons/0` doctests (`length == 9` / `== 10`) | flipped: 10 / 11, plus an `:unsupported_feature in legal_reasons()` doctest each |
+| `adapter_error_test.exs`, `embedding_adapter_error_test.exs`, `image_adapter_error_test.exs`, `moderation_adapter_error_test.exs` `@legal_reasons` literals | keep: other error families, which already carried the atom |
+
+After the flip, the predicate's hits are the four keep rows plus the new membership assertions and the two modules' own type/list/table/doctest lines.
+
+### Deviations
+
+- `[scope]` **Event constructor arities not fixed by the design.** The contract block specs only `SpeechEvent`'s constructors. `TranscriptionEvent` got `transcription_started/1`, `partial_transcript/1`, `committed_transcript/2` (language defaults to `nil`) and `transcription_completed/1`, mirroring `SpeechEvent`. No constructor for `:error` in either union, matching `ALLM.Event` (opaque/struct payload).
+- `[scope]` **"Required keys" read as "every key in the payload type".** A key may be present with value `nil`. `event?/1` does not check payload keys (only the payload's kind: map, non-empty binary, or the family's error struct), matching `ALLM.Event.event?/1`. `event?({:audio_delta, ""})` is `false`, consistent with the constructor.
+- `[scope]` **`event?/1` on `{:error, _}` requires the family's own error struct.** A `TranscriptionAdapterError` is not a speech event, and vice versa. Tested both ways.
+- `[scope]` **`speech_request/2` with `input: :streamed` skips the `:input` hard-reject as well as `:empty` / `:invalid_encoding`** (the design's "the three `:input` rows are skipped; any other `:input` value is ignored"). Any other value of the `:input` *option* keeps the default rules (tested).
+- `[scope]` The duplicated private `require_keys!/3` in the two event modules is two copies, below the extraction threshold. Not extracted.
+
+### Notes for later sub-phases
+
+- **26.4:** `lib/allm/speech_request.ex` moduledoc still says "There is no `:stream` field: speech synthesis is non-streaming." That becomes false when `stream_synthesize/3` lands; reword it then (streaming is a separate call, not a request flag).
+- **26.9:** the spec still reads "`ALLM.Error.SpeechAdapterError` (9 reasons) and `ALLM.Error.TranscriptionAdapterError` (the same 9 plus `:content_filter`)" (`grep -n "(9 reasons)" steering/allm_engine_session_streaming_spec_v0_2.md` → `:2844`, 2026-09-26). Add `:unsupported_feature` there with the rest of the spec amendment.
+
+### Verification (run 2026-09-26, working tree on `6167d79`)
+
+| Check | Result |
+|-------|--------|
+| `mix test` | exit 0, 554 doctests, 31 properties, 4237 tests, 0 failures, 14 excluded (26.1: 534 / 4182) |
+| `mix test --seed 0` | exit 0, same counts |
+| `mix format --check-formatted` | exit 0 |
+| `mix credo --strict` | no issues |
+| `mix dialyzer` | `Total errors: 0` |
+| `mix compile --warnings-as-errors --force` | exit 0 |
+| `mix run scripts/audit_user_docs.exs <file>` on the 3 new `lib/` files (and the 5 modified Layer A / validator files) | "No banned-token matches" each |
+| async grep `grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test/ \| xargs grep -L 'async: false' \| wc -l` | 12, unchanged; the new test files use none of the four calls |
+| `test/layer_a_docs_test.exs` | 33 tests (was 30 at `6167d79`: 29 modules + 1). `@layer_a` literal 29 → 32 entries; the delta is exactly the three new modules' moduledoc tests |
+| `conformance/` | not touched, so its gates were not run |
+| `README.md` | not modified |
 

@@ -14,6 +14,9 @@ defmodule ALLM.SpeechResponse do
     request's `:format`, and the two differ whenever the request left
     `:format` as `nil`. It is `nil` when the content type is not in the
     table.
+  - `:sample_rate`: the sample rate in Hz of the audio that arrived, as
+    the adapter reports it, or `nil` when the adapter cannot tell. For
+    `:pcm` this is the rate to play the bytes at.
   - `:id`, `:request_id`, `:model`, `:provider`: provider correlation.
   - `:usage`: an `t:ALLM.Usage.t/0`, never `nil`. A provider that reports
     no counters for speech leaves every field `nil`.
@@ -36,6 +39,7 @@ defmodule ALLM.SpeechResponse do
   @type t :: %__MODULE__{
           audio: ALLM.Audio.t() | nil,
           format: SpeechRequest.format() | nil,
+          sample_rate: pos_integer() | nil,
           id: String.t() | nil,
           request_id: String.t() | nil,
           model: String.t() | nil,
@@ -48,6 +52,7 @@ defmodule ALLM.SpeechResponse do
   defstruct [
     :audio,
     :format,
+    :sample_rate,
     :id,
     :request_id,
     :model,
@@ -125,6 +130,7 @@ defmodule ALLM.SpeechResponse do
     %__MODULE__{
       audio: Serializer.hydrate(data["audio"]),
       format: Serializer.to_atom_field(data["format"]),
+      sample_rate: data["sample_rate"],
       id: data["id"],
       request_id: data["request_id"],
       model: data["model"],

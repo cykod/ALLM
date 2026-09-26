@@ -15,6 +15,7 @@ defmodule ALLM.SpeechRequestTest do
                format: nil,
                instructions: nil,
                speed: nil,
+               sample_rate: nil,
                options: %{},
                metadata: %{}
              } = req
@@ -26,6 +27,14 @@ defmodule ALLM.SpeechRequestTest do
 
     test "an unknown key raises KeyError" do
       assert_raise KeyError, fn -> SpeechRequest.new(bogus: 1) end
+    end
+
+    test "sample_rate is unguarded: a bad value constructs, the validator rejects it" do
+      req = SpeechRequest.new(input: "x", sample_rate: -1)
+      assert req.sample_rate == -1
+
+      assert {:error, %{errors: [{:sample_rate, :out_of_range}]}} =
+               ALLM.Validate.speech_request(req)
     end
   end
 
@@ -44,6 +53,7 @@ defmodule ALLM.SpeechRequestTest do
         format: :opus,
         instructions: "Speak slowly.",
         speed: 1.25,
+        sample_rate: 44_100,
         options: %{"stream_format" => "audio"},
         metadata: %{"trace" => "abc"}
       )
@@ -59,6 +69,18 @@ defmodule ALLM.SpeechRequestTest do
       assert {:ok, decoded} = req |> Serializer.to_json!() |> Serializer.from_json()
       assert decoded == req
       assert decoded.format == :opus
+    end
+
+    test "sample_rate: 24_000 survives JSON" do
+      req = SpeechRequest.new(input: "x", format: :pcm, sample_rate: 24_000)
+
+      assert {:ok, %SpeechRequest{sample_rate: 24_000}} =
+               req |> Serializer.to_json!() |> Serializer.from_json()
+    end
+
+    test "an absent sample_rate key decodes to nil" do
+      json = Jason.encode!(%{"__type__" => "ALLM.SpeechRequest", "data" => %{"input" => "x"}})
+      assert {:ok, %SpeechRequest{sample_rate: nil}} = Serializer.from_json(json)
     end
 
     test "a default request round-trips through JSON" do

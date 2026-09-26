@@ -182,7 +182,10 @@ defmodule ALLM.MixProject do
           ALLM.SpeechRequest,
           ALLM.SpeechResponse,
           ALLM.TranscriptionRequest,
-          ALLM.TranscriptionResponse
+          ALLM.TranscriptionResponse,
+          ALLM.TranscriptionStreamRequest,
+          ALLM.SpeechEvent,
+          ALLM.TranscriptionEvent
         ],
         Runtime: [
           ALLM.Engine,

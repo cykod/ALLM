@@ -1,3 +1,17 @@
+## [FEAT] Add Layer A types for streaming speech and transcription
+*Saturday, September 26th at 8pm*
+Phase 26.2 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 audio). Adds 
+ALLM.SpeechEvent and ALLM.TranscriptionEvent as closed tagged-tuple unions that 
+are ETF-only and never JSON, and ALLM.TranscriptionStreamRequest, a 
+serializable realtime-session config with explicit decode pairs for its truthy 
+defaults. SpeechRequest and SpeechResponse gain :sample_rate, and both audio 
+adapter errors gain :unsupported_feature. Validate.speech_request/2 adds an 
+input: :streamed mode, and a new Validate.transcription_stream_request/1 is 
+added. The three structs are registered in @layer_a, groups_for_modules and, 
+for the request only, the Serializer allowlist.
+
+---
+
 ## [OTHR] Extract shared provider HTTP and transcription helpers
 *Saturday, September 26th at 8pm*
 Phase 26.1 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§27 module tree). 

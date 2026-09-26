@@ -22,6 +22,15 @@ defmodule ALLM.SpeechRequest do
     promise that every provider accepts every one. The response reports the
     format that actually arrived (`ALLM.SpeechResponse`'s `:format`).
   - `:instructions`: optional delivery guidance for models that accept it.
+  - `:sample_rate`: the sample rate in Hz of the audio to produce, or
+    `nil` for the adapter's default for the format. It matters most for
+    `:pcm`, which is headerless: the bytes cannot be played without knowing
+    the rate. The cross-provider default for `:pcm` is 24,000 Hz, so
+    switching providers does not silently change the playback rate. The
+    adapter contract is to accept its own set of rates per format, refuse
+    any other with `:unsupported_feature`, and report the rate that arrived
+    in `ALLM.SpeechResponse`'s `:sample_rate` (`nil` when the adapter cannot
+    tell).
   - `:speed`: optional playback speed. Only "a number greater than zero"
     is checked here, and each provider enforces its own range.
   - `:options`: a raw provider-body passthrough for fields ALLM does not
@@ -36,7 +45,8 @@ defmodule ALLM.SpeechRequest do
   ## Construction
 
   `new/1` is a bare `struct!/2` pass-through: unknown keys raise
-  `KeyError`, and nothing else is checked.
+  `KeyError`, and nothing else is checked. `new(sample_rate: -1)` constructs,
+  and `ALLM.Validate.speech_request/1` is what rejects it.
   """
 
   alias ALLM.Serializer
@@ -51,11 +61,22 @@ defmodule ALLM.SpeechRequest do
           format: format() | nil,
           instructions: String.t() | nil,
           speed: number() | nil,
+          sample_rate: pos_integer() | nil,
           options: map(),
           metadata: map()
         }
 
-  defstruct [:model, :voice, :format, :instructions, :speed, input: "", options: %{}, metadata: %{}]
+  defstruct [
+    :model,
+    :voice,
+    :format,
+    :instructions,
+    :speed,
+    :sample_rate,
+    input: "",
+    options: %{},
+    metadata: %{}
+  ]
 
   @formats [:mp3, :opus, :aac, :flac, :wav, :pcm]
 
@@ -96,6 +117,7 @@ defmodule ALLM.SpeechRequest do
       format: Serializer.to_atom_field(data["format"]),
       instructions: data["instructions"],
       speed: data["speed"],
+      sample_rate: data["sample_rate"],
       options: data["options"] || %{},
       metadata: data["metadata"] || %{}
     }

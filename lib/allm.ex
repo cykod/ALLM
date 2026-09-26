@@ -1354,6 +1354,7 @@ defmodule ALLM do
     :format,
     :instructions,
     :speed,
+    :sample_rate,
     :options,
     :metadata
   ]
@@ -1364,7 +1365,8 @@ defmodule ALLM do
   ## Options
 
   Only `ALLM.SpeechRequest` field names are read: `:model`, `:voice`,
-  `:format`, `:instructions`, `:speed`, `:options`, `:metadata`. Every other
+  `:format`, `:instructions`, `:speed`, `:sample_rate`, `:options`,
+  `:metadata`. Every other
   key is ignored, which is what lets `synthesize/3` forward its own
   call-control opts (`:request_id`, `:request_timeout`, `:retry`,
   `:adapter_opts`, `:api_key`, `:stream`) through this function without
@@ -1394,8 +1396,8 @@ defmodule ALLM do
   Layer-C façade. Two input shapes:
 
     * Binary — the text to speak. Opts named in `speech_request/2`
-      (`:model`, `:voice`, `:format`, `:instructions`, `:speed`, `:options`,
-      `:metadata`) lift onto the built request; everything else is a
+      (`:model`, `:voice`, `:format`, `:instructions`, `:speed`,
+      `:sample_rate`, `:options`, `:metadata`) lift onto the built request; everything else is a
       call-control opt.
     * Pre-built `%ALLM.SpeechRequest{}` — dispatched verbatim; opts are NOT
       merged onto it.

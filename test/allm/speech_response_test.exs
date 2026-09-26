@@ -67,6 +67,7 @@ defmodule ALLM.SpeechResponseTest do
       SpeechResponse.new(
         audio: Audio.from_binary(<<0, 255, 1, 200>>, "audio/mpeg"),
         format: :mp3,
+        sample_rate: 44_100,
         id: "sp-1",
         request_id: "req-1",
         model: "tts-1",
@@ -101,6 +102,16 @@ defmodule ALLM.SpeechResponseTest do
 
         assert {:ok, %SpeechResponse{usage: %Usage{}}} = Serializer.from_json(json)
       end
+    end
+
+    test "sample_rate: 24_000 survives JSON; an absent key decodes to nil" do
+      resp = SpeechResponse.new(format: :pcm, sample_rate: 24_000)
+
+      assert {:ok, %SpeechResponse{sample_rate: 24_000}} =
+               resp |> Serializer.to_json!() |> Serializer.from_json()
+
+      json = Jason.encode!(%{"__type__" => "ALLM.SpeechResponse", "data" => %{}})
+      assert {:ok, %SpeechResponse{sample_rate: nil}} = Serializer.from_json(json)
     end
 
     test "an untagged usage value passes through verbatim" do

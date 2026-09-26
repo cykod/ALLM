@@ -3,14 +3,11 @@ defmodule ALLM.Error.TranscriptionAdapterError do
   Errors returned by transcription adapters.
 
   Layer A — serializable (no PIDs, refs, funs, or raw API keys). A
-  closed-enum exception struct with ten reasons: the nine that
+  closed-enum exception struct with eleven reasons: the ten that
   `ALLM.Error.SpeechAdapterError` carries, plus `:content_filter`.
 
   There is no `:batch_too_large`: a transcription request carries one clip,
-  and there is no multi-input form to overflow. There is no
-  `:unsupported_feature`, because no bundled transcription adapter refuses a
-  request field. An adapter that must refuse one adds the reason when it
-  lands, which is additive for callers matching on the struct.
+  and there is no multi-input form to overflow.
 
   ## Error reasons
 
@@ -25,6 +22,7 @@ defmodule ALLM.Error.TranscriptionAdapterError do
   | `:timeout` | — | Adapter `request_timeout` exceeded. Retried automatically. |
   | `:network_error` | — | TCP/TLS/DNS failure. Retried automatically. |
   | `:malformed_response` | — | 200 without the expected transcript text. No retry; file a bug. |
+  | `:unsupported_feature` | — | The request sets a field the adapter's provider cannot express (for example a `:prompt` the provider has no field for). Refused locally, before the API key is resolved. Drop the field; no retry. |
   | `:unknown` | any | Catch-all for shapes the adapter cannot classify; non-retryable. |
   """
 
@@ -39,6 +37,7 @@ defmodule ALLM.Error.TranscriptionAdapterError do
           | :network_error
           | :malformed_response
           | :content_filter
+          | :unsupported_feature
           | :unknown
 
   @type t :: %__MODULE__{
@@ -61,6 +60,7 @@ defmodule ALLM.Error.TranscriptionAdapterError do
     network_error
     malformed_response
     content_filter
+    unsupported_feature
     unknown
   )a
 
@@ -72,8 +72,11 @@ defmodule ALLM.Error.TranscriptionAdapterError do
       iex> :content_filter in ALLM.Error.TranscriptionAdapterError.legal_reasons()
       true
 
+      iex> :unsupported_feature in ALLM.Error.TranscriptionAdapterError.legal_reasons()
+      true
+
       iex> length(ALLM.Error.TranscriptionAdapterError.legal_reasons())
-      10
+      11
   """
   @spec legal_reasons() :: [reason()]
   def legal_reasons, do: @legal_reasons

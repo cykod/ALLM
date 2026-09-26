@@ -15,20 +15,23 @@ defmodule ALLM.Error.TranscriptionAdapterErrorTest do
     :network_error,
     :malformed_response,
     :content_filter,
+    :unsupported_feature,
     :unknown
   ]
 
   describe "legal_reasons/0" do
-    test "returns the 10-atom closed set" do
+    test "returns the 11-atom closed set" do
       reasons = TranscriptionAdapterError.legal_reasons()
-      assert length(reasons) == 10
+      assert length(reasons) == 11
       assert MapSet.new(reasons) == MapSet.new(@legal_reasons)
     end
 
-    test "drops :batch_too_large and :unsupported_feature" do
-      reasons = TranscriptionAdapterError.legal_reasons()
-      refute :batch_too_large in reasons
-      refute :unsupported_feature in reasons
+    test "drops :batch_too_large" do
+      refute :batch_too_large in TranscriptionAdapterError.legal_reasons()
+    end
+
+    test "carries :unsupported_feature" do
+      assert :unsupported_feature in TranscriptionAdapterError.legal_reasons()
     end
 
     test "carries :content_filter, which the speech sibling does not" do
