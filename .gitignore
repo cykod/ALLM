@@ -33,3 +33,5 @@ erl_crash.dump
 code-reviews/
 steering/examples
 .work
+# Playwright CLI output (may contain credentials)
+.playwright-cli/
