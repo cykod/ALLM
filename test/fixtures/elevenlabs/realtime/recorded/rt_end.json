@@ -1,0 +1,154 @@
+{
+  "frames": [
+    {
+      "dir": "out",
+      "t_ms": 212,
+      "text": "{\"config\":{\"audio_format\":\"pcm_24000\",\"disable_logging\":false,\"entity_detection\":null,\"filter_background_audio\":false,\"include_language_detection\":false,\"include_timestamps\":false,\"keyterms\":[],\"language_code\":null,\"max_tokens_to_recompute\":5,\"min_silence_duration_ms\":100,\"min_speech_duration_ms\":100,\"model_id\":\"scribe_v2_realtime\",\"no_verbatim\":false,\"sample_rate\":24000,\"secondary_languages\":[],\"timestamps_granularity\":\"word\",\"vad_commit_strategy\":true,\"vad_silence_threshold_secs\":1.5,\"vad_threshold\":0.4},\"message_type\":\"session_started\",\"session_id\":\"c95e96b8c13d4302ad4b75ae0eb2fd03\"}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 212,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 212,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 212,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 212,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 212,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 212,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 212,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 212,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 212,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 212,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 213,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 213,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 213,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 213,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 213,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 213,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 213,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 213,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 213,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 213,
+      "text": "{\"audio_base_64\":\"<0 bytes>\",\"commit\":true,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "out",
+      "t_ms": 548,
+      "text": "{\"message_type\":\"committed_transcript\",\"text\":\"The quick brown fox jump-\"}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 1714,
+      "text": "{\"audio_base_64\":\"<0 bytes>\",\"commit\":true,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "out",
+      "t_ms": 1776,
+      "text": "{\"error\":\"Commit request ignored: only 0.00s of uncommitted audio. You need at least 0.3s of uncommitted audio before committing.\",\"message_type\":\"commit_throttled\"}"
+    },
+    {
+      "close": [
+        1000,
+        "commit_throttled"
+      ],
+      "dir": "out",
+      "t_ms": 1776
+    }
+  ],
+  "status": 101,
+  "summary": {
+    "chunk_ms": null,
+    "close": [
+      1000,
+      "commit_throttled"
+    ],
+    "commit_frame_order": [
+      "committed_transcript"
+    ],
+    "committed": [
+      "The quick brown fox jump-"
+    ],
+    "error": {
+      "error": "Commit request ignored: only 0.00s of uncommitted audio. You need at least 0.3s of uncommitted audio before committing.",
+      "message_type": "commit_throttled"
+    },
+    "pacing": null,
+    "partials": [],
+    "session_started": true
+  },
+  "url": "wss://api.elevenlabs.io/v1/speech-to-text/realtime?audio_format=pcm_24000&commit_strategy=vad&model_id=scribe_v2_realtime"
+}

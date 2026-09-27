@@ -199,8 +199,9 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   alias ALLM.Error.{SpeechAdapterError, ValidationError}
   alias ALLM.Providers.FakeSpeech
   alias ALLM.Providers.Support.ElevenLabs, as: Support
-  alias ALLM.Providers.Support.{HTTPResponse, InputPump, WebSocket}
+  alias ALLM.Providers.Support.{HTTPResponse, InputPump}
   alias ALLM.Providers.Support.SpeechAdapter, as: SpeechSupport
+  alias ALLM.Providers.Support.WebSocket.InputLoop
 
   @doc """
   Synthesize speech from `request.input` against ElevenLabs.
@@ -528,8 +529,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
     }
 
     opts
-    |> Support.base_url()
-    |> ws_base()
+    |> Support.ws_base_url()
     |> build_url(request, "/stream-input", structural, @ws_query_defaults)
   end
 
@@ -552,7 +552,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
       request.options
       |> SpeechSupport.stringify_keys()
       |> Map.get("query")
-      |> query_params()
+      |> Support.query_params(["output_format"])
 
     query =
       defaults
@@ -565,10 +565,6 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
       URI.encode(request.voice || @default_voice, &URI.char_unreserved?/1) <>
       suffix <> "?" <> URI.encode_query(query)
   end
-
-  defp ws_base("https://" <> rest), do: "wss://" <> rest
-  defp ws_base("http://" <> rest), do: "ws://" <> rest
-  defp ws_base(other), do: other
 
   @doc false
   # Adapter-injected default: `model_id` "eleven_flash_v2_5" when nil (the
@@ -832,7 +828,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
        Stream.resource(
          fn -> open_input_stream(request, input, api_key, opts) end,
          &input_next/1,
-         &WebSocket.close_loop/1
+         &InputLoop.close_loop/1
        )}
     end
   end
@@ -858,7 +854,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
 
     state =
       ws
-      |> WebSocket.loop_state(stream_timeout, div(inactivity_timeout(stream_timeout) * 1000, 2))
+      |> InputLoop.loop_state(stream_timeout, div(inactivity_timeout(stream_timeout) * 1000, 2))
       |> Map.merge(%{
         request: request,
         opts: opts,
@@ -872,7 +868,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
     with {:ok, conn} <- connect(ws, request, api_key, opts),
          state = %{state | conn: conn},
          {:ok, state} <- send_json(state, init_message(request, opts)) do
-      %{WebSocket.start_pump(state, input, opts) | pending: [ws_started_event(request, opts)]}
+      %{InputLoop.start_pump(state, input, opts) | pending: [ws_started_event(request, opts)]}
     else
       {:error, %SpeechAdapterError{} = error} ->
         %{state | pending: [{:error, error}], done?: true}
@@ -914,7 +910,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   # Selects only this stream's messages: the pump's (while it runs) and the
   # socket's.
   defp input_next(state) do
-    case WebSocket.next_message(state) do
+    case InputLoop.next_message(state) do
       {:pump, classified, state} -> on_pump(classified, state)
       {:transport, message, state} -> on_transport(message, state)
       :wake -> on_wake(state)
@@ -922,7 +918,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   end
 
   defp on_wake(state) do
-    if WebSocket.timed_out?(state) do
+    if InputLoop.timed_out?(state) do
       finish(
         state,
         stream_error(
@@ -944,11 +940,11 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   end
 
   defp on_pump(:done, %{spoke?: false} = state) do
-    finish(WebSocket.stop_pump(state), empty_input_error(state.opts))
+    finish(InputLoop.stop_pump(state), empty_input_error(state.opts))
   end
 
   defp on_pump(:done, state) do
-    state = %{WebSocket.stop_pump(state) | input_done?: true}
+    state = %{InputLoop.stop_pump(state) | input_done?: true}
 
     with {:ok, state} <- flush_word_buffer(state),
          {:ok, state} <- send_json(state, %{"text" => "", "flush" => true}) do
@@ -967,7 +963,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
         metadata: HTTPResponse.build_metadata(%{cause: cause}, state.opts)
       )
 
-    finish(WebSocket.stop_pump(state), error)
+    finish(InputLoop.stop_pump(state), error)
   end
 
   defp on_chunk("", state), do: {[], state}
@@ -1023,13 +1019,13 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
       options
       |> SpeechSupport.stringify_keys()
       |> Map.get("query")
-      |> query_params()
+      |> Support.query_params(["output_format"])
 
     @ws_query_defaults |> Map.merge(user_query) |> Map.get("auto_mode") |> to_string() == "true"
   end
 
   defp on_transport(message, state) do
-    case WebSocket.handle_transport(state, message) do
+    case InputLoop.handle_transport(state, message) do
       {:ok, state, frames} ->
         on_frames(frames, state, [])
 
@@ -1138,7 +1134,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   defp halt_error(state, %SpeechAdapterError{} = error), do: {:halt, [{:error, error}], state}
 
   defp send_json(state, message) do
-    case WebSocket.send_json(state, message) do
+    case InputLoop.send_json(state, message) do
       {:ok, state} ->
         {:ok, state}
 
@@ -1206,15 +1202,6 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
 
   defp put_nonempty(map, _key, value) when map_size(value) == 0, do: map
   defp put_nonempty(map, key, value), do: Map.put(map, key, value)
-
-  defp query_params(query) when is_map(query) do
-    query
-    |> SpeechSupport.stringify_keys()
-    |> Map.reject(fn {_k, v} -> is_nil(v) end)
-    |> Map.drop(["output_format"])
-  end
-
-  defp query_params(_query), do: %{}
 
   # ---------------------------------------------------------------------------
   # Internals — decoding and errors

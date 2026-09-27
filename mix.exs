@@ -159,7 +159,8 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Support.InputPump,
           ALLM.Providers.Support.ElevenLabs,
           ALLM.Providers.Support.WebSocket,
-          ALLM.Providers.Support.WebSocket.Mint
+          ALLM.Providers.Support.WebSocket.Mint,
+          ALLM.Providers.Support.WebSocket.InputLoop
         ],
         Defaults: [
           ALLM.ToolExecutor.Default,

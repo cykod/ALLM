@@ -1,0 +1,250 @@
+{
+  "frames": [
+    {
+      "dir": "out",
+      "t_ms": 301,
+      "text": "{\"config\":{\"audio_format\":\"pcm_24000\",\"disable_logging\":false,\"entity_detection\":null,\"filter_background_audio\":false,\"include_language_detection\":true,\"include_timestamps\":true,\"keyterms\":[],\"language_code\":null,\"max_tokens_to_recompute\":5,\"min_silence_duration_ms\":100,\"min_speech_duration_ms\":100,\"model_id\":\"scribe_v2_realtime\",\"no_verbatim\":false,\"sample_rate\":24000,\"secondary_languages\":[],\"timestamps_granularity\":\"word\",\"vad_commit_strategy\":true,\"vad_silence_threshold_secs\":1.5,\"vad_threshold\":0.4},\"message_type\":\"session_started\",\"session_id\":\"1ce49c4422ff4b88bff80cd190e8ea93\"}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 303,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 304,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 305,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 305,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 305,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 305,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 305,
+      "text": "{\"audio_base_64\":\"<4800 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 305,
+      "text": "{\"audio_base_64\":\"<0 bytes>\",\"commit\":true,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "out",
+      "t_ms": 700,
+      "text": "{\"message_type\":\"partial_transcript\",\"text\":\"The quick\"}"
+    },
+    {
+      "dir": "out",
+      "t_ms": 1204,
+      "text": "{\"message_type\":\"partial_transcript\",\"text\":\"The quick brown fox.\"}"
+    },
+    {
+      "dir": "out",
+      "t_ms": 1204,
+      "text": "{\"message_type\":\"partial_transcript\",\"text\":\"The quick brown fox jumps over the\"}"
+    },
+    {
+      "dir": "out",
+      "t_ms": 1234,
+      "text": "{\"message_type\":\"committed_transcript\",\"text\":\"The quick brown fox jumps over the lazy dog.\"}"
+    },
+    {
+      "dir": "out",
+      "t_ms": 1256,
+      "text": "{\"language_code\":\"en\",\"message_type\":\"committed_transcript_with_timestamps\",\"text\":\"The quick brown fox jumps over the lazy dog.\",\"words\":[{\"channel_index\":null,\"characters\":[{\"end\":0.1,\"start\":0.1,\"text\":\"T\"},{\"end\":0.12,\"start\":0.1,\"text\":\"h\"},{\"end\":0.2,\"start\":0.12,\"text\":\"e\"}],\"end\":0.2,\"logprob\":-0.8475399017333984,\"speaker_id\":null,\"start\":0.1,\"text\":\"The\",\"type\":\"word\"},{\"channel_index\":null,\"characters\":[{\"end\":0.26,\"start\":0.2,\"text\":\" \"}],\"end\":0.26,\"logprob\":-0.7176704406738281,\"speaker_id\":null,\"start\":0.2,\"text\":\" \",\"type\":\"spacing\"},{\"channel_index\":null,\"characters\":[{\"end\":0.32,\"start\":0.26,\"text\":\"q\"},{\"end\":0.38,\"start\":0.32,\"text\":\"u\"},{\"end\":0.4,\"start\":0.38,\"text\":\"i\"},{\"end\":0.52,\"start\":0.4,\"text\":\"c\"},{\"end\":0.54,\"start\":0.52,\"text\":\"k\"}],\"end\":0.54,\"logprob\":-0.6432624816894531,\"speaker_id\":null,\"start\":0.26,\"text\":\"quick\",\"type\":\"word\"},{\"channel_index\":null,\"characters\":[{\"end\":0.78,\"start\":0.54,\"text\":\" \"}],\"end\":0.78,\"logprob\":-0.8229789733886719,\"speaker_id\":null,\"start\":0.54,\"text\":\" \",\"type\":\"spacing\"},{\"channel_index\":null,\"characters\":[{\"end\":0.84,\"start\":0.78,\"text\":\"b\"},{\"end\":0.9,\"start\":0.84,\"text\":\"r\"},{\"end\":0.94,\"start\":0.9,\"text\":\"o\"},{\"end\":1.0,\"start\":0.94,\"text\":\"w\"},{\"end\":1.08,\"start\":1.0,\"text\":\"n\"}],\"end\":1.08,\"logprob\":-0.8051548004150391,\"speaker_id\":null,\"start\":0.78,\"text\":\"brown\",\"type\":\"word\"},{\"channel_index\":null,\"characters\":[{\"end\":1.2,\"start\":1.08,\"text\":\" \"}],\"end\":1.2,\"logprob\":-0.8345260620117188,\"speaker_id\":null,\"start\":1.08,\"text\":\" \",\"type\":\"spacing\"},{\"channel_index\":null,\"characters\":[{\"end\":1.26,\"start\":1.2,\"text\":\"f\"},{\"end\":1.46,\"start\":1.26,\"text\":\"o\"},{\"end\":1.58,\"start\":1.46,\"text\":\"x\"}],\"end\":1.58,\"logprob\":-1.0213177998860676,\"speaker_id\":null,\"start\":1.2,\"text\":\"fox\",\"type\":\"word\"},{\"channel_index\":null,\"characters\":[{\"end\":1.86,\"start\":1.58,\"text\":\" \"}],\"end\":1.86,\"logprob\":-0.6930065155029297,\"speaker_id\":null,\"start\":1.58,\"text\":\" \",\"type\":\"spacing\"},{\"channel_index\":null,\"characters\":[{\"end\":1.92,\"start\":1.86,\"text\":\"j\"},{\"end\":1.94,\"start\":1.92,\"text\":\"u\"},{\"end\":2.0,\"start\":1.94,\"text\":\"m\"},{\"end\":2.1,\"start\":2.0,\"text\":\"p\"},{\"end\":2.18,\"start\":2.1,\"text\":\"s\"}],\"end\":2.18,\"logprob\":-0.5261299133300781,\"speaker_id\":null,\"start\":1.86,\"text\":\"jumps\",\"type\":\"word\"},{\"channel_index\":null,\"characters\":[{\"end\":2.26,\"start\":2.18,\"text\":\" \"}],\"end\":2.26,\"logprob\":-0.7420902252197266,\"speaker_id\":null,\"start\":2.18,\"text\":\" \",\"type\":\"spacing\"},{\"channel_index\":null,\"characters\":[{\"end\":2.34,\"start\":2.26,\"text\":\"o\"},{\"end\":2.36,\"start\":2.34,\"text\":\"v\"},{\"end\":2.4,\"start\":2.36,\"text\":\"e\"},{\"end\":2.48,\"start\":2.42,\"text\":\"r\"}],\"end\":2.48,\"logprob\":-0.7016854286193848,\"speaker_id\":null,\"start\":2.26,\"text\":\"over\",\"type\":\"word\"},{\"channel_index\":null,\"characters\":[{\"end\":2.52,\"start\":2.48,\"text\":\" \"}],\"end\":2.52,\"logprob\":-0.5430545806884766,\"speaker_id\":null,\"start\":2.48,\"text\":\" \",\"type\":\"spacing\"},{\"channel_index\":null,\"characters\":[{\"end\":2.54,\"start\":2.52,\"text\":\"t\"},{\"end\":2.54,\"start\":2.54,\"text\":\"h\"},{\"end\":2.62,\"start\":2.54,\"text\":\"e\"}],\"end\":2.62,\"logprob\":-0.6997216542561849,\"speaker_id\":null,\"start\":2.52,\"text\":\"the\",\"type\":\"word\"},{\"channel_index\":null,\"characters\":[{\"end\":2.68,\"start\":2.62,\"text\":\" \"}],\"end\":2.68,\"logprob\":-0.9056358337402344,\"speaker_id\":null,\"start\":2.62,\"text\":\" \",\"type\":\"spacing\"},{\"channel_index\":null,\"characters\":[{\"end\":2.74,\"start\":2.68,\"text\":\"l\"},{\"end\":2.8,\"start\":2.74,\"text\":\"a\"},{\"end\":2.9,\"start\":2.8,\"text\":\"z\"},{\"end\":2.98,\"start\":2.96,\"text\":\"y\"}],\"end\":2.98,\"logprob\":-0.8812003135681152,\"speaker_id\":null,\"start\":2.68,\"text\":\"lazy\",\"type\":\"word\"},{\"channel_index\":null,\"characters\":[{\"end\":3.08,\"start\":2.98,\"text\":\" \"}],\"end\":3.08,\"logprob\":-0.8241672515869141,\"speaker_id\":null,\"start\":2.98,\"text\":\" \",\"type\":\"spacing\"},{\"channel_index\":null,\"characters\":[{\"end\":3.14,\"start\":3.08,\"text\":\"d\"},{\"end\":3.3,\"start\":3.16,\"text\":\"o\"},{\"end\":3.44,\"start\":3.3,\"text\":\"g\"},{\"end\":3.44,\"start\":3.44,\"text\":\".\"}],\"end\":3.44,\"logprob\":-0.8478031158447266,\"speaker_id\":null,\"start\":3.08,\"text\":\"dog.\",\"type\":\"word\"}]}"
+    }
+  ],
+  "status": 101,
+  "summary": {
+    "chunk_ms": null,
+    "close": null,
+    "commit_frame_order": [
+      "committed_transcript",
+      "committed_transcript_with_timestamps"
+    ],
+    "committed": [
+      "The quick brown fox jumps over the lazy dog."
+    ],
+    "error": null,
+    "pacing": "unpaced accepted",
+    "partials": [
+      "The quick",
+      "The quick brown fox.",
+      "The quick brown fox jumps over the"
+    ],
+    "session_started": true
+  },
+  "url": "wss://api.elevenlabs.io/v1/speech-to-text/realtime?audio_format=pcm_24000&commit_strategy=vad&include_language_detection=true&include_timestamps=true&model_id=scribe_v2_realtime"
+}

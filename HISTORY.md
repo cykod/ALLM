@@ -1,3 +1,21 @@
+## [FEAT] Add ElevenLabs realtime streaming transcription
+*Sunday, September 27th at 12pm*
+Phase 26.8 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 streaming audio). 
+ElevenLabs.Transcription implements stream_transcribe/3 over the realtime STT 
+WebSocket: PCM chunks in through InputPump, partial and committed transcript 
+events out, under vad or manual commit strategies. The owner loop moved into 
+the new Support.WebSocket.InputLoop, shared with ElevenLabs.Speech, and it 
+gained keepalive_ms: :infinity and a wake_at deadline. Six live probe arms 
+corrected the design's claims: short commits are refused with commit_throttled, 
+realtime error frames are shaped {message_type, error}, a bad key gets 101 then 
+auth_error, and the pump starts only after session_started so a bad key never 
+consumes input. Owner decision: when the caller requests timestamps or language 
+detection, each committed segment is held (bounded at 1 s) so it carries its 
+language. Frames are paired by commit order. Live-verified with word-exact 
+transcripts.
+
+---
+
 ## [FEAT] Add WebSocket transport and ElevenLabs TTS streaming
 *Sunday, September 27th at 10am*
 Phase 26.7 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 streaming audio). 

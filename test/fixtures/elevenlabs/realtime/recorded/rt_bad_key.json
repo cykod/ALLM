@@ -1,0 +1,35 @@
+{
+  "frames": [
+    {
+      "dir": "out",
+      "t_ms": 224,
+      "text": "{\"error\":\"You must be authenticated to use this endpoint.\",\"message_type\":\"auth_error\"}"
+    },
+    {
+      "close": [
+        1000,
+        ""
+      ],
+      "dir": "out",
+      "t_ms": 224
+    }
+  ],
+  "status": 101,
+  "summary": {
+    "chunk_ms": null,
+    "close": [
+      1000,
+      ""
+    ],
+    "commit_frame_order": [],
+    "committed": [],
+    "error": {
+      "error": "You must be authenticated to use this endpoint.",
+      "message_type": "auth_error"
+    },
+    "pacing": null,
+    "partials": [],
+    "session_started": false
+  },
+  "url": "wss://api.elevenlabs.io/v1/speech-to-text/realtime?audio_format=pcm_24000&commit_strategy=vad&model_id=scribe_v2_realtime"
+}

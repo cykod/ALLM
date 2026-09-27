@@ -699,6 +699,18 @@ The values come from the documented `output_format` list (convert page). **Bold*
 | Pacing | unpaced (faster than realtime) upload of a file | **UNVERIFIED** whether it is accepted. Arm `rt_fox` sends unpaced first. A `rate_limited`/`chunk_size_exceeded`/`queue_overflow` error flips the arm to 1× pacing and records that; the adapter never paces (the caller's mic does), and the guide states the finding |
 | Error types | the `message_type` table in Error classification | documented names; mapping is design |
 
+> CORRECTED 2026-09-27 (26.8 probe, `scripts/record_elevenlabs_audio_fixtures.exs`, sessions under `test/fixtures/elevenlabs/realtime/recorded/`; transcript in RECORDS §26.8). Rows settled:
+> - **Client chunk:** CONFIRMED, including the empty-audio `commit: true` frame (`rt_manual_commit`: two segments).
+> - **End of input:** CONFIRMED that a final commit yields a committed segment (`rt_end`), but the server does **not** close afterwards; the adapter closes. A commit covering less than 0.3 s of uncommitted audio is refused with `{"message_type": "commit_throttled", "error": "Commit request ignored: only 0.00s of uncommitted audio. You need at least 0.3s …"}` and then a close 1000 `"commit_throttled"`. So the adapter sends a final commit only when audio went out since its last commit, and a `commit_throttled` after the end of input completes the stream instead of failing it.
+> - **Server messages:** CONFIRMED. `session_started` also carries a `config` object. Partials can arrive **after** the `committed_transcript` of their segment (every `rt_fox`-style run).
+> - **Timestamped commits:** sent only with the query parameter `include_timestamps=true`; `language_code` is non-null only with `include_language_detection=true`, and is ISO 639-1 (`"en"`, unlike batch STT's `"eng"`). Both orders occur: the plain frame came first for 3 of the 4 logged segments (`rt_fox` included), so under the rule above a segment's `language` is usually `nil`. The rule is implemented as written; the trade-off is surfaced to the owner in RECORDS §26.8.
+> - **Pacing:** unpaced upload is **accepted** (`rt_fox`: the 3.8 s clip sent in about 0.3 s, no error).
+> - **Error types:** the realtime error frame is `{"message_type": <code>, "error": <text>}` (the text in `error`, unlike TTS). A bad key upgrades with **101**, then `auth_error` and a close **1000** (`rt_bad_key`); no key echo.
+> - **Control:** an invented query parameter is ignored (`rt_control`).
+> - **`@max_chunk_ms`:** one 1,000 ms chunk is accepted (`rt_big_chunk`; an exploratory 3,000 ms chunk was too). The adapter keeps 1,000 ms.
+
+> OWNER NOTE 2026-09-27 (26.8 fix pass): **"Hold when requested."** This supersedes the Timestamped commits row above. When `options` sets `include_timestamps` or `include_language_detection` (`true` or `"true"`), each `:committed_transcript` is held until its `committed_transcript_with_timestamps` frame arrives and is emitted with that frame's `language`; a timestamped frame that arrives first is kept and its segment is emitted at once. The hold is bounded: the segment is released with `language: nil` when the next segment's `committed_transcript` arrives, when the stream ends with an error, or after 1,000 ms (`adapter_opts[:language_hold_ms]`), whichever is first, and `:transcription_completed` waits for a held segment. Without those options nothing is held (latency first). The two frames of a segment pair by commit order (the n-th timestamped frame belongs to the n-th segment), never by text, so two consecutive segments with the same text each keep their language. Details: RECORDS §26.8 "Owner decision (2026-09-27)".
+
 ### Error classification (ElevenLabs, `Support.ElevenLabs.classify/2`, shared by both adapters)
 
 This returns `{reason_atom, metadata}`, and each adapter wraps the result in its own error module.
@@ -733,6 +745,8 @@ The HTTP 400/401/404/422 rows are **documented** codes. The WS rows are **docume
 > CORRECTED 2026-09-27: an invalid key is a 400 *or* a 401 depending on its shape (see the Key-redaction correction above); the body row covers both.
 
 > CORRECTED 2026-09-27 (26.7 probe): the WS rows are keyed on the error frame's `error` value (text-to-speech) or `message_type` (realtime speech-to-text), through one table in `Support.ElevenLabs.ws_reason/2`. **Added:** `invalid_api_key` and `authentication_required` → `:authentication_failed`; `voice_id_does_not_exist` → `:invalid_request` (all three observed; `authentication_required` only in an exploratory call, not a recorded fixture). **Rewritten:** the inferred "close 1008 → `:authentication_failed`" row is falsified: ElevenLabs closes 1008 for an unknown voice too. A 1008 close is classified by the error frame that precedes it; a bare 1008 with no frame is `:invalid_request`; any other code before a terminal event, including an orderly 1000 before `isFinal`, is `:network_error`.
+
+> CORRECTED 2026-09-27 (26.8 probe): a realtime error frame carries both a `message_type` (the code) and an `error` (the text), so `ws_error_fields/3` reads the code from `message_type` first and the text from `message`, else `error`; `ws_error?/1` also accepts a `message_type` in the table that does not end in `error` (`commit_throttled`). `commit_throttled` stays `:rate_limited` mid-stream; after the end of input it completes the stream (wire-map correction above).
 
 ### Script contract (streaming)
 

@@ -1,0 +1,40 @@
+{
+  "frames": [
+    {
+      "dir": "out",
+      "t_ms": 195,
+      "text": "{\"config\":{\"audio_format\":\"pcm_24000\",\"disable_logging\":false,\"entity_detection\":null,\"filter_background_audio\":false,\"include_language_detection\":false,\"include_timestamps\":false,\"keyterms\":[],\"language_code\":null,\"max_tokens_to_recompute\":5,\"min_silence_duration_ms\":100,\"min_speech_duration_ms\":100,\"model_id\":\"scribe_v2_realtime\",\"no_verbatim\":false,\"sample_rate\":24000,\"secondary_languages\":[],\"timestamps_granularity\":\"word\",\"vad_commit_strategy\":true,\"vad_silence_threshold_secs\":1.5,\"vad_threshold\":0.4},\"message_type\":\"session_started\",\"session_id\":\"cb6d4f2cfe504e4983c0ac5809932639\"}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 195,
+      "text": "{\"audio_base_64\":\"<48000 bytes>\",\"commit\":false,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 195,
+      "text": "{\"audio_base_64\":\"<0 bytes>\",\"commit\":true,\"message_type\":\"input_audio_chunk\",\"sample_rate\":24000}"
+    },
+    {
+      "dir": "out",
+      "t_ms": 410,
+      "text": "{\"message_type\":\"committed_transcript\",\"text\":\"The quick brown-\"}"
+    }
+  ],
+  "status": 101,
+  "summary": {
+    "chunk_ms": 1000,
+    "close": null,
+    "commit_frame_order": [
+      "committed_transcript"
+    ],
+    "committed": [
+      "The quick brown-"
+    ],
+    "error": null,
+    "pacing": null,
+    "partials": [],
+    "session_started": true
+  },
+  "url": "wss://api.elevenlabs.io/v1/speech-to-text/realtime?audio_format=pcm_24000&commit_strategy=vad&model_id=scribe_v2_realtime"
+}

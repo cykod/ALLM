@@ -1,6 +1,7 @@
 defmodule ALLM.Providers.ElevenLabs.TranscriptionConformanceTest do
   @moduledoc """
-  `ALLM.Test.TranscriptionAdapterConformance` invocation against
+  `ALLM.Test.TranscriptionAdapterConformance` and
+  `ALLM.Test.TranscriptionStreamAdapterConformance` invocations against
   `ALLM.Providers.ElevenLabs.Transcription`.
 
   Cases 2, 5 and 6 are **[scripted]**: they pass
@@ -25,10 +26,13 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionConformanceTest do
   measures a sparse file one byte over the cap. Do not re-add the case here
   without a smaller way to build the oversized clip.
 
-  **What this run does NOT bind.** The adapter's own decoder (the scripted
+  **What these runs do NOT bind.** The adapter's own decoder (the scripted
   success path never reaches `decode_response/4`); the decoder tests in
   `transcription_test.exs` and the recorded fixtures in
-  `transcription_wire_test.exs` bind it.
+  `transcription_wire_test.exs` bind it. The realtime path's halt-safety,
+  `:stream_timeout`, frame handling and end-of-input commit: the scripted
+  stream cases hand off to `ALLM.Providers.FakeTranscription` before the
+  socket, so `transcription_stream_test.exs` binds them.
   """
 
   use ExUnit.Case, async: true
@@ -45,4 +49,11 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionConformanceTest do
         "owner decision 2026-09-27: a 5 GB cap makes the oversize clip cost 5 GB of memory; " <>
           "the size gate is bound by a sparse-file test in transcription_test.exs"
     }
+
+  # All six cases run for the realtime path. Its [unscripted] cases are
+  # keyless and pass a transport that raises, so a gate moved after key
+  # resolution, or into the stream, fails even with ELEVENLABS_API_KEY set.
+  use ALLM.Test.TranscriptionStreamAdapterConformance,
+    transcription_adapter: ALLM.Providers.ElevenLabs.Transcription,
+    gate_opts: [ws_module: ALLM.Test.RaisingWebSocket]
 end

@@ -78,7 +78,7 @@ defmodule ALLM.Providers.Support.InputPumpTest do
       assert InputPump.classify(m2, ref) == :done
 
       {_pid, ref} = InputPump.start(Stream.map([1], fn _ -> raise "kaboom" end), self(), 8)
-      assert_receive {^ref, {:input_error, _}} = m3
+      assert_receive {^ref, {:input_error, _}} = m3, 1_000
       assert {:failed, :input_raised, %{kind: :error, message: msg}} = InputPump.classify(m3, ref)
       assert msg =~ "kaboom"
 
@@ -108,10 +108,10 @@ defmodule ALLM.Providers.Support.InputPumpTest do
       input = Stream.map([1], fn _ -> raise ArgumentError, "bad chunk source" end)
       {pid, ref} = InputPump.start(input, self(), 8)
 
-      assert_receive {^ref, {:input_error, %{kind: :error, message: message}}}
+      assert_receive {^ref, {:input_error, %{kind: :error, message: message}}}, 1_000
       assert message =~ "ArgumentError"
       assert message =~ "bad chunk source"
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
       assert Process.alive?(self())
     end
 

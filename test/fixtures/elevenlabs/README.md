@@ -15,6 +15,10 @@ Response envelopes used by `test/allm/providers/elevenlabs/*_test.exs` and
 - `speech_stream/recorded/` — live `POST /v1/text-to-speech/{voice_id}/stream`
   (`stream_chunked.json`) and `wss://…/stream-input` sessions (`ws_*.json`),
   written by the same recorder on 2026-09-27 (Phase 26.7).
+- `realtime/recorded/` — live `wss://…/v1/speech-to-text/realtime` sessions
+  (`rt_*.json`), written by the same recorder on 2026-09-27 (Phase 26.8).
+  Client audio is never stored: every `"in"` frame's `audio_base_64` is
+  `"<N bytes>"`.
 - `speech/synthesized/`, `transcriptions/synthesized/` — hand-written error
   envelopes for classification rows the probe did not (or could not cheaply)
   observe, plus the planted-key 401 for the redaction test. Each carries a

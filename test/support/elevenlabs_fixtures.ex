@@ -49,6 +49,15 @@ defmodule ALLM.Providers.ElevenLabsTestFixtures do
   def speech_stream_recorded(name) when is_atom(name), do: load("speech_stream/recorded", name)
 
   @doc """
+  Load `realtime/recorded/<name>.json` (Phase 26.8): a realtime
+  speech-to-text session `{"status", "url", "frames", "summary"}`, in the
+  WebSocket session shape above. Client audio is `"<N bytes>"` in every
+  `"in"` frame.
+  """
+  @spec realtime_recorded(atom()) :: envelope()
+  def realtime_recorded(name) when is_atom(name), do: load("realtime/recorded", name)
+
+  @doc """
   The server frames of a recorded WebSocket session, as
   `ALLM.Test.WebSocketStub` server frames: `{:text, json}` and
   `{:close, code, reason}`. The recorder keeps only the first audio frame's

@@ -240,6 +240,19 @@ defmodule ALLM.Providers.Support.ElevenLabsTest do
     test "auth is the xi-api-key header" do
       assert ElevenLabs.headers("sk_x") == [{"xi-api-key", "sk_x"}]
     end
+
+    test "ws_base_url/1 swaps the scheme and keeps a ws:// or wss:// base" do
+      assert ElevenLabs.ws_base_url([]) == "wss://api.elevenlabs.io"
+      assert ElevenLabs.ws_base_url(base_url: "http://127.0.0.1:9") == "ws://127.0.0.1:9"
+      assert ElevenLabs.ws_base_url(base_url: "wss://h") == "wss://h"
+    end
+
+    test "query_params/2 stringifies keys, drops nils and the reserved names" do
+      assert ElevenLabs.query_params(%{:a => 1, "b" => nil, "c" => "x", "r" => 2}, ["r"]) ==
+               %{"a" => 1, "c" => "x"}
+
+      assert ElevenLabs.query_params("not a map", []) == %{}
+    end
   end
 
   describe "ws_reason/2 (one row per WebSocket code of the error classification)" do
@@ -288,6 +301,13 @@ defmodule ALLM.Providers.Support.ElevenLabsTest do
       refute ElevenLabs.ws_error?(%{"message_type" => "partial_transcript"})
       refute ElevenLabs.ws_error?(%{"audio" => "AAAA", "isFinal" => nil, "error" => nil})
     end
+
+    test "a classified message_type that does not end in error is an error frame too" do
+      assert ElevenLabs.ws_error?(%{"message_type" => "commit_throttled"})
+      assert ElevenLabs.ws_error?(%{"message_type" => "session_time_limit_exceeded"})
+      refute ElevenLabs.ws_error?(%{"message_type" => "committed_transcript"})
+      refute ElevenLabs.ws_error?(%{"message_type" => "warning"})
+    end
   end
 
   describe "ws_error_fields/3" do
@@ -306,6 +326,32 @@ defmodule ALLM.Providers.Support.ElevenLabsTest do
     test "a message_type error (realtime STT shape) is classified by its message_type" do
       assert {:rate_limited, _} =
                ElevenLabs.ws_error_fields(%{"message_type" => "queue_overflow"}, nil, [])
+    end
+
+    test "the recorded realtime bad-key frame: the code is message_type, the text is error" do
+      env = Fixtures.realtime_recorded(:rt_bad_key)
+
+      [frame] =
+        for %{"dir" => "out", "text" => t} <- env["frames"],
+            %{"message_type" => "auth_error"} = p <- [Jason.decode!(t)],
+            do: p
+
+      assert %{"error" => text} = frame
+      assert {:authentication_failed, fields} = ElevenLabs.ws_error_fields(frame, nil, [])
+      assert fields[:message] == text
+      assert fields[:metadata].code == "auth_error"
+    end
+
+    test "the recorded commit_throttled frame -> :rate_limited with the provider's text" do
+      env = Fixtures.realtime_recorded(:rt_end)
+
+      [frame] =
+        for %{"dir" => "out", "text" => t} <- env["frames"],
+            %{"message_type" => "commit_throttled"} = p <- [Jason.decode!(t)],
+            do: p
+
+      assert {:rate_limited, fields} = ElevenLabs.ws_error_fields(frame, nil, [])
+      assert fields[:message] =~ "0.3s"
     end
 
     test "a planted key in a provider message is redacted" do

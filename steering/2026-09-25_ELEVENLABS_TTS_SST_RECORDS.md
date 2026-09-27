@@ -13,6 +13,7 @@ Companion to `steering/2026-09-25_ELEVENLABS_TTS_SST.md`. Status, ticks, deviati
 | 26.5 | Completed — fix-pass widened-fence edits (`lib/allm/adapter.ex`, `lib/allm/stream_runner.ex`, `lib/allm.ex` `run_audio_stream/3`, `support/transport.ex`) landed after the review checkpoint and are unreviewed; pinned by `test/allm/transport_opts_routing_test.exs` + the mutation table in §26.5 Fix pass |
 | 26.6 | Completed (fix pass re-reviewed: `.work/code-reviews/2026-09-26-phase-26-6-fix.md`) |
 | 26.7 | Completed — fix pass re-reviewed (`.work/code-reviews/2026-09-26-phase-26-7-fix.md`, 7 Lows: F4/F5 carried to 26.8 via HANDOFF, rest to polish); owner decision 2026-09-27: word-buffer + `auto_mode` |
+| 26.8 | Completed — fix-pass edits (owner decision "hold when requested": `elevenlabs/transcription.ex` language hold + `support/web_socket/input_loop.ex` `wake_at`; test repairs) landed after the review checkpoint and are **unreviewed by a review lane**; pinned by the 7-mutant table and a live 3.8 s confirmation in §26.8 "Owner decision (2026-09-27)" |
 
 ## Phase 26.1 — `Support.HTTPResponse` + `Support.TranscriptionAdapter`
 
@@ -905,4 +906,119 @@ Mutation checks (each restored and `cmp`-verified): pending decoded after the ne
 | pump-protocol guard / speech DRY predicate | exit 1 (empty) / exit 1 (empty) |
 | async grep (`… \| xargs grep -L 'async: false' \| wc -l`) | 12, unchanged |
 | `cd conformance && mix test && mix credo --strict && mix format --check-formatted` | 194 tests, 0 failures, 1 skipped; no issues; exit 0 |
+| `README.md` | not modified |
+
+## Phase 26.8 — ElevenLabs realtime STT
+
+Built 2026-09-27 on `1f152cf`. The working tree is uncommitted; the orchestrator commits after review.
+
+### Checklist (26.8.3)
+
+- [x] `ElevenLabs.Transcription.stream_transcribe/3` + `stream_sample_rates/0` (`@behaviour ALLM.TranscriptionStreamAdapter`), over `Support.WebSocket` + `InputPump` through the shared `Support.WebSocket.InputLoop`; seams `stream_url/2`, `audio_chunk_message/3` (`@doc false`).
+- [x] `test/support/pcm.ex` (`ALLM.Test.PCM.wav_pcm_chunks/2`, `0xFFFFFFFF` → to end of file); recorder arms (6, behind the overwrite guard); settled rows carry dated `> CORRECTED 2026-09-27 (26.8 probe)` blockquotes under the realtime STT wire map and the Error classification.
+- [x] `transcription_conformance_test.exs` mounts `TranscriptionStreamAdapterConformance`: 6/6. Batch case 4 stays skipped (owner decision 2026-09-27).
+
+### HANDOFF rows applied
+
+- **F4:** `InputLoop.loop_state/3` takes `keepalive_ms: :infinity` (`timeout()`); `wait_ms/1` short-circuits it the way `stream_timeout: :infinity` already was (`deadline_in/3`). The realtime path passes `:infinity`: its protocol has no keep-alive. Pinned by `input_loop_test.exs` "keepalive_ms: :infinity leaves only the silence deadline" (mutant: the `:infinity` clause removed → 55 failures across the two files).
+- **F5:** the loop helpers moved, behaviour-preserving, from `Support.WebSocket` into `ALLM.Providers.Support.WebSocket.InputLoop` (`lib/allm/providers/support/web_socket/input_loop.ex`, its own moduledoc and `groups_for_modules` row under `Providers`); `Support.WebSocket` keeps the callbacks and the `is_transport_message/2` guard and no longer aliases `InputPump`. `ElevenLabs.Speech` migrated in the same change. The helpers now carry real `@doc`s (the module is documented).
+- **Done-when predicates** (run from the repo root after the change): `grep -rnE "defp? await\(|receive do" lib/allm/providers/elevenlabs` → empty, exit 1; `grep -rn "defp await(%{pump:" lib/allm/providers | wc -l` → 0; pump-protocol guard `grep -lE --exclude=input_pump.ex ':input_error|crash_info\(|@input_window' lib/allm/providers/*.ex lib/allm/providers/*/*.ex` → empty, exit 1.
+
+### Live probe (run 2026-09-27, `( set -a; . ./.env; set +a; mix run scripts/record_elevenlabs_audio_fixtures.exs )`)
+
+Exploratory sessions first, from a scratchpad script through `Support.WebSocket.Mint` (not committed): vad unpaced at 100/1,000/3,000 ms chunks, `include_timestamps` with and without `include_language_detection`, manual with a mid-clip commit, a second commit with nothing uncommitted, an invented query parameter, a bad key; then live smokes of the finished adapter (vad and manual, paced and unpaced). Recorder run 1 crashed before any arm finished (a recorder bug: a `0` deadline passed as a monotonic time; one session opened, nothing written). Run 2: 6 live calls, exit 0, every arm matched, 6 files written. Run 3: `0 live calls`, exit 0.
+
+| Arm | Got | Observation |
+|-----|-----|-------------|
+| `rt_fox` (fox WAV, 24 kHz from its header, 100 ms chunks, unpaced, vad, `include_timestamps` + `include_language_detection`) | 101 | `session_started{session_id, config}`; one committed `"The quick brown fox jumps over the lazy dog."`; frame order `committed_transcript` then `committed_transcript_with_timestamps` (`language_code: "en"`); 3 partials, one of them **after** the committed segment; unpaced accepted |
+| `rt_manual_commit` (manual, halves split by a commit) | 101 | two segments, `"The quick brown fox jump-"`, `"... over the lazy dog."` |
+| `rt_end` (half the clip, final commit, then a second commit with no audio) | 101 | committed `"The quick brown fox jump-"`; the second commit → `{"message_type": "commit_throttled", "error": "Commit request ignored: only 0.00s of uncommitted audio. You need at least 0.3s …"}`, then close `[1000, "commit_throttled"]` |
+| `rt_control` (`not_a_real_param=1`) | 101 | accepted: a committed segment; unknown query parameters are ignored |
+| `rt_big_chunk` (one 1,000 ms chunk + commit) | 101 | accepted, committed `"The quick brown-"` |
+| `rt_bad_key` (mixed-case `sk_`) | 101 | `{"message_type": "auth_error", "error": "You must be authenticated to use this endpoint."}`, close `[1000, ""]`; no session, no key echo |
+
+Exploratory-only facts (not recorded): a 3,000 ms chunk was accepted; without `include_timestamps` no timestamped frame is sent; without `include_language_detection` its `language_code` is `null`; the server does not close after a final committed segment (it waits). In manual mode the second segment's text depended on the split point: split at 1.9 s it was `"... over the lazy dog."` (this arm and one exploratory run), split at 2.0 s it was `""` in all five runs (timestamps on or off, paced or unpaced) — provider behaviour, not the adapter's. A live key check: `grep -rlF "$ELEVENLABS_API_KEY" test/fixtures/elevenlabs` (key from `.env` in a subshell) → exit 1.
+
+Cost: about 12 s of audio in the recorded run and about 60 s in the exploratory sessions and smokes, at $0.39/h (well under $0.01).
+
+### Owner decision needed
+
+> RESOLVED 2026-09-27: option (c), "Hold when requested". See "Owner decision (2026-09-27)" below.
+
+- **Language on realtime segments.** The Timestamped-commits rule (a timestamped frame only attaches its language to a segment *not yet emitted*; a late twin is dropped) was implemented as written and is pinned by the Test Plan's three-segment test. In the observed order the plain `committed_transcript` comes first for 3 of the 4 logged segments (`rt_fox` included), so the language is dropped and `:committed_transcript.language` / `:transcription_completed.language` are usually `nil`, even with `include_language_detection=true`. Options: (a) keep as is (documented in the `stream_transcribe/3` `@doc`); (b) let a late twin set `:transcription_completed.language` only (tried and reverted here: the final segment's twin arrives after the completion is emitted, so it would work only mid-stream, which is inconsistent); (c) when `include_timestamps` is requested, hold each `committed_transcript` until its twin arrives (or a short grace), costing latency on every segment. Recommendation: (a) now, (c) if a caller needs language.
+
+### Owner decision (2026-09-27): "Hold when requested"
+
+Applied by the 26.8 fix pass; design OWNER NOTE under the realtime STT wire map.
+
+- **Opted in** (`request.options` sets `include_timestamps` or `include_language_detection` to `true` or `"true"`): each `committed_transcript` is held until its timestamped frame arrives, then emitted with that frame's `language`. A timestamped frame that arrives first is kept, and its segment is emitted at once. The hold is bounded: the segment is released with `language: nil` when the next segment's `committed_transcript` arrives, when the stream ends with an error (the segment goes out ahead of the `{:error, _}`), or after `adapter_opts[:language_hold_ms]` (default 1,000 ms), whichever is first. `:transcription_completed` waits for a held segment. A segment is never dropped or reordered.
+- **Not opted in** (the default): unchanged, latency first. Each segment is emitted on its plain frame.
+- **Pairing** is by commit order: two counters (`commits_seen`, `stamps_seen`); the n-th timestamped frame belongs to the n-th segment; one that arrives first waits in `stamps` by index; one whose segment already went out is dropped. The text-equality twin check (`last_text`, `pending_language`) is gone, which also resolves code-review F3 (two consecutive identical texts lost the second's language). Known limit: pairing assumes ElevenLabs sends a timestamped frame for every segment once opted in; a skipped one would shift languages by one segment. Not observed.
+- **Timer:** `InputLoop` gained a third deadline, `wake_at` (a monotonic-ms instant or `nil`, `nil` from `loop_state/3`), in the same `min/2` as the silence and keep-alive deadlines. No message resets it. The adapter sets it when it holds a segment and clears it on release. `on_wake/1` now ends the stream with `:timeout` only when `timed_out?/1` holds; any other wake releases the held segment. `ElevenLabs.Speech` never sets it.
+- **Tests** (`transcription_stream_test.exs`, describe "language hold when opted in"): plain-then-timestamped and timestamped-then-plain each give one segment with its language; `include_language_detection: "true"` alone opts in; the frame never arriving → released after the default bound (`ms >= 950`), `language: nil`, no error, completion present; `language_hold_ms: 2_500` sets the bound (lower bound only); the next segment's plain frame releases a held one at once (bound 5 s, `ms < 2_000`); two identical texts keep `en`/`fr`; an error while held emits the segment first; not opted in emits at once. Plus a default-path identical-text row and an opted-in `rt_fox` replay (`language: "en"` from the recorded frames). `input_loop_test.exs` gained a `wake_at` row.
+- **Mutation checks** (each applied, the listed files run, source restored and `cmp`-verified): hold never on → 8 failures; no release on the next plain frame → 1; `finish/2` not releasing → 1; every wake a timeout → 1 (plus the bound row after its `refute {:error, _}` was added); `language_hold_ms` ignored → 1; timestamped-first index off by one (`>` for `>=`) → 4; `InputLoop` ignoring `wake_at` → 3.
+- **Live confirmation** (one session, 3.8 s fox WAV, both options, through the adapter; `( set -a; . ./.env; set +a; MIX_ENV=test mix run <scratchpad>/live_hold.exs )`): `transcription_started` at 342 ms; `committed_transcript` `"The quick brown fox jumps over the lazy dog."` with `language: "en"` and `transcription_completed` `language: "en"` at 1,023 ms. No recorder arm added: the recorded `rt_fox` frames already carry both frame types in the observed order, and its opted-in replay binds the adapter. Not probed: whether `include_language_detection` without `include_timestamps` sends a timestamped frame (the exploratory runs saw none without `include_timestamps`, but did not try detection alone); if it does not, that option alone costs up to the bound per segment and yields `nil`.
+
+### Fix pass (2026-09-27, code review F1/F2, HANDOFF flake row)
+
+- **F1** (`input_loop_test.exs`): the pump row now lets the pump send `"b"`, waits until it sits unconsumed in the mailbox, and `refute_received {^ref, _}` after `stop_pump/1` (mutant: `InputPump.stop/2` without `drain/1` → 1 failure). The close row sends a stub-tagged message before `close_loop/1` and refutes it after, keeping an unrelated message (mutant: no `flush_messages/1` → 1 failure); renamed to what it asserts.
+- **F2** (`transcription_stream_test.exs` "no keep-alive"): also refutes `{:error, _}`, asserts the completion, and bounds the reducing process's reductions (< 1,000,000). With the new `on_wake/1`, a finite `keepalive_ms` no longer ends the stream; it spins the loop instead (measured 2026-09-27 with `loop_state(stream_timeout, 100)`: 26,795,337 reductions, against 2,789 unmutated), and the bound fails it.
+- **Flake** (`input_pump_test.exs`, 26.3 code): `assert_receive` at `:81` and `:111` (and the `:DOWN` at `:114`) wait 1,000 ms, as `:118`'s sibling did in 26.7. `grep -nF 'assert_receive {^ref, {:input_error' test/allm/providers/support/input_pump_test.exs` → every hit carries `1_000`.
+- **Verification** (after the fix pass): `mix test` ×5 (random seeds) and `mix test --seed 0` → 593 doctests, 33 properties, 4902 tests, 0 failures, 14 excluded, 1 skipped, every run; `mix format --check-formatted`, `mix compile --warnings-as-errors --force`, `mix credo --strict`, `mix dialyzer` → clean; `mix docs 2>&1 | grep -ciE 'warning|error'` → 0; `audit_user_docs.exs` on `transcription.ex` and `input_loop.ex` → no matches; `cd conformance && mix test && mix credo --strict && mix format --check-formatted` → 194 tests, 0 failures, 1 skipped; no issues; exit 0.
+
+### Deviations
+
+- `[structural, probe]` **End of input and `commit_throttled`.** The design's "commits any uncommitted audio and waits for the final `committed_transcript`" is refined by the probe: the adapter sends a final commit only when audio went out since its last commit, counts the commits it sent (`awaiting`, decremented per `committed_transcript`, floored at 0), and completes when input is done and `awaiting` is 0. A `commit_throttled` frame after the end of input (a commit with < 0.3 s of audio) completes the stream instead of failing it; mid-stream it stays `:rate_limited`. Known limit: under `vad`, a server-initiated commit that arrives after the final commit is sent is counted against it, so the stream can complete one segment early; not observed (every vad run produced one segment, after the final commit). Design CORRECTED under the wire map.
+- `[structural, probe]` **Realtime error frames** are `{"message_type": code, "error": text}`, so `Support.ElevenLabs.ws_error_fields/3` reads the code from `message_type` before `error` and the text from `message`, else `error`; `ws_error?/1` also accepts a table `message_type` that does not end in `error` (`commit_throttled`). The TTS frames (`error` code + `message`, no `message_type`) classify as before (their tests unchanged and green). Design CORRECTED under Error classification.
+- `[structural, documented]` **The pump starts on `session_started`**, not after the connect: the adapter's start function only connects, and the next function starts the pump when the server's `session_started` arrives (invariant 9's "waits for `session_started` (STT)"). So a bad key, answered with 101 + `auth_error`, never reduces the input — unlike `/stream-input` TTS.
+- `[scope]` **DRY promotions to `Support.ElevenLabs`** (second callers): `ws_base_url/1` (was `ElevenLabs.Speech`'s private `ws_base/1`) and `query_params/2` (was Speech's private `query_params/1`, now parameterised by the reserved names). Both `@doc false` + `@spec`, both migrated in `speech.ex`, tests in `support/elevenlabs_test.exs`.
+- `[scope]` **`ALLM.Test.WebSocketStub` gained `:greeting`** (server frames delivered on connect, before any client frame): the realtime server speaks first (`session_started`), which the `{:after_client, …}` script could not express.
+- `[scope]` **`test/allm/providers/support/web_socket/input_loop_test.exs`** (new, one test file per `lib/` file): deadline arithmetic, selective receive, `send_json/2`, `close_loop/1`.
+- `[tactical]` The realtime `options` map becomes query parameters (atom keys stringified, `nil` dropped); `model_id`, `audio_format`, `commit_strategy` are reserved and dropped with a deferred `Logger.debug/1`. `language_code` is structural only when `request.language` is set.
+- `[tactical]` The adapter also runs `Validate.transcription_stream_request/1` before the rate gate (`:invalid_request`, `metadata.errors`), mirroring `stream_synthesize_input/3`'s request-shape gate.
+- `[tactical]` An empty `committed_transcript` text is emitted as an event and dropped from `completed.text` by the normative join.
+- `[tactical]` `@max_chunk_ms` stays 1,000 (accepted live); an exploratory 3,000 ms chunk was accepted too, so it is a conservative bound, stated as such in the attribute comment.
+- `[probe]` `rt_fox` sends `include_timestamps` and `include_language_detection` (to see both frame types and a language); `rt_end` adds a second, empty commit to record `commit_throttled`, which the adapter's end-of-input rule relies on.
+- `[probe]` `rt_control` and `rt_bad_key` accept `[101, 400, 422]` / `[101, 400, 401, 403]` (outcome recorded either way, the control rule); both got 101.
+
+### Mutation checks
+
+Each mutant was applied to `lib/`, `transcription_stream_test.exs` + `transcription_conformance_test.exs` run, and the source restored and `cmp`-verified.
+
+| Mutant | Failing tests |
+|--------|---------------|
+| no odd-byte carry (odd chunks sent as-is) | 3 |
+| no final commit at end of input | 27 |
+| `commit_throttled` after end of input treated as an error | 1 (recorded `rt_end` replay) |
+| timestamped twin not dropped | 1 (three-segment language row) |
+| no split of long chunks | 1 (3 s at 16 kHz) |
+| a `committed_transcript` does not settle the wait | 20 |
+| pump started at connect, before `session_started` | 34 (incl. the `rt_bad_key` "input never reduced" row) |
+| `InputLoop` without the `keepalive_ms: :infinity` clause | 55 (with `input_loop_test.exs`) |
+
+### Notes for later sub-phases
+
+- **26.9:** the guide's realtime pacing paragraph: unpaced upload is accepted (`rt_fox`: 3.8 s in about 0.3 s); partials can arrive after their segment's commit (a UI should stop showing a partial once its segment is committed); a `:commit` needs at least 0.3 s of uncommitted audio or ElevenLabs refuses it and closes (`commit_throttled`, `:rate_limited` mid-stream); language needs `options: %{"include_timestamps" => true, "include_language_detection" => true}`, and with them each segment is held (up to 1,000 ms) for its language (owner decision 2026-09-27 above). Example 26 reads the WAV with the `0xFFFFFFFF` rule (`ALLM.Test.PCM` is test-only; the example needs its own reader).
+- **Any later WebSocket stream:** build on `ALLM.Providers.Support.WebSocket.InputLoop`; pass `keepalive_ms: :infinity` when the protocol has no keep-alive.
+
+### Flakes
+
+- `test/allm/providers/support/input_pump_test.exs:107` ("composition behaviour 2 …", 26.3) failed once in 15 runs of the ElevenLabs + support directories: `assert_receive` at `:111` uses the default 100 ms timeout under load. It is the sibling of the `:118` flake the 26.7 fix pass widened to 1,000 ms. Pre-existing test code outside this fence; not fixed here, filed in HANDOFF. One full-suite run in 11 (seed 290171) also had one failure that did not reproduce at that seed nor in 6 further runs; its test was not captured, so attributing it to `:107` is unverified.
+
+### Verification (run 2026-09-27, working tree on `1f152cf`)
+
+| Check | Result |
+|-------|--------|
+| Start Green (before any edit) | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix test` (590 doctests, 33 properties, 4799 tests, 0 failures), `mix credo --strict`, `mix dialyzer`: all clean |
+| `mix test` ×11 (random seeds) and `mix test --seed 0` ×2 | 12 of 13 exit 0 with 593 doctests, 33 properties, 4890 tests, 0 failures, 14 excluded, 1 skipped; 1 run (seed 290171) had 1 failure, see Flakes |
+| `mix format --check-formatted`, `mix credo --strict`, `mix dialyzer` | exit 0; no issues; `Total errors: 0` |
+| `mix compile --warnings-as-errors --force` (dev and test) | exit 0 |
+| `mix docs 2>&1 \| grep -ciE 'warning\|error'` | 0 |
+| `mix run scripts/audit_user_docs.exs` on `support/web_socket/input_loop.ex` (new) and the modified `elevenlabs/transcription.ex`, `support/elevenlabs.ex`, `support/web_socket.ex` | "No banned-token matches" each |
+| async grep (`grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test/`) | the new test files use none of the four calls (`capture_log/2` only) |
+| HANDOFF predicates | loop `await`/`receive` predicate: empty, exit 1; `defp await(%{pump:` count: 0; pump-protocol guard: empty, exit 1 |
+| `cd conformance && mix test && mix credo --strict && mix format --check-formatted` (not modified; run anyway) | 194 tests, 0 failures, 1 skipped; no issues; exit 0 |
+| Stream conformance for `ElevenLabs.Transcription` | 6/6 (`transcription_conformance_test.exs`, 12 tests, 1 skipped = batch case 4) |
+| BLOCKING recorder | run 2: 6 live calls, every arm matched; run 3: `0 live calls` |
+| coverage (`mix test --cover test/allm/providers/elevenlabs test/allm/providers/support`) | `ElevenLabs.Transcription` 98.30%, `Support.WebSocket.InputLoop` 100%, `Support.WebSocket` 100%, `Support.ElevenLabs` 97.37%, `ElevenLabs.Speech` 99.49% |
 | `README.md` | not modified |

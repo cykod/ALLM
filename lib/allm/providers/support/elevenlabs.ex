@@ -74,7 +74,8 @@ defmodule ALLM.Providers.Support.ElevenLabs do
   # WebSocket error codes: the `error` value of a text-to-speech error frame
   # (observed 2026-09-27: `invalid_api_key`, `authentication_required`,
   # `voice_id_does_not_exist`) and the documented `message_type` values of
-  # the realtime speech-to-text errors, each with its reason.
+  # the realtime speech-to-text errors (observed 2026-09-27: `auth_error`
+  # and `commit_throttled`), each with its reason.
   @ws_code_reasons Map.new(
                      [
                        {~w(invalid_api_key authentication_required auth_error unaccepted_terms),
@@ -107,6 +108,32 @@ defmodule ALLM.Providers.Support.ElevenLabs do
       opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:base_url) ||
       @base_url
   end
+
+  @doc false
+  # The WebSocket host: `base_url/1` with its scheme swapped (`https` ->
+  # `wss`, `http` -> `ws`; a `ws`/`wss` base URL is kept), so a test can
+  # reach a local server through an `http://` base URL.
+  @spec ws_base_url(keyword()) :: String.t()
+  def ws_base_url(opts) do
+    case base_url(opts) do
+      "https://" <> rest -> "wss://" <> rest
+      "http://" <> rest -> "ws://" <> rest
+      other -> other
+    end
+  end
+
+  @doc false
+  # Caller-supplied URL query parameters: `query` with atom keys stringified,
+  # `nil` values dropped and the `reserved` names (the ones the adapter
+  # derives itself) removed. Anything but a map is no parameters.
+  @spec query_params(term(), [String.t()]) :: %{optional(String.t()) => term()}
+  def query_params(query, reserved) when is_map(query) do
+    query
+    |> Map.new(fn {k, v} -> {to_string(k), v} end)
+    |> Map.reject(fn {k, v} -> is_nil(v) or k in reserved end)
+  end
+
+  def query_params(_query, _reserved), do: %{}
 
   @doc false
   # ElevenLabs authenticates with the `xi-api-key` header, never a bearer
@@ -228,8 +255,12 @@ defmodule ALLM.Providers.Support.ElevenLabs do
   # `{reason, fields}` for an error a WebSocket session reports after the
   # upgrade: `payload` is the decoded error frame and `close_code` the code
   # of the close frame, when one arrived without an error frame (`nil`
-  # otherwise). The error code is the frame's `error` (text-to-speech) or
-  # `message_type` (realtime speech-to-text) value; `ws_reason/2` maps it.
+  # otherwise). The two endpoints shape the frame differently (both
+  # observed): text-to-speech sends `{"error": <code>, "message": <text>,
+  # "code": 1008}`, realtime speech-to-text `{"message_type": <code>,
+  # "error": <text>}`. So the code is `message_type` when present, else
+  # `error`, and the text is `message`, else (beside a `message_type`)
+  # `error`. `ws_reason/2` maps the code.
   @spec ws_error_fields(map(), non_neg_integer() | nil, keyword()) :: {atom(), keyword()}
   def ws_error_fields(payload, close_code, opts) when is_map(payload) do
     code = ws_code(payload)
@@ -237,7 +268,7 @@ defmodule ALLM.Providers.Support.ElevenLabs do
     reason = ws_reason(code, close_code)
 
     message =
-      case Map.get(payload, "message") do
+      case ws_message(payload) do
         text when is_binary(text) and text != "" -> redact_key_material(text)
         _ -> "ElevenLabs WebSocket error #{inspect(code || close_code)}"
       end
@@ -253,13 +284,15 @@ defmodule ALLM.Providers.Support.ElevenLabs do
 
   @doc false
   # Whether a decoded WebSocket server frame reports an error: it carries a
-  # string `error` (the text-to-speech shape, observed 2026-09-27) or a
-  # `message_type` ending in `error` (the realtime speech-to-text shape).
+  # string `error` (both endpoints, observed 2026-09-27), or a
+  # `message_type` that ends in `error` or is one of the classified error
+  # codes (the documented realtime speech-to-text errors, some of which,
+  # such as `commit_throttled`, do not end in `error`).
   @spec ws_error?(map()) :: boolean()
   def ws_error?(%{"error" => code}) when is_binary(code), do: true
 
   def ws_error?(%{"message_type" => type}) when is_binary(type),
-    do: String.ends_with?(type, "error")
+    do: String.ends_with?(type, "error") or is_map_key(@ws_code_reasons, type)
 
   def ws_error?(_payload), do: false
 
@@ -283,11 +316,15 @@ defmodule ALLM.Providers.Support.ElevenLabs do
 
   defp ws_code(payload) do
     case payload do
-      %{"error" => code} when is_binary(code) -> code
       %{"message_type" => code} when is_binary(code) -> code
+      %{"error" => code} when is_binary(code) -> code
       _ -> nil
     end
   end
+
+  defp ws_message(%{"message" => text}) when is_binary(text), do: text
+  defp ws_message(%{"message_type" => _, "error" => text}) when is_binary(text), do: text
+  defp ws_message(_payload), do: nil
 
   defp integer_or_nil(n) when is_integer(n), do: n
   defp integer_or_nil(_n), do: nil

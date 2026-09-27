@@ -42,6 +42,9 @@ defmodule ALLM.Test.WebSocketStub do
     * `:send_error` — a matcher: `send_frame/2` returns
       `{:error, conn, :closed}` for a client frame it accepts (the frame is
       not recorded).
+    * `:greeting` — server frames delivered to the connecting process as
+      soon as `connect/3` succeeds, before any client frame (for a protocol
+      whose server speaks first, such as a realtime `session_started`).
 
   ## Inspection
 
@@ -67,6 +70,7 @@ defmodule ALLM.Test.WebSocketStub do
           script: script,
           connect: Keyword.get(opts, :connect, :ok),
           send_error: Keyword.get(opts, :send_error),
+          greeting: Keyword.get(opts, :greeting, []),
           sent: [],
           close_count: 0,
           connects: [],
@@ -102,14 +106,18 @@ defmodule ALLM.Test.WebSocketStub do
     agent = Keyword.fetch!(opts, :ws_stub)
     record_call(agent, :connect)
 
-    reply =
+    {reply, greeting} =
       Agent.get_and_update(agent, fn s ->
-        {s.connect, %{s | connects: [{url, headers} | s.connects]}}
+        {{s.connect, s.greeting}, %{s | connects: [{url, headers} | s.connects]}}
       end)
 
     case reply do
-      :ok -> {:ok, %__MODULE__{agent: agent, tag: make_ref()}}
-      {:error, _} = error -> error
+      :ok ->
+        conn = %__MODULE__{agent: agent, tag: make_ref()}
+        deliver(conn, conn.tag, greeting)
+
+      {:error, _} = error ->
+        error
     end
   end
 
