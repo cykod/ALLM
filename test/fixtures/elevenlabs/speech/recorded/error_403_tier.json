@@ -1,0 +1,31 @@
+{
+  "body": {
+    "detail": {
+      "code": "subscription_required",
+      "message": "Output format 'pcm_44100' is only available on the Pro tier and above.",
+      "request_id": "5c7b5d9d34ce5d2e5f6792832805ba35",
+      "status": "output_format_not_allowed",
+      "type": "authorization_error"
+    }
+  },
+  "header_names": [
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-origin",
+    "access-control-max-age",
+    "alt-svc",
+    "content-type",
+    "date",
+    "server",
+    "strict-transport-security",
+    "transfer-encoding",
+    "vary",
+    "via",
+    "x-region",
+    "x-trace-id"
+  ],
+  "headers": {
+    "content-type": "application/json"
+  },
+  "status": 403
+}

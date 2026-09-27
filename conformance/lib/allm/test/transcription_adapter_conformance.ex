@@ -55,6 +55,21 @@ defmodule ALLM.Test.TranscriptionAdapterConformance do
   that means allocating a clip of provider size (tens of megabytes) once per
   run.
 
+  ### `:skip_cases`
+
+  An adapter whose cap makes a case impractical to run (a multi-gigabyte
+  cap makes case 4 allocate that much memory) can skip it by number with a
+  mandatory reason:
+
+      use ALLM.Test.TranscriptionAdapterConformance,
+        transcription_adapter: MyTranscriptionAdapter,
+        skip_cases: %{4 => "the 5 GB cap makes the oversize clip cost 5 GB of memory"}
+
+  A skipped case is still injected and is tagged `skip:` with the case
+  number and the reason. ExUnit counts it in every run's skipped total and
+  names it with the reason under `mix test --trace`. An unknown case number or an empty reason raises `ArgumentError` at
+  compile time. Skip only what the adapter's own tests bind another way.
+
   ## What this suite does NOT bind
 
   **Invariant 1 is unbound.** It is enforced at the façade, which raises
@@ -91,6 +106,40 @@ defmodule ALLM.Test.TranscriptionAdapterConformance do
   def case_count, do: @case_count
 
   @doc false
+  # Validates `:skip_cases` (a map of case number => non-empty reason).
+  @spec skip_cases!(keyword()) :: %{pos_integer() => String.t()}
+  def skip_cases!(opts) do
+    skips = Keyword.get(opts, :skip_cases, %{})
+
+    unless is_map(skips) do
+      raise ArgumentError, ":skip_cases must be a map of case number => reason"
+    end
+
+    Enum.each(skips, fn
+      {n, reason} when n in 1..@case_count//1 and is_binary(reason) and reason != "" ->
+        :ok
+
+      {n, reason} ->
+        raise ArgumentError,
+              ":skip_cases entry #{inspect(n)} => #{inspect(reason)} needs a case number " <>
+                "in 1..#{@case_count} and a non-empty reason"
+    end)
+
+    skips
+  end
+
+  @doc false
+  # The `@tag` for case `n`: `[skip: "..."]` naming the case and the reason,
+  # or `[]` when it runs.
+  @spec skip_tag(%{pos_integer() => String.t()}, pos_integer()) :: keyword()
+  def skip_tag(skips, n) do
+    case Map.fetch(skips, n) do
+      {:ok, reason} -> [skip: "transcription conformance case #{n} skipped: #{reason}"]
+      :error -> []
+    end
+  end
+
+  @doc false
   @spec clip_bytes(non_neg_integer()) :: binary()
   def clip_bytes(n) when is_integer(n) and n >= 0, do: :binary.copy(<<0>>, n)
 
@@ -100,18 +149,23 @@ defmodule ALLM.Test.TranscriptionAdapterConformance do
                                                     unquote(opts),
                                                     :transcription_adapter
                                                   )
+      @__allm_transcription_conformance_skips__ ALLM.Test.TranscriptionAdapterConformance.skip_cases!(
+                                                  unquote(opts)
+                                                )
 
       describe "ALLM.TranscriptionAdapter conformance (#{inspect(@__allm_transcription_conformance_adapter__)})" do
         alias ALLM.{Audio, TranscriptionRequest, TranscriptionResponse, Usage}
         alias ALLM.Error.TranscriptionAdapterError
         alias ALLM.Test.TranscriptionAdapterConformance, as: Harness
 
+        @tag Harness.skip_tag(@__allm_transcription_conformance_skips__, 1)
         test "1. [unscripted] max_audio_bytes/0 returns a pos_integer" do
           max = @__allm_transcription_conformance_adapter__.max_audio_bytes()
           assert is_integer(max)
           assert max > 0
         end
 
+        @tag Harness.skip_tag(@__allm_transcription_conformance_skips__, 2)
         test "2. [scripted] a small clip returns binary text and %Usage{} usage" do
           audio = Audio.from_binary(Harness.clip_bytes(512), "audio/mpeg")
           req = TranscriptionRequest.new(audio: audio)
@@ -124,6 +178,7 @@ defmodule ALLM.Test.TranscriptionAdapterConformance do
           assert is_binary(text)
         end
 
+        @tag Harness.skip_tag(@__allm_transcription_conformance_skips__, 3)
         test "3. [unscripted] unresolvable audio is rejected with :invalid_request before any key" do
           req = TranscriptionRequest.new(audio: Audio.from_file("/nonexistent.mp3"))
           opts = Keyword.get(unquote(opts), :gate_opts, [])
@@ -132,6 +187,7 @@ defmodule ALLM.Test.TranscriptionAdapterConformance do
                    @__allm_transcription_conformance_adapter__.transcribe(req, opts)
         end
 
+        @tag Harness.skip_tag(@__allm_transcription_conformance_skips__, 4)
         test "4. [unscripted] audio over max_audio_bytes/0 is rejected with count and max" do
           adapter = @__allm_transcription_conformance_adapter__
           max = adapter.max_audio_bytes()
@@ -146,6 +202,7 @@ defmodule ALLM.Test.TranscriptionAdapterConformance do
           assert meta.max == max
         end
 
+        @tag Harness.skip_tag(@__allm_transcription_conformance_skips__, 5)
         test "5. [scripted] preserves opts[:request_id] onto response.request_id" do
           audio = Audio.from_binary(Harness.clip_bytes(16), "audio/mpeg")
           req = TranscriptionRequest.new(audio: audio)
@@ -157,6 +214,7 @@ defmodule ALLM.Test.TranscriptionAdapterConformance do
                    )
         end
 
+        @tag Harness.skip_tag(@__allm_transcription_conformance_skips__, 6)
         test "6. [scripted] round-trips request.metadata onto response.metadata" do
           metadata = %{"k" => "v", trace_id: "abc"}
           audio = Audio.from_binary(Harness.clip_bytes(16), "audio/mpeg")

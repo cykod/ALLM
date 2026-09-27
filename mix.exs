@@ -136,6 +136,8 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Gemini.Embeddings,
           ALLM.Providers.Gemini.Transcription,
           ALLM.Providers.Voyage.Embeddings,
+          ALLM.Providers.ElevenLabs.Speech,
+          ALLM.Providers.ElevenLabs.Transcription,
           ALLM.Providers.Fake,
           ALLM.Providers.Fake.Script,
           ALLM.Providers.FakeImages,
@@ -150,7 +152,9 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Support.Transport,
           ALLM.Providers.Support.HTTPResponse,
           ALLM.Providers.Support.TranscriptionAdapter,
-          ALLM.Providers.Support.InputPump
+          ALLM.Providers.Support.SpeechAdapter,
+          ALLM.Providers.Support.InputPump,
+          ALLM.Providers.Support.ElevenLabs
         ],
         Defaults: [
           ALLM.ToolExecutor.Default,

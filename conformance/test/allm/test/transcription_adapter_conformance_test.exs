@@ -98,3 +98,43 @@ defmodule ALLM.Test.TranscriptionAdapterConformanceGateOptsTest do
     assert byte_size(TranscriptionAdapterConformance.clip_bytes(601)) == 601
   end
 end
+
+defmodule ALLM.Test.TranscriptionAdapterConformanceSkipCasesTest do
+  @moduledoc """
+  Meta-invariant 5: `:skip_cases` skips exactly the named case, visibly. The
+  skipped case is still injected, carries a `skip:` tag naming its number
+  and the reason, and every other case runs.
+  """
+
+  use ExUnit.Case, async: true
+
+  use ALLM.Test.TranscriptionAdapterConformance,
+    transcription_adapter: ALLM.Test.Fixtures.ScriptedTranscriptionStub,
+    skip_cases: %{4 => "self-test reason"}
+
+  alias ALLM.Test.TranscriptionAdapterConformance
+
+  @describe_name "ALLM.TranscriptionAdapter conformance (ALLM.Test.Fixtures.ScriptedTranscriptionStub)"
+
+  test "only case 4 is skipped, and its skip tag names the case and the reason" do
+    injected =
+      Enum.filter(__MODULE__.__ex_unit__().tests, &(&1.tags[:describe] == @describe_name))
+
+    assert length(injected) == TranscriptionAdapterConformance.case_count()
+
+    skipped = for t <- injected, t.tags[:skip], do: {t.name, t.tags[:skip]}
+
+    assert [{name, "transcription conformance case 4 skipped: self-test reason"}] = skipped
+    assert Atom.to_string(name) =~ "4. [unscripted] audio over max_audio_bytes/0"
+  end
+
+  test "skip_cases!/1 rejects an unknown case number, an empty reason and a non-map" do
+    for bad <- [%{7 => "r"}, %{0 => "r"}, %{4 => ""}, %{4 => :r}, [{4, "r"}]] do
+      assert_raise ArgumentError, fn ->
+        TranscriptionAdapterConformance.skip_cases!(skip_cases: bad)
+      end
+    end
+
+    assert TranscriptionAdapterConformance.skip_cases!([]) == %{}
+  end
+end

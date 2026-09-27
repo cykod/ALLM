@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized (Phase 26.6). The documented feature_not_available 403 (not observed; the observed tier gate is recorded/error_403_tier.json).",
+  "status": 403,
+  "headers": {"content-type": "application/json"},
+  "body": {"detail": {"type": "authorization_error", "code": "feature_not_available", "message": "This feature is not available on your plan.", "status": "feature_not_available", "request_id": "synthesized-403f"}}
+}

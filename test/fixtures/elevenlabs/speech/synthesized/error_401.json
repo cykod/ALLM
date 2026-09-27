@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized (Phase 26.6). A 401 in the shape ElevenLabs sent for a missing key permission on 2026-09-26 (GET /v1/user/subscription), with a DELIBERATELY PLANTED sk_ token in the message: the redaction test's only target. ElevenLabs' real invalid-key errors are a 400 for a hex-shaped key (recorded/error_400_bad_key.json) or a 401 for any other (recorded/error_401_bad_key.json); neither echoes the key.",
+  "status": 401,
+  "headers": {"content-type": "application/json"},
+  "body": {"detail": {"type": "authentication_error", "code": "unauthorized", "message": "The API key sk_FAKEKEY0123456789abcdef0123456789abcdef is missing the permission text_to_speech to execute this operation.", "status": "missing_permissions", "request_id": "synthesized-401"}}
+}

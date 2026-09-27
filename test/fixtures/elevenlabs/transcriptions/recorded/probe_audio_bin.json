@@ -1,0 +1,158 @@
+{
+  "body": {
+    "audio_duration_secs": 3.72,
+    "language_code": "eng",
+    "language_probability": 0.6974507570266724,
+    "text": "The quick brown fox jumps over the lazy dog.",
+    "transcription_id": "W5ETYLK8uZPk401mKibE",
+    "words": [
+      {
+        "end": 0.24,
+        "logprob": -1.4935807848814875e-4,
+        "start": 0.14,
+        "text": "The",
+        "type": "word"
+      },
+      {
+        "end": 0.32,
+        "logprob": -3.3378546504536644e-6,
+        "start": 0.24,
+        "text": " ",
+        "type": "spacing"
+      },
+      {
+        "end": 0.58,
+        "logprob": -3.3378546504536644e-6,
+        "start": 0.32,
+        "text": "quick",
+        "type": "word"
+      },
+      {
+        "end": 0.72,
+        "logprob": -4.458328112377785e-5,
+        "start": 0.58,
+        "text": " ",
+        "type": "spacing"
+      },
+      {
+        "end": 1.04,
+        "logprob": -4.458328112377785e-5,
+        "start": 0.72,
+        "text": "brown",
+        "type": "word"
+      },
+      {
+        "end": 1.16,
+        "logprob": -1.156323378381785e-5,
+        "start": 1.04,
+        "text": " ",
+        "type": "spacing"
+      },
+      {
+        "end": 1.6,
+        "logprob": -1.156323378381785e-5,
+        "start": 1.16,
+        "text": "fox",
+        "type": "word"
+      },
+      {
+        "end": 2.06,
+        "logprob": -2.145764938177308e-6,
+        "start": 1.6,
+        "text": " ",
+        "type": "spacing"
+      },
+      {
+        "end": 2.38,
+        "logprob": -2.145764938177308e-6,
+        "start": 2.06,
+        "text": "jumps",
+        "type": "word"
+      },
+      {
+        "end": 2.46,
+        "logprob": -1.1920928244535389e-7,
+        "start": 2.38,
+        "text": " ",
+        "type": "spacing"
+      },
+      {
+        "end": 2.68,
+        "logprob": -1.1920928244535389e-7,
+        "start": 2.46,
+        "text": "over",
+        "type": "word"
+      },
+      {
+        "end": 2.72,
+        "logprob": -1.0728830375228426e-6,
+        "start": 2.68,
+        "text": " ",
+        "type": "spacing"
+      },
+      {
+        "end": 2.82,
+        "logprob": -1.0728830375228426e-6,
+        "start": 2.72,
+        "text": "the",
+        "type": "word"
+      },
+      {
+        "end": 2.88,
+        "logprob": -6.794906312279636e-6,
+        "start": 2.82,
+        "text": " ",
+        "type": "spacing"
+      },
+      {
+        "end": 3.18,
+        "logprob": -6.794906312279636e-6,
+        "start": 2.88,
+        "text": "lazy",
+        "type": "word"
+      },
+      {
+        "end": 3.26,
+        "logprob": -9.536738616588991e-7,
+        "start": 3.18,
+        "text": " ",
+        "type": "spacing"
+      },
+      {
+        "end": 3.58,
+        "logprob": -0.0871134996410774,
+        "start": 3.26,
+        "text": "dog.",
+        "type": "word"
+      }
+    ]
+  },
+  "header_names": [
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-origin",
+    "access-control-expose-headers",
+    "access-control-max-age",
+    "alt-svc",
+    "character-cost",
+    "content-type",
+    "current-concurrent-requests",
+    "date",
+    "fiat-cost-before-overages",
+    "fiat-currency",
+    "maximum-concurrent-requests",
+    "server",
+    "strict-transport-security",
+    "transfer-encoding",
+    "vary",
+    "via",
+    "workspace-concurrent-requests",
+    "x-region",
+    "x-trace-id"
+  ],
+  "headers": {
+    "character-cost": "4",
+    "content-type": "application/json"
+  },
+  "status": 200
+}

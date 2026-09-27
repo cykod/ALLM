@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized (Phase 26.6). A 403 with no feature code, which classifies as an authentication failure.",
+  "status": 403,
+  "headers": {"content-type": "application/json"},
+  "body": {"detail": {"type": "authorization_error", "code": "forbidden", "message": "Access denied.", "status": "forbidden", "request_id": "synthesized-403"}}
+}

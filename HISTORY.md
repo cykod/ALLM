@@ -1,3 +1,21 @@
+## [FEAT] Add ElevenLabs speech and transcription adapters
+*Sunday, September 27th at 2am*
+Phase 26.6 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37; §35.7 
+carve-out, where the owner admitted ElevenLabs to core). Adds 
+ALLM.Providers.ElevenLabs.Speech and ALLM.Providers.ElevenLabs.Transcription 
+with a shared Support.ElevenLabs module (format table, error classification, 
+sk_ key redactor). A live recorder probe corrected several doc-sourced wire 
+claims: a bad key is answered 400 or 401, a tier gate returns 403, STT carries 
+no request-id, and language codes are ISO 639-3. There are 16 recorded fixtures 
+with raw-bytes provenance tests. The fix pass extracted Support.SpeechAdapter, 
+which now holds the speech retry step and the Finch stream state machine, and 
+migrated OpenAI.Speech to it without changing behaviour (scoped re-review). The 
+transcription conformance harness gains skip_cases:, which skips the 5 GB 
+oversize case for ElevenLabs only (owner decision 2026-09-27). The size gate is 
+bound by a sparse-file unit test instead.
+
+---
+
 ## [FEAT] Stream OpenAI speech synthesis over chunked HTTP
 *Saturday, September 26th at 10pm*
 Phase 26.5 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 streaming audio). 

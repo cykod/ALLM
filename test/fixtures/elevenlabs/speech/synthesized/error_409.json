@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized (Phase 26.6). A documented 409 (not observed).",
+  "status": 409,
+  "headers": {"content-type": "application/json"},
+  "body": {"detail": {"type": "invalid_request", "code": "conflict", "message": "Conflict.", "status": "conflict", "request_id": "synthesized-409"}}
+}

@@ -186,13 +186,15 @@ defmodule ALLM.Providers.OpenAI.Speech do
 
   @behaviour ALLM.SpeechAdapter
   @behaviour ALLM.SpeechStreamAdapter
+  @behaviour ALLM.Providers.Support.SpeechAdapter
 
   require Logger
 
-  alias ALLM.{Audio, Keys, Retry, SpeechEvent, SpeechRequest, SpeechResponse, Usage}
+  alias ALLM.{Audio, Keys, SpeechEvent, SpeechRequest, SpeechResponse, Usage}
   alias ALLM.Error.SpeechAdapterError
   alias ALLM.Providers.FakeSpeech
-  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders, Transport}
+  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders}
+  alias ALLM.Providers.Support.SpeechAdapter, as: SpeechSupport
 
   @doc """
   Synthesize speech from `request.input` against OpenAI.
@@ -237,8 +239,8 @@ defmodule ALLM.Providers.OpenAI.Speech do
   @spec synthesize(SpeechRequest.t(), keyword()) ::
           {:ok, SpeechResponse.t()} | {:error, SpeechAdapterError.t()}
   def synthesize(%SpeechRequest{} = request, opts) when is_list(opts) do
-    case fetch_speech_script(opts) do
-      nil -> do_synthesize(request, opts)
+    case SpeechSupport.fetch_speech_script(opts) do
+      nil -> SpeechSupport.do_synthesize(__MODULE__, :openai, request, opts)
       _script -> FakeSpeech.synthesize(request, opts)
     end
   end
@@ -262,12 +264,9 @@ defmodule ALLM.Providers.OpenAI.Speech do
   @spec prepare_request(SpeechRequest.t(), keyword()) ::
           {:ok, Req.Request.t()} | {:error, SpeechAdapterError.t()}
   def prepare_request(%SpeechRequest{} = request, opts) when is_list(opts) do
-    case fetch_speech_script(opts) do
-      nil ->
-        with :ok <- run_gates(request, opts), do: build_request(request, opts)
-
-      _script ->
-        {:error, stub_error(opts)}
+    case SpeechSupport.fetch_speech_script(opts) do
+      nil -> SpeechSupport.prepare_request(__MODULE__, request, opts)
+      _script -> {:error, SpeechSupport.stub_error(:openai, opts)}
     end
   end
 
@@ -340,7 +339,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
   @spec stream_synthesize(SpeechRequest.t(), keyword()) ::
           {:ok, Enumerable.t(SpeechEvent.t())} | {:error, SpeechAdapterError.t()}
   def stream_synthesize(%SpeechRequest{} = request, opts) when is_list(opts) do
-    case fetch_speech_script(opts) do
+    case SpeechSupport.fetch_speech_script(opts) do
       nil -> do_stream_synthesize(request, opts)
       _script -> FakeSpeech.stream_synthesize(request, opts)
     end
@@ -387,13 +386,20 @@ defmodule ALLM.Providers.OpenAI.Speech do
         "input" => request.input,
         "voice" => request.voice || @default_voice
       }
-      |> put_present("response_format", request.format && Atom.to_string(request.format))
-      |> put_present("instructions", request.instructions)
-      |> put_present("speed", request.speed)
+      |> SpeechSupport.put_present(
+        "response_format",
+        request.format && Atom.to_string(request.format)
+      )
+      |> SpeechSupport.put_present("instructions", request.instructions)
+      |> SpeechSupport.put_present("speed", request.speed)
 
     request.options
-    |> stringify_option_keys()
-    |> drop_reserved_options()
+    |> SpeechSupport.stringify_keys()
+    |> SpeechSupport.drop_reserved_options(
+      @reserved_options,
+      __MODULE__,
+      "they would change the response shape."
+    )
     |> Map.merge(body)
   end
 
@@ -424,6 +430,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
   end
 
   @doc false
+  @impl SpeechSupport
   @spec decode_response(term(), Enumerable.t() | map(), SpeechRequest.t(), keyword()) ::
           {:ok, SpeechResponse.t()} | {:error, SpeechAdapterError.t()}
   def decode_response(body, headers, request, opts)
@@ -432,7 +439,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
       when is_binary(body) and byte_size(body) > 0 do
     content_type = HTTPResponse.header_value(headers, "content-type")
 
-    if audio_content_type?(content_type) do
+    if SpeechSupport.audio_content_type?(content_type) do
       format = SpeechResponse.mime_to_format(content_type)
       mime = if format, do: SpeechResponse.format_to_mime(format), else: content_type
 
@@ -449,11 +456,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
          metadata: request.metadata
        }}
     else
-      {:error,
-       malformed_error(
-         "200 content type #{inspect(redact_key_material(content_type || "(none)"))} is not audio/*",
-         opts
-       )}
+      {:error, SpeechSupport.non_audio_error(__MODULE__, content_type, opts)}
     end
   end
 
@@ -466,6 +469,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
   @doc false
   # `body` may be a decoded map or an undecoded binary: OpenAI's 401 is
   # `text/plain` carrying JSON, which `Req` does not decode.
+  @impl SpeechSupport
   @spec to_speech_adapter_error(non_neg_integer(), term(), Enumerable.t() | map(), keyword()) ::
           SpeechAdapterError.t()
   def to_speech_adapter_error(status, body, headers, opts) when is_integer(status) do
@@ -488,20 +492,21 @@ defmodule ALLM.Providers.OpenAI.Speech do
   end
 
   # ---------------------------------------------------------------------------
-  # Internals — gates
+  # Internals — gates and request building
+  #
+  # The shared contract (Fake hand-off, input-shape gate, retry loop,
+  # transport errors, the HTTP stream) is `ALLM.Providers.Support.SpeechAdapter`'s;
+  # the `@impl` functions below are the callbacks it invokes on this module.
   # ---------------------------------------------------------------------------
 
-  defp fetch_speech_script(opts) do
-    opts
-    |> Keyword.get(:adapter_opts, [])
-    |> Keyword.get(:speech_script)
-  end
-
+  @doc false
   # All three gates run ahead of `Keys.fetch!/2`, which is what keeps the
   # unscripted conformance cases green in a keyless environment. Shared by
   # `synthesize/2`, `prepare_request/2` and `stream_synthesize/2`.
-  defp run_gates(%SpeechRequest{} = request, opts) do
-    with :ok <- gate_input_shape(request, opts),
+  @impl SpeechSupport
+  @spec run_gates(SpeechRequest.t(), keyword()) :: :ok | {:error, SpeechAdapterError.t()}
+  def run_gates(%SpeechRequest{} = request, opts) do
+    with :ok <- SpeechSupport.gate_input_shape(request, :openai, opts),
          :ok <- gate_input_length(request, opts) do
       gate_sample_rate(request, opts)
     end
@@ -531,48 +536,12 @@ defmodule ALLM.Providers.OpenAI.Speech do
      )}
   end
 
-  defp gate_input_shape(%SpeechRequest{input: input}, opts) do
-    cond do
-      not is_binary(input) -> input_error("input must be a string", opts)
-      input == "" -> input_error("input must not be empty", opts)
-      not String.valid?(input) -> input_error("input is not valid UTF-8", opts)
-      true -> :ok
-    end
-  end
-
-  defp input_error(message, opts) do
-    {:error,
-     SpeechAdapterError.new(:invalid_request,
-       provider: :openai,
-       message: message,
-       metadata: HTTPResponse.build_metadata(%{field: :input}, opts)
-     )}
-  end
-
-  defp stub_error(opts) do
-    SpeechAdapterError.new(:unknown,
-      provider: :openai,
-      message: "prepare_request/2 has no analogue under the speech_script short-circuit",
-      metadata: HTTPResponse.build_metadata(%{}, opts)
-    )
-  end
-
-  # ---------------------------------------------------------------------------
-  # Internals — dispatch
-  # ---------------------------------------------------------------------------
-
-  defp do_synthesize(%SpeechRequest{} = request, opts) do
-    with :ok <- run_gates(request, opts),
-         {:ok, http_req} <- build_request(request, opts) do
-      Retry.run(Keyword.get(opts, :retry, :default), retry_telemetry_meta(opts), fn ->
-        run_one_attempt(http_req, request, opts)
-      end)
-    end
-  end
-
+  @doc false
   # `Keys.fetch!/2` raises `%EngineError{reason: :missing_key}` by documented
   # design and is not rescued. It runs AFTER `run_gates/2`.
-  defp build_request(%SpeechRequest{} = request, opts) do
+  @impl SpeechSupport
+  @spec build_request(SpeechRequest.t(), keyword()) :: {:ok, Req.Request.t()}
+  def build_request(%SpeechRequest{} = request, opts) do
     api_key = Keys.fetch!(:openai, opts)
 
     req =
@@ -581,8 +550,9 @@ defmodule ALLM.Providers.OpenAI.Speech do
         url: @base_url <> @endpoint,
         headers: OpenAIHeaders.json_headers(api_key, opts),
         json: to_json_body(request, opts),
-        # The only retry loop is `ALLM.Retry.run/3` above; Req's own must not
-        # add attempts behind it.
+        # The only retry loop is `ALLM.Retry.run/3` in
+        # `Support.SpeechAdapter.do_synthesize/4`; Req's own must not add
+        # attempts behind it.
         retry: false
       )
       |> HTTPResponse.maybe_apply_req_test_stub(opts)
@@ -591,68 +561,12 @@ defmodule ALLM.Providers.OpenAI.Speech do
     {:ok, req}
   end
 
-  defp run_one_attempt(http_req, request, opts) do
-    case Req.request(http_req) do
-      {:ok, %Req.Response{status: status, body: body, headers: headers}}
-      when status in 200..299 ->
-        decode_response(body, headers, request, opts)
-
-      {:ok, %Req.Response{status: status, body: body, headers: headers}} ->
-        classified = to_speech_adapter_error(status, body, headers, opts)
-
-        if classified.reason in [:rate_limited, :provider_unavailable] do
-          {:retry, classified.retry_after_ms || 0, classified}
-        else
-          {:error, classified}
-        end
-
-      {:error, %{__struct__: Req.TransportError, reason: :timeout} = cause} ->
-        {:retry, 0, transport_error(:timeout, "request timed out", cause, opts)}
-
-      {:error, %{__struct__: Jason.DecodeError} = cause} ->
-        {:error,
-         %{
-           malformed_error("response body is not valid JSON", opts)
-           | cause: HTTPResponse.sanitize_cause(cause)
-         }}
-
-      {:error, exception} ->
-        {:retry, 0,
-         transport_error(
-           :network_error,
-           "transport failure: " <> Exception.message(exception),
-           exception,
-           opts
-         )}
-    end
-  end
-
-  defp transport_error(reason, message, cause, opts) do
-    SpeechAdapterError.new(reason,
-      provider: :openai,
-      message: message,
-      cause: HTTPResponse.sanitize_cause(cause),
-      metadata: HTTPResponse.build_metadata(%{}, opts)
-    )
-  end
-
-  defp retry_telemetry_meta(opts) do
-    case Keyword.get(opts, :request_id) do
-      nil -> %{provider: :openai}
-      request_id -> %{provider: :openai, request_id: request_id}
-    end
-  end
-
   # ---------------------------------------------------------------------------
   # Internals — streaming
   #
-  # `Stream.resource/3` over `Finch.async_request/3`, the chat adapter's
-  # transport (`ALLM.Providers.OpenAI.stream/2`). The three functions run in
-  # the reducing process, so the Finch messages arrive in its mailbox.
-  # `transport_done?` records that Finch sent its last message (`:done` or
-  # `{:error, _}`); `terminal?` that the stream emitted its terminal event.
-  # The two differ when the adapter ends the stream itself (a bad content
-  # type, a timeout), and only a transport that is not done is cancelled.
+  # The `Stream.resource/3` state machine over `Finch.async_request/3` is
+  # `Support.SpeechAdapter.stream_resource/6`; this module supplies the
+  # request and the three streaming callbacks below.
   # ---------------------------------------------------------------------------
 
   defp do_stream_synthesize(%SpeechRequest{} = request, opts) do
@@ -667,128 +581,23 @@ defmodule ALLM.Providers.OpenAI.Speech do
           Jason.encode!(to_json_body(request, opts))
         )
 
-      finch_module = Keyword.get(opts, :finch_module, Finch)
-      finch_name = Keyword.get(opts, :finch_name, ALLM.Finch)
-      stream_timeout = Keyword.get(opts, :stream_timeout, @default_stream_timeout)
-      finch_opts = Transport.finch_opts(opts, stream_timeout)
-
       {:ok,
-       Stream.resource(
-         fn ->
-           ref = finch_module.async_request(finch_request, finch_name, finch_opts)
-           new_stream_state(ref, finch_module, request, opts)
-         end,
-         &stream_next(&1, stream_timeout),
-         &stream_after/1
+       SpeechSupport.stream_resource(
+         __MODULE__,
+         :openai,
+         finch_request,
+         request,
+         opts,
+         @default_stream_timeout
        )}
     end
   end
 
-  defp new_stream_state(ref, finch_module, request, opts) do
-    %{
-      ref: ref,
-      finch_module: finch_module,
-      request: request,
-      opts: opts,
-      status: nil,
-      headers: [],
-      error_body: [],
-      bytes: 0,
-      started?: false,
-      transport_done?: false,
-      terminal?: false
-    }
-  end
-
-  defp stream_next(%{terminal?: true} = state, _timeout), do: {:halt, state}
-
-  defp stream_next(%{ref: ref} = state, timeout) do
-    receive do
-      {^ref, message} -> handle_stream_message(message, state)
-    after
-      timeout ->
-        terminate(
-          state,
-          SpeechAdapterError.new(:timeout,
-            provider: :openai,
-            message: "no transport message within stream_timeout (#{timeout} ms)",
-            metadata: HTTPResponse.build_metadata(%{}, state.opts)
-          )
-        )
-    end
-  end
-
-  defp handle_stream_message({:status, status}, state), do: {[], %{state | status: status}}
-
-  # A second `{:headers, _}` on a 2xx response carries HTTP trailers; only
-  # the first starts the stream.
-  defp handle_stream_message({:headers, headers}, %{status: status, started?: false} = state)
-       when status in 200..299 do
-    content_type = HTTPResponse.header_value(headers, "content-type")
-    state = %{state | headers: headers, started?: true}
-
-    if audio_content_type?(content_type) do
-      {[speech_started(content_type, state)], state}
-    else
-      terminate(
-        state,
-        malformed_error(
-          "200 content type #{inspect(redact_key_material(content_type || "(none)"))} is not audio/*",
-          state.opts
-        )
-      )
-    end
-  end
-
-  defp handle_stream_message({:headers, headers}, state),
-    do: {[], %{state | headers: state.headers ++ headers}}
-
-  defp handle_stream_message({:data, ""}, state), do: {[], state}
-
-  defp handle_stream_message({:data, chunk}, %{status: status} = state)
-       when status in 200..299 do
-    {[SpeechEvent.audio_delta(chunk)], %{state | bytes: state.bytes + byte_size(chunk)}}
-  end
-
-  defp handle_stream_message({:data, chunk}, state),
-    do: {[], %{state | error_body: [state.error_body | chunk]}}
-
-  defp handle_stream_message(:done, state) do
-    state = %{state | transport_done?: true}
-
-    case state do
-      %{status: status, bytes: 0} when status in 200..299 ->
-        terminate(state, empty_audio_error(state.opts))
-
-      %{status: status} when status in 200..299 ->
-        {[speech_completed(state)], %{state | terminal?: true}}
-
-      %{status: status} ->
-        body = IO.iodata_to_binary(state.error_body)
-        terminate(state, to_speech_adapter_error(status || 0, body, state.headers, state.opts))
-    end
-  end
-
-  defp handle_stream_message({:error, exception}, state) do
-    state = %{state | transport_done?: true}
-
-    terminate(
-      state,
-      transport_error(
-        :network_error,
-        "transport failure: " <> Exception.message(exception),
-        exception,
-        state.opts
-      )
-    )
-  end
-
-  defp handle_stream_message(_other, state), do: {[], state}
-
-  defp terminate(state, %SpeechAdapterError{} = error),
-    do: {[{:error, error}], %{state | terminal?: true}}
-
-  defp speech_started(content_type, %{request: request, opts: opts, headers: headers}) do
+  @doc false
+  @impl SpeechSupport
+  @spec speech_started(String.t(), Enumerable.t() | map(), SpeechRequest.t(), keyword()) ::
+          SpeechEvent.t()
+  def speech_started(content_type, headers, %SpeechRequest{} = request, opts) do
     format = SpeechResponse.mime_to_format(content_type)
 
     SpeechEvent.speech_started(%{
@@ -801,7 +610,11 @@ defmodule ALLM.Providers.OpenAI.Speech do
     })
   end
 
-  defp speech_completed(%{request: request, opts: opts, headers: headers}) do
+  @doc false
+  @impl SpeechSupport
+  @spec speech_completed(Enumerable.t() | map(), SpeechRequest.t(), keyword()) ::
+          SpeechEvent.t()
+  def speech_completed(headers, %SpeechRequest{} = request, opts) do
     SpeechEvent.speech_completed(%{
       request_id: request_id_for(opts, headers),
       id: nil,
@@ -810,12 +623,10 @@ defmodule ALLM.Providers.OpenAI.Speech do
     })
   end
 
-  # The one correlation rule both paths share (the moduledoc's
-  # "Correlation" row): the façade's request id, else `x-request-id`.
-  defp request_id_for(opts, headers),
-    do: Keyword.get(opts, :request_id) || HTTPResponse.header_value(headers, "x-request-id")
-
-  defp empty_audio_error(opts) do
+  @doc false
+  @impl SpeechSupport
+  @spec empty_audio_error(keyword()) :: SpeechAdapterError.t()
+  def empty_audio_error(opts) do
     SpeechAdapterError.new(:invalid_request,
       provider: :openai,
       message: "OpenAI ended the stream without any audio bytes",
@@ -823,61 +634,23 @@ defmodule ALLM.Providers.OpenAI.Speech do
     )
   end
 
-  # Cancel a request Finch has not finished, then drain the messages it had
-  # already queued for this ref, so a halted stream leaves none behind.
-  defp stream_after(%{ref: ref, finch_module: finch_module, transport_done?: done?}),
-    do: Transport.cancel_and_drain(finch_module, ref, done?)
-
-  # ---------------------------------------------------------------------------
-  # Internals — body builder
-  # ---------------------------------------------------------------------------
-
-  defp put_present(body, _key, nil), do: body
-  defp put_present(body, key, value), do: Map.put(body, key, value)
-
-  defp stringify_option_keys(options) when is_map(options) do
-    Map.new(options, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-      {k, v} -> {k, v}
-    end)
-  end
-
-  defp stringify_option_keys(_options), do: %{}
-
-  defp drop_reserved_options(options) do
-    case Map.take(options, @reserved_options) do
-      dropped when map_size(dropped) == 0 ->
-        options
-
-      dropped ->
-        Logger.debug(fn ->
-          "ALLM.Providers.OpenAI.Speech: dropping reserved option(s) " <>
-            "#{inspect(Map.keys(dropped))}; they would change the response shape."
-        end)
-
-        Map.drop(options, @reserved_options)
-    end
-  end
+  # The one correlation rule both paths share (the moduledoc's
+  # "Correlation" row): the façade's request id, else `x-request-id`.
+  defp request_id_for(opts, headers),
+    do: Keyword.get(opts, :request_id) || HTTPResponse.header_value(headers, "x-request-id")
 
   # ---------------------------------------------------------------------------
   # Internals — decoding and errors
   # ---------------------------------------------------------------------------
 
-  defp audio_content_type?(ct) when is_binary(ct),
-    do: ct |> String.downcase() |> String.starts_with?("audio/")
-
-  defp audio_content_type?(_ct), do: false
-
   defp sample_rate_for(format) when format in @pcm_formats, do: @pcm_sample_rate
   defp sample_rate_for(_format), do: nil
 
-  defp malformed_error(detail, opts) do
-    SpeechAdapterError.new(:malformed_response,
-      provider: :openai,
-      message: "could not decode OpenAI speech response: " <> detail,
-      metadata: HTTPResponse.build_metadata(%{}, opts)
-    )
-  end
+  @doc false
+  @impl SpeechSupport
+  @spec malformed_error(String.t(), keyword()) :: SpeechAdapterError.t()
+  def malformed_error(detail, opts),
+    do: SpeechSupport.malformed_error(:openai, "OpenAI", detail, opts)
 
   defp provider_message(error, status) do
     case Map.get(error, "message") do
@@ -908,9 +681,12 @@ defmodule ALLM.Providers.OpenAI.Speech do
 
   defp classify_speech_reason(_status, _message, _ra), do: {:unknown, nil}
 
+  @doc false
   # Inherited from `ALLM.Providers.OpenAI.Moderation`: same provider, same key
   # shapes.
-  defp redact_key_material(message) when is_binary(message) do
+  @impl SpeechSupport
+  @spec redact_key_material(String.t()) :: String.t()
+  def redact_key_material(message) when is_binary(message) do
     String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
   end
 end

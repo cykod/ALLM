@@ -248,6 +248,8 @@ There is **no Layer D**. `ALLM.Session` is untouched.
     - Whatever latency setting arm `ws_tokens` selects (Decision #11), if it selects one.
 
     The voice default's candidate is `JBFqnCBsd6RMkjVDRZzb` (the voice ElevenLabs' quickstart uses; **UNVERIFIED** as a permanent premade voice). Probe arm `default_voice` must 200, otherwise the recorder halts and the implementer picks a `category: "premade"` id from `GET /v1/voices` and amends. *Docs target: as stated.*
+
+    > CORRECTED 2026-09-26 (26.6 probe): `JBFqnCBsd6RMkjVDRZzb` answered 200 (arm `tts_default`, `recorded/tts_default.json`), so it is the adapter's `@default_voice`. The key's scope does not include `voices_read`, so its `category` was not read.
 11. **ElevenLabs' `options` placement.** HTTP TTS: JSON body, deep-merged under the structural fields; `voice_settings` is deep-merged, so `options: %{"voice_settings" => %{"stability" => 0.3}}` coexists with `speed`. WebSocket TTS: into the initial message (`voice_settings`, `generation_config`). Batch STT: one multipart field per entry. Realtime STT: query parameters. Query parameters ALLM does not model on the HTTP/TTS-WS paths go in `options["query"]` (a map), merged under structural ones. **Reserved and dropped with a deferred `Logger.debug/1`:** `output_format` (derived from `format` + `sample_rate`), `model_id`, `text`, and on realtime `audio_format` and `commit_strategy`. Each changes a shape the decoder relies on or duplicates a modelled field. **The WebSocket TTS latency default is chosen by measurement, and the owner's criterion is the fastest first audio.** Arm `ws_tokens` measures time to first audio frame twice on the same input: under the provider's documented default `chunk_length_schedule` (`[120,160,250,290]`, no `generation_config` and no `auto_mode` sent) and under `auto_mode=true` (query parameter). Whichever has the lower first-audio `t_ms` becomes the adapter default. If it is `auto_mode=true`, the adapter sends it unless `options["query"]` sets `auto_mode` itself, and that injected default joins Decision #10's list. The two numbers and the choice go in RECORDS; this Decision and the WebSocket TTS wire map are rewritten in place in 26.7's commit, and the guide quotes both numbers. Callers still tune with `options: %{"generation_config" => %{"chunk_length_schedule" => […]}}` or `options["query"]["auto_mode"]`. *Docs target: `@moduledoc` of both ElevenLabs adapters.*
 
 ---
@@ -631,6 +633,20 @@ Base URL: `opts[:base_url] || "https://api.elevenlabs.io"`. Documented residency
 
 The values come from the documented `output_format` list (convert page). **Bold** marks the default. Rates at 44.1 kHz for PCM/WAV need the Pro tier and 192 kbps MP3 needs Creator ("MP3 with 192kbps bitrate requires you to be subscribed to Creator tier or above. PCM and WAV formats with 44.1kHz sample rate requires you to be subscribed to Pro tier or above.", convert page). The provider's 403 is classified as `:unsupported_feature` (Error classification). The 24 kHz defaults avoid that tier gate.
 
+> CORRECTED 2026-09-26 (26.6 probe, `scripts/record_elevenlabs_audio_fixtures.exs`, fixtures under `test/fixtures/elevenlabs/`; full transcript in RECORDS §26.6). Rows settled:
+> - **Default voice / default model:** 200 (`tts_default`). **Default voice is CONFIRMED.**
+> - **200 content-type:** CONFIRMED `audio/mpeg` (mp3, also the no-`output_format` default), `audio/pcm`, `audio/wav`, `audio/opus`. All four map through `SpeechResponse.mime_to_format/1`, so the outcome rule's fallback does not fire: format and mime are derived from the response, as §37 Decision #4 says. `sample_rate` comes from the request (the response does not state it).
+> - **Correlation:** TTS responses carry `request-id` and `character-cost` (CONFIRMED). **STT responses carry `character-cost` but no `request-id`** (only `x-trace-id`), so STT correlation is `transcription_id` → `id` only.
+> - **Unknown body field:** **200** on TTS (`control`) and on STT (an invented multipart field, arm `stt_control`). Unknown fields are ignored, so every acceptance-only row stays inferred.
+> - **Input limit:** the `too_long` arm is **falsified and removed**. `eleven_v3` with 5,001 characters answered **200** and was billed; no length arm is run, and the `text_too_long` → `:context_length_exceeded` row is documented only (a synthesized fixture pins the mapping).
+> - **STT response:** CONFIRMED. `language_code` is ISO 639-3 (`"eng"`) and is passed through as `language`.
+> - **STT mime gate:** a valid mp3 sent as `audio.bin` / `application/octet-stream` → **200** with the right transcript. ElevenLabs sniffs content, so there is **no filename gate**; an unknown mime is sent as `audio.bin`.
+> - **Error envelope:** CONFIRMED `{"detail": {"type", "code", "message", "status", "request_id", "param"?}}`, and a 422 `detail` is a list of `{"type", "loc", "msg", "input"}`.
+> - **Key redaction:** the `sk_` prefix is CONFIRMED (the `.env` key is `sk_` + 48 characters). **An invalid key is a 400, not a 401** (`detail.type: "authentication_error"`, `code`/`status: "invalid_api_key"`), and the body does not echo the key. A real 401 was observed for a key missing a permission (`status: "missing_permissions"`, on `GET /v1/user/subscription`), so the planted-token fixture uses that shape.
+> - **Tier gate:** `output_format=pcm_44100` on this account → **403** `code: "subscription_required"`, `status: "output_format_not_allowed"` (arm `tier_gate`, new).
+>
+> CORRECTED 2026-09-27 (functional review of 26.6): "an invalid key is a 400, not a 401" holds only for a hex-shaped key. A mixed-case `sk_` key is answered with a **401** `code: "unauthorized"`, `status: "invalid_api_key"`; both shapes carry `detail.type: "authentication_error"` and classify as `:authentication_failed`. Recorded as `speech/recorded/error_401_bad_key.json` (arm `bad_key_401`); no key echo.
+
 ### Wire-field map — ElevenLabs WebSocket TTS (26.7)
 
 `wss://<host>/v1/text-to-speech/{voice_id}/stream-input?model_id=…&output_format=…` (https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input). The `xi-api-key` goes in the **upgrade header** (Decision #3).
@@ -691,6 +707,10 @@ This returns `{reason_atom, metadata}`, and each adapter wraps the result in its
 | anything else | — | `:unknown` |
 
 The HTTP 400/401/404/422 rows are **documented** codes. The WS rows are **documented names with a designed mapping**. The close-code rows are **inferred**, and the arms above settle them.
+
+> CORRECTED 2026-09-26 (26.6 probe): two rows are widened and one is added. **Added, checked after the quota row and before the status rows:** a body whose `detail.type` is `authentication_error` → `:authentication_failed`, whatever the status, because an invalid key is answered with a 400 (`recorded/error_400_bad_key.json`). **Widened:** the 403 → `:unsupported_feature` row also matches `subscription_required` / `output_format_not_allowed`, the observed tier gate (`recorded/error_403_tier.json`); without it the tier gate classified as `:authentication_failed`. The quota row also matches `payment_required`. The 400 `text_too_long` row stays documented only (the probe's input-limit arm was falsified).
+
+> CORRECTED 2026-09-27: an invalid key is a 400 *or* a 401 depending on its shape (see the Key-redaction correction above); the body row covers both.
 
 ### Script contract (streaming)
 
@@ -1111,6 +1131,8 @@ Targeted + uniform + conformance + **BLOCKING** recorder (subshell form). **Succ
 - Raw-bytes provenance, one test per recorded file.
 
 `*_conformance_test.exs`: Phase 25's `SpeechAdapterConformance` / `TranscriptionAdapterConformance` with `:gate_opts`.
+
+> OWNER DECISION 2026-09-27: `elevenlabs/transcription_conformance_test.exs` skips `TranscriptionAdapterConformance` case 4 (via the harness's new `:skip_cases` option). Its oversized clip is `max_audio_bytes() + 1` = 5 GB of memory and about 22 s per run. The 5 GB cap is kept, and case 4 still runs for OpenAI, Gemini and the Fakes. `elevenlabs/transcription_test.exs` binds the size gate with a sparse file one byte over the cap. Details: RECORDS §26.6.
 
 #### 26.6.2 Live probe — `scripts/record_elevenlabs_audio_fixtures.exs`
 This probe has four parts (`CLAUDE.md`): a control arm, assertions checked before any write, recorded bodies including errors, and an overwrite guard in which every arm has a write target. Canonical shape: `scripts/record_voyage_embeddings_fixtures.exs`.

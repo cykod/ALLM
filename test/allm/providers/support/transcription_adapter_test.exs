@@ -179,4 +179,37 @@ defmodule ALLM.Providers.Support.TranscriptionAdapterTest do
       end
     end
   end
+
+  # Provider-independent: added in 26.6 when ElevenLabs.Transcription became
+  # the second multipart transcription adapter.
+  describe "multipart option helpers" do
+    test "optional_field/2 is empty for nil and one field otherwise" do
+      assert Support.optional_field("language", nil) == []
+      assert Support.optional_field("language", "en") == [{"language", "en"}]
+    end
+
+    test "option_fields/2 stringifies, sorts, expands lists and encodes values" do
+      options = %{
+        :z => 1,
+        "a" => ["x", "y"],
+        "m" => nil,
+        "flag" => true,
+        "map" => %{"k" => 1},
+        "model" => "dropped"
+      }
+
+      assert Support.option_fields(options, ["model"]) ==
+               {[
+                  {"a", "x"},
+                  {"a", "y"},
+                  {"flag", "true"},
+                  {"map", ~s({"k":1})},
+                  {"z", "1"}
+                ], ["model"]}
+    end
+
+    test "option_fields/2 on a non-map is empty" do
+      assert Support.option_fields(nil, ["model"]) == {[], []}
+    end
+  end
 end

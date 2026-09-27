@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized (Phase 26.6). An out-of-credit error sent with status 401, as ElevenLabs has reportedly done (not observed): the body's quota code must win over the status.",
+  "status": 401,
+  "headers": {"content-type": "application/json"},
+  "body": {"detail": {"type": "billing_error", "code": "quota_exceeded", "message": "This request exceeds your quota of 10000.", "status": "quota_exceeded", "request_id": "synthesized-quota"}}
+}

@@ -192,6 +192,48 @@ defmodule ALLM.Providers.Support.TranscriptionAdapter do
   end
 
   @doc false
+  # A one-element field list when `value` is set, else `[]`.
+  @spec optional_field(String.t(), term()) :: [{String.t(), term()}]
+  def optional_field(_name, nil), do: []
+  def optional_field(name, value), do: [{name, value}]
+
+  @doc false
+  # `request.options` as multipart form fields, sorted by name. Keys are
+  # stringified; a list value becomes one field per element under the bare
+  # key; `nil` values are skipped; numbers and atoms are stringified and
+  # other terms JSON-encoded. Keys in `structural` are removed and returned
+  # as the second element, so the adapter can log what it dropped.
+  @spec option_fields(term(), [String.t()]) :: {[{String.t(), String.t()}], [String.t()]}
+  def option_fields(options, structural) when is_map(options) do
+    stringified =
+      Map.new(options, fn
+        {k, v} when is_atom(k) -> {Atom.to_string(k), v}
+        {k, v} -> {k, v}
+      end)
+
+    fields =
+      stringified
+      |> Map.drop(structural)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.flat_map(fn {name, value} -> form_values(name, value) end)
+
+    {fields, stringified |> Map.take(structural) |> Map.keys()}
+  end
+
+  def option_fields(_options, _structural), do: {[], []}
+
+  defp form_values(name, values) when is_list(values),
+    do: Enum.flat_map(values, &form_values(name, &1))
+
+  defp form_values(_name, nil), do: []
+  defp form_values(name, value) when is_binary(value), do: [{name, value}]
+
+  defp form_values(name, value) when is_number(value) or is_atom(value),
+    do: [{name, to_string(value)}]
+
+  defp form_values(name, value), do: [{name, Jason.encode!(value)}]
+
+  @doc false
   # The audio bytes, or `:invalid_request` when they cannot be read.
   @spec resolve_bytes(Audio.t(), atom(), keyword()) ::
           {:ok, binary()} | {:error, TranscriptionAdapterError.t()}

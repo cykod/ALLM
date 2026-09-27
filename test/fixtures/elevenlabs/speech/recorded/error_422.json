@@ -1,0 +1,35 @@
+{
+  "body": {
+    "detail": [
+      {
+        "input": null,
+        "loc": [
+          "body",
+          "text"
+        ],
+        "msg": "Field required",
+        "type": "missing"
+      }
+    ]
+  },
+  "header_names": [
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-origin",
+    "access-control-max-age",
+    "alt-svc",
+    "content-type",
+    "date",
+    "server",
+    "strict-transport-security",
+    "transfer-encoding",
+    "vary",
+    "via",
+    "x-region",
+    "x-trace-id"
+  ],
+  "headers": {
+    "content-type": "application/json"
+  },
+  "status": 422
+}

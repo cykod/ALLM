@@ -1,0 +1,32 @@
+{
+  "body": {
+    "detail": {
+      "code": "invalid_api_key",
+      "message": "API key is invalid.",
+      "param": "api_key",
+      "request_id": "d75743ead131491b5f6792832805b9a2",
+      "status": "invalid_api_key",
+      "type": "authentication_error"
+    }
+  },
+  "header_names": [
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-origin",
+    "access-control-max-age",
+    "alt-svc",
+    "content-type",
+    "date",
+    "server",
+    "strict-transport-security",
+    "transfer-encoding",
+    "vary",
+    "via",
+    "x-region",
+    "x-trace-id"
+  ],
+  "headers": {
+    "content-type": "application/json"
+  },
+  "status": 400
+}

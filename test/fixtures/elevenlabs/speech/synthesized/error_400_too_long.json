@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized (Phase 26.6). The documented text_too_long 400. Not observed: the 2026-09-26 probe sent eleven_v3 5,001 characters and got a 200.",
+  "status": 400,
+  "headers": {"content-type": "application/json"},
+  "body": {"detail": {"type": "validation_error", "code": "text_too_long", "message": "Text is too long for this model.", "status": "text_too_long", "request_id": "synthesized-400"}}
+}

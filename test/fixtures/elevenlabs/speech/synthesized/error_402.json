@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized (Phase 26.6). The documented 402 envelope (not observed).",
+  "status": 402,
+  "headers": {"content-type": "application/json"},
+  "body": {"detail": {"type": "billing_error", "code": "payment_required", "message": "Payment is required to continue.", "status": "payment_required", "request_id": "synthesized-402"}}
+}

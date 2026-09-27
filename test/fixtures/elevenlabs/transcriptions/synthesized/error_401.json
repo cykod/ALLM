@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized (Phase 26.6). A 401 in the observed missing-permission shape with a DELIBERATELY PLANTED sk_ token: the redaction test's only target.",
+  "status": 401,
+  "headers": {"content-type": "application/json"},
+  "body": {"detail": {"type": "authentication_error", "code": "unauthorized", "message": "The API key sk_FAKEKEY0123456789abcdef0123456789abcdef is missing the permission speech_to_text to execute this operation.", "status": "missing_permissions", "request_id": "synthesized-401"}}
+}

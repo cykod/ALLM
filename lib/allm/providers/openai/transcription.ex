@@ -301,7 +301,8 @@ defmodule ALLM.Providers.OpenAI.Transcription do
           {"model", request.model || @default_model},
           {"response_format", "json"}
         ] ++
-          optional_field("language", request.language) ++ optional_field("prompt", request.prompt)
+          TranscriptionSupport.optional_field("language", request.language) ++
+          TranscriptionSupport.optional_field("prompt", request.prompt)
 
       {:ok, structural ++ option_fields(request.options)}
     end
@@ -435,41 +436,22 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   # Internals — multipart fields
   # ---------------------------------------------------------------------------
 
-  defp optional_field(_name, nil), do: []
-  defp optional_field(name, value), do: [{name, value}]
+  # The option-to-field mapping is shared with the other transcription
+  # adapters (`ALLM.Providers.Support.TranscriptionAdapter.option_fields/2`).
+  # Only a dropped `response_format` is logged: the other structural fields
+  # are dropped silently.
+  defp option_fields(options) do
+    {fields, dropped} = TranscriptionSupport.option_fields(options, @structural_fields)
 
-  defp option_fields(options) when is_map(options) do
-    stringified =
-      Map.new(options, fn
-        {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-        {k, v} -> {k, v}
-      end)
-
-    if Map.has_key?(stringified, "response_format") do
+    if "response_format" in dropped do
       Logger.debug(fn ->
         "ALLM.Providers.OpenAI.Transcription: dropping reserved option \"response_format\"; " <>
           "the decoder reads only the json response shape."
       end)
     end
 
-    stringified
-    |> Map.drop(@structural_fields)
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.flat_map(fn {name, value} -> form_values(name, value) end)
+    fields
   end
-
-  defp option_fields(_options), do: []
-
-  defp form_values(name, values) when is_list(values),
-    do: Enum.flat_map(values, &form_values(name, &1))
-
-  defp form_values(_name, nil), do: []
-  defp form_values(name, value) when is_binary(value), do: [{name, value}]
-
-  defp form_values(name, value) when is_number(value) or is_atom(value),
-    do: [{name, to_string(value)}]
-
-  defp form_values(name, value), do: [{name, Jason.encode!(value)}]
 
   # ---------------------------------------------------------------------------
   # Internals — decoding and errors

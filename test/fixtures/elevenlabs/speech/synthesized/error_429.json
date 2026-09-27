@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized (Phase 26.6). The documented concurrent-limit 429, with a Retry-After header.",
+  "status": 429,
+  "headers": {"content-type": "application/json", "retry-after": "7"},
+  "body": {"detail": {"type": "rate_limit_error", "code": "concurrent_limit_exceeded", "message": "Too many concurrent requests.", "status": "concurrent_limit_exceeded", "request_id": "synthesized-429"}}
+}

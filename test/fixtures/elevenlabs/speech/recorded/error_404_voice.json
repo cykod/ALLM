@@ -1,0 +1,31 @@
+{
+  "body": {
+    "detail": {
+      "code": "voice_not_found",
+      "message": "A voice with voice_id 'notARealVoiceId000000' was not found.",
+      "request_id": "f79190399a98395b5f6792832805b298",
+      "status": "voice_not_found",
+      "type": "not_found"
+    }
+  },
+  "header_names": [
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-origin",
+    "access-control-max-age",
+    "alt-svc",
+    "content-type",
+    "date",
+    "server",
+    "strict-transport-security",
+    "transfer-encoding",
+    "vary",
+    "via",
+    "x-region",
+    "x-trace-id"
+  ],
+  "headers": {
+    "content-type": "application/json"
+  },
+  "status": 404
+}

@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized (Phase 26.6). A 503 with a Retry-After header (not observed).",
+  "status": 503,
+  "headers": {"content-type": "application/json", "retry-after": "2"},
+  "body": {"detail": {"type": "service_unavailable", "code": "system_busy", "message": "The system is busy.", "status": "system_busy", "request_id": "synthesized-503"}}
+}
