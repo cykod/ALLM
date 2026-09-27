@@ -524,7 +524,7 @@ defmodule ALLM.Providers.Gemini.Images do
           ImageAdapterError.new(:timeout,
             provider: :gemini,
             message: "request timed out",
-            cause: sanitize_cause(cause),
+            cause: HTTPResponse.sanitize_cause(cause),
             metadata: HTTPResponse.build_metadata(%{}, opts)
           )
 
@@ -538,7 +538,7 @@ defmodule ALLM.Providers.Gemini.Images do
           ImageAdapterError.new(:network_error,
             provider: :gemini,
             message: "transport failure: " <> Exception.message(exception),
-            cause: sanitize_cause(exception),
+            cause: HTTPResponse.sanitize_cause(exception),
             metadata: HTTPResponse.build_metadata(%{}, opts)
           )
 
@@ -588,27 +588,13 @@ defmodule ALLM.Providers.Gemini.Images do
       provider: :gemini,
       status: chat_err.status,
       retry_after_ms: chat_err.retry_after_ms,
-      message: body |> provider_message(chat_err.message) |> redact_key_material(),
-      cause: sanitize_cause(chat_err.cause),
+      # Read off the raw body, not `chat_err.message`: that field is typed
+      # `String.t()` but can carry a non-binary provider message, which the
+      # redactor's catch-all clause replaces.
+      message: body |> HTTPResponse.body_error_message(chat_err.message) |> redact_key_material(),
+      cause: HTTPResponse.sanitize_cause(chat_err.cause),
       metadata: base_metadata
     )
-  end
-
-  # Read off the RAW decoded body rather than off `chat_err.message`, which
-  # `ALLM.Error.AdapterError` types as `String.t()`. That declaration is
-  # optimistic: `classify_error/3` populates the field with
-  # `Map.get(error, "message", default)` straight off the body, so a provider or
-  # proxy answering `{"error": {"message": 123}}` puts a non-binary there.
-  # Sourcing from the body keeps the non-binary arm below both reachable AND
-  # visible to Dialyzer, and it is the more honest seam anyway — redaction is a
-  # property of untrusted provider text, not of a typed struct field.
-  #
-  # Mirrors `ALLM.Providers.Gemini.Embeddings.provider_message/2`.
-  defp provider_message(body, fallback) do
-    case body do
-      %{"error" => %{"message" => message}} -> message
-      _ -> fallback
-    end
   end
 
   # Google credential shapes: `AIza…` API keys and `ya29.…` OAuth access
@@ -643,18 +629,11 @@ defmodule ALLM.Providers.Gemini.Images do
 
   defp redact_key_material(_message), do: "Gemini images error"
 
-  # `%ImageAdapterError{}` derives `Jason.Encoder` and is routinely logged and
-  # persisted, so `:cause` must never smuggle a raw response body through.
-  # `Jason.DecodeError` carries the whole undecodable payload on `:data`;
-  # everything else (transport errors) carries only a reason atom.
-  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause), do: %{cause | data: ""}
-  defp sanitize_cause(cause), do: cause
-
   defp malformed_error(cause, opts) do
     ImageAdapterError.new(:malformed_response,
       provider: :gemini,
       message: "could not parse Gemini response: body is not valid JSON",
-      cause: sanitize_cause(cause),
+      cause: HTTPResponse.sanitize_cause(cause),
       metadata: HTTPResponse.build_metadata(%{}, opts)
     )
   end

@@ -76,6 +76,71 @@ defmodule ALLM.Providers.Support.HTTPResponseTest do
     end
   end
 
+  describe "body_error_message/2" do
+    test "returns the error object's message whatever its type, unredacted" do
+      assert HTTPResponse.body_error_message(%{"error" => %{"message" => "AIzaSECRETKEY1"}}, "fb") ==
+               "AIzaSECRETKEY1"
+
+      assert HTTPResponse.body_error_message(%{"error" => %{"message" => 123}}, "fb") == 123
+    end
+
+    test "any other shape returns the fallback" do
+      assert HTTPResponse.body_error_message(%{"error" => %{"code" => 400}}, "fb") == "fb"
+      assert HTTPResponse.body_error_message(%{"error" => "boom"}, "fb") == "fb"
+      assert HTTPResponse.body_error_message(%{}, nil) == nil
+      assert HTTPResponse.body_error_message("not a map", "fb") == "fb"
+    end
+  end
+
+  describe "redacted_error_message/3" do
+    defp redactor, do: fn text -> String.replace(text, ~r/sk-\w+/, "[REDACTED]") end
+
+    test "a binary message goes through the caller's redactor" do
+      assert HTTPResponse.redacted_error_message(
+               %{"message" => "bad key sk-abc123"},
+               "OpenAI HTTP 401",
+               redactor()
+             ) == "bad key [REDACTED]"
+    end
+
+    test "a missing or non-binary message yields the fallback, unredacted" do
+      assert HTTPResponse.redacted_error_message(%{}, "OpenAI HTTP 500", redactor()) ==
+               "OpenAI HTTP 500"
+
+      assert HTTPResponse.redacted_error_message(%{"message" => 42}, "sk-literal", redactor()) ==
+               "sk-literal"
+    end
+  end
+
+  describe "redact_optional/2" do
+    test "a binary goes through the redactor; anything else becomes nil" do
+      redactor = fn text -> String.replace(text, "pa-secret", "[REDACTED]") end
+
+      assert HTTPResponse.redact_optional("code pa-secret", redactor) == "code [REDACTED]"
+      assert HTTPResponse.redact_optional(nil, redactor) == nil
+      assert HTTPResponse.redact_optional(429, redactor) == nil
+      assert HTTPResponse.redact_optional(%{"a" => 1}, redactor) == nil
+    end
+  end
+
+  describe "stringify_keys/1" do
+    test "atom keys become strings; other keys and every value pass through" do
+      assert HTTPResponse.stringify_keys(%{:temperature => 0.2, "top_p" => 1, 3 => :v}) ==
+               %{"temperature" => 0.2, "top_p" => 1, 3 => :v}
+    end
+
+    test "only the top level is stringified; nested maps keep their atom keys" do
+      assert HTTPResponse.stringify_keys(%{config: %{mode: :fast}}) ==
+               %{"config" => %{mode: :fast}}
+    end
+
+    test "anything that is not a map becomes %{}" do
+      assert HTTPResponse.stringify_keys(nil) == %{}
+      assert HTTPResponse.stringify_keys(a: 1) == %{}
+      assert HTTPResponse.stringify_keys("x") == %{}
+    end
+  end
+
   describe "sanitize_cause/1" do
     test "a Jason.DecodeError loses its payload and every offset, so message/1 still works" do
       {:error, cause} = Jason.decode("{\"secret\": sk-abcdefgh")

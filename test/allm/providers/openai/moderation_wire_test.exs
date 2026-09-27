@@ -356,6 +356,23 @@ defmodule ALLM.Providers.OpenAI.ModerationWireTest do
       # response body out through `:cause`.
       refute inspect(err) =~ "not json"
     end
+
+    test "the sanitized decode-error cause renders a message without raising", %{stub: stub} do
+      Req.Test.stub(stub, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, "{not json")
+      end)
+
+      assert {:error, %ModerationAdapterError{cause: %Jason.DecodeError{} = cause}} =
+               call(stub, req(["hi"]))
+
+      # Blanking `:data` alone would leave `:position` past the end of the
+      # empty payload, and `Jason.DecodeError.message/1` would raise; the
+      # shared sanitizer resets every offset with it.
+      assert Jason.DecodeError.message(cause) == "unexpected end of input at position 0"
+      refute Exception.message(cause) =~ "while retrieving Exception.message"
+    end
   end
 
   # ---------------------------------------------------------------------------

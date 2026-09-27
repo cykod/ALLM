@@ -417,7 +417,8 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   #                                fail-closed fallback string:
   #                                `"OpenAI moderation error"` here vs
   #                                `"OpenAI embeddings error"` there)
-  #   * `sanitize_cause/1`       — `openai/embeddings.ex`, byte-for-byte
+  #   (`sanitize_cause/1` was listed here; every adapter now calls the shared
+  #   `HTTPResponse.sanitize_cause/1`.)
   #
   #   RENAMED for the moderation family (per-capability, not per-provider):
   #   * `to_moderation_adapter_error/4` ↔ embeddings' `to_embedding_adapter_error/4`
@@ -480,8 +481,13 @@ defmodule ALLM.Providers.OpenAI.Moderation do
       %{"input" => wire_input(request)}
       |> put_pair(model_pair(request))
 
+    # `:options` is the documented home for provider-specific opaque opts.
+    # Keys are normalized to strings so a body never mixes atom and string
+    # keys, an off-shape (non-map) value contributes nothing, and the merge
+    # puts the structural fields on top. The provider IGNORES unknown fields
+    # (see the moduledoc), so a typo here is silent rather than a 400.
     request.options
-    |> stringify_option_keys()
+    |> HTTPResponse.stringify_keys()
     |> Map.merge(body)
   end
 
@@ -837,14 +843,15 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   # of `ALLM.ModerationRequest.multimodal?/1`'s one-line body and needs its
   # reason recorded. That function is specced `t() :: boolean()`, so calling it
   # on `to_json_body/2`'s binding refines that binding to the FULL declared
-  # `ModerationRequest.t()` — which in turn makes `model_pair/1`'s and
-  # `stringify_option_keys/1`'s catch-all clauses provably dead and turns
-  # `mix dialyzer` red with two `pattern_match_cov` errors. Those clauses are
-  # dead by type but alive by test: `to_json_body/2` is a public `@doc false`
-  # seam, and `test/allm/providers/openai/moderation_test.exs`'s "an off-shape
-  # :options is ignored rather than raising" drives exactly the shape the type
-  # says cannot exist. Deleting them to satisfy dialyzer would break a released
-  # test and remove a real defence at a public entry point, so the clone stays
+  # `ModerationRequest.t()` — which in turn makes `model_pair/1`'s catch-all
+  # clause provably dead and turns `mix dialyzer` red with a
+  # `pattern_match_cov` error. That clause is dead by type but alive by test:
+  # `to_json_body/2` is a public `@doc false` seam, and tests drive it with
+  # shapes the type says cannot exist (the off-shape `:options` defence, which
+  # `test/allm/providers/openai/moderation_test.exs`'s "an off-shape :options
+  # is ignored rather than raising" pins, now lives in the remote
+  # `HTTPResponse.stringify_keys/1`). Deleting the clause to satisfy dialyzer
+  # would remove a real defence at a public entry point, so the clone stays
   # and `moderation_vision_test.exs`'s "to_json_body/2 branches on exactly what
   # multimodal?/1 reports" pins the two against drift.
   defp wire_input(%ModerationRequest{input: input}) when is_list(input) do
@@ -896,20 +903,6 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   defp model_pair(%ModerationRequest{model: m}) when is_binary(m), do: {"model", m}
   defp model_pair(_request), do: nil
 
-  # `:options` is the documented home for provider-specific opaque opts. Keys
-  # are normalized to strings so a body never mixes atom and string keys, and
-  # the merge in `to_json_body/2` puts the structural fields on top. Note the
-  # provider IGNORES unknown fields (see the moduledoc), so a typo here is
-  # silent rather than a 400.
-  defp stringify_option_keys(options) when is_map(options) do
-    Map.new(options, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-      {k, v} -> {k, v}
-    end)
-  end
-
-  defp stringify_option_keys(_options), do: %{}
-
   # ---------------------------------------------------------------------------
   # Internals — HTTP attempt
   # ---------------------------------------------------------------------------
@@ -928,20 +921,25 @@ defmodule ALLM.Providers.OpenAI.Moderation do
          ModerationAdapterError.new(:timeout,
            provider: :openai,
            message: "request timed out",
-           cause: sanitize_cause(cause),
+           cause: HTTPResponse.sanitize_cause(cause),
            metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
 
       {:error, %{__struct__: Jason.DecodeError} = cause} ->
         {:error,
-         malformed_error("response body is not valid JSON", %{}, opts, sanitize_cause(cause))}
+         malformed_error(
+           "response body is not valid JSON",
+           %{},
+           opts,
+           HTTPResponse.sanitize_cause(cause)
+         )}
 
       {:error, exception} ->
         {:retry, 0,
          ModerationAdapterError.new(:network_error,
            provider: :openai,
            message: "transport failure: " <> Exception.message(exception),
-           cause: sanitize_cause(exception),
+           cause: HTTPResponse.sanitize_cause(exception),
            metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
     end
@@ -987,13 +985,6 @@ defmodule ALLM.Providers.OpenAI.Moderation do
       metadata: HTTPResponse.build_metadata(metadata, opts)
     )
   end
-
-  # `%ModerationAdapterError{}` derives `Jason.Encoder` and is routinely logged
-  # and persisted, so `:cause` must never smuggle a raw response body through.
-  # `Jason.DecodeError` carries the whole undecodable payload on `:data`;
-  # everything else (transport errors) carries only a reason atom.
-  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause), do: %{cause | data: ""}
-  defp sanitize_cause(cause), do: cause
 
   # Inherited VERBATIM from `ALLM.Providers.OpenAI.Embeddings` — same provider,
   # same key shapes. See the seam banner above for why that is correct here and

@@ -8,10 +8,11 @@ defmodule ALLM.Providers.Support.HTTPResponse do
   `@doc false` seams: they carry a `@spec` and are callable from tests, but
   are not part of the public API.
 
-  Helpers that close over something provider-specific stay in their
-  adapter: the credential redactor (`redact_key_material/1`, whose pattern
-  is per provider), anything that renders a provider name into a message
-  (`provider_message/2`), and the redactor wrapper `redact_optional/1`.
+  The credential redactor (`redact_key_material/1`) stays in each adapter,
+  because its pattern is per provider: a pattern inherited from a sibling
+  provider redacts nothing. Helpers here that redact take that function as
+  an argument instead, and any provider name in a message is rendered by
+  the caller.
 
   ## Contents
 
@@ -19,8 +20,10 @@ defmodule ALLM.Providers.Support.HTTPResponse do
     * Error bodies: `decode_error_body/1` (a map passes through, anything
       else is `%{}`), `decode_json_error_body/1` (additionally
       JSON-decodes a binary body, for providers that send JSON as
-      `text/plain`), `error_object/1`, `sanitize_cause/1`.
+      `text/plain`), `error_object/1`, `body_error_message/2`,
+      `redacted_error_message/3`, `redact_optional/2`, `sanitize_cause/1`.
     * Error metadata: `build_metadata/2`.
+    * Request bodies: `stringify_keys/1`.
     * `Req` request options: `maybe_apply_req_test_stub/2`,
       `maybe_apply_request_timeout/2` (leaves the request unchanged without
       `opts[:request_timeout]`) and `apply_receive_timeout/3` (applies the
@@ -99,6 +102,37 @@ defmodule ALLM.Providers.Support.HTTPResponse do
   end
 
   @doc false
+  # `body["error"]["message"]` off a decoded error body, whatever its type,
+  # else `fallback`. Not redacted: the caller pipes the result through its
+  # own redactor, which also handles a non-binary message.
+  @spec body_error_message(term(), term()) :: term()
+  def body_error_message(body, fallback) do
+    case body do
+      %{"error" => %{"message" => message}} -> message
+      _ -> fallback
+    end
+  end
+
+  @doc false
+  # The error object's `"message"`, passed through `redactor` when it is a
+  # binary; otherwise `fallback` (the caller's provider-named message, such
+  # as `"OpenAI HTTP 500"`), which is not redacted.
+  @spec redacted_error_message(map(), String.t(), (String.t() -> String.t())) :: String.t()
+  def redacted_error_message(error, fallback, redactor) do
+    case Map.get(error, "message") do
+      m when is_binary(m) -> redactor.(m)
+      _ -> fallback
+    end
+  end
+
+  @doc false
+  # A binary goes through `redactor`; anything else becomes `nil`. For
+  # optional provider-authored metadata fields (`code`, `type`, `status`).
+  @spec redact_optional(term(), (String.t() -> String.t())) :: String.t() | nil
+  def redact_optional(value, redactor) when is_binary(value), do: redactor.(value)
+  def redact_optional(_value, _redactor), do: nil
+
+  @doc false
   # `Jason.DecodeError` carries the undecodable payload on `:data`. Every
   # offset is reset with it, because blanking only `:data` leaves
   # `message/1` raising on the stale position. Any other cause passes
@@ -118,6 +152,20 @@ defmodule ALLM.Providers.Support.HTTPResponse do
       request_id -> Map.put(metadata, :request_id, request_id)
     end
   end
+
+  @doc false
+  # Atom keys become strings and other keys pass through unchanged, so a
+  # request body never mixes atom and string keys. Anything that is not a
+  # map becomes `%{}`.
+  @spec stringify_keys(term()) :: map()
+  def stringify_keys(map) when is_map(map) do
+    Map.new(map, fn
+      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
+      {k, v} -> {k, v}
+    end)
+  end
+
+  def stringify_keys(_other), do: %{}
 
   @doc false
   # Routes the request through `opts[:adapter_opts][:plug]` (a `Req.Test`

@@ -355,8 +355,8 @@ defmodule ALLM.Providers.Gemini.Embeddings do
   #   * SEAM `to_embedding_adapter_error/4`, SEAM `max_batch_size/0`
   #   * `run_one_attempt/3`, `classify_http_error/4`, `stub_error/1`,
   #     `fetch_embedding_script/1`, `gate_empty_input/2`, `gate_batch_size/2`,
-  #     `sanitize_cause/1`, `malformed_error/3`, `build_retry_telemetry_meta/1`
-  #   * `build_metadata/2`, `maybe_apply_req_test_stub/2` and
+  #     `malformed_error/3`, `build_retry_telemetry_meta/1`
+  #   * `build_metadata/2`, `sanitize_cause/1`, `maybe_apply_req_test_stub/2` and
   #     `maybe_apply_request_timeout/2` are shared, from
   #     `ALLM.Providers.Support.HTTPResponse`
   #
@@ -424,7 +424,8 @@ defmodule ALLM.Providers.Gemini.Embeddings do
   #     `@translatable_reasons ⊆ EmbeddingAdapterError.legal_reasons/0` subset
   #     property across both enums. 20.6: promote to a seam only alongside that
   #     test, otherwise leave it `defp`.
-  #   * `provider_message/2` is Gemini-only, and exists because this adapter
+  #   * Reading the message through `HTTPResponse.body_error_message/2` is
+  #     Gemini-only, and exists because this adapter
   #     delegates classification. The OpenAI sibling redacts the message it
   #     extracted itself; here the message arrives on a typed
   #     `%ALLM.Error.AdapterError{}` whose `:message` is declared `String.t()`,
@@ -521,7 +522,10 @@ defmodule ALLM.Providers.Gemini.Embeddings do
       provider: :gemini,
       status: chat_error.status,
       retry_after_ms: chat_error.retry_after_ms,
-      message: body |> provider_message(chat_error.message) |> redact_key_material(),
+      # Read off the raw body, not `chat_error.message`: that field is typed
+      # `String.t()` but can carry a non-binary provider message, which the
+      # redactor's catch-all clause replaces.
+      message: body |> HTTPResponse.body_error_message(chat_error.message) |> redact_key_material(),
       metadata: HTTPResponse.build_metadata(Map.put(chat_error.metadata, :status, status), opts)
     )
   end
@@ -788,20 +792,25 @@ defmodule ALLM.Providers.Gemini.Embeddings do
          EmbeddingAdapterError.new(:timeout,
            provider: :gemini,
            message: "request timed out",
-           cause: sanitize_cause(cause),
+           cause: HTTPResponse.sanitize_cause(cause),
            metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
 
       {:error, %{__struct__: Jason.DecodeError} = cause} ->
         {:error,
-         malformed_error("response body is not valid JSON", %{}, opts, sanitize_cause(cause))}
+         malformed_error(
+           "response body is not valid JSON",
+           %{},
+           opts,
+           HTTPResponse.sanitize_cause(cause)
+         )}
 
       {:error, exception} ->
         {:retry, 0,
          EmbeddingAdapterError.new(:network_error,
            provider: :gemini,
            message: "transport failure: " <> Exception.message(exception),
-           cause: sanitize_cause(exception),
+           cause: HTTPResponse.sanitize_cause(exception),
            metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
     end
@@ -829,38 +838,6 @@ defmodule ALLM.Providers.Gemini.Embeddings do
       cause: cause,
       metadata: HTTPResponse.build_metadata(metadata, opts)
     )
-  end
-
-  # `%EmbeddingAdapterError{}` derives `Jason.Encoder` and is routinely logged
-  # and persisted, so `:cause` must never smuggle a raw response body through.
-  # `Jason.DecodeError` carries the whole undecodable payload on `:data`;
-  # a `%Req.TransportError{}`'s CONTENTS are only a reason atom.
-  #
-  # Confidentiality is therefore intact, but note what this does NOT fix: the
-  # sanitized cause is still a `%Req.TransportError{}` / `%Jason.DecodeError{}`
-  # STRUCT, and neither implements `Jason.Encoder`, so `Jason.encode!/1` on the
-  # surrounding error raises `Protocol.UndefinedError` on all three
-  # transport/decode paths. The struct is where the defect hides, not its
-  # contents. This is library-wide — the committed 20.4 OpenAI sibling and the
-  # shipped v0.4 `ALLM.Providers.Gemini.Images` fail identically — so per
-  # cross-phase bug discipline it is ticketed in `ASKS.md` and fixed across all
-  # adapters at once, not diverged here.
-  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause), do: %{cause | data: ""}
-  defp sanitize_cause(cause), do: cause
-
-  # Read off the RAW decoded body rather than off `chat_error.message`, which
-  # `ALLM.Error.AdapterError` types as `String.t()`. That declaration is
-  # optimistic: `classify_error/3` populates the field with
-  # `Map.get(error, "message", default)` straight off the body, so a provider
-  # or proxy answering `{"error": {"message": 123}}` puts a non-binary there.
-  # Sourcing from the body keeps the non-binary arm below both reachable AND
-  # visible to Dialyzer, and it is the more honest seam anyway — redaction is a
-  # property of untrusted provider text, not of a typed struct field.
-  defp provider_message(body, fallback) do
-    case body do
-      %{"error" => %{"message" => message}} -> message
-      _ -> fallback
-    end
   end
 
   # Google credential shapes: `AIza…` API keys and `ya29.…` OAuth access

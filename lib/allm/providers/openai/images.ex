@@ -982,7 +982,7 @@ defmodule ALLM.Providers.OpenAI.Images do
           ImageAdapterError.new(:timeout,
             provider: :openai,
             message: "request timed out",
-            cause: sanitize_cause(cause),
+            cause: HTTPResponse.sanitize_cause(cause),
             metadata: HTTPResponse.build_metadata(%{}, opts)
           )
 
@@ -996,7 +996,7 @@ defmodule ALLM.Providers.OpenAI.Images do
           ImageAdapterError.new(:network_error,
             provider: :openai,
             message: "transport failure: " <> Exception.message(exception),
-            cause: sanitize_cause(exception),
+            cause: HTTPResponse.sanitize_cause(exception),
             metadata: HTTPResponse.build_metadata(%{}, opts)
           )
 
@@ -1077,17 +1077,10 @@ defmodule ALLM.Providers.OpenAI.Images do
     ImageAdapterError.new(:malformed_response,
       provider: :openai,
       message: "could not parse OpenAI response: body is not valid JSON",
-      cause: sanitize_cause(cause),
+      cause: HTTPResponse.sanitize_cause(cause),
       metadata: HTTPResponse.build_metadata(%{}, opts)
     )
   end
-
-  # `%ImageAdapterError{}` derives `Jason.Encoder` and is routinely logged and
-  # persisted, so `:cause` must never smuggle a raw response body through.
-  # `Jason.DecodeError` carries the whole undecodable payload on `:data`;
-  # everything else (transport errors) carries only a reason atom.
-  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause), do: %{cause | data: ""}
-  defp sanitize_cause(cause), do: cause
 
   # OpenAI is *believed* to echo a prefix of the offending key back in its 401
   # text ("Incorrect API key provided: sk-..."), and that message lands on

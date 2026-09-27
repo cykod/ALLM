@@ -205,11 +205,7 @@ defmodule ALLM.Providers.Support.TranscriptionAdapter do
   # as the second element, so the adapter can log what it dropped.
   @spec option_fields(term(), [String.t()]) :: {[{String.t(), String.t()}], [String.t()]}
   def option_fields(options, structural) when is_map(options) do
-    stringified =
-      Map.new(options, fn
-        {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-        {k, v} -> {k, v}
-      end)
+    stringified = HTTPResponse.stringify_keys(options)
 
     fields =
       stringified

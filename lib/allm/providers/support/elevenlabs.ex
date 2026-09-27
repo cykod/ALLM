@@ -278,7 +278,13 @@ defmodule ALLM.Providers.Support.ElevenLabs do
        provider: :elevenlabs,
        message: message,
        metadata:
-         HTTPResponse.build_metadata(%{code: redact_optional(code), close_code: close_code}, opts)
+         HTTPResponse.build_metadata(
+           %{
+             code: HTTPResponse.redact_optional(code, &redact_key_material/1),
+             close_code: close_code
+           },
+           opts
+         )
      ]}
   end
 
@@ -347,9 +353,10 @@ defmodule ALLM.Providers.Support.ElevenLabs do
 
   defp detail_metadata(detail) when is_map(detail) do
     %{
-      code: redact_optional(Map.get(detail, "code")),
-      type: redact_optional(Map.get(detail, "type")),
-      provider_status: redact_optional(Map.get(detail, "status"))
+      code: HTTPResponse.redact_optional(Map.get(detail, "code"), &redact_key_material/1),
+      type: HTTPResponse.redact_optional(Map.get(detail, "type"), &redact_key_material/1),
+      provider_status:
+        HTTPResponse.redact_optional(Map.get(detail, "status"), &redact_key_material/1)
     }
   end
 
@@ -379,7 +386,4 @@ defmodule ALLM.Providers.Support.ElevenLabs do
   # An entry without a string `msg` is described generically: its other keys
   # can echo the rejected input.
   defp validation_message(_other), do: "invalid field"
-
-  defp redact_optional(value) when is_binary(value), do: redact_key_material(value)
-  defp redact_optional(_value), do: nil
 end

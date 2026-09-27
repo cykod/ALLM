@@ -359,13 +359,16 @@ defmodule ALLM.Providers.OpenAI.Transcription do
       provider: :openai,
       status: status,
       retry_after_ms: retry_after,
-      message: provider_message(error, status),
+      message:
+        HTTPResponse.redacted_error_message(error, "OpenAI HTTP #{status}", &redact_key_material/1),
       metadata:
         HTTPResponse.build_metadata(
           %{
             status: status,
-            openai_code: redact_optional(Map.get(error, "code")),
-            openai_type: redact_optional(Map.get(error, "type"))
+            openai_code:
+              HTTPResponse.redact_optional(Map.get(error, "code"), &redact_key_material/1),
+            openai_type:
+              HTTPResponse.redact_optional(Map.get(error, "type"), &redact_key_material/1)
           },
           opts
         )
@@ -488,16 +491,6 @@ defmodule ALLM.Providers.OpenAI.Transcription do
       metadata: HTTPResponse.build_metadata(%{}, opts)
     )
   end
-
-  defp provider_message(error, status) do
-    case Map.get(error, "message") do
-      m when is_binary(m) -> redact_key_material(m)
-      _ -> "OpenAI HTTP #{status}"
-    end
-  end
-
-  defp redact_optional(value) when is_binary(value), do: redact_key_material(value)
-  defp redact_optional(_value), do: nil
 
   # A 413 carries `type: "server_error"` in its body, so the classifier keys
   # on status alone.

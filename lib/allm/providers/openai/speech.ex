@@ -351,7 +351,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
   # `openai/embeddings.ex`): `to_json_body/2` returns a bare `map()`,
   # `decode_response/4` takes `(body, headers, request, opts)`, and the error
   # funnel is renamed per capability (`to_speech_adapter_error/4`). The HTTP
-  # helpers come from `ALLM.Providers.Support.HTTPResponse`, and four choices
+  # helpers come from `ALLM.Providers.Support.HTTPResponse`, and three choices
   # differ deliberately from the moderation adapter:
   #
   #   * `HTTPResponse.decode_json_error_body/1`, not `decode_error_body/1`:
@@ -359,9 +359,6 @@ defmodule ALLM.Providers.OpenAI.Speech do
   #     carrying JSON, which `Req` leaves undecoded; the moderation adapter
   #     returns `%{}` for every binary and so loses the message before the
   #     redactor sees it.
-  #   * `HTTPResponse.sanitize_cause/1`, which also resets `:position` and
-  #     `:token`: the moderation adapter's private copy blanks only `:data`,
-  #     which leaves `Jason.DecodeError.message/1` raising on the bad offset.
   #   * The error funnel tolerates a non-map `"error"` value
   #     (`HTTPResponse.error_object/1`), and redacts the provider's `code` /
   #     `type` as well as its message.
@@ -393,7 +390,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
       |> SpeechSupport.put_present("speed", request.speed)
 
     request.options
-    |> SpeechSupport.stringify_keys()
+    |> HTTPResponse.stringify_keys()
     |> SpeechSupport.drop_reserved_options(
       @reserved_options,
       __MODULE__,
@@ -473,9 +470,12 @@ defmodule ALLM.Providers.OpenAI.Speech do
           SpeechAdapterError.t()
   def to_speech_adapter_error(status, body, headers, opts) when is_integer(status) do
     error = body |> HTTPResponse.decode_json_error_body() |> HTTPResponse.error_object()
-    message = provider_message(error, status)
-    code = redact_optional(Map.get(error, "code"))
-    type = redact_optional(Map.get(error, "type"))
+
+    message =
+      HTTPResponse.redacted_error_message(error, "OpenAI HTTP #{status}", &redact_key_material/1)
+
+    code = HTTPResponse.redact_optional(Map.get(error, "code"), &redact_key_material/1)
+    type = HTTPResponse.redact_optional(Map.get(error, "type"), &redact_key_material/1)
 
     {reason, retry_after} =
       classify_speech_reason(status, message, HTTPResponse.retry_after_ms(headers))
@@ -650,16 +650,6 @@ defmodule ALLM.Providers.OpenAI.Speech do
   @spec malformed_error(String.t(), keyword()) :: SpeechAdapterError.t()
   def malformed_error(detail, opts),
     do: SpeechSupport.malformed_error(:openai, "OpenAI", detail, opts)
-
-  defp provider_message(error, status) do
-    case Map.get(error, "message") do
-      m when is_binary(m) -> redact_key_material(m)
-      _ -> "OpenAI HTTP #{status}"
-    end
-  end
-
-  defp redact_optional(value) when is_binary(value), do: redact_key_material(value)
-  defp redact_optional(_value), do: nil
 
   defp classify_speech_reason(status, _message, _ra) when status in [401, 403],
     do: {:authentication_failed, nil}

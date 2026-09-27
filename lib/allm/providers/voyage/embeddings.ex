@@ -381,9 +381,9 @@ defmodule ALLM.Providers.Voyage.Embeddings do
   #   Identical with BOTH siblings:
   #   * `build_retry_telemetry_meta/1`, `classify_http_error/4`,
   #     `fetch_embedding_script/1`, `malformed_error/4`, `non_neg_int/2`,
-  #     `put_pair/2`, `run_one_attempt/3`, `sanitize_cause/1`, `stub_error/1`
+  #     `put_pair/2`, `run_one_attempt/3`, `stub_error/1`
   #     (`put_pair/2` differs from Gemini's only in its first parameter's name.)
-  #   * `build_metadata/2`, `decode_error_body/1`,
+  #   * `build_metadata/2`, `decode_error_body/1`, `sanitize_cause/1`,
   #     `maybe_apply_req_test_stub/2` and `maybe_apply_request_timeout/2` are
   #     shared, from `ALLM.Providers.Support.HTTPResponse`
   #
@@ -500,8 +500,8 @@ defmodule ALLM.Providers.Voyage.Embeddings do
   #   * `default_message/2` — the shape-narrowing seam neither sibling has under
   #     any name. OpenAI reaches its default through
   #     `Map.get(error, "message", "OpenAI HTTP #{status}")`; Gemini's
-  #     `provider_message/2` re-reads the message off the raw body to keep its
-  #     redactor's non-binary arm reachable. Voyage's envelope is a bare string
+  #     `HTTPResponse.body_error_message/2` call re-reads the message off the
+  #     raw body to keep its redactor's non-binary arm reachable. Voyage's envelope is a bare string
   #     rather than a nested object, so neither shape ports: this is where a
   #     non-binary `detail` becomes `"Voyage HTTP <status>"`. It is also what
   #     makes `redact_key_material/1` safe as a single clause — see list 2.
@@ -840,20 +840,25 @@ defmodule ALLM.Providers.Voyage.Embeddings do
          EmbeddingAdapterError.new(:timeout,
            provider: :voyage,
            message: "request timed out",
-           cause: sanitize_cause(cause),
+           cause: HTTPResponse.sanitize_cause(cause),
            metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
 
       {:error, %{__struct__: Jason.DecodeError} = cause} ->
         {:error,
-         malformed_error("response body is not valid JSON", %{}, opts, sanitize_cause(cause))}
+         malformed_error(
+           "response body is not valid JSON",
+           %{},
+           opts,
+           HTTPResponse.sanitize_cause(cause)
+         )}
 
       {:error, exception} ->
         {:retry, 0,
          EmbeddingAdapterError.new(:network_error,
            provider: :voyage,
            message: "transport failure: " <> Exception.message(exception),
-           cause: sanitize_cause(exception),
+           cause: HTTPResponse.sanitize_cause(exception),
            metadata: HTTPResponse.build_metadata(%{}, opts)
          )}
     end
@@ -914,13 +919,6 @@ defmodule ALLM.Providers.Voyage.Embeddings do
       metadata: HTTPResponse.build_metadata(metadata, opts)
     )
   end
-
-  # `%EmbeddingAdapterError{}` derives `Jason.Encoder` and is routinely logged
-  # and persisted, so `:cause` must never smuggle a raw response body through.
-  # `Jason.DecodeError` carries the whole undecodable payload on `:data`;
-  # everything else (transport errors) carries only a reason atom.
-  defp sanitize_cause(%{__struct__: Jason.DecodeError} = cause), do: %{cause | data: ""}
-  defp sanitize_cause(cause), do: cause
 
   # Voyage API keys are `pa-` prefixed. The OpenAI sibling's `sk-`/`rk-`/`org-`
   # pattern and the Gemini sibling's `AIza…`/`ya29.…` pattern each match nothing

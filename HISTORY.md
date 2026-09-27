@@ -1,3 +1,17 @@
+## [OTHR] Consolidate provider error and option helpers into Support
+*Sunday, September 27th at 9pm*
+Closes the remaining HTTP-helper and stringify DRY tickets. 
+ALLM.Providers.Support.HTTPResponse gains body_error_message/2, 
+redacted_error_message/3, redact_optional/2 (each takes the caller's own 
+redactor, so per-provider key patterns stay per-provider) and stringify_keys/1, 
+replacing five provider_message, four redact_optional and four stringify copies 
+across the speech, transcription, image, embedding and moderation adapters; 
+outputs were compared before/after and are identical. The six data-only 
+sanitize_cause/1 copies now use the shared offset-resetting form, which fixes 
+Jason.DecodeError.message/1 raising on a sanitized cause (a HANDOFF [BUG]).
+
+---
+
 ## [BUG] Classify streamed chat errors from their body and drain on halt
 *Sunday, September 27th at 9pm*
 The OpenAI (both endpoints), Anthropic and Gemini stream adapters used to 

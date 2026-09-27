@@ -396,7 +396,9 @@ defmodule ALLM.Providers.Gemini.Transcription do
         ) :: TranscriptionAdapterError.t()
   def to_transcription_adapter_error(status, body, headers, opts) when is_integer(status) do
     error = body |> HTTPResponse.decode_json_error_body() |> HTTPResponse.error_object()
-    message = provider_message(error, status)
+
+    message =
+      HTTPResponse.redacted_error_message(error, "Gemini HTTP #{status}", &redact_key_material/1)
 
     chat_error =
       Gemini.classify_error(status, %{"error" => Map.put(error, "message", message)}, headers)
@@ -408,7 +410,11 @@ defmodule ALLM.Providers.Gemini.Transcription do
       message: message,
       metadata:
         HTTPResponse.build_metadata(
-          %{status: status, google_status: redact_optional(Map.get(error, "status"))},
+          %{
+            status: status,
+            google_status:
+              HTTPResponse.redact_optional(Map.get(error, "status"), &redact_key_material/1)
+          },
           opts
         )
     )
@@ -504,13 +510,7 @@ defmodule ALLM.Providers.Gemini.Transcription do
 
   defp put_generation_config(body, %TranscriptionRequest{options: options})
        when is_map(options) and map_size(options) > 0 do
-    config =
-      Map.new(options, fn
-        {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-        {k, v} -> {k, v}
-      end)
-
-    Map.put(body, "generationConfig", config)
+    Map.put(body, "generationConfig", HTTPResponse.stringify_keys(options))
   end
 
   defp put_generation_config(body, _request), do: body
@@ -604,16 +604,6 @@ defmodule ALLM.Providers.Gemini.Transcription do
     do: Enum.any?(details, &match?(%{"reason" => "API_KEY_INVALID"}, &1))
 
   defp api_key_invalid?(_error), do: false
-
-  defp provider_message(error, status) do
-    case Map.get(error, "message") do
-      m when is_binary(m) -> redact_key_material(m)
-      _ -> "Gemini HTTP #{status}"
-    end
-  end
-
-  defp redact_optional(value) when is_binary(value), do: redact_key_material(value)
-  defp redact_optional(_value), do: nil
 
   # Inherited from `ALLM.Providers.Gemini.Embeddings`: same provider, same
   # Google credential shapes (`AIza…` API keys and `ya29.…` OAuth tokens).

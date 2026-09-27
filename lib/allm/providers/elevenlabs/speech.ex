@@ -581,7 +581,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   def to_json_body(%SpeechRequest{} = request, _opts) do
     options =
       request.options
-      |> SpeechSupport.stringify_keys()
+      |> HTTPResponse.stringify_keys()
       |> Map.delete("query")
       |> SpeechSupport.drop_reserved_options(
         @reserved_options,
@@ -593,7 +593,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
       options
       |> Map.get("voice_settings")
       |> case do
-        settings when is_map(settings) -> SpeechSupport.stringify_keys(settings)
+        settings when is_map(settings) -> HTTPResponse.stringify_keys(settings)
         _ -> %{}
       end
       |> SpeechSupport.put_present("speed", request.speed)
@@ -1048,7 +1048,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   # adapter derives it from `:format`).
   defp user_query(%SpeechRequest{options: options}) do
     options
-    |> SpeechSupport.stringify_keys()
+    |> HTTPResponse.stringify_keys()
     |> Map.get("query")
     |> Support.query_params(["output_format"])
   end

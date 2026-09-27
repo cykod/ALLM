@@ -244,18 +244,6 @@ defmodule ALLM.Providers.Support.SpeechAdapter do
   def audio_content_type?(_ct), do: false
 
   @doc false
-  # Atom keys become strings; anything that is not a map becomes `%{}`.
-  @spec stringify_keys(term()) :: map()
-  def stringify_keys(map) when is_map(map) do
-    Map.new(map, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-      {k, v} -> {k, v}
-    end)
-  end
-
-  def stringify_keys(_other), do: %{}
-
-  @doc false
   # `map` with `key` set, unless `value` is `nil` (a nil field is omitted
   # from a request body, never sent as null).
   @spec put_present(map(), String.t(), term()) :: map()
