@@ -14,6 +14,11 @@ defmodule ALLM.AudioStreamEquivalencePropertyTest do
       it; the streaming Fake computes it from the bytes consumed. Pinned in
       `fake_transcription_test.exs` ("32,000 bytes at 16 kHz gives 1.0").
 
+    * `metadata.bytes_received` on an error — `collect_speech/1` adds it to
+      a stream's terminal error and `synthesize/3` has no stream to count.
+      For a `{:ok, ""}` script the property asserts it is `0` and compares
+      the rest of the error.
+
   `model` (transcription) IS compared, but only because both engines carry
   `transcription_model: nil`: `transcribe/3` stamps the engine's slot model
   and `stream_transcribe/3` deliberately does not. That divergence is pinned
@@ -61,7 +66,14 @@ defmodule ALLM.AudioStreamEquivalencePropertyTest do
 
   property "synthesize/3 equals stream_synthesize/3 folded by collect_speech/1" do
     check all(
-            bytes <- StreamData.binary(min_length: 1, max_length: 300),
+            # Empty bytes are weighted in explicitly: a script entry of `{:ok, ""}`
+            # must fail the same way on both paths, and a plain `binary/1`
+            # generator reaches `""` too rarely to bind that.
+            bytes <-
+              StreamData.frequency([
+                {1, StreamData.constant("")},
+                {9, StreamData.binary(min_length: 1, max_length: 300)}
+              ]),
             chunk_bytes <- StreamData.integer(1..64),
             format <- StreamData.member_of(SpeechRequest.formats()),
             sample_rate <-
@@ -85,8 +97,7 @@ defmodule ALLM.AudioStreamEquivalencePropertyTest do
       # Two engines with the same script: each reads its own first entry.
       opts = [request_id: "rid-eq"]
 
-      assert {:ok, whole} =
-               ALLM.synthesize(speech_engine(bytes, chunk_bytes, speech_model), request, opts)
+      whole = ALLM.synthesize(speech_engine(bytes, chunk_bytes, speech_model), request, opts)
 
       assert {:ok, events} =
                ALLM.stream_synthesize(
@@ -95,15 +106,32 @@ defmodule ALLM.AudioStreamEquivalencePropertyTest do
                  opts
                )
 
-      assert {:ok, folded} = AudioStream.collect_speech(events)
+      folded = AudioStream.collect_speech(events)
+      assert_same_speech(bytes, whole, folded)
+    end
+  end
 
-      assert Audio.to_binary(folded.audio) == Audio.to_binary(whole.audio)
-      assert folded.audio.mime_type == whole.audio.mime_type
+  # Empty bytes are an error on both paths, and it must be the same error.
+  defp assert_same_speech("", whole, folded) do
+    assert {:error, %{reason: :invalid_request, metadata: %{cause: :empty_input}} = whole_err} =
+             whole
 
-      for field <- [:format, :sample_rate, :model, :provider, :usage, :request_id, :metadata] do
-        assert Map.fetch!(folded, field) == Map.fetch!(whole, field),
-               "#{inspect(field)} differs between the paths"
-      end
+    assert {:error, folded_err} = folded
+    {received, folded_meta} = Map.pop!(folded_err.metadata, :bytes_received)
+    assert received == 0
+    assert %{folded_err | metadata: folded_meta} == whole_err
+  end
+
+  defp assert_same_speech(_bytes, whole, folded) do
+    assert {:ok, whole} = whole
+    assert {:ok, folded} = folded
+
+    assert Audio.to_binary(folded.audio) == Audio.to_binary(whole.audio)
+    assert folded.audio.mime_type == whole.audio.mime_type
+
+    for field <- [:format, :sample_rate, :model, :provider, :usage, :request_id, :metadata] do
+      assert Map.fetch!(folded, field) == Map.fetch!(whole, field),
+             "#{inspect(field)} differs between the paths"
     end
   end
 

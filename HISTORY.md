@@ -1,3 +1,14 @@
+## [BUG] Make FakeSpeech reject empty audio on the batch path too
+*Sunday, September 27th at 9pm*
+FakeSpeech.synthesize/2 now returns the same {:error, 
+%SpeechAdapterError{reason: :invalid_request, metadata: %{cause: 
+:empty_input}}} its stream paths produce for a {:ok, ""} script entry or a 
+zero-byte %SpeechResponse{}, so batch and stream Fakes agree (SpeechAdapter 
+invariant 2). The batch/stream equivalence property now generates empty bytes, 
+so it would have caught this; it failed on the pre-fix code.
+
+---
+
 ## [TWK] Pin binary-size variables and drop an unused Logger require
 *Sunday, September 27th at 8pm*
 Binary patterns in the ElevenLabs transcription adapter, FakeSpeech, the OpenAI 

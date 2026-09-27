@@ -80,6 +80,35 @@ defmodule ALLM.Providers.FakeSpeechTest do
       assert {:ok, ^scripted} = FakeSpeech.synthesize(request(), opts)
     end
 
+    test "{:ok, \"\"} is the same :empty_input error the stream paths end with" do
+      script = [{:ok, ""}]
+
+      opts = fn ->
+        [adapter_opts: [speech_script: script, script_cursor: FakeSpeech.start_script_cursor()]]
+      end
+
+      assert {:error,
+              %SpeechAdapterError{reason: :invalid_request, metadata: %{cause: :empty_input}} =
+                batch_err} = FakeSpeech.synthesize(request(), opts.())
+
+      for call <- [
+            &FakeSpeech.stream_synthesize(request(), &1),
+            &FakeSpeech.stream_synthesize_input(request(), ["a"], &1)
+          ] do
+        assert {:ok, events} = call.(opts.())
+        assert {:error, ^batch_err} = List.last(Enum.to_list(events))
+      end
+    end
+
+    test "{:ok, %SpeechResponse{}} with zero-byte audio is the :empty_input error" do
+      resp = %SpeechResponse{audio: Audio.from_binary("", "audio/mpeg"), format: :mp3}
+      opts = [adapter_opts: [speech_script: [{:ok, resp}]]]
+
+      assert {:error,
+              %SpeechAdapterError{reason: :invalid_request, metadata: %{cause: :empty_input}}} =
+               FakeSpeech.synthesize(request(), opts)
+    end
+
     test "{:error, %SpeechAdapterError{}} is returned verbatim" do
       opts = [adapter_opts: Fixtures.speech_rate_limited()]
 

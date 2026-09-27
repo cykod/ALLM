@@ -61,7 +61,8 @@ defmodule ALLM.Providers.FakeSpeech do
   | Entry | `synthesize/2` | `stream_synthesize/2` and `stream_synthesize_input/3` |
   |-------|----------------|--------------------------------------------------------|
   | `{:ok, bytes}` | `bytes` as the audio | `:speech_started`, `bytes` in `adapter_opts[:chunk_bytes]` pieces (default 1,024), `:speech_completed`. The input form consumes all input first |
-  | `{:ok, %SpeechResponse{}}` | the struct | the struct's fields and audio as events |
+  | `{:ok, ""}` | `:invalid_request` with `metadata.cause: :empty_input` | `:speech_started`, then the same error |
+  | `{:ok, %SpeechResponse{}}` | the struct (zero-byte audio: the `:empty_input` error) | the struct's fields and audio as events (zero-byte audio: `:speech_started`, then the `:empty_input` error) |
   | `{:error, err}` | `{:error, err}` | `:speech_started`, then `{:error, err}` |
   | `{:events, events}` | `:unknown` with `metadata.cause: :stream_only_script_entry` | `events`, verbatim (how a mid-stream error is scripted) |
   | `{:retry_until_call, n}` | `:rate_limited` error | a stream whose only event is a `:rate_limited` error |
@@ -161,6 +162,12 @@ defmodule ALLM.Providers.FakeSpeech do
   `request.metadata` onto `response.metadata`, and stamps `provider: :fake`. `{:ok, %SpeechResponse{}}` script entries are
   returned verbatim.
 
+  A script entry with no audio bytes, `{:ok, ""}` or a `%SpeechResponse{}`
+  whose audio is zero bytes, returns
+  `{:error, %SpeechAdapterError{reason: :invalid_request, metadata: %{cause: :empty_input}}}`,
+  the error the streaming callbacks end the same entry with, because a
+  successful response always carries at least one audio byte.
+
   ## Examples
 
       iex> req = ALLM.SpeechRequest.new(input: "Hi.", metadata: %{trace: "t1"})
@@ -215,7 +222,9 @@ defmodule ALLM.Providers.FakeSpeech do
     * absent script or `{:ok, bytes}` — `:speech_started`, the bytes split
       into `adapter_opts[:chunk_bytes]` pieces (default #{@chunk_bytes}) as
       `:audio_delta` events, then `:speech_completed`. The default bytes
-      are `"FAKE-AUDIO:" <> input`.
+      are `"FAKE-AUDIO:" <> input`. `{:ok, ""}` is `:speech_started`, then
+      `:invalid_request` with `metadata.cause: :empty_input`, the error
+      `synthesize/2` returns for the same entry.
     * `{:ok, %SpeechResponse{}}` — `:speech_started` built from the
       struct, its audio bytes as `:audio_delta` events, then
       `:speech_completed`. Zero-byte audio ends with `:invalid_request` and
@@ -565,8 +574,11 @@ defmodule ALLM.Providers.FakeSpeech do
 
     * `{:ok, bytes}` — return `bytes` as the audio, with `:format` set to
       `request.format || :mp3` and the MIME type from
-      `ALLM.SpeechResponse.format_to_mime/1`.
-    * `{:ok, %ALLM.SpeechResponse{}}` — return the struct verbatim.
+      `ALLM.SpeechResponse.format_to_mime/1`. `{:ok, ""}` is
+      `:invalid_request` with `metadata.cause: :empty_input` on every
+      callback.
+    * `{:ok, %ALLM.SpeechResponse{}}` — return the struct verbatim, unless
+      its audio is zero bytes, which is the same `:empty_input` error.
     * `{:error, %ALLM.Error.SpeechAdapterError{}}` — return the struct
       verbatim.
     * `{:events, events}` — for the streaming callbacks, emit `events`
@@ -693,7 +705,16 @@ defmodule ALLM.Providers.FakeSpeech do
     end
   end
 
-  defp interpret_entry({:ok, %SpeechResponse{} = response}, _request, _opts), do: {:ok, response}
+  # Zero bytes are the stream paths' `:empty_input` terminal here too, so one
+  # script fails the same way on every callback (SpeechAdapter invariant 2).
+  defp interpret_entry({:ok, %SpeechResponse{} = response}, _request, _opts) do
+    case response_bytes(response) do
+      {:ok, ""} -> empty_input_error()
+      _ -> {:ok, response}
+    end
+  end
+
+  defp interpret_entry({:ok, ""}, _request, _opts), do: empty_input_error()
 
   defp interpret_entry({:ok, bytes}, request, opts) when is_binary(bytes),
     do: {:ok, build_response(bytes, request, opts)}
