@@ -192,9 +192,19 @@ defmodule ALLM.Providers.CacheUsageFamilyTest do
 
   describe "recorded prompt-cache fixtures: decoded usage on real data" do
     @responses_hits ["prompt_cache_hit.json", "prompt_cache_hit_gpt6.json"]
-    @anthropic_models ["claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-sonnet-4-6"]
+    # Derived from the recorded-fixture list, so a new Anthropic recording gets
+    # its decoding test without editing a second literal.
+    @anthropic_hit ~r{anthropic/messages/recorded/prompt_cache_hit_(.+)\.json$}
+    @anthropic_models Enum.flat_map(
+                        CF.recorded_paths(),
+                        &(Regex.run(@anthropic_hit, &1, capture: :all_but_first) || [])
+                      )
 
     defp recorded(rel), do: CF.recorded_json(Path.join("test/fixtures", rel))
+
+    test "the Anthropic per-model loop below is not empty" do
+      assert @anthropic_models != [], "no Anthropic prompt_cache_hit_*.json in CF.recorded_paths/0"
+    end
 
     for file <- @responses_hits do
       @file_name file

@@ -11,8 +11,9 @@
 # and `GEMINI_API_KEY` for the recording pass). A project-root `.env` is
 # loaded first, per key, only when that key is not already set:
 # `EnvLoader.load/1` calls `System.put_env/2` unconditionally, so an unguarded
-# load would let a stale `.env` override an explicit assignment. This mirrors
-# `scripts/record_voyage_embeddings_fixtures.exs`.
+# load would let a stale `.env` override an explicit assignment. This
+# generalizes the `scripts/record_voyage_embeddings_fixtures.exs` guard to
+# several keys.
 #
 # Modes
 # -----
@@ -177,7 +178,8 @@ defmodule RecordPromptCacheFixtures do
 
     if Enum.any?(vars, &is_nil(System.get_env(&1))) and Code.ensure_loaded?(EnvLoader) and
          File.exists?(path) do
-      # Load into a scratch copy, then set only the variables still unset.
+      # Snapshot the preset values, load `.env` into the environment, then
+      # restore any value that was already set, so an explicit assignment wins.
       preset = Map.new(vars, &{&1, System.get_env(&1)})
       # Called through a variable: `:env_loader` is a dev-only dep, and the
       # test that loads this file compiles it without that module.
@@ -780,6 +782,12 @@ defmodule RecordPromptCacheFixtures do
     |> Map.put(:informational_miss?, status != 400)
   end
 
+  # A qualifying hit: a 200 reporting cache reads, on a repeat attempt (or on
+  # any attempt when the cache was already primed). Decides both when the
+  # repeat loop stops and which attempt is recorded.
+  defp hit?(status, counts, i, first_counts?),
+    do: status == 200 and (i > 1 or first_counts?) and (counts.read || 0) > 0
+
   defp run_arm(%{kind: kind} = arm, prefix, run) when kind in [:hit, :stream_hit] do
     stream? = kind == :stream_hit
     # AN-P3 re-sends AN-P1's request, which already wrote the cache.
@@ -792,13 +800,14 @@ defmodule RecordPromptCacheFixtures do
         counts = counts(arm, status, raw)
         acc = acc ++ [%{status: status, raw: raw, counts: counts}]
 
-        hit? = status == 200 and (i > 1 or first_counts?) and (counts.read || 0) > 0
-        if hit? or status != 200, do: {:halt, acc}, else: {:cont, acc}
+        if hit?(status, counts, i, first_counts?) or status != 200,
+          do: {:halt, acc},
+          else: {:cont, acc}
       end)
 
     hit_index =
       Enum.find_index(Enum.with_index(attempts, 1), fn {a, i} ->
-        a.status == 200 and (i > 1 or first_counts?) and (a.counts.read || 0) > 0
+        hit?(a.status, a.counts, i, first_counts?)
       end)
 
     first = hd(attempts)
@@ -1026,7 +1035,7 @@ defmodule RecordPromptCacheFixtures do
         ],
         json: body,
         receive_timeout: 120_000,
-        max_retries: 2
+        retry: false
       ] ++ req_opts
     )
   end
@@ -1045,7 +1054,7 @@ defmodule RecordPromptCacheFixtures do
         ],
         json: body,
         receive_timeout: 120_000,
-        max_retries: 2
+        retry: false
       ] ++ req_opts
     )
   end

@@ -211,22 +211,32 @@ A long-lived session re-sends the same prefix every turn: the system
 prompt, the tools, and every earlier message. Providers can serve that
 prefix from a prompt cache, which lowers both the latency to the first
 token and the input cost. Turn it on with `prompt_cache:`, as a call
-option or in the engine's `params` (below, `recipe_text` stands for your
-long, stable system prompt):
+option or in the engine's `params`. The example below runs on
+`ALLM.Providers.Fake`, scripted with the usage a real cache hit reports;
+against a provider only the engine changes (for example
+`adapter: ALLM.Providers.OpenAI, model: "gpt-5.6"`). `recipe_text` stands
+for your long, stable system prompt:
 
-```elixir
-engine =
-  ALLM.Engine.new(
-    adapter: ALLM.Providers.OpenAI,
-    model: "gpt-5.6",
-    params: %{prompt_cache: %{retention: :long}}
-  )
-
-session = ALLM.Session.new(id: "recipe-42") |> ALLM.Session.append(ALLM.system(recipe_text))
-{:ok, session, result} = ALLM.Session.start(engine, session)
-{:ok, _session, result} = ALLM.Session.reply(engine, session, "How long does step 12 take?")
-result.final_response.usage.cached_input_tokens
-```
+    iex> recipe_text = "Step 1. Sear the short ribs..."
+    iex> engine = ALLM.Engine.new(
+    ...>   adapter: ALLM.Providers.Fake,
+    ...>   params: %{prompt_cache: %{retention: :long}},
+    ...>   adapter_opts: [
+    ...>     scripts: [
+    ...>       [{:text, "Ready."}, {:finish, :stop}],
+    ...>       [
+    ...>         {:text, "About 40 minutes."},
+    ...>         {:usage, %{input_tokens: 6263, cached_input_tokens: 6260, cache_write_input_tokens: 0}},
+    ...>         {:finish, :stop}
+    ...>       ]
+    ...>     ]
+    ...>   ]
+    ...> )
+    iex> session = ALLM.Session.new(id: "recipe-42") |> ALLM.Session.append(ALLM.system(recipe_text))
+    iex> {:ok, session, _result} = ALLM.Session.start(engine, session)
+    iex> {:ok, _session, result} = ALLM.Session.reply(engine, session, "How long does step 12 take?")
+    iex> result.final_response.usage.cached_input_tokens
+    6260
 
 `retention: :short` keeps the provider's default cache lifetime;
 `:long` asks for the longest lifetime the provider offers per request.

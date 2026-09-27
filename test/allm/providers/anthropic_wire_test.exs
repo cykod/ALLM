@@ -666,6 +666,19 @@ defmodule ALLM.Providers.AnthropicWireTest do
       assert response.usage.cached_input_tokens == nil
       assert response.usage.cache_write_input_tokens == nil
     end
+
+    test "no input_tokens on the wire → no uncached_input_tokens key in extra", %{stub: stub} do
+      body =
+        :happy_text
+        |> Fx.messages_response()
+        |> update_in(["usage"], &Map.delete(&1, "input_tokens"))
+
+      Req.Test.stub(stub, fn conn -> respond_json(conn, 200, body) end)
+
+      assert {:ok, response} = call(stub, req())
+      assert response.usage.input_tokens == nil
+      refute Map.has_key?(response.usage.extra, "uncached_input_tokens")
+    end
   end
 
   # ---------------------------------------------------------------------------

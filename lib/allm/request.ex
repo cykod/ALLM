@@ -215,10 +215,10 @@ defmodule ALLM.Request do
   defguard is_prompt_cache(value)
            when is_map(value) and map_size(value) == 2 and is_map_key(value, :key) and
                   is_map_key(value, :retention) and
-                  :erlang.map_get(:retention, value) in [:short, :long] and
-                  (:erlang.map_get(:key, value) == nil or
-                     (is_binary(:erlang.map_get(:key, value)) and
-                        :erlang.map_get(:key, value) != ""))
+                  value.retention in [:short, :long] and
+                  (value.key == nil or
+                     (is_binary(value.key) and
+                        value.key != ""))
 end
 
 defimpl Jason.Encoder, for: ALLM.Request do

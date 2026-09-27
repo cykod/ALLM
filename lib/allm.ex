@@ -606,7 +606,9 @@ defmodule ALLM do
   The key defaults to `:session_id` only when it is a non-empty binary
   (otherwise the key stays `nil`), and only when caching was asked for: a
   `session_id:` alone never turns caching on. An explicit `key: ""` is still
-  rejected.
+  rejected. On `engine.params`, prefer the map form: an engine carrying a
+  keyword-list `prompt_cache` cannot be encoded to JSON, while a keyword list
+  as a call opt is fine.
   `ALLM.Session` passes `session.id` as `:session_id`, so a session's id
   becomes its cache key. Each provider adapter's `generate/2` docs say
   what it sends for the field (`ALLM.Providers.OpenAI`,

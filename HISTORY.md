@@ -1,3 +1,27 @@
+## [TWK] Polish Phase 27 prompt caching after the gate cleared
+*Sunday, September 27th at 7pm*
+Phase 27 (2026-09-27_PROMPT_CACHING_DESIGN.md) cleared its gate review (PASS); 
+this commit carries the retro fix pass and the polish pass over the deferred 
+Low findings.
+
+- Usage moduledoc cites tests by name instead of file:line; the garbled 
+Anthropic generate/2 doc line is repaired.
+- Request.is_prompt_cache/1 reads fields directly; chat.ex points at the 
+ALLM.chat/3 Prompt caching table, whose docs now recommend the map form on 
+engine.params (a keyword list is not JSON-serializable).
+- Recorder: hit?/4 helper, accurate load_dotenv comment, retry: false on its 
+POSTs.
+- Example 28 opens its system prompt with a per-run nonce so Anthropic shows 
+the write-then-read progression (re-run live on openai, anthropic and gemini, 
+exit 0).
+- The guide's session example is now an executed iex> block over Fake; a 
+binding test pins the uncached_input_tokens omission; the family test derives 
+its Anthropic model list from the recorded fixtures.
+- Legacy ASKS.md: the recorder-scaffolding CHORE records the retro's 
+measurement.
+
+---
+
 ## [FEAT] Record live prompt-cache fixtures and document caching
 *Sunday, September 27th at 7pm*
 Phase 27.5 of the prompt-caching design, the live gate (spec §5.4, §5.9a, §9 

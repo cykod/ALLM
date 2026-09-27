@@ -546,3 +546,56 @@ Gates after the fix pass:
 | `mix format --check-formatted` | 0 |
 | `mix test test/guides_test.exs test/guides_doctest_test.exs` | 0 (76 doctests, 62 tests, 0 failures) |
 | `mix run scripts/check_guide_fences.exs \| head -1` | `69 fences compiled, 14 skipped.` |
+
+## Retro fix pass (2026-09-27)
+
+Source: `.work/retro/2026-09-27-prompt-caching.md`. Scope F1, F5, F3 (lib ticket only), F6 (ticket append only); F2, F4 and F3's doc parts are `/apply-retro`'s.
+
+- **F5 (fixed):** `lib/allm/usage.ex` moduledoc no longer cites `test/…:112` / `:99` (hexdocs-unresolvable); it names the `"no cache fields on the wire → nil, never 0"` describe and the `"cached + write <= input holds on both paths"` test in `cache_usage_family_test.exs`. `mix run scripts/audit_user_docs.exs lib/allm/usage.ex` → 0 hits.
+- **F1 (routed):** HANDOFF row "(from 27.2, for the 27.2 gate)" reworded (capture-to-file, `mix test --failed` after a red run, telemetry hypothesis weakened per F2) and moved to Discharged; receiver is the `.work/ASKS.md` `[BUG]` "Intermittent full-suite failure, unattributed" (self-scoring 30-run DONE WHEN).
+- **F3 (ticketed):** `.work/ASKS.md` `[BUG]` — a top-level `plug:` must raise in `HTTPResponse.maybe_apply_req_test_stub/2`. Predicate (`mix run -e '…maybe_apply_req_test_stub(Req.new(url: "http://x"), plug: {Req.Test, :x})…'`) measured exit 1.
+- **F6 (appended):** root `ASKS.md` recorder-scaffolding `[CHORE]` updated — `grep -l 'defp load_dotenv\|defp overwritable?' scripts/record_*.exs | wc -l` → 8.
+
+| Gate | Exit |
+|---|---|
+| `mix test > $SP/full1.log 2>&1` | 0 (seed 511671; 620 doctests, 33 properties, 5075 tests, 0 failures) |
+| `mix test --seed 0` (captured to file) | 0 (5075 tests, 0 failures) |
+| `mix credo --strict` | 0 |
+| `mix dialyzer` | 0 |
+| `mix format --check-formatted` | 0 |
+
+## Polish pass (2026-09-27)
+
+Scope: the gate review's "Deferred Lows" (`.work/gate-reviews/2026-09-27-prompt-caching.md`).
+
+- **b1 REVIEW.md `Fake.engine/1` template (left):** outside the fence; `/apply-retro` owns it.
+- **b2 RECORDS 27.2 deviation 3 (fixed):** `test/allm/providers/anthropic_wire_test.exs` "no input_tokens on the wire → no uncached_input_tokens key in extra". Mutant (`put_uncached_input/2` fallback writes the key with `nil`) → 37 tests, 1 failure; restored → 0.
+- **b2 code-review F3 (already dead):** fixed by the retro fix pass (F5 above).
+- **b2 garbled `@doc` "(Anthropic-specific.1" (fixed):** `Anthropic.generate/2` now reads "adds `529 Overloaded` (Anthropic-specific) to the default retryable set"; sibling "on top of the the documented contract default" in the moduledoc fixed in the same pass.
+- **b3 F2 (fixed):** `load_dotenv/1` comment now describes snapshot → load → restore; header says it generalizes the Voyage recorder's guard to several keys.
+- **b3 F3 (fixed, remedy corrected):** the finding's `Kernel.map_get/2` does not exist on Elixir 1.17.3 (`Kernel.__info__(:functions)` has no `map_get`; the edit failed to compile). `is_prompt_cache/1` now uses guard-safe `value.key` / `value.retention`, behaviour-identical.
+- **b3 key-check ordering (already dead):** `require_keys!/1` already runs per mode, after the zero-call guard.
+- **b3 `max_retries: 2` on POST (fixed):** replaced with `retry: false` on both Req.post calls (Req's default never retried POST), matching the Gemini call and keeping `http_calls/0` exact.
+- **b4 F2 (fixed):** `chat.ex` comment points at the `ALLM.chat/3` "Prompt caching" docs table.
+- **b4 F3 prefix-stability pin (left):** `test/allm/prompt_cache_prefix_stability_test.exs` is outside this pass's file fence.
+- **b4 mixed string/atom keys, duplicate keyword keys (left):** behaviour-or-docs decision (which key wins), not mechanical.
+- **b4 keyword `prompt_cache` on `engine.params` not JSON-serializable (fixed, docs):** one sentence in `ALLM.chat/3` "Prompt caching" recommends the map form on `engine.params`.
+- **b5 F2 (fixed):** `hit?/4` helper used by both the repeat loop and the recorded-attempt search.
+- **b5 F4 (fixed):** `guides/sessions.md` session fence is now a Fake-driven `iex>` block asserting `result.final_response.usage.cached_input_tokens`; mutated expected value → 1 doctest failure.
+- **b5 F5 (fixed):** `cache_usage_family_test.exs` derives `@anthropic_models` from `CF.recorded_paths/0`, with a non-empty guard test.
+- **Example 28 nonce (fixed):** per-run ticket line opens the system prompt; assertions unchanged. Not run live (no live calls in this pass).
+
+| Gate | Exit |
+|---|---|
+| `mix test > $SP/t1.txt 2>&1` | 0 (seed 844087; 621 doctests, 33 properties, 5077 tests, 0 failures) |
+| `mix test --seed 0` | 0 (same counts) |
+| `mix credo --strict` | 0 |
+| `mix dialyzer` | 0 |
+| `mix format --check-formatted` | 0 |
+| `mix test test/guides_test.exs test/guides_doctest_test.exs` | 0 (77 doctests, 62 tests, 0 failures) |
+| `mix run scripts/check_guide_fences.exs \| head -1` | `68 fences compiled, 14 skipped.` |
+| `mix run scripts/audit_user_docs.exs guides/sessions.md` / `lib/allm.ex lib/allm/providers/anthropic.ex` | 0 hits |
+
+### Post-polish live check (orchestrator, 2026-09-27)
+
+`set -a; . ./.env; set +a; ALLM_PROVIDER=<p> mix run examples/28_prompt_cache.exs` after the polish pass's per-run nonce: openai exit 0 (turn 2 cached=5888 of 6105), anthropic exit 0 (turn 1 write=7247, turn 2 cached=7247 write=26 of 7276), gemini exit 0 (turn 2 cached=4074 of 6605). 9 live calls. Gate: `.work/gate-reviews/2026-09-27-prompt-caching.md` — PASS.

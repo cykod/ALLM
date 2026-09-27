@@ -40,8 +40,13 @@ steps =
       "#{60 + rem(i * 13, 120)} minutes, keeping the liquid at a bare simmer."
   end
 
+# A per-run ticket number opens the prefix, so a rerun inside the cache TTL
+# still writes the cache on turn 1 and shows the write-then-read progression.
+ticket = "Kitchen ticket #{System.os_time(:second)}-#{System.unique_integer([:positive])}. "
+
 system =
-  "You are a sous-chef in cook mode. Answer the cook in one short sentence. " <>
+  ticket <>
+    "You are a sous-chef in cook mode. Answer the cook in one short sentence. " <>
     "The recipe being cooked:\n\n" <> Enum.join(steps, "\n")
 
 # The id is the session's identity and, with caching on, the OpenAI cache key.

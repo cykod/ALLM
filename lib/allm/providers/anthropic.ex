@@ -60,7 +60,7 @@ defmodule ALLM.Providers.Anthropic do
 
   `generate/2` wraps the HTTP call in `ALLM.Retry.run(opts[:retry] || :default, …)`.
   The closure adds **`529 Overloaded`** (Anthropic-specific) to the retryable
-  set on top of the the documented contract default `[429, 500, 502, 503, 504, :timeout]`.
+  set on top of the documented default `[429, 500, 502, 503, 504, :timeout]`.
   `Retry-After` honored when present. Streaming never retries.
 
   ## Key resolution
@@ -287,8 +287,8 @@ defmodule ALLM.Providers.Anthropic do
   Execute a non-streaming Messages-API request synchronously.
 
   Wraps the HTTP call in `ALLM.Retry.run/3`. The closure adds
-  `529 Overloaded` (Anthropic-specific.1
-  default retryable set `[429, 500, 502, 503, 504, :timeout]`. Returns
+  `529 Overloaded` (Anthropic-specific) to the default retryable set
+  `[429, 500, 502, 503, 504, :timeout]`. Returns
   `{:ok, %Response{}}` on 2xx success or `{:error, %AdapterError{}}` on
   every failure shape.
 

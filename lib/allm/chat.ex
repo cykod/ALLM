@@ -2042,8 +2042,8 @@ defmodule ALLM.Chat do
     Request.new(msgs, base ++ extra ++ structured)
   end
 
-  # `prompt_cache:` call-opt / engine-param normalization (see the design's
-  # call-opt table). Turning caching on is opt-in; the key defaulting to the
+  # `prompt_cache:` call-opt / engine-param normalization (the table in
+  # `ALLM.chat/3`'s "Prompt caching" docs). Turning caching on is opt-in; the key defaulting to the
   # session id is not. Shapes this does not recognise pass through unchanged so
   # `Validate.request/1` rejects them with `{:prompt_cache, :invalid_shape}`.
   @spec normalize_prompt_cache(term(), term()) :: term()
