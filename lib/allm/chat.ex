@@ -2027,7 +2027,9 @@ defmodule ALLM.Chat do
     extra =
       [
         response_format: Keyword.get(opts, :response_format),
-        tool_choice: Keyword.get(opts, :tool_choice)
+        tool_choice: Keyword.get(opts, :tool_choice),
+        prompt_cache:
+          normalize_prompt_cache(Map.get(params, :prompt_cache), Keyword.get(opts, :session_id))
       ]
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
@@ -2039,6 +2041,50 @@ defmodule ALLM.Chat do
 
     Request.new(msgs, base ++ extra ++ structured)
   end
+
+  # `prompt_cache:` call-opt / engine-param normalization (see the design's
+  # call-opt table). Turning caching on is opt-in; the key defaulting to the
+  # session id is not. Shapes this does not recognise pass through unchanged so
+  # `Validate.request/1` rejects them with `{:prompt_cache, :invalid_shape}`.
+  @spec normalize_prompt_cache(term(), term()) :: term()
+  defp normalize_prompt_cache(nil, _session_id), do: nil
+  defp normalize_prompt_cache(false, _session_id), do: nil
+  defp normalize_prompt_cache(true, session_id), do: normalize_prompt_cache(%{}, session_id)
+
+  defp normalize_prompt_cache(list, session_id) when is_list(list) do
+    if Keyword.keyword?(list),
+      do: normalize_prompt_cache(Map.new(list), session_id),
+      else: list
+  end
+
+  defp normalize_prompt_cache(map, session_id) when is_map(map) do
+    map
+    |> atomize_prompt_cache_key("key", :key, & &1)
+    |> atomize_prompt_cache_key("retention", :retention, &Request.decode_retention/1)
+    |> Map.put_new(:retention, :short)
+    |> Map.update(:key, default_prompt_cache_key(session_id), fn
+      nil -> default_prompt_cache_key(session_id)
+      key -> key
+    end)
+  end
+
+  defp normalize_prompt_cache(other, _session_id), do: other
+
+  # A JSON round-tripped engine's `params` restores top-level keys only, so a
+  # nested `prompt_cache` map arrives string-keyed. Never mints an atom.
+  defp atomize_prompt_cache_key(map, string_key, atom_key, decode) do
+    case Map.pop(map, string_key) do
+      {nil, map} -> map
+      {value, map} -> Map.put(map, atom_key, decode.(value))
+    end
+  end
+
+  # An empty id is as unusable as a non-binary one: `Validate` rejects a `""`
+  # key, and the caller never wrote it, so fall back to `nil` instead.
+  defp default_prompt_cache_key(session_id) when is_binary(session_id) and session_id != "",
+    do: session_id
+
+  defp default_prompt_cache_key(_session_id), do: nil
 
   # Keys that `resolve_params/2` does NOT strip (they're not engine-field
   # keys) but which must never land in `request.options` — they're either
@@ -2064,6 +2110,7 @@ defmodule ALLM.Chat do
     # handled by `extra`
     :response_format,
     :tool_choice,
+    :prompt_cache,
     # handled by `structured` / two-pass orchestration
     :structured_finalize,
     :structured_finalize_nudge,

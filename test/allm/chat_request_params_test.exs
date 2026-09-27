@@ -34,6 +34,9 @@ defmodule ALLM.ChatRequestParamsTest do
   defp probe_value(:mode), do: :auto
   defp probe_value(:max_turns), do: 5
   defp probe_value(:max_concurrency), do: 1
+  # consumed into the typed `request.prompt_cache` field; `:__probe__` would
+  # fail `Validate.request/1` before request.options could be observed.
+  defp probe_value(:prompt_cache), do: true
   # transport opts — integer-valued timers and module/name-valued Finch refs
   defp probe_value(k) when k in [:receive_timeout, :request_timeout, :pool_timeout], do: 300_000
   defp probe_value(:stream_timeout), do: 300_000
@@ -110,6 +113,15 @@ defmodule ALLM.ChatRequestParamsTest do
       assert req.max_tokens == 128
     end
 
+    test "engine.params[:prompt_cache] lands on the typed field, never request.options" do
+      engine = fake_engine(%{prompt_cache: %{retention: :long}, top_p: 0.5})
+      assert {:ok, _} = ALLM.chat(engine, thread(), session_id: "s1")
+      req = recorded_request()
+      refute Map.has_key?(req.options, :prompt_cache)
+      assert req.options == %{top_p: 0.5}
+      assert req.prompt_cache == %{key: "s1", retention: :long}
+    end
+
     test "reasoning-control opts never leak into request.options (Responses double-route guard)" do
       # Pre-fix regression: :reasoning_effort double-routed — it rode
       # request.options AND was re-shaped by OpenAI.merge_reasoning_opts/4,
@@ -159,7 +171,8 @@ defmodule ALLM.ChatRequestParamsTest do
             :tool_timeout,
             :on_tool_error,
             :max_concurrency,
-            :session_id
+            :session_id,
+            :prompt_cache
           ]
 
       # Give each carried key a value that passes upstream validation (some

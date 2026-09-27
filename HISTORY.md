@@ -1,3 +1,18 @@
+## [FEAT] Wire prompt_cache through chat, step and Session
+*Sunday, September 27th at 6pm*
+Phase 27.4 of the prompt-caching design (spec §9, §10). prompt_cache: is now 
+accepted as a call opt and in engine.params by chat/3, stream/3, step/3, 
+stream_step/3 and Session.*; Chat.build_request/4 normalizes it (true, maps, 
+keyword lists, JSON round-tripped string-keyed maps) into Request.prompt_cache, 
+defaulting the key to a non-empty :session_id so Session callers get a stable 
+per-conversation cache key with no new API. The key is kept out of 
+request.options, the ALLM.chat/3 docs carry the normalization table, and 
+ALLM.Session documents the privacy note. A prefix-stability test pins that each 
+turn's wire body extends the previous one across all four translators, with a 
+negative control.
+
+---
+
 ## [FEAT] Translate Request.prompt_cache onto provider wire bodies
 *Sunday, September 27th at 6pm*
 Phase 27.3 of the prompt-caching design (spec §7.1, §9). A typed prompt_cache 

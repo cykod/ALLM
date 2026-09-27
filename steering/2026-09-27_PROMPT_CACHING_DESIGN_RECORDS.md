@@ -10,7 +10,7 @@ Companion to `steering/2026-09-27_PROMPT_CACHING_DESIGN.md`. Bookkeeping lives h
 | 27.1 | Completed | `Usage.cache_write_input_tokens`, `Request.prompt_cache`, `validate_prompt_cache/2`, `@summed_usage_fields` |
 | 27.2 | Completed | Cache-usage normalization: OpenAI (both endpoints), Anthropic, Gemini; streaming + non-streaming |
 | 27.3 | Completed | `put_prompt_cache/2` in OpenAI (both translators) and Anthropic; Gemini doc-only; recorder `--only acceptance` green live 2026-09-27 |
-| 27.4 | Not Started | |
+| 27.4 | Completed | `Chat.build_request/4` resolves + normalizes `prompt_cache:` (session-id key default); prefix-stability pin over four translators |
 | 27.5 | Not Started | |
 
 ## Start Green (2026-09-27, HEAD `94ffa45`)
@@ -321,4 +321,77 @@ Fix-pass gates (tree = batch 3 + this fix pass + the user's five files):
 | `mix test --seed 0` | 0 (same counts) |
 | `mix credo --strict` | 0 |
 | `mix dialyzer` | 0 (passed successfully) |
+| `mix format --check-formatted` | 0 |
+
+## 27.4 — Chat/Session wiring and prefix stability
+
+### Checklist
+
+- [x] `build_request/4` reads `:prompt_cache` from the resolved params map (`Engine.resolve_params/2`, so engine params apply and call opts win) and normalizes it per the call-opt table: `normalize_prompt_cache/2` + `atomize_prompt_cache_key/4` + `default_prompt_cache_key/1` in `lib/allm/chat.ex` (private, next to `build_request/4`). The string-keyed row calls the existing `Request.decode_retention/1` — no second copy (HANDOFF 27.1 row).
+- [x] `:prompt_cache` added to `@local_request_carried_keys` ("handled by `extra`" group).
+- [x] `lib/allm.ex` docs: new "Prompt caching (`:prompt_cache`)" section on `chat/3` with the normalization table and an `iex>` doctest (engine param + `session_id:` → `%{key: "recipe-42", retention: :long}` via Fake `:record`); `stream/3`, `step/3`, `stream_step/3` point to it; `generate/3` / `stream_generate/3` say to set `Request.prompt_cache` directly. `ALLM.Session` moduledoc "`session_id` propagation" gains the security sentence.
+- [x] `chat_request_params_test.exs`: `:prompt_cache` in the carried-key literal, `probe_value(:prompt_cache) -> true`, plus an explicit R2-shaped engine-param test refuting `:prompt_cache` in `request.options`.
+- [x] `test/allm/prompt_cache_chat_test.exs` and `test/allm/prompt_cache_prefix_stability_test.exs`.
+
+### Tests (+42 tests, +2 doctests; 4999 → 5041, 617 → 619)
+
+The one new `iex>` block counts twice because `ALLM` is doctested from both `test/allm_test.exs` and `test/allm_doc_test.exs`.
+
+- `prompt_cache_chat_test.exs` (32): R1–R5 on `chat/3` AND `stream/3`; R6/R7 on `Session.reply/4` AND `stream_reply/4`; R8 (JSON round-tripped engine, with a premise guard that `restored.params.prompt_cache == %{"retention" => "long"}` so the string-keyed row is what is exercised); R9; R10 on `step/3` AND `stream_step/3`; plus one test per remaining table row (false, explicit-nil call opt overriding an engine param, session_id-alone never enables caching, `%{}`/`[]`, keyword, explicit nil key, explicit key never replaced, non-binary session_id, string-keyed full/partial, unknown retention string not atomized, unknown retention atom, non-keyword list, explicit `retention: nil`).
+- `prompt_cache_prefix_stability_test.exs` (9): premise guard (snapshots strictly grow, contain `:system` and `:tool` messages); one pin per translator (OpenAI `:chat_completions` / `:responses`, Anthropic, Gemini) over a three-turn Session (text → tool call + result → text), requests built separately per snapshot with a fresh `Tool`, cache-field premise (`prompt_cache_key` / `cache_control` present; Gemini none); negative control per translator stamping the turn index into the system text, asserting `prefix_violations/2` reports both pairs (OpenAI trips (b), since system is in the message array; Anthropic/Gemini trip (a), since system is outside it — so both halves of the helper bind).
+- `chat_request_params_test.exs` (+1).
+- Stream R5 note: `stream/3` returns the `ValidationError` synchronously (first-step pre-flight), matching `chat/3`.
+
+### Mutation checks (each binds: ≥1 failure with `--max-failures 1 --timeout 5000` over the three Verification test files; source restored from a scratch copy)
+
+| Mutant | Bound |
+|---|---|
+| M1 drop the `false` clause (false passes through) | yes |
+| M2 `true` → nil | yes |
+| M3 keyword list not converted | yes |
+| M4 no `"key"` atomization | yes |
+| M5 `"retention"` not decoded | yes |
+| M6 no default `:short` | yes |
+| M7 explicit nil key kept nil | yes |
+| M8 non-binary session_id used as key | yes |
+| M9 `nil` prompt_cache turns caching on | yes |
+| M10 `:prompt_cache` not in carried keys | yes |
+| M11 read from `opts` instead of resolved params | yes |
+| M12 explicit key overridden by session_id | yes |
+| M13 no session-id default at all | yes |
+
+### Verification (tree = 27.0–27.4 + the user's five files)
+
+| Command | Exit |
+|---|---|
+| `mix test test/allm/prompt_cache_chat_test.exs test/allm/prompt_cache_prefix_stability_test.exs test/allm/chat_request_params_test.exs` | 0 (61 tests) |
+| `mix test` (seeds 481848, 600147, 550974, 622602) | 0 each (final: 619 doctests, 33 properties, 5041 tests, 0 failures, 14 excluded, 1 skipped) |
+| `mix test --seed 0` (run twice) | 0 |
+| `mix compile --warnings-as-errors --force` | 0 |
+| `mix credo --strict` | 0 |
+| `mix dialyzer` | 0 (passed successfully) |
+| `mix format --check-formatted` | 0 |
+| `mix run scripts/audit_user_docs.exs lib/allm.ex lib/allm/session.ex lib/allm/chat.ex` | 0 hits |
+
+### Deviations
+
+- `[structural, documented]` `lib/allm/session.ex` edited, moduledoc only: the Module Tree has no `session.ex` row (Decision #5: "`session.ex` is not modified"), but the 27.4 Checklist and Security note require the "`session_id` propagation" sentence there. No code change.
+- `[tactical]` Only a *missing* `:retention` defaults to `:short` (the table's literal wording); an explicit `retention: nil` passes through and `Validate` rejects it. `:key` is defaulted when missing *or* nil, as the table says. Pinned by "only a MISSING retention defaults…".
+- `[tactical]` Normalization applies to every map, including one with neither `:key` nor `:retention` (e.g. `%{foo: 1}`): defaults are added and the extra key is kept, so `Validate` rejects it — the same outcome as the table's pass-through row.
+- `[tactical]` The session-id default reads the call opt `:session_id` (the table's `opts[:session_id]`), not `engine.params`.
+- Docs claims in `ALLM.chat/3` are pinned by `test/allm/prompt_cache_chat_test.exs` (table rows) and the section's own `iex>` block.
+
+### b4 fix pass (2026-09-27)
+
+- **Empty-string session id** (code-review F1 + functional-review Known Issue 1; both lanes found it without being pointed at it; both rated it Low; fixed on an orchestrator override of the severity floor). `default_prompt_cache_key/1` (`lib/allm/chat.ex:2084`) now guards `is_binary(session_id) and session_id != ""`, so `session_id: ""` falls back to `key: nil` the way a non-binary id already does. An explicit `prompt_cache: %{key: ""}` is still rejected. `ALLM.chat/3`'s "Prompt caching" wording now reads "only when it is a non-empty binary". New rows in `test/allm/prompt_cache_chat_test.exs`: chat/3 empty sid → `%{key: nil, retention: :short}`; explicit `key: ""` → `{:prompt_cache, :invalid_shape}`; `Session.reply/4` and `Session.stream_reply/4` on `Session.new(id: "")` → nil key (+4 tests).
+- Mutation M14 (guard reverted to `when is_binary(session_id)`), run as `mix test test/allm/prompt_cache_chat_test.exs` → 3 failures (chat/3 row, reply, stream_reply): binds. Source restored, `grep -n 'session_id != ""' lib/allm/chat.ex` → :2084.
+- Deferred to the polish pass (Low): code-review F2 (comment pointer), F3 (prefix-test scope), and functional Known Issues 2–4. KI4 was checked against carve-out 1. The docs list keyword as an accepted *value*, which is true at call time, and do not recommend keyword on `engine.params`. So no sentence is false, and the carve-out does not apply.
+
+| Command | Exit |
+|---|---|
+| `mix run scripts/audit_user_docs.exs lib/allm.ex lib/allm/chat.ex` | 0 hits |
+| `mix test` (first run) | 1 failure, not captured, test name unknown (619 doctests, 33 properties, 5045 tests); 5 later full runs → 0 failures each. Unattributed intermittent failure |
+| `mix test --seed 0` | 0 (619 doctests, 33 properties, 5045 tests, 0 failures) |
+| `mix credo --strict` | 0 |
+| `mix dialyzer` | 0 |
 | `mix format --check-formatted` | 0 |

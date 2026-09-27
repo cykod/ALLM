@@ -322,6 +322,9 @@ defmodule ALLM do
   Multi-turn orchestration opts (`:mode`, `:max_turns`, `:halt_when`) are
   silently stripped — `stream_generate/3` is single-request.
 
+  The request is caller-built, so `prompt_cache:` is not read from these
+  opts: set `ALLM.Request`'s `:prompt_cache` field on the request itself.
+
   ## Examples
 
       iex> engine = ALLM.Engine.new(
@@ -355,7 +358,9 @@ defmodule ALLM do
 
   Accepts the same options as `stream_generate/3`. `:include_raw_chunks`
   defaults to `false` but `{:usage, _}` raw chunks always survive the
-  filter so `response.usage` is populated regardless.
+  filter so `response.usage` is populated regardless. As there, prompt
+  caching is set on the request (`ALLM.Request`'s `:prompt_cache` field),
+  not through a `prompt_cache:` opt.
 
   ## Examples
 
@@ -460,6 +465,8 @@ defmodule ALLM do
     * `:tool_timeout` — milliseconds per tool (default `30_000`).
     * `:on_tool_error` — `:continue` (default) or `:halt`.
     * `:tool_executor`, `:tool_result_encoder` — module overrides.
+    * `:prompt_cache` — provider prompt caching; resolved and normalized
+      exactly as for `chat/3` (see "Prompt caching" there).
     * Stream filter opts are accepted but have no effect on this
       non-streaming path.
 
@@ -505,7 +512,8 @@ defmodule ALLM do
 
   ## Options
 
-  Same as `step/3`. Additionally accepts the streaming filter opts
+  Same as `step/3`, including `:prompt_cache` (see "Prompt caching" on
+  `chat/3`). Additionally accepts the streaming filter opts
   (`:emit_text_deltas`, `:emit_tool_deltas`, `:include_raw_chunks`,
   `:on_event`) — they apply to the adapter-stream pass-through.
 
@@ -578,6 +586,42 @@ defmodule ALLM do
   `Engine.new(params: %{max_tokens: N})` or a per-call `max_tokens:` opt
   when a turn needs more room, or it truncates (`finish_reason: :length`)
   before tools run.
+
+  ## Prompt caching (`:prompt_cache`)
+
+  `prompt_cache:` asks the provider to cache the stable prefix of the
+  conversation. It resolves like the sampling params (call opts win over
+  `engine.params`) and lands on the typed `request.prompt_cache` field,
+  never on `request.options`. The value is normalized to
+  `%{key: key, retention: :short | :long}`:
+
+  | Value | Result |
+  |-------|--------|
+  | absent, `nil` or `false` | no caching (`nil`) |
+  | `true`, `%{}` or `[]` | `%{key: session_id, retention: :short}` |
+  | map or keyword with `:key` and/or `:retention` | missing `:retention` becomes `:short`; a missing or `nil` `:key` becomes the `:session_id` opt |
+  | the same map with string keys (a JSON-restored engine) | converted to atom keys first |
+  | anything else, or extra keys | `{:error, %ALLM.Error.ValidationError{}}` naming `:prompt_cache` |
+
+  The key defaults to `:session_id` only when it is a non-empty binary
+  (otherwise the key stays `nil`), and only when caching was asked for: a
+  `session_id:` alone never turns caching on. An explicit `key: ""` is still
+  rejected.
+  `ALLM.Session` passes `session.id` as `:session_id`, so a session's id
+  becomes its cache key. Each provider adapter's `generate/2` docs say
+  what it sends for the field (`ALLM.Providers.OpenAI`,
+  `ALLM.Providers.Anthropic`, `ALLM.Providers.Gemini`).
+
+      iex> engine = ALLM.Engine.new(
+      ...> adapter: ALLM.Providers.Fake,
+      ...> params: %{prompt_cache: %{retention: :long}},
+      ...> adapter_opts: [script: [{:text, "ok"}, {:finish, :stop}], record: self()]
+      ...>)
+      iex> {:ok, _} = ALLM.chat(engine, [ALLM.user("hi")], session_id: "recipe-42")
+      iex> receive do
+      ...>   {:allm_fake_record, request, _opts} -> request.prompt_cache
+      ...> end
+      %{key: "recipe-42", retention: :long}
 
   ## `:halt_when` semantics
 
@@ -732,7 +776,8 @@ defmodule ALLM do
 
   ## Options
 
-  Same options as `chat/3`. The streaming filter opts
+  Same options as `chat/3`, including `:prompt_cache` (see "Prompt
+  caching" there). The streaming filter opts
   (`:emit_text_deltas`, `:emit_tool_deltas`, `:include_raw_chunks`,
   `:on_event`) apply to each turn's adapter pass-through.
 

@@ -122,6 +122,13 @@ defmodule ALLM.Session do
   When `session.id` is `nil` (no id assigned), no opt is added — the
   tool handler sees `nil`.
 
+  The same `:session_id` is the default key for provider prompt caching
+  when `prompt_cache:` is set on the engine's `params` or the call (see
+  "Prompt caching" on `ALLM.chat/3`): with caching on, `session.id` is sent
+  to the provider as the cache key, verbatim. Callers whose session ids
+  carry personal data should pass an explicit `prompt_cache: %{key: ...}`
+  instead.
+
   See also `guides/sessions.md`.
   """
 
