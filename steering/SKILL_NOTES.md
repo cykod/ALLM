@@ -32,6 +32,22 @@ Proposed changes to the pipeline skills in `~/.claude/skills/`. This project can
 **Proposed wording:** "Discharge a row only when its DONE WHEN predicate passes; a row re-filed to ASKS stays Open with the ASKS pointer."
 **Argument against:** `## Open` then grows across phases, and the phase-end gate counts open non-Low rows, so a phase could fail its gate on debt it correctly filed.
 
+### 5. `/build`: a fix pass that goes past the checkpoint gets its own review lane
+*Raised 2026-09-27, Phase 26 `/auto-build` run (`.work/retro/2026-09-27-phase-26-elevenlabs-tts-sst_applied.md` F2, P1).*
+**Target:** `~/.claude/skills/build/SKILL.md` Step 5c/5d, after the fix pass and before the commit.
+**Evidence:** fix passes in 4 of 9 batches did substantial work after the review checkpoint.
+- 26.6 and 26.7 got scoped re-reviews, chosen ad hoc. The 26.7 re-review found two prerequisites for 26.8.
+- 26.5 and 26.8 shipped with an "unreviewed" status note. A late scoped review of those two diffs then found a real Medium bug (`a61a204`).
+**Proposed wording:** "After the fix pass, re-tag and diff `<checkpoint>..<fix-checkpoint> -- lib/`. If the fix pass implemented an owner decision, added a public or `@doc false` function, or moved code between modules, dispatch one scoped `/code-review` of that diff before committing. A status note saying 'unreviewed' is not a substitute."
+**Argument against:** 3–5 minutes per affected batch; the implementer's mutation table plus a green suite already pin behaviour.
+
+### 6. `/devil`: check forward DRY between the design's own sub-phases
+*Raised 2026-09-27, same run (retro F1, P2).*
+**Target:** `~/.claude/skills/devil/SKILL.md` review lenses.
+**Evidence:** the pre-build devil review found 28 issues, including backward DRY. It found none of the 5 cross-batch clones that code review later caught in 26.3–26.7.
+**Proposed wording:** "For each pair of sub-phases that build the same capability or transport, name the loop or helper the later one will need from the earlier one. If no Module Tree row owns it, flag it (auto-fixable: add the shared-module row to the earlier sub-phase)."
+**Argument against:** some clones only become visible once code exists, and a speculative seam can fit badly and need rework anyway.
+
 ## Discharged
 
 (none)

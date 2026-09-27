@@ -1,3 +1,18 @@
+## [DOC] Apply the Phase 26 retro — forward DRY, claim-named mutants
+*Sunday, September 27th at 2pm*
+Applied .work/retro/2026-09-27-phase-26-elevenlabs-tts-sst_applied.md. In 
+agent-spec/DESIGN.md, the cloned-helper rule now covers a second caller in a 
+later sub-phase of the same design: the shared seam becomes a row in the first 
+sub-phase's Module Tree, never a DEFERRED-DRY. In agent-spec/IMPLEMENTATION.md, 
+the premise-guard paragraph gains two rules: a test named for 
+never/only/once/drains gets its own mutant, and mutation runs use 
+--max-failures 1 --timeout 5000. It also requires stub rows to be re-derived 
+when a probe corrects a wire shape (owner chose a merge, net 0 lines). 
+steering/SKILL_NOTES.md gains two pending pipeline proposals: a review lane for 
+fix passes past the checkpoint, and a forward-DRY devil lens.
+
+---
+
 ## [TWK] Polish Phase 26 streaming audio after the gate cleared
 *Sunday, September 27th at 2pm*
 Phase 26 of steering/2026-09-25_ELEVENLABS_TTS_SST.md passed its gate 
