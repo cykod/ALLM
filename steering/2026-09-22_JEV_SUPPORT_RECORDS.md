@@ -8,7 +8,7 @@ Companion to `steering/2026-09-22_JEV_SUPPORT.md`. Bookkeeping lives here; the d
 |-------|--------|-------|
 | 24.1 | Completed | Layer A classification data: four structs, `ClassificationAdapterError`, `Validate.classification_request/1`, enum + registry edits |
 | 24.2 | Completed | `ALLM.ClassificationAdapter`, 12 Engine sites, `FakeClassification`, conformance harness (`@case_count 9`) + stub + self-test |
-| 24.3 | Not Started | |
+| 24.3 | Completed | `ALLM.classify/3`, `ALLM.classification_request/2`, classification internals block, `:classify` span, `@public_facade` +2 |
 | 24.4 | Not Started | |
 | 24.5 | Not Started | |
 | 24.6 | Not Started | |
@@ -108,3 +108,43 @@ Inputs: `.work/reviews/2026-09-27-phase-24-2/overview.md`, `.work/code-reviews/2
 
 - `[fixed]` The `[tactical]` deviation above claimed an unvalidated entry reaching `classify/2` raises `ArgumentError` naming the grammar, but a malformed `{:retry_until_call, n}` did not: `:x` rate-limited forever, `2.5` behaved as 3, `0`/`-1` skipped silently (functional review KI #1, Low; fixed under the claim-vs-behaviour carve-out because the false sentence is this register's). Both `run_scripted/2` and the chained arm of `handle_retry_until_call/6` now guard `when is_integer(n) and n >= 1`, so other shapes reach `interpret_entry/3`'s raise. Pinned by `fake_classification_test.exs` "classify/2 raises ArgumentError on a malformed {:retry_until_call, n} it reaches" (4 values x leading/chained); each guard removed alone turns it red (mutated and reverted). The sibling Fakes are unchanged (released code): `grep -nE '\{:retry_until_call, [nm]\} ->' lib/allm/providers/fake_*.ex | wc -l` -> 9 (2026-09-27), carried in `.work/HANDOFF.md`.
 - `[fixed]` Code review F1: the retry test's "leading entry is load-bearing: forces `advance` to WRITE the slot `peek` READS" comment was false for this Fake (`peek_cursor/2` defaults an unwritten slot to `0`; the unled "layered budget" test passes). Reworded to say what the leading entry does here (starts the retry at a nonzero cursor).
+
+## 24.3 — Façade and telemetry
+
+### Start Green (2026-09-27, HEAD `dbc0d3b`)
+
+- `mix test` (seed 702267) → exit 0: `655 doctests, 33 properties, 5372 tests, 0 failures, 14 excluded, 1 skipped`. Tree clean; `README.md` clean, no stash needed.
+- `mix test test/allm_facade_doctest_inventory_test.exs` before editing `@public_facade`: **28 tests**.
+
+### Checklist
+
+- [x] `lib/allm.ex`: `@classification_request_field_opts [:questions, :model, :options, :metadata]`, `classification_request/2`, `classify/3` (head + two clauses) after `stream_transcribe/3`; internals block (`@retryable_classification_reasons`, `stringify_question_ids/1`, `drop_classification_request_opts/1`, `do_classify/3`, `question_count/1`, `do_classify_body/4`, `dispatch_classify_attempt/3`, `classify_stop_extras/1`) after the audio internals (after `transcribe_stop_extras/1`). Reuses `augment_retry_policy/2`, `build_capability_dispatch_opts/3`, `fill_request_id/2` unchanged.
+- [x] `lib/allm/telemetry.ex`: `:classify` in `@type span_name` and `@valid_span_names`, moduledoc entry-point list, event-table row, stable-key paragraph
+- [x] `lib/allm.ex` moduledoc capability table: row after `moderate/3`
+- [x] `@doc classify/3` sections: One call many questions, Model resolution, Gate order, Validation, Retry, Telemetry, Raises (`:missing_key` + invariant-1 `ArgumentError`), `request_id` precedence, `:stream`
+- [x] `@public_facade` +2 (`classification_request: 2` after `transcription_request: 2`; `classify: 3` in a new `# Classification` group after `# Audio`) — inventory test **28 → 30 (+2)**
+- [x] HANDOFF (from 24.2): `ALLM.ClassificationAdapter` invariant 1 now names `ALLM.classify/3` as the enforcer; `dispatch_classify_attempt/3` raises `ArgumentError` with the `dispatch_moderate_attempt/3` wording shape
+
+### Tests
+
+New: `test/allm/allm_classify_test.exs` (`async: true`, `TelemetryCapture` only; 34 tests + 3 doctests via `doctest ALLM, only: [classify: 3, classification_request: 2]`). Covers every 24.3.1 bullet. Modified: `test/allm_facade_doctest_inventory_test.exs`.
+Mutants (each run then restored from a scratch copy; `cmp` clean afterwards): model stamping falls back to `engine.model` → red on "engine.model (the chat model) never reaches the classification adapter"; dispatch opts built without `build_capability_dispatch_opts/3` → red on the cursor test (and the `:stream` test); `question_count/1` without the non-map clause → red on "question_count is 0 for a non-map :questions"; `stringify_question_ids/1` removed → 4 red.
+
+### Gates [G]
+
+- `mix test` → exit 0, `661 doctests, 33 properties, 5408 tests, 0 failures, 14 excluded, 1 skipped` (seed 765075; +6 doctests, +36 tests vs Start Green). Zero `warning` lines in the log.
+- `mix test --seed 0` → exit 0, same counts.
+- `mix format --check-formatted` → 0 (after one `mix format` on the new block); `mix credo --strict` → 0; `mix dialyzer` → `Total errors: 0`; `mix compile --force --warnings-as-errors` → 0.
+- Docs audit `comm -13` → only `Files scanned:    139` (unchanged since 24.2; no new `lib/` file). No new hit line; `Total hits: 5`. Per-file `mix run scripts/audit_user_docs.exs lib/allm.ex lib/allm/telemetry.ex lib/allm/classification_adapter.ex` → 0 hits.
+- Process-global grep: the same nine files, all `async: false`; the new test file is not among them and attaches telemetry only through `TelemetryCapture`.
+- `conformance/`: not touched, not run.
+
+### Deviations / notes
+
+- `[tactical]` `answer_count` is `map_size(response.answers)` with no non-map guard, matching `moderate_stop_extras/1`'s unguarded `length(results)`. FakeClassification's script grammar has no verbatim `{:ok, response}` entry, so no scripted response can carry a non-map `:answers`; a non-conforming third-party adapter doing so raises inside the span (`:exception` event), as on the moderation span.
+- `[tactical]` `classification_request/2` stringifies only atom ids of a non-struct map `:questions`; a non-map `:questions` (or a struct) is passed through for the validator's `{:questions, :invalid_shape}` hard-reject.
+- `[tactical]` The symmetry test pins both the expected field set (`[:metadata, :model, :options, :questions]`, from `Map.keys/1`) and per-field reachability via a sentinel, as the audio siblings do; the allow-list attribute stays private (no `@doc false` accessor), so an allow-listed non-field is not bound — same accepted gap as `speech_request/2`.
+- `[CARRY]` Low, out of 24.3's tree: `conformance/lib/allm/test/classification_adapter_conformance.ex` `## What this suite does NOT bind` still says invariant 1 "is checked where the adapter is dispatched". True, but it can now name `ALLM.classify/3`. Carried in `.work/HANDOFF.md` for 24.5/24.6.
+- `[DEFERRED-DRY]` (fix pass, code review F1) Design-sanctioned copy: `lib/allm.ex` `dispatch_{moderate,synthesize,transcribe,classify}_attempt/3` are four semantic clones, and `@retryable_{image,embedding,moderation,speech,transcription,classification}_reasons` six identical lists. Extraction touches released façades → stand-alone `[REFACTOR]`; filed in `.work/ASKS.md` (sun 9/27 11pm). `grep -cE '^  @retryable_[a-z]+_reasons \[' lib/allm.ex` → 6; `grep -cE '^  defp dispatch_(moderate|synthesize|transcribe|classify)_attempt\(' lib/allm.ex` → 4.
+- Fix pass (2026-09-27): code review F2 — the three shared-helper comments in `lib/allm.ex` (`augment_retry_policy/2`, `build_capability_dispatch_opts/3`, `fill_request_id/2`) now list `classify`; the same class in `lib/allm/telemetry.ex`'s `span/3` `@doc` (valid-names list and the 3-tuple-form span list omitted `:classify` / `:answer_count`) fixed alongside. Code review F3 (Low, `question_count/1` struct guard) left for the polish pass. Functional review Known Issue 1 (`:options`/`:metadata` unvalidated, Low) routed to `.work/HANDOFF.md` for 24.4.
+

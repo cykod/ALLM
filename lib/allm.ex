@@ -59,6 +59,7 @@ defmodule ALLM do
   | Generate or edit images | `generate_image/3`, `edit_image/4` | `{:ok, %ALLM.ImageResponse{}}` |
   | Turn text into vectors for a vector store | `embed/3` | `{:ok, %ALLM.EmbeddingResponse{}}` |
   | Screen text (or text + images) for policy violations | `moderate/3` | `{:ok, %ALLM.ModerationResponse{}}` |
+  | Answer typed questions about text (choice / score / yes-no) | `classify/3` | `{:ok, %ALLM.ClassificationResponse{}}` |
   | Turn text into spoken audio | `synthesize/3` | `{:ok, %ALLM.SpeechResponse{}}` |
   | Turn recorded speech into text | `transcribe/3` | `{:ok, %ALLM.TranscriptionResponse{}}` |
   | Play speech while it is still being synthesized | `stream_synthesize/3` | `{:ok, Enumerable.t}` of `t:ALLM.SpeechEvent.t/0` |
@@ -99,6 +100,8 @@ defmodule ALLM do
     Adapter,
     Audio,
     ChatResult,
+    ClassificationRequest,
+    ClassificationResponse,
     EmbeddingRequest,
     EmbeddingResponse,
     Engine,
@@ -123,6 +126,7 @@ defmodule ALLM do
 
   alias ALLM.Error.{
     AdapterError,
+    ClassificationAdapterError,
     EmbeddingAdapterError,
     EngineError,
     ImageAdapterError,
@@ -1981,6 +1985,193 @@ defmodule ALLM do
     do_stream_transcribe(engine, request, input, opts)
   end
 
+  # The opts `classification_request/2` lifts onto the struct — an explicit
+  # ALLOW-list, never a deny-list, so a new façade opt can never leak into
+  # `ClassificationRequest.new/1` (a bare `struct!/2` that raises `KeyError`
+  # on any unknown key). Symmetry invariant: this list equals the
+  # `%ClassificationRequest{}` field set minus `:state`, or the missing field
+  # is silently unreachable from the state call shape. Pinned by a test
+  # computing from `Map.keys/1`. `drop_classification_request_opts/1` below is
+  # the outbound counterpart.
+  @classification_request_field_opts [:questions, :model, :options, :metadata]
+
+  @doc """
+  Build an `%ALLM.ClassificationRequest{}` from the state to classify.
+
+  The state is a string, a JSON object (map) or a JSON array (list) — the
+  text the questions are asked about.
+
+  ## Options
+
+  Only `ALLM.ClassificationRequest` field names are read: `:questions`,
+  `:model`, `:options`, `:metadata`. Every other key is ignored, which is
+  what lets `classify/3` forward its own call-control opts (`:request_id`,
+  `:request_timeout`, `:retry`, `:adapter_opts`, `:api_key`, `:stream`)
+  through this function without them landing on the struct.
+
+  Atom question ids in `:questions` are converted to strings, because an
+  atom key does not survive a JSON round trip. Nothing else is done to the
+  questions.
+
+  No validation runs here — call `ALLM.Validate.classification_request/1`
+  if you want the field rules checked before dispatch. `classify/3` calls
+  it for you.
+
+  ## Examples
+
+      iex> q = ALLM.ClassificationQuestion.yes_no("Is a refund requested?")
+      iex> req = ALLM.classification_request("Please refund me.", questions: %{refund: q}, model: "jev-1.13.0")
+      iex> {req.state, Map.keys(req.questions), req.model}
+      {"Please refund me.", ["refund"], "jev-1.13.0"}
+  """
+  @spec classification_request(ClassificationRequest.state(), keyword()) ::
+          ClassificationRequest.t()
+  def classification_request(state, opts \\ []) when is_list(opts) do
+    opts
+    |> Keyword.take(@classification_request_field_opts)
+    |> stringify_question_ids()
+    |> Keyword.put(:state, state)
+    |> ClassificationRequest.new()
+  end
+
+  @doc """
+  Ask typed questions about a piece of state using the engine's
+  `:classification_adapter`.
+
+  Layer-C façade. Two input shapes:
+
+    * State — a string, a map (JSON object) or a list (JSON array). Opts
+      named in `classification_request/2` (`:questions`, `:model`,
+      `:options`, `:metadata`) lift onto the built request; everything else
+      is a call-control opt.
+    * Pre-built `%ALLM.ClassificationRequest{}` — dispatched verbatim; opts
+      are NOT merged onto it.
+
+  Each question is an `ALLM.ClassificationQuestion` — pick one option
+  (`choice/2`), score on ordered levels (`score/2`), or yes/no
+  (`yes_no/2`). The response carries one typed `ALLM.ClassificationAnswer`
+  per question id; read one with `ALLM.ClassificationResponse.answer/2`.
+
+  The library does not decide thresholds. It returns the probabilities,
+  score position and confidence the provider reports; what counts as
+  "confident enough" lives in your code.
+
+  ## One call, many questions
+
+  Every question in the request is answered in the same call, against the
+  same state. There is no chunking and no question-count cap in the
+  façade: splitting questions across calls would re-send the whole state
+  each time. Put every question you have about a state into one request.
+
+  ## Model resolution
+
+  The model comes from the classification slot, never from the chat model:
+  `request.model`, else `engine.classification_model`, else the adapter's
+  own documented default. `engine.model` is not consulted — a chat model
+  name is not a classification model name. On the state shape
+  `opts[:model]` sets `request.model`; a pre-built request's `:model` is
+  authoritative.
+
+  ## Gate order
+
+    1. `{:error, %ALLM.Error.EngineError{reason: :no_classification_adapter}}`
+       when `engine.classification_adapter == nil` — first, so a
+       misconfigured engine never surfaces as a request problem.
+    2. Validation (below).
+    3. Dispatch to `c:ALLM.ClassificationAdapter.classify/2`, under the
+       retry policy below.
+
+  ## Validation
+
+  `ALLM.Validate.classification_request/1` runs before dispatch, returning
+  `{:error, %ALLM.Error.ValidationError{reason: :invalid_classification_request}}`
+  on failure: empty state, no questions, a malformed question, or a state
+  or question field that cannot be encoded as JSON. A keyword list or a
+  struct passed as the state is rejected the same way rather than raising
+  or being sent to the provider. Any other state (an integer, `nil`)
+  raises `FunctionClauseError`.
+
+  ## Unknown opts — forwarded to the adapter
+
+  Any opt that is neither a request field nor a call-control opt is passed
+  through to `c:ALLM.ClassificationAdapter.classify/2` untouched, so
+  provider-specific knobs need no façade change. `:api_key` is forwarded
+  too; the adapter resolves the key itself.
+
+  ## Retry
+
+  `:rate_limited`, `:provider_unavailable`, `:timeout` and `:network_error`
+  are retried under the engine's `:retry` policy; every other
+  `ALLM.Error.ClassificationAdapterError` reason surfaces immediately.
+  `opts[:retry]` is also forwarded to the adapter; an adapter that runs its
+  own retry loop inside this one multiplies the two budgets. Read the
+  adapter's own docs for whether it does.
+
+  ## Telemetry
+
+  The call runs inside an `[:allm, :classify, …]` span (see
+  `ALLM.Telemetry`). `:start` and `:stop` metadata carry `question_count`;
+  `:stop` adds the `answer_count` measurement (`0` on error) and `usage`
+  (`nil` on error).
+
+  ## Raises
+
+    * `%ALLM.Error.EngineError{reason: :missing_key}` when the adapter
+      cannot resolve an API key. It is raised, not returned, as on every
+      other façade.
+    * `ArgumentError`, naming the adapter, when
+      `c:ALLM.ClassificationAdapter.classify/2` returns anything other than
+      `{:ok, %ALLM.ClassificationResponse{}}` or
+      `{:error, %ALLM.Error.ClassificationAdapterError{}}` (invariant 1).
+      The error union above describes conforming adapters only.
+
+  ## `request_id` precedence
+
+  `opts[:request_id]` wins over an auto-generated id. The id is forwarded
+  to the adapter and filled onto `response.request_id` IFF the adapter left
+  it `nil`; an adapter-populated id is preserved.
+
+  ## `:stream` opt is silently dropped
+
+  Classification is request/response — there is no streaming variant.
+  Passing `stream: true` does not error; the opt is ignored.
+
+  ## Examples
+
+      iex> q = ALLM.ClassificationQuestion.choice("Which team?", ["billing", "technical"])
+      iex> engine = ALLM.Engine.new(
+      ...> classification_adapter: ALLM.Providers.FakeClassification,
+      ...> adapter_opts: [classification_script: [{:answers, %{"team" => "technical"}}]]
+      ...>)
+      iex> {:ok, resp} = ALLM.classify(engine, "The app crashes on login.", questions: %{team: q})
+      iex> ALLM.ClassificationResponse.answer(resp, :team).choice
+      "technical"
+
+      iex> q = ALLM.ClassificationQuestion.yes_no("Is a refund requested?")
+      iex> {:error, %ALLM.Error.EngineError{reason: :no_classification_adapter}} =
+      ...> ALLM.classify(ALLM.Engine.new(), "Please refund me.", questions: %{refund: q})
+      iex> :ok
+      :ok
+  """
+  @spec classify(
+          Engine.t(),
+          ClassificationRequest.state() | ClassificationRequest.t(),
+          keyword()
+        ) ::
+          {:ok, ClassificationResponse.t()}
+          | {:error, EngineError.t() | ValidationError.t() | ClassificationAdapterError.t()}
+  def classify(engine, state_or_request, opts \\ [])
+
+  def classify(%Engine{} = engine, %ClassificationRequest{} = request, opts)
+      when is_list(opts) do
+    do_classify(engine, request, opts)
+  end
+
+  def classify(%Engine{} = engine, state, opts)
+      when (is_binary(state) or is_map(state) or is_list(state)) and is_list(opts) do
+    do_classify(engine, classification_request(state, opts), opts)
+  end
+
   # ---------------------------------------------------------------------------
   # Internals — image telemetry + preflight + retry wrap.
   # ---------------------------------------------------------------------------
@@ -2097,7 +2288,7 @@ defmodule ALLM do
   end
 
   # Shared by every non-chat capability façade (image, embed, moderate,
-  # synthesize, transcribe): materialise the engine's
+  # synthesize, transcribe, classify): materialise the engine's
   # retry config, then append the capability's closed-enum reason atoms to
   # the chat-side `retry_on` so `ALLM.Retry.error_matches?/2` recognises
   # them. Idempotent — `Enum.uniq/1` keeps the list stable on repeat calls.
@@ -2587,7 +2778,7 @@ defmodule ALLM do
   end
 
   # Shared by every non-chat capability façade (image, embed, moderate,
-  # synthesize, transcribe); the caller has already stripped its own
+  # synthesize, transcribe, classify); the caller has already stripped its own
   # request-field opts. Engine `adapter_opts` come FIRST so `Keyword.get/2`
   # makes the ENGINE win on collision (not `Keyword.merge/2`), then the
   # engine's stable `:id` is injected as `adapter_opts[:cursor_key]` so the
@@ -2650,7 +2841,7 @@ defmodule ALLM do
   end
 
   # Shared by every non-chat capability façade (image, embed, moderate,
-  # synthesize, transcribe): stamp the façade's request id onto a success
+  # synthesize, transcribe, classify): stamp the façade's request id onto a success
   # whose adapter left `:request_id` nil. Struct-agnostic on purpose — each
   # façade's per-attempt dispatch closure (or `ALLM.EmbeddingBatch`) has
   # already pinned the response struct type before this runs.
@@ -2689,6 +2880,130 @@ defmodule ALLM do
 
   defp transcribe_stop_extras({:error, error}),
     do: {%{usage: nil, response: nil, error: error}, %{text_length: 0}}
+
+  # ---------------------------------------------------------------------------
+  # Internals — classification telemetry + gates + retry wrap.
+  #
+  # The audio block above, transcribed for classification: no capability
+  # pre-flight, and the model is the classification slot's
+  # (`request.model || engine.classification_model`) — `engine.model` is the
+  # chat model and is never read here.
+  # ---------------------------------------------------------------------------
+
+  @retryable_classification_reasons [:rate_limited, :provider_unavailable, :timeout, :network_error]
+
+  # Atom question ids become strings (an atom key does not survive a JSON
+  # round trip); string ids and non-map `:questions` pass through untouched —
+  # the validator rejects the latter.
+  defp stringify_question_ids(fields) do
+    case Keyword.fetch(fields, :questions) do
+      {:ok, questions} when is_map(questions) and not is_struct(questions) ->
+        stringified =
+          Map.new(questions, fn
+            {id, question} when is_atom(id) -> {Atom.to_string(id), question}
+            pair -> pair
+          end)
+
+        Keyword.put(fields, :questions, stringified)
+
+      _ ->
+        fields
+    end
+  end
+
+  # Outbound counterpart of `@classification_request_field_opts`: request-field
+  # opts already live on the struct by dispatch time, so they are stripped
+  # from the opts the adapter sees. Everything else is forwarded.
+  defp drop_classification_request_opts(opts) when is_list(opts),
+    do: Keyword.drop(opts, @classification_request_field_opts)
+
+  # The whole body runs inside the span so `:start` ALWAYS fires, even when
+  # the adapter is missing or validation rejects. Gate order inside:
+  #   (1) adapter-presence pattern match (first `do_classify_body/4` clause)
+  #   (2) `Validate.classification_request/1`
+  #   (3) slot-model stamping
+  #   (4) `Retry.run/3`-wrapped dispatch
+  defp do_classify(%Engine{} = engine, %ClassificationRequest{} = request, opts) do
+    request_id = Keyword.get(opts, :request_id) || ALLM.Telemetry.request_id()
+
+    start_metadata = %{
+      request_id: request_id,
+      engine: engine,
+      model: request.model || engine.classification_model,
+      question_count: question_count(request.questions)
+    }
+
+    ALLM.Telemetry.span(:classify, start_metadata, fn ->
+      result = do_classify_body(engine, request, opts, request_id)
+      {extras, measurements} = classify_stop_extras(result)
+      {result, measurements, extras}
+    end)
+  end
+
+  # `:start` metadata is built before validation, so a hand-built request
+  # with a non-map `:questions` (rejected a moment later) must not raise here.
+  defp question_count(questions) when is_map(questions), do: map_size(questions)
+  defp question_count(_questions), do: 0
+
+  defp do_classify_body(%Engine{classification_adapter: nil}, _request, _opts, _request_id),
+    do: {:error, EngineError.new(:no_classification_adapter)}
+
+  defp do_classify_body(
+         %Engine{classification_adapter: adapter} = engine,
+         request,
+         opts,
+         request_id
+       ) do
+    with :ok <- ALLM.Validate.classification_request(request) do
+      request = %{request | model: request.model || engine.classification_model}
+      policy = augment_retry_policy(engine.retry, @retryable_classification_reasons)
+
+      dispatch_opts =
+        build_capability_dispatch_opts(engine, drop_classification_request_opts(opts), request_id)
+
+      policy
+      |> ALLM.Retry.run(%{request_id: request_id, model: request.model}, fn ->
+        dispatch_classify_attempt(adapter, request, dispatch_opts)
+      end)
+      |> fill_request_id(request_id)
+    end
+  end
+
+  # Per-attempt closure for `Retry.run/3`. The final clause is an EXPLICIT
+  # raise: `ALLM.ClassificationAdapter` is a public extension point with an
+  # open caller set, its conformance suite does not bind invariant 1, and
+  # this raise is what enforces it (a `raise` keeps the façade `@spec`
+  # honest and names the offending adapter).
+  defp dispatch_classify_attempt(adapter, request, dispatch_opts) do
+    case adapter.classify(request, dispatch_opts) do
+      {:ok, %ClassificationResponse{}} = ok ->
+        ok
+
+      {:error, %ClassificationAdapterError{reason: reason} = err}
+      when reason in @retryable_classification_reasons ->
+        {:retry, err.retry_after_ms || 0, err}
+
+      {:error, %ClassificationAdapterError{}} = err ->
+        err
+
+      other ->
+        raise ArgumentError,
+              "#{inspect(adapter)} violated ALLM.ClassificationAdapter invariant 1: " <>
+                "classify/2 must return {:ok, %ALLM.ClassificationResponse{}} or " <>
+                "{:error, %ALLM.Error.ClassificationAdapterError{}}, got: #{inspect(other)}"
+    end
+  end
+
+  # `:stop` extras. `answer_count` is a MEASUREMENT, present on both paths
+  # (`0` on error) for a stable key set; `:usage`, `:response`, `:error` are
+  # METADATA, with `usage: nil` on error. `question_count` rides over from
+  # the `:start` metadata. Returns `{metadata_extras, extra_measurements}`.
+  defp classify_stop_extras({:ok, %ClassificationResponse{answers: answers} = response}) do
+    {%{usage: response.usage, response: response, error: nil}, %{answer_count: map_size(answers)}}
+  end
+
+  defp classify_stop_extras({:error, error}),
+    do: {%{usage: nil, response: nil, error: error}, %{answer_count: 0}}
 
   # ---------------------------------------------------------------------------
   # Internals — streaming audio (`stream_synthesize/3`,

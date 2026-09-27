@@ -56,10 +56,10 @@ defmodule ALLM.ClassificationAdapter do
        to the error tuple. The one documented exception is
        `ALLM.Keys.fetch!/2`, which raises
        `%ALLM.Error.EngineError{reason: :missing_key}` by design; adapters do
-       not rescue it. The conformance suite cannot observe this invariant:
-       the check lives at the call site that dispatches to the adapter, so a
-       green conformance run is not evidence that every failure shape has
-       been converted.
+       not rescue it. `ALLM.classify/3` enforces this invariant: any other
+       return shape raises `ArgumentError` naming the adapter. The
+       conformance suite cannot observe it, so a green conformance run is
+       not evidence that every failure shape has been converted.
     2. On `{:ok, response}`, `Map.keys(response.answers)` equals
        `Map.keys(request.questions)` as sets: one answer per question id, no
        extras.

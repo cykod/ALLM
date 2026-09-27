@@ -6,8 +6,8 @@ defmodule ALLM.Telemetry do
   Every public Layer-C entry point (`ALLM.generate/3`,
   `ALLM.stream_generate/3`, `ALLM.step/3`, `ALLM.stream_step/3`,
   `ALLM.chat/3`, `ALLM.stream/3`, `ALLM.generate_image/3` &
-  siblings, `ALLM.embed/3`, `ALLM.moderate/3`, `ALLM.synthesize/3`,
-  `ALLM.transcribe/3`, `ALLM.stream_synthesize/3`,
+  siblings, `ALLM.embed/3`, `ALLM.moderate/3`, `ALLM.classify/3`,
+  `ALLM.synthesize/3`, `ALLM.transcribe/3`, `ALLM.stream_synthesize/3`,
   `ALLM.stream_synthesize_input/3`, `ALLM.stream_transcribe/3`) is wrapped
   in a span. Attach `:telemetry.attach_many/4`
   handlers to observe every execution.
@@ -26,6 +26,7 @@ defmodule ALLM.Telemetry do
   | `[:allm, :image, :start \\| :stop \\| :exception]` | image generation | `duration`, plus `image_count` on `:stop` | `request_id`, `engine`, `model`, `operation`, `n`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :embed, :start \\| :stop \\| :exception]` | text embedding | `duration`, plus `chunk_count` and `embedding_count` on `:stop` | `request_id`, `engine`, `model`, `input_count`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :moderate, :start \\| :stop \\| :exception]` | content moderation | `duration`, plus `result_count` and `flagged_count` on `:stop` | `request_id`, `engine`, `model`, `input_count`, `multimodal`, plus `usage`, `response`, `error` on `:stop` |
+  | `[:allm, :classify, :start \\| :stop \\| :exception]` | typed classification | `duration`, plus `answer_count` on `:stop` | `request_id`, `engine`, `model`, `question_count`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :synthesize, :start \\| :stop \\| :exception]` | text-to-speech | `duration`, plus `audio_bytes` on `:stop` | `request_id`, `engine`, `model`, `input_length`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :transcribe, :start \\| :stop \\| :exception]` | speech-to-text | `duration`, plus `text_length` on `:stop` | `request_id`, `engine`, `model`, `audio_mime`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :stream_synthesize, :start \\| :stop \\| :exception]` | streaming text-to-speech (`ALLM.stream_synthesize/3` and `ALLM.stream_synthesize_input/3`) | `duration`; `:stop` fires when the stream is returned, not when it drains | `request_id`, `engine`, `model`, `input_length` (`nil` for the input form), plus `response: nil` on `:stop` |
@@ -56,6 +57,13 @@ defmodule ALLM.Telemetry do
   without a second measurement. A 40-element input with one `ALLM.ImagePart`
   therefore reports `input_count: 40` and is still accepted by an adapter
   whose `c:ALLM.ModerationAdapter.max_batch_size/0` is `32`.
+
+  `[:allm, :classify, :stop]` follows the same stable-key rule:
+  `answer_count` is `0` and `usage` is `nil` on the error path.
+  `question_count` is the number of questions on the request (`0` when
+  `:questions` is not a map), and `model` is the classification slot's
+  model (`request.model || engine.classification_model`), never the chat
+  `engine.model` — `nil` when neither is set.
 
   `[:allm, :synthesize, :stop]` and `[:allm, :transcribe, :stop]` follow
   the same stable-key rule: `audio_bytes` / `text_length` are `0` on the
@@ -137,6 +145,7 @@ defmodule ALLM.Telemetry do
           | :image
           | :embed
           | :moderate
+          | :classify
           | :synthesize
           | :transcribe
           | :stream_synthesize
@@ -151,6 +160,7 @@ defmodule ALLM.Telemetry do
     :image,
     :embed,
     :moderate,
+    :classify,
     :synthesize,
     :transcribe,
     :stream_synthesize,
@@ -204,10 +214,10 @@ defmodule ALLM.Telemetry do
     * `{result, extra_measurements, stop_metadata_extras}` — the
       3-tuple form, for spans that inject custom `:stop` measurements
       beyond `:duration` and `:monotonic_time`. `:image`, `:embed`,
-      `:moderate`, `:synthesize` and `:transcribe` spans use this form
-      to carry `:image_count` / `:embedding_count` + `:chunk_count` /
-      `:result_count` + `:flagged_count` / `:audio_bytes` /
-      `:text_length` as measurements (numeric metrics →
+      `:moderate`, `:synthesize`, `:transcribe` and `:classify` spans use
+      this form to carry `:image_count` / `:embedding_count` +
+      `:chunk_count` / `:result_count` + `:flagged_count` /
+      `:audio_bytes` / `:text_length` / `:answer_count` as measurements (numeric metrics →
       measurements; structured context → metadata).
 
   Caller-supplied `start_metadata` is forwarded to the `:start` event
@@ -217,7 +227,7 @@ defmodule ALLM.Telemetry do
   `:chats` / `:steps`); valid names are
   `:generate | :stream | :step | :chat | :tool | :image | :embed |
   :moderate | :synthesize | :transcribe | :stream_synthesize |
-  :stream_transcribe`.
+  :stream_transcribe | :classify`.
 
   ## Carve-out: `:stream :stop` `:response` is `nil`
 

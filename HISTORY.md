@@ -1,3 +1,18 @@
+## [FEAT] Add ALLM.classify/3 façade and :classify telemetry span
+*Sunday, September 27th at 11pm*
+Phase 24.3 of steering/2026-09-22_JEV_SUPPORT.md (spec §41): ALLM.classify/3 
+and ALLM.classification_request/2 run typed classification end to end over any 
+ClassificationAdapter. The façade accepts a prebuilt request or 
+binary/map/list state, stringifies atom question ids, checks adapter presence 
+then validates, stamps the per-slot model (request.model || 
+engine.classification_model, never engine.model), and dispatches through 
+Retry.run/3 using the shared capability dispatch-opts and request-id helpers. 
+Adapter invariant 1 is enforced with an ArgumentError, and a [:allm, :classify, 
+...] span reports question_count, answer_count and usage. The duplicated 
+per-capability dispatch shape is ticketed as deferred DRY.
+
+---
+
 ## [FEAT] Add classification adapter behaviour, engine slots and Fake
 *Sunday, September 27th at 11pm*
 Phase 24.2 of steering/2026-09-22_JEV_SUPPORT.md (spec §41): the runtime 

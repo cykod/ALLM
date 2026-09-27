@@ -26,6 +26,7 @@ defmodule ALLMFacadeDoctestInventoryTest do
     moderation_request: 2,
     speech_request: 2,
     transcription_request: 2,
+    classification_request: 2,
     request: 2,
     # Stateless execution
     generate: 3,
@@ -46,7 +47,9 @@ defmodule ALLMFacadeDoctestInventoryTest do
     transcribe: 3,
     stream_synthesize: 3,
     stream_synthesize_input: 3,
-    stream_transcribe: 3
+    stream_transcribe: 3,
+    # Classification
+    classify: 3
   ]
 
   describe "every public ALLM function has a doctest" do
