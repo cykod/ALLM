@@ -16,6 +16,21 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   # Req's own `receive_timeout` default (15 s) is too short for a long clip.
   @default_timeout_ms 60_000
 
+  # Both stream paths: milliseconds of silence (no transport message and,
+  # on the WebSocket path, no input chunk) before the stream ends with
+  # `:timeout`.
+  @default_stream_timeout 60_000
+
+  # ElevenLabs closes an idle `/stream-input` socket after
+  # `inactivity_timeout` seconds (documented default 20, maximum 180).
+  @max_inactivity_timeout 180
+
+  # `/stream-input` query parameters sent unless `options["query"]` sets
+  # them. `auto_mode=true` gave the first audio frame in 238 ms against
+  # 563 ms under the provider's default `chunk_length_schedule` (2026-09-27
+  # probe, `speech_stream/recorded/ws_tokens*.json`, same four tokens).
+  @ws_query_defaults %{"auto_mode" => "true"}
+
   # `request.options` keys that the adapter owns. `output_format` is derived
   # from `format` + `sample_rate`, `model_id` and `text` duplicate modelled
   # fields. They are dropped with a debug log. `query` is not dropped: it
@@ -85,6 +100,10 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
       above.
     * The HTTP receive timeout defaults to #{div(@default_timeout_ms, 1000)} s
       when `opts[:request_timeout]` is absent.
+    * On `/stream-input` only: `inactivity_timeout` is
+      `min(#{@max_inactivity_timeout}, ceil(stream_timeout / 1000))` seconds, and
+      `auto_mode=true` unless `options["query"]` sets `auto_mode` (see
+      `stream_synthesize_input/3` for the latency and quality trade-off).
 
   ## Pre-flight gates
 
@@ -114,6 +133,35 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   `opts[:request_id]` is reflected onto `response.request_id`, and
   `request.metadata` round-trips onto `response.metadata`.
 
+  ## Streaming
+
+  This module also implements `ALLM.SpeechStreamAdapter`, with both
+  callbacks:
+
+    * `stream_synthesize/2` sends the same request to
+      `POST /v1/text-to-speech/{voice_id}/stream` with `Finch.async_request/3`
+      (HTTP/1, the `ALLM.Finch` pool) and emits one `:audio_delta` per body
+      chunk. The body is raw chunked audio (observed 2026-09-27: 44
+      characters of `pcm_24000` arrived in 26 chunks between 425 ms and
+      545 ms). `:speech_completed.id` is the `request-id` header.
+    * `stream_synthesize_input/3` speaks an enumerable of text chunks over
+      `wss://<host>/v1/text-to-speech/{voice_id}/stream-input`, through
+      `ALLM.Providers.Support.WebSocket`. The key goes in the upgrade
+      request's `xi-api-key` header, never in the URL.
+
+  | Concern | `/stream-input` (observed 2026-09-27) |
+  |---------|------------------------------------------|
+  | Query | `model_id`, `output_format`, `inactivity_timeout`, `auto_mode=true` by default; `options["query"]` adds parameters under the first three and may replace `auto_mode` |
+  | Initial message | `{"text": " "}` plus `voice_settings` (with `speed`) and the other `options` keys. Unknown keys are ignored |
+  | Text | `{"text": text}`, no space appended; whole words only under `auto_mode` (the adapter buffers to a word boundary), each non-empty chunk verbatim without it |
+  | End of input | `{"text": "", "flush": true}`, then `{"text": ""}`; the server answers with its last audio, `isFinal: true` and a close 1000 |
+  | Audio | `{"audio": base64, "alignment", "normalizedAlignment", "isFinal"}`; a `nil` or `""` audio is skipped |
+  | Errors | a bad or missing key and an unknown voice still upgrade with 101, then send `{"error": code, "message", "code": 1008}` and close 1008. `invalid_api_key` and `authentication_required` are `:authentication_failed`, `voice_id_does_not_exist` is `:invalid_request` |
+  | Upgrade errors | a model the endpoint does not serve is refused at the upgrade with an HTTP 400 `unsupported_model` (`eleven_v3`), `:invalid_request` |
+  | Keep-alive | `{"text": " "}` after half of `inactivity_timeout` without a client frame; a keep-alive sent between `"Hi"` and `" there."` left the returned alignment `" Hi there."` |
+
+  Neither stream is retried once it has been returned.
+
   ## Retry
 
   Each attempt runs inside `ALLM.Retry.run/3` under `opts[:retry]`
@@ -136,20 +184,22 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
 
   ## Test-injection escape hatch
 
-  `synthesize/2` honours `opts[:adapter_opts][:speech_script]`: when the key
-  is present, the call is handed to `ALLM.Providers.FakeSpeech.synthesize/2`
+  `synthesize/2`, `stream_synthesize/2` and `stream_synthesize_input/3`
+  honour `opts[:adapter_opts][:speech_script]`: when the key is present, the
+  call is handed to the same-named `ALLM.Providers.FakeSpeech` function
   BEFORE any of this adapter's gates run. `prepare_request/2` returns a stub
   error under the same key.
   """
 
   @behaviour ALLM.SpeechAdapter
+  @behaviour ALLM.SpeechStreamAdapter
   @behaviour ALLM.Providers.Support.SpeechAdapter
 
-  alias ALLM.{Audio, Keys, SpeechRequest, SpeechResponse, Usage}
-  alias ALLM.Error.SpeechAdapterError
+  alias ALLM.{Audio, Keys, SpeechEvent, SpeechRequest, SpeechResponse, Usage, Validate}
+  alias ALLM.Error.{SpeechAdapterError, ValidationError}
   alias ALLM.Providers.FakeSpeech
   alias ALLM.Providers.Support.ElevenLabs, as: Support
-  alias ALLM.Providers.Support.HTTPResponse
+  alias ALLM.Providers.Support.{HTTPResponse, InputPump, WebSocket}
   alias ALLM.Providers.Support.SpeechAdapter, as: SpeechSupport
 
   @doc """
@@ -226,6 +276,201 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
     end
   end
 
+  @doc """
+  Stream speech for `request.input` from ElevenLabs' HTTP stream endpoint
+  (`POST /v1/text-to-speech/{voice_id}/stream`) as it is synthesized.
+
+  Returns `{:ok, enumerable}` of `ALLM.SpeechEvent` values, or
+  `{:error, %ALLM.Error.SpeechAdapterError{}}` from a pre-flight gate. The
+  three gates of `synthesize/2` run first, then `ALLM.Keys.fetch!/2` (which
+  raises `%ALLM.Error.EngineError{reason: :missing_key}` by design). No
+  HTTP request is made until the enumerable is reduced.
+
+  **Injected defaults:** the same as `synthesize/2`: `voice` is
+  `"#{@default_voice}"` and `model_id` is `"#{@default_model}"` when the
+  request leaves them `nil`; `output_format` is `mp3_44100_128` for a `nil`
+  format, and a `nil` `sample_rate` takes the format's default. The URL and
+  JSON body are `synthesize/2`'s, with `/stream` appended to the path.
+
+  **Options** (each read from the top level of `opts`;
+  `ALLM.stream_synthesize/3` hoists an engine's `adapter_opts:` transport
+  keys there):
+
+    * `:stream_timeout` — milliseconds of silence between two transport
+      messages before the stream ends with `:timeout`. Default
+      #{@default_stream_timeout}.
+    * `:receive_timeout`, `:request_timeout`, `:pool_timeout` — forwarded
+      to `Finch.async_request/3`.
+    * `:finch_name` (default `ALLM.Finch`) and `:finch_module` (default
+      `Finch`; tests pass `ALLM.Test.FinchStub`).
+
+  **Events:** `:speech_started` once the response headers arrive (`format`
+  from the `content-type`, `sample_rate` the requested rate), one
+  `:audio_delta` per non-empty body chunk, then `:speech_completed`, whose
+  `id` is the `request-id` response header. Usage is all-`nil`. A failure
+  ends the stream with one `{:error, _}`: an HTTP error status is
+  classified from its body exactly as `synthesize/2` classifies it; a 200
+  that is not `audio/*` is `:malformed_response`; a 200 with no audio is
+  `:invalid_request` with `metadata.cause: :empty_input`; silence past
+  `:stream_timeout` is `:timeout`; a transport failure is `:network_error`.
+
+  **Halting** the stream early (`Enum.take/2`) cancels the HTTP request and
+  removes its pending messages from the calling process's mailbox. A
+  stream is never retried once it has been returned.
+
+  `opts[:adapter_opts][:speech_script]` hands the call to
+  `ALLM.Providers.FakeSpeech.stream_synthesize/2` before any gate runs.
+
+  ## Examples
+
+      iex> req = ALLM.SpeechRequest.new(input: "Hello.", format: :pcm)
+      iex> opts = [adapter_opts: [speech_script: [{:ok, "PCM-bytes"}]]]
+      iex> {:ok, events} = ALLM.Providers.ElevenLabs.Speech.stream_synthesize(req, opts)
+      iex> for {:audio_delta, bytes} <- events, into: "", do: bytes
+      "PCM-bytes"
+
+      iex> req = ALLM.SpeechRequest.new(input: "Hi.", format: :flac)
+      iex> {:error, err} = ALLM.Providers.ElevenLabs.Speech.stream_synthesize(req, [])
+      iex> {err.reason, err.metadata.field}
+      {:unsupported_feature, :format}
+  """
+  @impl ALLM.SpeechStreamAdapter
+  @spec stream_synthesize(SpeechRequest.t(), keyword()) ::
+          {:ok, Enumerable.t(SpeechEvent.t())} | {:error, SpeechAdapterError.t()}
+  def stream_synthesize(%SpeechRequest{} = request, opts) when is_list(opts) do
+    case SpeechSupport.fetch_speech_script(opts) do
+      nil -> do_stream_synthesize(request, opts)
+      _script -> FakeSpeech.stream_synthesize(request, opts)
+    end
+  end
+
+  @doc """
+  Speak text as it arrives: `input` is an enumerable of text chunks (for
+  example `ALLM.AudioStream.text_deltas/1` over a chat stream), sent over
+  ElevenLabs' WebSocket endpoint
+  `wss://<host>/v1/text-to-speech/{voice_id}/stream-input`.
+
+  `request.input` is ignored. Returns `{:ok, enumerable}` of
+  `ALLM.SpeechEvent` values, or `{:error, %ALLM.Error.SpeechAdapterError{}}`
+  from a pre-flight gate. The gates run in this order, then
+  `ALLM.Keys.fetch!/2`, before the enumerable is returned:
+
+    1. **Request shape.** `ALLM.Validate.speech_request(request, input: :streamed)`;
+       a failure is `:invalid_request` with the validator's errors on
+       `metadata.errors`.
+    2. **Instructions** and 3. **format and sample rate**, as in
+       `synthesize/2` (`:unsupported_feature`).
+
+  No socket is opened until the enumerable is reduced. The stream then
+  connects, sends the initial message, emits `:speech_started`, and only
+  then starts reducing `input` (in a helper process, see
+  `ALLM.Providers.Support.InputPump`), so an upgrade the server refuses
+  (any status other than 101, such as the HTTP 400 for `eleven_v3`) never
+  reduces the input. **A bad key or an unknown voice is not refused at the
+  upgrade:** ElevenLabs answers it with 101 and rejects it afterwards with
+  an error frame and a close 1008. By then `:speech_started` has been
+  emitted and the pump has started, so the input may already be reduced
+  (up to the pump's credit window ahead of what was sent) before the
+  stream ends with `{:error, %{reason: :authentication_failed}}` (or
+  `:invalid_request` for the voice). When `input` is itself a paid stream,
+  such as `ALLM.AudioStream.text_deltas/1` over a chat, that request is
+  issued even though the key was never valid. The stream does not wait for
+  a first server frame before reducing the input, because ElevenLabs sends
+  nothing until it has received text.
+
+  **Wire.** The key goes in the upgrade request's `xi-api-key` header,
+  never in the URL. The URL carries `model_id`, `output_format` and
+  `inactivity_timeout` (plus `options["query"]`, merged under them). The
+  initial message is `{"text": " "}` plus `voice_settings` (with `speed`)
+  and any other `request.options` keys (e.g. `generation_config`). Text
+  is sent as `{"text": text}` with no space appended: under `auto_mode`
+  (the default) it is buffered to whole words first (see below), and with
+  `auto_mode` off each non-empty chunk is sent verbatim. The end of input
+  sends any buffered text, then `{"text": "", "flush": true}` and then
+  `{"text": ""}`.
+
+  **Injected defaults:** `voice` is `"#{@default_voice}"` and `model_id`
+  is `"#{@default_model}"` when the request leaves them `nil`;
+  `output_format` is `mp3_44100_128` for a `nil` format and a `nil`
+  `sample_rate` takes the format's default; `inactivity_timeout` is
+  `min(#{@max_inactivity_timeout}, ceil(stream_timeout / 1000))` seconds,
+  and #{@max_inactivity_timeout} when `:stream_timeout` is `:infinity`, so
+  the server does not close a slow input's socket before this stream
+  would; and `auto_mode=true`, unless `options["query"]` sets `auto_mode`
+  itself. When no frame has been sent for half of `inactivity_timeout`, the
+  stream sends ElevenLabs' documented keep-alive, `{"text": " "}`.
+
+  **Latency against quality: `auto_mode` plus word buffering.**
+  `auto_mode=true` is the default because it produced the first audio
+  sooner (238 ms against 563 ms from the first text chunk, one probe of
+  the four chunks `["Hel", "lo", " world", "."]` on 2026-09-27). Under
+  `auto_mode` ElevenLabs voices every text frame as it arrives: in that
+  probe `"Hel"` and `"lo"` were generated as separate clips (2.1 s against
+  1.0 s for the same text under the provider's default buffering), and
+  ElevenLabs recommends `auto_mode` only for whole words or sentences.
+  So while `auto_mode` is on, the adapter holds incoming text until a word
+  boundary and sends only whole words: `["Hel", "lo", " world", "."]` goes
+  out as `"Hello "` and, at the end of input, `"world."`. A boundary is
+  whitespace or one of `! ? ;` and the CJK full-width marks; `.`, `,`, `:`
+  and `'` are sent at the space that follows them, because they also occur
+  inside words and numbers ("3.14", "don't"). Text with no boundary at all
+  waits for the end of input. To turn both off, pass
+  `options: %{"query" => %{"auto_mode" => false}}`: each chunk is then sent
+  verbatim and ElevenLabs buffers by its `chunk_length_schedule` (tunable
+  through
+  `options: %{"generation_config" => %{"chunk_length_schedule" => [...]}}`),
+  so the first audio waits for that schedule or the end of input.
+
+  **Options:** `:stream_timeout` (default #{@default_stream_timeout}) is the
+  silence allowed between two messages, where both a server frame and an
+  input chunk count, so a slow input does not time out a socket whose
+  server is waiting for text. `:connect_timeout` bounds the upgrade.
+  `:ws_module` is the `ALLM.Providers.Support.WebSocket` implementation
+  (default `ALLM.Providers.Support.WebSocket.Mint`).
+  `adapter_opts[:input_window]` is the input pump's credit window (default
+  8).
+
+  **Events and failures:** `:speech_started` (format, MIME type and sample
+  rate from the requested `output_format`), one `:audio_delta` per server
+  audio frame, and `:speech_completed` on the server's `isFinal`. A failure
+  ends the stream with one `{:error, _}`, `:invalid_request` for the input
+  rules of `ALLM.SpeechStreamAdapter` (`metadata.cause` `:invalid_input_chunk`,
+  `:empty_input`, `:input_raised` or `:input_crashed`), a classified server
+  error frame (an invalid or missing key is `:authentication_failed`, an
+  unknown voice `:invalid_request`), `:network_error` for a transport
+  failure or a close before `isFinal`, and `:timeout`.
+
+  **Halting** the stream closes the socket, stops the input pump, and
+  removes the socket's and the pump's pending messages from the calling
+  process's mailbox.
+
+  `opts[:adapter_opts][:speech_script]` hands the call to
+  `ALLM.Providers.FakeSpeech.stream_synthesize_input/3` before any gate
+  runs.
+
+  ## Examples
+
+      iex> req = ALLM.SpeechRequest.new(input: "", format: :pcm)
+      iex> opts = [adapter_opts: [speech_script: [{:ok, "PCM-bytes"}]]]
+      iex> {:ok, events} = ALLM.Providers.ElevenLabs.Speech.stream_synthesize_input(req, ["Hel", "lo."], opts)
+      iex> for {:audio_delta, bytes} <- events, into: "", do: bytes
+      "PCM-bytes"
+
+      iex> req = ALLM.SpeechRequest.new(input: "", instructions: "Whisper.")
+      iex> {:error, err} = ALLM.Providers.ElevenLabs.Speech.stream_synthesize_input(req, ["Hi."], [])
+      iex> {err.reason, err.metadata.field}
+      {:unsupported_feature, :instructions}
+  """
+  @impl ALLM.SpeechStreamAdapter
+  @spec stream_synthesize_input(SpeechRequest.t(), Enumerable.t(String.t()), keyword()) ::
+          {:ok, Enumerable.t(SpeechEvent.t())} | {:error, SpeechAdapterError.t()}
+  def stream_synthesize_input(%SpeechRequest{} = request, input, opts) when is_list(opts) do
+    case SpeechSupport.fetch_speech_script(opts) do
+      nil -> do_stream_synthesize_input(request, input, opts)
+      _script -> FakeSpeech.stream_synthesize_input(request, input, opts)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Public testing seams (`@doc false` + `@spec`).
   #
@@ -251,22 +496,79 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   # UNDER `output_format`. Assumes the request passed the gates; an
   # unsupported format raises here.
   @spec url(SpeechRequest.t(), keyword()) :: String.t()
-  def url(%SpeechRequest{} = request, opts) do
+  def url(%SpeechRequest{} = request, opts),
+    do: build_url(Support.base_url(opts), request, "", %{}, %{})
+
+  @doc false
+  # The HTTP stream URL: `url/2` with `/stream` after the voice, so the same
+  # injected voice and `output_format` defaults apply.
+  @spec stream_url(SpeechRequest.t(), keyword()) :: String.t()
+  def stream_url(%SpeechRequest{} = request, opts),
+    do: build_url(Support.base_url(opts), request, "/stream", %{}, %{})
+
+  @doc false
+  # The `/stream-input` WebSocket URL. The scheme follows the base URL
+  # (`https` becomes `wss`, `http` becomes `ws`). Adapter-injected defaults:
+  # the voice "JBFqnCBsd6RMkjVDRZzb" when nil, `model_id` "eleven_flash_v2_5"
+  # when nil, `output_format` as in `url/2`, and `inactivity_timeout`
+  # derived from `opts[:stream_timeout]` (`inactivity_timeout/1`), all
+  # structural (`options["query"]` merges UNDER them); and `auto_mode=true`,
+  # a default that `options["query"]["auto_mode"]` replaces (the lower
+  # first-audio latency of the 2026-09-27 probe). The public
+  # `stream_synthesize_input/3` doc states each. The API key is never part
+  # of it.
+  @spec ws_url(SpeechRequest.t(), keyword()) :: String.t()
+  def ws_url(%SpeechRequest{} = request, opts) do
+    structural = %{
+      "model_id" => request.model || @default_model,
+      "inactivity_timeout" =>
+        Integer.to_string(
+          inactivity_timeout(Keyword.get(opts, :stream_timeout, @default_stream_timeout))
+        )
+    }
+
+    opts
+    |> Support.base_url()
+    |> ws_base()
+    |> build_url(request, "/stream-input", structural, @ws_query_defaults)
+  end
+
+  @doc false
+  # Seconds of client silence after which ElevenLabs closes a
+  # `/stream-input` socket: `ceil(stream_timeout / 1000)`, capped at 180,
+  # the documented maximum, and 180 for `:infinity`.
+  @spec inactivity_timeout(timeout()) :: pos_integer()
+  def inactivity_timeout(:infinity), do: @max_inactivity_timeout
+
+  def inactivity_timeout(ms) when is_integer(ms) and ms > 0,
+    do: min(@max_inactivity_timeout, div(ms + 999, 1000))
+
+  # `defaults` sit under `options["query"]`, `structural` over it.
+  defp build_url(base, %SpeechRequest{} = request, suffix, structural, defaults) do
     {:ok, %{output_format: output_format}} =
       Support.output_format(request.format, request.sample_rate)
 
-    query =
+    user_query =
       request.options
       |> SpeechSupport.stringify_keys()
       |> Map.get("query")
       |> query_params()
+
+    query =
+      defaults
+      |> Map.merge(user_query)
+      |> Map.merge(structural)
       |> Map.put("output_format", output_format)
 
-    Support.base_url(opts) <>
+    base <>
       @endpoint <>
       URI.encode(request.voice || @default_voice, &URI.char_unreserved?/1) <>
-      "?" <> URI.encode_query(query)
+      suffix <> "?" <> URI.encode_query(query)
   end
+
+  defp ws_base("https://" <> rest), do: "wss://" <> rest
+  defp ws_base("http://" <> rest), do: "ws://" <> rest
+  defp ws_base(other), do: other
 
   @doc false
   # Adapter-injected default: `model_id` "eleven_flash_v2_5" when nil (the
@@ -431,6 +733,471 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
       |> HTTPResponse.apply_receive_timeout(opts, @default_timeout_ms)
 
     {:ok, req}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Internals — HTTP streaming
+  #
+  # The `Stream.resource/3` state machine over `Finch.async_request/3` is
+  # `Support.SpeechAdapter.stream_resource/6`; this module supplies the
+  # request and the three streaming callbacks below.
+  # ---------------------------------------------------------------------------
+
+  defp do_stream_synthesize(%SpeechRequest{} = request, opts) do
+    with :ok <- run_gates(request, opts) do
+      api_key = Keys.fetch!(:elevenlabs, opts)
+
+      finch_request =
+        Finch.build(
+          :post,
+          stream_url(request, opts),
+          Support.headers(api_key) ++ [{"content-type", "application/json"}],
+          Jason.encode!(to_json_body(request, opts))
+        )
+
+      {:ok,
+       SpeechSupport.stream_resource(
+         __MODULE__,
+         :elevenlabs,
+         finch_request,
+         request,
+         opts,
+         @default_stream_timeout
+       )}
+    end
+  end
+
+  @doc false
+  @impl SpeechSupport
+  @spec speech_started(String.t(), Enumerable.t() | map(), SpeechRequest.t(), keyword()) ::
+          SpeechEvent.t()
+  def speech_started(content_type, _headers, %SpeechRequest{} = request, opts) do
+    format = SpeechResponse.mime_to_format(content_type)
+
+    SpeechEvent.speech_started(%{
+      request_id: Keyword.get(opts, :request_id),
+      model: request.model || @default_model,
+      provider: :elevenlabs,
+      format: format,
+      mime_type: if(format, do: SpeechResponse.format_to_mime(format), else: content_type),
+      sample_rate: requested_sample_rate(request)
+    })
+  end
+
+  @doc false
+  @impl SpeechSupport
+  @spec speech_completed(Enumerable.t() | map(), SpeechRequest.t(), keyword()) ::
+          SpeechEvent.t()
+  def speech_completed(headers, %SpeechRequest{} = request, opts) do
+    SpeechEvent.speech_completed(%{
+      request_id: Keyword.get(opts, :request_id),
+      id: HTTPResponse.header_value(headers, "request-id"),
+      usage: %Usage{},
+      metadata: request.metadata
+    })
+  end
+
+  @doc false
+  @impl SpeechSupport
+  @spec empty_audio_error(keyword()) :: SpeechAdapterError.t()
+  def empty_audio_error(opts),
+    do:
+      stream_error(
+        :invalid_request,
+        "ElevenLabs ended the stream without any audio bytes",
+        %{cause: :empty_input},
+        opts
+      )
+
+  # ---------------------------------------------------------------------------
+  # Internals — WebSocket input streaming
+  #
+  # One `Stream.resource/3` whose three functions run in the reducing
+  # process, which therefore owns the socket. The start function connects,
+  # sends the initial message and only then starts the input pump. The next
+  # function selects pump messages and this socket's transport messages
+  # (never anything else in the mailbox); every one of them resets the
+  # silence timer, and a keep-alive is sent when no client frame has gone
+  # out for half of `inactivity_timeout`. The after function closes the
+  # socket, drains its messages and stops the pump.
+  # ---------------------------------------------------------------------------
+
+  defp do_stream_synthesize_input(%SpeechRequest{} = request, input, opts) do
+    with :ok <- gate_streamed_request(request, opts),
+         :ok <- gate_instructions(request, opts),
+         :ok <- gate_output_format(request, opts) do
+      api_key = Keys.fetch!(:elevenlabs, opts)
+
+      {:ok,
+       Stream.resource(
+         fn -> open_input_stream(request, input, api_key, opts) end,
+         &input_next/1,
+         &WebSocket.close_loop/1
+       )}
+    end
+  end
+
+  defp gate_streamed_request(%SpeechRequest{} = request, opts) do
+    case Validate.speech_request(request, input: :streamed) do
+      :ok ->
+        :ok
+
+      {:error, %ValidationError{errors: errors}} ->
+        {:error,
+         SpeechAdapterError.new(:invalid_request,
+           provider: :elevenlabs,
+           message: "invalid speech request: #{inspect(errors)}",
+           metadata: HTTPResponse.build_metadata(%{errors: errors}, opts)
+         )}
+    end
+  end
+
+  defp open_input_stream(request, input, api_key, opts) do
+    ws = Keyword.get(opts, :ws_module, ALLM.Providers.Support.WebSocket.Mint)
+    stream_timeout = Keyword.get(opts, :stream_timeout, @default_stream_timeout)
+
+    state =
+      ws
+      |> WebSocket.loop_state(stream_timeout, div(inactivity_timeout(stream_timeout) * 1000, 2))
+      |> Map.merge(%{
+        request: request,
+        opts: opts,
+        pending: [],
+        spoke?: false,
+        word_buffer: if(auto_mode?(request), do: "", else: nil),
+        bytes: 0,
+        done?: false
+      })
+
+    with {:ok, conn} <- connect(ws, request, api_key, opts),
+         state = %{state | conn: conn},
+         {:ok, state} <- send_json(state, init_message(request, opts)) do
+      %{WebSocket.start_pump(state, input, opts) | pending: [ws_started_event(request, opts)]}
+    else
+      {:error, %SpeechAdapterError{} = error} ->
+        %{state | pending: [{:error, error}], done?: true}
+
+      {:error, state, %SpeechAdapterError{} = error} ->
+        %{state | pending: [{:error, error}], done?: true}
+    end
+  end
+
+  defp connect(ws, request, api_key, opts) do
+    case ws.connect(ws_url(request, opts), Support.headers(api_key), opts) do
+      {:ok, conn} ->
+        {:ok, conn}
+
+      {:error, {:upgrade_status, status, body}} ->
+        {reason, fields} = Support.error_fields(status, body, [], opts)
+        {:error, SpeechAdapterError.new(reason, fields)}
+
+      {:error, {:transport, cause}} ->
+        {:error, transport_failure("WebSocket connect failed", cause, opts)}
+    end
+  end
+
+  @doc false
+  # The first message on `/stream-input`: `{"text": " "}` plus the same
+  # `voice_settings` (with `speed`) and `request.options` keys the HTTP body
+  # carries. `model_id` goes in the URL instead.
+  @spec init_message(SpeechRequest.t(), keyword()) :: map()
+  def init_message(%SpeechRequest{} = request, opts) do
+    request
+    |> to_json_body(opts)
+    |> Map.delete("model_id")
+    |> Map.put("text", " ")
+  end
+
+  defp input_next(%{pending: [_ | _] = pending} = state), do: {pending, %{state | pending: []}}
+  defp input_next(%{done?: true} = state), do: {:halt, state}
+
+  # Selects only this stream's messages: the pump's (while it runs) and the
+  # socket's.
+  defp input_next(state) do
+    case WebSocket.next_message(state) do
+      {:pump, classified, state} -> on_pump(classified, state)
+      {:transport, message, state} -> on_transport(message, state)
+      :wake -> on_wake(state)
+    end
+  end
+
+  defp on_wake(state) do
+    if WebSocket.timed_out?(state) do
+      finish(
+        state,
+        stream_error(
+          :timeout,
+          "no server frame or input chunk within stream_timeout (#{state.stream_timeout} ms)",
+          %{},
+          state.opts
+        )
+      )
+    else
+      # ElevenLabs' documented keep-alive: a single space.
+      emit(send_json(state, %{"text" => " "}))
+    end
+  end
+
+  defp on_pump({:input, chunk}, %{pump: {pid, ref}} = state) do
+    InputPump.ack(pid, ref)
+    on_chunk(chunk, state)
+  end
+
+  defp on_pump(:done, %{spoke?: false} = state) do
+    finish(WebSocket.stop_pump(state), empty_input_error(state.opts))
+  end
+
+  defp on_pump(:done, state) do
+    state = %{WebSocket.stop_pump(state) | input_done?: true}
+
+    with {:ok, state} <- flush_word_buffer(state),
+         {:ok, state} <- send_json(state, %{"text" => "", "flush" => true}) do
+      emit(send_json(state, %{"text" => ""}))
+    else
+      failed -> emit(failed)
+    end
+  end
+
+  defp on_pump({:failed, cause, info}, state) do
+    error =
+      SpeechAdapterError.new(:invalid_request,
+        provider: :elevenlabs,
+        message: "the input stream failed: #{info.message}",
+        cause: info,
+        metadata: HTTPResponse.build_metadata(%{cause: cause}, state.opts)
+      )
+
+    finish(WebSocket.stop_pump(state), error)
+  end
+
+  defp on_chunk("", state), do: {[], state}
+
+  defp on_chunk(chunk, state) when is_binary(chunk) do
+    if String.valid?(chunk) do
+      speak(%{state | spoke?: true}, chunk)
+    else
+      finish(state, invalid_chunk_error(state.opts))
+    end
+  end
+
+  defp on_chunk(_chunk, state), do: finish(state, invalid_chunk_error(state.opts))
+
+  # Without `auto_mode` (`word_buffer: nil`) each chunk goes out verbatim
+  # and ElevenLabs' `chunk_length_schedule` does the buffering. With it,
+  # ElevenLabs voices every text frame as it arrives, so the text is held
+  # until a word boundary (see `split_at_word_boundary/1`) and only whole
+  # words are sent; the remainder is sent at the end of input.
+  defp speak(%{word_buffer: nil} = state, chunk), do: emit(send_json(state, %{"text" => chunk}))
+
+  defp speak(state, chunk) do
+    case split_at_word_boundary(state.word_buffer <> chunk) do
+      {"", rest} -> {[], %{state | word_buffer: rest}}
+      {words, rest} -> emit(send_json(%{state | word_buffer: rest}, %{"text" => words}))
+    end
+  end
+
+  defp flush_word_buffer(%{word_buffer: buffer} = state) when buffer in [nil, ""], do: {:ok, state}
+
+  defp flush_word_buffer(state),
+    do: send_json(%{state | word_buffer: ""}, %{"text" => state.word_buffer})
+
+  @doc false
+  # Splits `text` after its last word boundary: `{words, rest}`, where
+  # `words` ends at a boundary (or is `""`) and `rest` is the unfinished
+  # word. A boundary is Unicode whitespace or one of `! ? ;` and the CJK
+  # full-width marks `。 、 ， ！ ？ ； ：` and `…`. `.`, `,`, `:`, `'` and
+  # `-` are not boundaries on their own, because they occur inside words
+  # and numbers ("3.14", "1,000", "10:30", "don't"); followed by a space
+  # they are sent at the space.
+  @spec split_at_word_boundary(String.t()) :: {String.t(), String.t()}
+  def split_at_word_boundary(text) when is_binary(text) do
+    # Greedy `.*` puts the split after the LAST boundary.
+    case Regex.run(~r/\A(.*[\s!?;。、，！？；：…])(.*)\z/su, text, capture: :all_but_first) do
+      [words, rest] -> {words, rest}
+      nil -> {"", text}
+    end
+  end
+
+  defp auto_mode?(%SpeechRequest{options: options}) do
+    user_query =
+      options
+      |> SpeechSupport.stringify_keys()
+      |> Map.get("query")
+      |> query_params()
+
+    @ws_query_defaults |> Map.merge(user_query) |> Map.get("auto_mode") |> to_string() == "true"
+  end
+
+  defp on_transport(message, state) do
+    case WebSocket.handle_transport(state, message) do
+      {:ok, state, frames} ->
+        on_frames(frames, state, [])
+
+      :unknown ->
+        {[], state}
+
+      {:error, state, cause} ->
+        finish(state, transport_failure("WebSocket transport failed", cause, state.opts))
+    end
+  end
+
+  # Each frame yields `{:cont, events, state}` or, for a terminal,
+  # `{:halt, events, state}` whose last event is the terminal one.
+  defp on_frames([], state, acc), do: {acc, state}
+
+  defp on_frames([frame | rest], state, acc) do
+    case on_frame(frame, state) do
+      {:cont, events, state} -> on_frames(rest, state, acc ++ events)
+      {:halt, events, state} -> {acc ++ events, %{state | done?: true}}
+    end
+  end
+
+  defp on_frame({:text, json}, state) do
+    case Jason.decode(json) do
+      {:ok, %{} = payload} -> on_payload(payload, state)
+      _ -> halt_error(state, malformed_error("server frame is not a JSON object", state.opts))
+    end
+  end
+
+  defp on_frame({:close, code, reason}, state) do
+    {error_reason, fields} = Support.ws_error_fields(%{"message" => reason}, code, state.opts)
+    halt_error(state, SpeechAdapterError.new(closed_reason(error_reason), fields))
+  end
+
+  defp on_frame(:closed, state) do
+    halt_error(
+      state,
+      stream_error(
+        :network_error,
+        "ElevenLabs closed the connection before isFinal",
+        %{},
+        state.opts
+      )
+    )
+  end
+
+  defp on_frame(_binary, state), do: {:cont, [], state}
+
+  # A close before `isFinal`: an orderly 1000 still means the clip was cut
+  # short.
+  defp closed_reason(:unknown), do: :network_error
+  defp closed_reason(reason), do: reason
+
+  defp on_payload(payload, state) do
+    if Support.ws_error?(payload) do
+      {reason, fields} = Support.ws_error_fields(payload, nil, state.opts)
+      halt_error(state, SpeechAdapterError.new(reason, fields))
+    else
+      on_audio_payload(payload, state)
+    end
+  end
+
+  defp on_audio_payload(payload, state) do
+    case audio_events(Map.get(payload, "audio"), state) do
+      {:ok, events, state} ->
+        if Map.get(payload, "isFinal") == true,
+          do: final(events, state),
+          else: {:cont, events, state}
+
+      {:error, error} ->
+        halt_error(state, error)
+    end
+  end
+
+  defp audio_events(audio, state) when audio in [nil, ""], do: {:ok, [], state}
+
+  defp audio_events(audio, state) when is_binary(audio) do
+    case Base.decode64(audio) do
+      {:ok, bytes} ->
+        {:ok, [SpeechEvent.audio_delta(bytes)], %{state | bytes: state.bytes + byte_size(bytes)}}
+
+      :error ->
+        {:error, malformed_error("audio is not base64", state.opts)}
+    end
+  end
+
+  defp audio_events(_audio, state),
+    do: {:error, malformed_error("audio is not a string", state.opts)}
+
+  # `isFinal` ends the clip. With no audio at all the grammar's empty-input
+  # rule applies, as on the HTTP stream.
+  defp final(_events, %{bytes: 0} = state), do: halt_error(state, empty_audio_error(state.opts))
+
+  defp final(events, state) do
+    completed =
+      SpeechEvent.speech_completed(%{
+        request_id: Keyword.get(state.opts, :request_id),
+        id: nil,
+        usage: %Usage{},
+        metadata: state.request.metadata
+      })
+
+    {:halt, events ++ [completed], state}
+  end
+
+  defp halt_error(state, %SpeechAdapterError{} = error), do: {:halt, [{:error, error}], state}
+
+  defp send_json(state, message) do
+    case WebSocket.send_json(state, message) do
+      {:ok, state} ->
+        {:ok, state}
+
+      {:error, state, cause} ->
+        {:error, state, transport_failure("WebSocket send failed", cause, state.opts)}
+    end
+  end
+
+  defp emit({:ok, state}), do: {[], state}
+  defp emit({:error, state, error}), do: finish(state, error)
+
+  defp finish(state, %SpeechAdapterError{} = error), do: {[{:error, error}], %{state | done?: true}}
+
+  defp ws_started_event(%SpeechRequest{} = request, opts) do
+    {:ok, output} = Support.output_format(request.format, request.sample_rate)
+
+    SpeechEvent.speech_started(%{
+      request_id: Keyword.get(opts, :request_id),
+      model: request.model || @default_model,
+      provider: :elevenlabs,
+      format: output.format,
+      mime_type: output.mime_type,
+      sample_rate: output.sample_rate
+    })
+  end
+
+  defp empty_input_error(opts),
+    do:
+      stream_error(
+        :invalid_request,
+        "the input produced no text to speak",
+        %{cause: :empty_input},
+        opts
+      )
+
+  defp invalid_chunk_error(opts),
+    do:
+      stream_error(
+        :invalid_request,
+        "input chunks must be UTF-8 strings",
+        %{cause: :invalid_input_chunk},
+        opts
+      )
+
+  defp transport_failure(message, cause, opts) do
+    SpeechAdapterError.new(:network_error,
+      provider: :elevenlabs,
+      message: message,
+      cause: HTTPResponse.sanitize_cause(cause),
+      metadata: HTTPResponse.build_metadata(%{}, opts)
+    )
+  end
+
+  defp stream_error(reason, message, metadata, opts) do
+    SpeechAdapterError.new(reason,
+      provider: :elevenlabs,
+      message: message,
+      metadata: HTTPResponse.build_metadata(metadata, opts)
+    )
   end
 
   # ---------------------------------------------------------------------------

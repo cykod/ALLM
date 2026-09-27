@@ -241,4 +241,88 @@ defmodule ALLM.Providers.Support.ElevenLabsTest do
       assert ElevenLabs.headers("sk_x") == [{"xi-api-key", "sk_x"}]
     end
   end
+
+  describe "ws_reason/2 (one row per WebSocket code of the error classification)" do
+    for {code, reason} <- [
+          {"invalid_api_key", :authentication_failed},
+          {"authentication_required", :authentication_failed},
+          {"auth_error", :authentication_failed},
+          {"unaccepted_terms", :authentication_failed},
+          {"quota_exceeded", :invalid_request},
+          {"insufficient_credits", :invalid_request},
+          {"rate_limited", :rate_limited},
+          {"commit_throttled", :rate_limited},
+          {"queue_overflow", :rate_limited},
+          {"resource_exhausted", :rate_limited},
+          {"session_time_limit_exceeded", :context_length_exceeded},
+          {"input_error", :invalid_request},
+          {"invalid_request", :invalid_request},
+          {"chunk_size_exceeded", :invalid_request},
+          {"insufficient_audio_activity", :invalid_request},
+          {"voice_id_does_not_exist", :invalid_request},
+          {"error", :provider_unavailable},
+          {"transcriber_error", :provider_unavailable}
+        ] do
+      test "#{code} -> #{reason}, whatever the close code" do
+        assert ElevenLabs.ws_reason(unquote(code), 1008) == unquote(reason)
+        assert ElevenLabs.ws_reason(unquote(code), nil) == unquote(reason)
+      end
+    end
+
+    test "an unknown code falls back on the close code: 1008 -> :invalid_request" do
+      assert ElevenLabs.ws_reason("something_new", 1008) == :invalid_request
+      assert ElevenLabs.ws_reason(nil, 1008) == :invalid_request
+    end
+
+    test "any other close code -> :network_error; no code at all -> :unknown" do
+      assert ElevenLabs.ws_reason(nil, 1011) == :network_error
+      assert ElevenLabs.ws_reason(nil, 1000) == :network_error
+      assert ElevenLabs.ws_reason(nil, nil) == :unknown
+    end
+  end
+
+  describe "ws_error?/1" do
+    test "a string error, or a message_type ending in error, is an error frame" do
+      assert ElevenLabs.ws_error?(%{"error" => "invalid_api_key"})
+      assert ElevenLabs.ws_error?(%{"message_type" => "auth_error"})
+      refute ElevenLabs.ws_error?(%{"message_type" => "partial_transcript"})
+      refute ElevenLabs.ws_error?(%{"audio" => "AAAA", "isFinal" => nil, "error" => nil})
+    end
+  end
+
+  describe "ws_error_fields/3" do
+    test "the recorded bad-key frame -> :authentication_failed with code, close_code and message" do
+      env = Fixtures.speech_stream_recorded(:ws_bad_key)
+      [error_frame] = for %{"dir" => "out", "text" => t} <- env["frames"], do: Jason.decode!(t)
+
+      assert {:authentication_failed, fields} =
+               ElevenLabs.ws_error_fields(error_frame, nil, request_id: "rid")
+
+      assert fields[:provider] == :elevenlabs
+      assert fields[:message] == "Invalid API key"
+      assert fields[:metadata] == %{code: "invalid_api_key", close_code: 1008, request_id: "rid"}
+    end
+
+    test "a message_type error (realtime STT shape) is classified by its message_type" do
+      assert {:rate_limited, _} =
+               ElevenLabs.ws_error_fields(%{"message_type" => "queue_overflow"}, nil, [])
+    end
+
+    test "a planted key in a provider message is redacted" do
+      {_reason, fields} =
+        ElevenLabs.ws_error_fields(
+          %{"error" => "invalid_api_key", "message" => "bad key sk_abcdefghijklmnop0123"},
+          1008,
+          []
+        )
+
+      assert fields[:message] == "bad key [REDACTED]"
+    end
+
+    test "a close without an error frame names the close code in the message" do
+      assert {:network_error, fields} = ElevenLabs.ws_error_fields(%{}, 1011, [])
+      assert fields[:message] =~ "1011"
+      assert fields[:metadata].close_code == 1011
+    end
+  end
 end

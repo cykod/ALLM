@@ -39,6 +39,45 @@ defmodule ALLM.Providers.ElevenLabsTestFixtures do
   def transcription_synthesized(name) when is_atom(name),
     do: load("transcriptions/synthesized", name)
 
+  @doc """
+  Load `speech_stream/recorded/<name>.json` (Phase 26.7): the `/stream`
+  envelope with `"chunks"`, or a WebSocket session
+  `{"status", "url", "frames", "summary"}`. A frame's `dir` is from the
+  server's side: `"in"` is a client frame, `"out"` a server frame.
+  """
+  @spec speech_stream_recorded(atom()) :: envelope()
+  def speech_stream_recorded(name) when is_atom(name), do: load("speech_stream/recorded", name)
+
+  @doc """
+  The server frames of a recorded WebSocket session, as
+  `ALLM.Test.WebSocketStub` server frames: `{:text, json}` and
+  `{:close, code, reason}`. The recorder keeps only the first audio frame's
+  bytes; every later `"<N bytes>"` placeholder becomes N zero bytes, so the
+  replayed audio has the recorded length.
+  """
+  @spec ws_server_frames(envelope()) :: [tuple()]
+  def ws_server_frames(%{"frames" => frames}) do
+    for %{"dir" => "out"} = frame <- frames,
+        server_frame = to_server_frame(frame),
+        server_frame != nil,
+        do: server_frame
+  end
+
+  defp to_server_frame(%{"text" => text}) do
+    case Jason.decode!(text) do
+      %{"audio" => "<" <> placeholder} = payload ->
+        {n, " bytes>"} = Integer.parse(placeholder)
+        {:text, Jason.encode!(%{payload | "audio" => Base.encode64(:binary.copy(<<0>>, n))})}
+
+      _ ->
+        {:text, text}
+    end
+  end
+
+  defp to_server_frame(%{"close" => [code, reason]}), do: {:close, code, reason}
+  defp to_server_frame(%{"closed" => true}), do: :closed
+  defp to_server_frame(_frame), do: nil
+
   @doc "The raw decoded JSON of a fixture file, `_comment` included (for provenance tests)."
   @spec raw(String.t(), String.t()) :: map()
   def raw(dir, name) do

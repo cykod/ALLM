@@ -1,0 +1,49 @@
+{
+  "frames": [
+    {
+      "dir": "in",
+      "t_ms": 192,
+      "text": "{\"text\":\" \"}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 192,
+      "text": "{\"text\":\"Hi.\"}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 192,
+      "text": "{\"flush\":true,\"text\":\"\"}"
+    },
+    {
+      "dir": "in",
+      "t_ms": 192,
+      "text": "{\"text\":\"\"}"
+    },
+    {
+      "dir": "out",
+      "t_ms": 242,
+      "text": "{\"code\":1008,\"error\":\"voice_id_does_not_exist\",\"message\":\"A voice with voice_id notARealVoiceId000000 does not exist.\"}"
+    },
+    {
+      "close": [
+        1008,
+        "A voice with voice_id notARealVoiceId000000 does not exist."
+      ],
+      "dir": "out",
+      "t_ms": 1042
+    }
+  ],
+  "status": 101,
+  "summary": {
+    "audio_bytes": 0,
+    "audio_frames": 0,
+    "close": [
+      1008,
+      "A voice with voice_id notARealVoiceId000000 does not exist."
+    ],
+    "final_after_flush_ms": null,
+    "first_audio_ms": null
+  },
+  "url": "wss://api.elevenlabs.io/v1/text-to-speech/notARealVoiceId000000/stream-input?inactivity_timeout=60&model_id=eleven_flash_v2_5&output_format=pcm_24000"
+}

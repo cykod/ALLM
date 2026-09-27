@@ -117,11 +117,11 @@ defmodule ALLM.Providers.Support.InputPumpTest do
 
     test "a throw and an exit inside the input are reported with their kind" do
       {_pid, ref} = InputPump.start(Stream.map([1], fn _ -> throw(:oops) end), self(), 8)
-      assert_receive {^ref, {:input_error, %{kind: :throw, message: message}}}
+      assert_receive {^ref, {:input_error, %{kind: :throw, message: message}}}, 1_000
       assert message =~ ":oops"
 
       {_pid, ref} = InputPump.start(Stream.map([1], fn _ -> exit(:gone) end), self(), 8)
-      assert_receive {^ref, {:input_error, %{kind: :exit, message: message}}}
+      assert_receive {^ref, {:input_error, %{kind: :exit, message: message}}}, 1_000
       assert message =~ ":gone"
     end
   end

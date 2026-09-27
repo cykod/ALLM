@@ -12,6 +12,7 @@ Companion to `steering/2026-09-25_ELEVENLABS_TTS_SST.md`. Status, ticks, deviati
 | 26.4 | Completed |
 | 26.5 | Completed — fix-pass widened-fence edits (`lib/allm/adapter.ex`, `lib/allm/stream_runner.ex`, `lib/allm.ex` `run_audio_stream/3`, `support/transport.ex`) landed after the review checkpoint and are unreviewed; pinned by `test/allm/transport_opts_routing_test.exs` + the mutation table in §26.5 Fix pass |
 | 26.6 | Completed (fix pass re-reviewed: `.work/code-reviews/2026-09-26-phase-26-6-fix.md`) |
+| 26.7 | Completed — fix pass re-reviewed (`.work/code-reviews/2026-09-26-phase-26-7-fix.md`, 7 Lows: F4/F5 carried to 26.8 via HANDOFF, rest to polish); owner decision 2026-09-27: word-buffer + `auto_mode` |
 
 ## Phase 26.1 — `Support.HTTPResponse` + `Support.TranscriptionAdapter`
 
@@ -769,3 +770,139 @@ Each mutant was applied to `lib/allm/providers/support/speech_adapter.ex`, then 
 | `conformance/` | not touched, so its gates were not run |
 | `README.md` | not modified (`git diff --stat HEAD -- README.md` empty) |
 
+
+
+## Phase 26.7 — WebSocket transport + ElevenLabs TTS streaming
+
+Built 2026-09-27 on `591e96b`. The working tree is uncommitted; the orchestrator commits after review.
+
+### Checklist (26.7.3)
+
+- [x] `mix.exs` `{:mint_web_socket, "~> 1.0"}`; `mix deps.get` locked `mint_web_socket 1.0.6` (no new transitive dep: `mint 1.7.1` was already locked); `mix.lock` +1 line.
+- [x] `cd conformance && mix deps.get`: `conformance/mix.lock` +1 line (`mint_web_socket`).
+- [x] `ALLM.Providers.Support.WebSocket` (`support/web_socket.ex`, behaviour only) and `ALLM.Providers.Support.WebSocket.Mint` (`support/web_socket/mint.ex`: scheme/host/port from the URL, `ws://` → `:http`; selective handshake receive bounded by `:connect_timeout`; ping answered with a pong; `flush_messages/1`). `test/support/web_socket_stub.ex` (Agent-backed from the start), `test/support/ws_test_server.ex` (`:gen_tcp`, port 0 per server, no new dependency).
+- [x] `ElevenLabs.Speech.stream_synthesize/2` (Finch, on `Support.SpeechAdapter.stream_resource/6` with the three optional callbacks) and `stream_synthesize_input/3` (WebSocket + `InputPump`); both stream suites added to `elevenlabs/speech_conformance_test.exs`.
+- [x] Recorder arms (8 new, behind the overwrite guard); settled rows carry dated `> CORRECTED 2026-09-27 (26.7 probe)` blockquotes in the design (HTTP wire map, WebSocket TTS wire map, Error classification, the WebSocket contract block, Decisions #6 and #11).
+- [x] `groups_for_modules`: `Support.WebSocket` and `Support.WebSocket.Mint`, one row each, under `Providers`.
+
+### HANDOFF rows applied
+
+- **`stream_resource/6`, no clone:** `do_stream_synthesize/2` builds the `Finch.Request` (`stream_url/2`, `to_json_body/2`) and calls `SpeechSupport.stream_resource/6`; `speech_started/4`, `speech_completed/3`, `empty_audio_error/1` are `@impl` callbacks. Speech DRY predicate (`.work/ASKS.md` sun 9/27): empty, exit 1.
+- **After function:** the HTTP path's is `Support.Transport.cancel_and_drain/3` (inside `stream_resource/6`). The WebSocket path's closes the socket, calls `flush_messages/1`, then `InputPump.stop/2`.
+- **Transport opts from the top level:** `:finch_module`, `:finch_name`, `:stream_timeout`, `:ws_module`, `:connect_timeout` are read from `opts` only.
+- **InputPump helpers:** `is_pump_message/2` in the selective `receive`, `classify/2`, `ack/2`, `default_window/0`, `stop/2`. Pump-protocol guard: empty, exit 1.
+- **`ALLM.Test.RaisingFinch`** for the keyless HTTP gates; its WebSocket sibling `ALLM.Test.RaisingWebSocket` for the input gates.
+
+### Live probe (run 2026-09-27, `( set -a; . ./.env; set +a; mix run scripts/record_elevenlabs_audio_fixtures.exs )`)
+
+Exploratory calls first, from a scratchpad script (not committed), through `Support.WebSocket.Mint`: one `"Hi."` session, then bad key (mixed-case and hex-shaped), unknown voice and no key. All four error calls upgraded with **101** and then sent an error frame and closed 1008; the no-key frame was `{"code": 1008, "error": "authentication_required", "message": "None of the authentication methods (xi-api-key, authorization header, single-use token) were found. …"}`. One live smoke of the finished adapter (`["Hi", "."]`, pcm) followed.
+
+Recorder run 1: exit 1, nothing written. Every arm matched except `ws_v3`, which the arm expected to upgrade: `eleven_v3` was refused at the upgrade with HTTP 400. The arm was widened to `[101, 400]` with a verdict for each (see Deviations). Run 2: 8 live calls, exit 0, every arm matched, 8 files written. Run 3: `0 live calls`, exit 0.
+
+| Arm | Got | Observation |
+|-----|-----|-------------|
+| `stream_chunked` (`/stream`, flash, 44 chars, `pcm_24000`) | 200 | `audio/pcm`, `transfer-encoding: chunked`, 140,434 bytes in 26 data messages, first 425 ms, last 545 ms; `request-id` and `character-cost: 22` present |
+| `ws_tokens` (default `chunk_length_schedule`) | 101 | first audio **563 ms** after the first text frame (after the flush), 2 audio frames, 46,812 bytes; alignment `" Hello world."`, 975 ms; `isFinal` 221 ms after the flush; close 1000 |
+| `ws_tokens_auto_mode` (`auto_mode=true`) | 101 | first audio **238 ms** after the first text frame, 5 audio frames, 100,310 bytes; each chunk generated separately (`"Hel"` 557 ms, `"lo"` 464 ms, `" world"` 604 ms, `"."` 464 ms); close 1000 |
+| `ws_end` (`inactivity_timeout=1`; `"Hi"`, 500 ms, keep-alive `" "`, 200 ms, `" there."`, flush, close) | 101 | alignment `" Hi there."` (789 ms), no extra pause; `isFinal` 261 ms after the flush; close 1000 |
+| `ws_control` (`not_a_real_field` in the initial message) | 101 | audio and `isFinal`: unknown init fields are ignored |
+| `ws_v3` (`model_id=eleven_v3`) | **400** at the upgrade | `{"detail": {"type": "validation_error", "code": "unsupported_model", "message": "Model 'eleven_v3' is not supported on the text-to-speech websocket endpoint. Use the text-to-dialogue websocket endpoint instead.", …}}` |
+| `ws_bad_voice` | 101 | `{"code": 1008, "error": "voice_id_does_not_exist", "message": …}`, then close 1008 with the message; no audio |
+| `ws_bad_key` (mixed-case `sk_`) | 101 | `{"code": 1008, "error": "invalid_api_key", "message": "Invalid API key"}`, then close 1008; no key echo |
+
+Cost: about 44 + 4 × 12 characters of synthesis per clean run, plus the exploratory calls and the failed first run (≈ 200 characters in all, under $0.02 at $0.05 / 1K). No input-length arm.
+
+### Owner decision needed
+
+- **The `/stream-input` latency default.** Decision #11 binds the default to whichever setting gives the lower first-audio time, and `auto_mode=true` won (238 ms against 563 ms, one run each), so the adapter sends `auto_mode=true` unless `options["query"]` sets `auto_mode`. The same run shows the two settings do not produce the same speech: under `auto_mode` each chunk was generated as its own clip (`"Hel"`, `"lo"`, `" world"`, `"."`: 2.1 s against 0.98 s for the whole sentence), and ElevenLabs' docs recommend `auto_mode` only for whole words or sentences. `ALLM.AudioStream.text_deltas/1` feeds raw LLM token deltas, which split words. Options: (a) keep `auto_mode=true` (the rule as written; the trade-off and the `auto_mode: false` escape hatch are in the `stream_synthesize_input/3` `@doc`); (b) default to the provider's `chunk_length_schedule` (quality first; first audio waits for 120 buffered characters or the flush); (c) a middle setting, e.g. a short `chunk_length_schedule` such as `[50]` in the initial message, which needs one more measured arm. The flip is one attribute (`@ws_query_defaults` in `lib/allm/providers/elevenlabs/speech.ex`) plus the `@doc` paragraph and one URL test row.
+- **Resolved 2026-09-27 by the owner: "Word-buffer + auto_mode"** — option (a) plus adapter-side word buffering. Applied in the fix pass; see "Fix pass" below.
+
+### Deviations
+
+- `[structural, documented]` **`Support.WebSocket` has a sixth callback, `message_tag/1`.** The contract block's `handle_message/2 → :unknown` cannot select messages on its own: a message has to be received before it can be passed in, and a catch-all `receive` would consume the consumer's unrelated messages. Every transport message of a connection is a 2- or 3-tuple whose second element is the tag (the socket for Mint, a reference for the stub), and the adapter's `receive` guard (`is_transport_message/2`, a `defguardp`) selects on it. Design CORRECTED under the contract block. *(Fix pass: the guard is now a public `defguard` on `ALLM.Providers.Support.WebSocket`, code review F1.)*
+- `[structural, documented]` **The WebSocket scheme follows the base URL** (`https` → `wss`, `http` → `ws`, `ws`/`wss` kept), so the end-to-end rows reach `WSTestServer` with `base_url: "http://127.0.0.1:<port>"`. The default and every `https://` base URL still give `wss://`. Design CORRECTED.
+- `[structural, probe]` **WebSocket error classification** (`Support.ElevenLabs.ws_error?/1`, `ws_error_fields/3`, `ws_reason/2`, shared with 26.8): one table from the frame's `error` / `message_type` code, then the close code. A bare close 1008 is `:invalid_request`, not the design's inferred `:authentication_failed` (an unknown voice also closes 1008); any other close before a terminal event, including an orderly 1000 before `isFinal`, is `:network_error`. The design's WS `message_type` rows are all in the table now (table-driven test, 18 codes), ahead of 26.8.
+- `[probe]` **`stream_chunked` sends 44 characters, not ~400** (the batch's ≤ 50-character budget). 26 chunks over 120 ms still settle the framing row.
+- `[probe]` **`ws_tokens` is two arms with two targets** (`ws_tokens.json`, `ws_tokens_auto_mode.json`), because the overwrite guard is per target. **`ws_v3` accepts 400** after run 1 showed the refusal happens at the upgrade; its verdict records the body.
+- `[scope]` **`test/support/raising_web_socket.ex`** (`ALLM.Test.RaisingWebSocket`) is not in the Module Tree. It is the `:ws_module` sibling of `ALLM.Test.RaisingFinch`, used by the input suite's `gate_opts` and the keyless gate rows.
+- `[scope]` **The URL-builder row lives in `elevenlabs/speech_stream_test.exs`**, not `web_socket_test.exs`: the builder is `ElevenLabs.Speech.ws_url/2` (one test file per `lib/` file).
+- `[tactical]` **`ALLM.Providers.Support.WebSocket.Mint.finish_upgrade/4` carries `@dialyzer {:nowarn_function, …}`.** `mint_web_socket` 1.0.6 types its opaque struct's `:fragment` as `tuple()` while its `defstruct` default is `nil`, so Dialyzer infers `Mint.WebSocket.new/5` can only fail. The success path runs in every handshake test.
+- `[tactical]` `:speech_started` on the WebSocket path is emitted after the connect and the initial message, before any input, with format, MIME type and rate from the requested `output_format`. `:speech_completed.id` is `nil` there (no correlation id reaches the client). `request_id` is `opts[:request_id]` on both paths, as in 26.6.
+- `[tactical]` `:ws_module` is not added to `ALLM.Adapter.transport_opts/0`, so an engine's `adapter_opts` cannot set it; a direct call's top-level opts can. No test needs the engine route.
+- `[tactical]` **The slow-input row uses 100 ms gaps under a 250 ms `stream_timeout`**, not the Test Plan's 60 ms under 100 ms: that version failed once in ten full-suite runs (a 40 ms margin is inside scheduler jitter under load). The input still takes 500 ms, twice the timeout, so a timer reset only by transport messages fails it (mutation table).
+- `[tactical]` The keep-alive runs only while input is still flowing; after `{"text": ""}` nothing more is sent (test "no keep-alive is sent after the end of input").
+
+### Mutation checks
+
+Each mutant was applied, the targeted files run, and the source restored and `cmp`-verified.
+
+| Mutant | Failing tests |
+|--------|---------------|
+| pump messages do not reset the silence timer | 1 (slow input under a short timeout) |
+| no keep-alive | 1 (keep-alive row) |
+| after function skips `flush_messages/1` | 3 (end-to-end halt over Mint, recorded `:tcp` drain rows) |
+| after function skips `InputPump.stop/2` | 1 (halt: pump dead within 500 ms) |
+| a space appended to each chunk | 7 |
+| no `auto_mode` default | 1 (URL row) |
+| error frames ignored | 3 |
+| a pump started before the connect | 3 (the three "never reduce the input" rows) |
+| `WebSocket.Mint` answers no pong | 1 (server-observed pong) |
+| `WebSocket.Mint.flush_messages/1` drains nothing | 2 (Mint mailbox row, end-to-end halt row) |
+| no buffered delivery of bytes read with the 101 | 2 (the greeting row, and the ping row when its frame shares the read) |
+
+### Notes for later sub-phases
+
+- **26.8:** `stream_transcribe/3` is the second WebSocket stream. Reuse `Support.WebSocket` (`connect/3` with the key in the header, `message_tag/1` + a tag guard in the `receive`), `Support.ElevenLabs.ws_error?/1` / `ws_error_fields/3` (the `message_type` rows are already in the table), `ALLM.Test.WebSocketStub` (`:send_error`, `:unknown`, `{:transport_error, _}`, `:closed`), `ALLM.Test.WSTestServer` and `ALLM.Test.RaisingWebSocket`. `ElevenLabs.Speech`'s `/stream-input` machine (`open_input_stream/4`, `input_next/1`, `await/2`, `wait_ms/1`, `input_after/1`) is the first copy of the owner loop; a second copy triggers the two-implementations rule, so extract the shared skeleton (connect → start pump → selective receive with a silence timer → close/flush/stop) with its first second caller rather than cloning it.
+- **26.8 (fix pass):** the owner loop is already shared. Build `stream_transcribe/3` on `ALLM.Providers.Support.WebSocket`'s `@doc false` helpers (`loop_state/3`, `start_pump/3`, `next_message/1`, `timed_out?/1`, `handle_transport/2`, `send_json/2`, `stop_pump/1`, `close_loop/1`) and the public `is_transport_message/2` guard; keep only the payload handlers and the error construction in the adapter. Predicate: `grep -rnE "defp? await\(|receive do" lib/allm/providers/elevenlabs` prints nothing.
+- **26.9:** the guide quotes Decision #11's two numbers (238 ms / 563 ms) and the owner's default: `auto_mode=true` with word buffering (`auto_mode: false` turns both off).
+
+### Verification (run 2026-09-27, working tree on `591e96b`)
+
+| Check | Result |
+|-------|--------|
+| `mix test` | exit 0; 590 doctests, 33 properties, 4778 tests, 0 failures, 14 excluded, 1 skipped (26.6 fix pass: 586 / 33 / 4632) |
+| `mix test` ×8 and `mix test --seed 0` ×3 after widening the slow-input row | all 11 exit 0, same counts. Before the widening, 1 run in ~12 failed the slow-input row (see Deviations) |
+| `mix format --check-formatted`, `mix credo --strict`, `mix dialyzer` | exit 0; no issues; `Total errors: 0` |
+| `mix compile --warnings-as-errors --force` (dev and test) | exit 0 |
+| `mix docs 2>&1 \| grep -ciE 'warning\|error'` | 0 |
+| `mix run scripts/audit_user_docs.exs` on `support/web_socket.ex`, `support/web_socket/mint.ex`, and the modified `elevenlabs/speech.ex`, `support/elevenlabs.ex` | "No banned-token matches" each |
+| async grep (`… \| xargs grep -L 'async: false' \| wc -l`) | 12, unchanged; the new test files use none of the four calls |
+| pump-protocol guard / speech DRY predicate | exit 1 (empty) / exit 1 (empty) |
+| `cd conformance && mix test && mix credo --strict && mix format --check-formatted` | 194 tests, 0 failures, 1 skipped; no issues; exit 0 |
+| `mix hex.build` | succeeds; `Dependencies:` lists `mint_web_socket ~> 1.0 (app: mint_web_socket)` |
+| BLOCKING recorder | run 2: 8 live calls, every arm matched; run 3: `0 live calls` |
+| live key in fixtures (`grep -rlF "$ELEVENLABS_API_KEY" test/fixtures/elevenlabs`, key from `.env` in a subshell) | exit 1 (none) |
+| coverage (`mix test --cover` over `test/allm/providers/{elevenlabs,support}`) | `ElevenLabs.Speech` 99.54%, `Support.ElevenLabs` 96.97%, `Support.WebSocket` 100%, `Support.WebSocket.Mint` **87.23%** (below the 90% new-code floor: the uncovered lines are `Mint.WebSocket` error tuples the local server cannot provoke — an encode error, an upgrade-request error, a failed pong, `{:error, ref, _}` responses — and the `safely/1` rescue arms of `close/1`) |
+| `README.md` | not modified |
+
+### Flakes
+
+- `test/allm/providers/support/input_pump_test.exs:118` ("a throw and an exit inside the input are reported with their kind", 26.3) failed once in about 20 runs of the ElevenLabs + support test directories (`assert_receive` with the default 100 ms timeout, seed 331841); it passed on rerun. Pre-existing test code, outside this fence; the new timing-based tests in this batch add load. Filed in HANDOFF. *(Fix pass: both `assert_receive`s in that test now wait 1,000 ms; HANDOFF row discharged.)*
+
+### Fix pass (2026-09-27)
+
+Sources: `.work/reviews/2026-09-26-phase-26-7/overview.md` (D-1), `.work/code-reviews/2026-09-26-phase-26-7.md` (F1–F5), `.work/security-reviews/2026-09-26-phase-26-7.md` (clean), `.work/design-reviews/2026-09-26-phase-26-7.md` (N/A). No live calls.
+
+- **Owner decision (2026-09-27): "Word-buffer + auto_mode".** `auto_mode=true` stays the `/stream-input` default. While it is on (the effective query value, so `options["query"]["auto_mode"]` still turns it off), `ElevenLabs.Speech` holds incoming text in a `word_buffer` and sends only up to the last word boundary; the remainder goes out at the end of input, before the flush. `text_deltas/1` stays a pure mapper: the buffering lives in the adapter's input path because that serves every caller of the `auto_mode` path, not only chat deltas. **Boundary set:** Unicode whitespace, `! ? ;`, and the CJK full-width marks `。 、 ， ！ ？ ； ：` plus `…` (`split_at_word_boundary/1`, a `@doc false` seam). `.`, `,`, `:`, `'` and `-` are not boundaries on their own because they occur inside words and numbers (`3.14`, `1,000`, `10:30`, `don't`); followed by a space they go out at the space, so a sentence-final `.` waits one token or the end of input. CJK marks are included so that text without spaces still streams. Text with no boundary at all waits for the end of input (no size cap: nothing measured needs one). With `auto_mode` off, chunks go out verbatim as before. Tests (`speech_stream_test.exs`): `["Hel","lo"," world","."]` → `"Hello "`, `"world."`; a trailing partial word is flushed before `{"text":"","flush":true}`; a boundary-less chunk is held while the keep-alive still goes out; a `split_at_word_boundary/1` table; the old verbatim row now runs with `auto_mode: false` and asserts `auto_mode=false` in the URL. Design: dated OWNER NOTE under Decision #11.
+- **F1 (Medium) — shared owner loop, done now.** `await/2`, `wait_ms/1`, the timer reset, `on_transport`'s transport half, `send_json/2`, `stop_pump/1` and the after function moved to `ALLM.Providers.Support.WebSocket` as `@doc false` + `@spec` defs over a state map (`loop_state/3`, `start_pump/3`, `next_message/1`, `timed_out?/1`, `handle_transport/2`, `send_json/2`, `stop_pump/1`, `close_loop/1`), chosen over a new module because 26.8 already calls `Support.WebSocket` and no `groups_for_modules` row changes. `is_transport_message/2` is a public `defguard` there, used by the moduledoc sample, the loop and `web_socket_test.exs`. `await/2` is one clause (with no pump running, a fresh reference matches no pump message). Predicates: `grep -rn "defp await(%{pump:" lib/allm/providers | wc -l` → 0; `grep -rnE "defp? await\(|receive do" lib/allm/providers/elevenlabs` → empty, exit 1.
+- **F2 (Medium, bug) — bytes read with the 101.** They are held in a new `pending` struct field; the next `handle_message/2`, whatever it is given, decodes them first (an `:unknown` message still returns the pending frames). A payload-less `{WebSocket.Mint, socket}` self-message is only a wake-up, and `flush/1` drains it. New test: a greeting split between the 101's read and a later packet, with the mailbox re-ordered to put the `:tcp` message first → one intact frame. Mutant (pending decoded after the next packet): the test fails with `{:unsupported_opcode, <<7::4>>}`, the framing corruption the review predicted.
+- **F4 (Low, folded into F2).** `finish_upgrade/5` now holds only `Mint.WebSocket.new/5`, the struct build and the shared `abort/3`; the pending hand-off moved to `handshake/3`. The comment names `mint_web_socket` 1.0.6 with the `deps/` line cites and says to drop the attribute and rerun `mix dialyzer` on a bump.
+- **F5 (Low, folded into F2).** `safely/1`'s dead `rescue` removed.
+- **F3 (Medium) — cross-packet tests.** `WSTestServer` gained `encode_frame/1`, a `{:frame, opcode, payload, fin?}` frame and `greeting: {:raw, bytes}`. New `web_socket_test.exs` rows: a 10 KB text frame over two reads (16-bit length), a 70,000-byte binary frame whose header is split from its 64-bit length, and a two-fragment text message reassembled; plus three pending-byte rows (non-connection message, socket error, malformed greeting). `speech_stream_test.exs` gained an end-to-end session with two 6,144-byte audio frames (8 KB base64 each) over Mint. **Coverage** (`mix test --cover test/allm/providers/elevenlabs test/allm/providers/support`): `Support.WebSocket.Mint` **90.91%** (was 87.23%), `Support.WebSocket` 100%. Still uncovered: `Mint.WebSocket` encode/decode error tuples, `{:error, ref, _}` responses, the upgrade-request error and `safely/1`'s catch arm.
+- **D-1 (Medium) — false doc sentence.** The `stream_synthesize_input/3` `@doc` now says only a refused upgrade never reduces the input; a bad key or an unknown voice is upgraded with 101 and rejected by an error frame and a close 1008, after `:speech_started` and after the input may have been reduced (so a paid chat input is issued). New end-to-end row over `WSTestServer`: 101, then (after the first text frame) the recorded `invalid_api_key` error frame and close 1008 → `[:speech_started, {:error, :authentication_failed, close_code 1008}]` with the first chunk reduced. **The pump is not held until a first server frame:** ElevenLabs sends nothing on a valid session until it has received text (in all four recorded valid sessions, `ws_tokens`, `ws_tokens_auto_mode`, `ws_end`, `ws_control`, the first server frame follows the client's text frames; `ws_end` shows no server frame during a 500 ms pause after `"Hi"`), so holding would deadlock a valid key or cost a grace-window timeout on every first audio. No evidence found that holding is safe and cheap.
+- **`input_pump_test.exs:118` flake:** both `assert_receive`s in that test wait 1,000 ms (a trivially safer timeout).
+- Rewritten rows because of the word buffer: keep-alive (`"one "`), halt-safety (`"Hi "`), end-to-end halt (`"Hi "`), and the LLM-shaped row (asserts the same text in order, every frame but the last ending at a boundary).
+
+Mutation checks (each restored and `cmp`-verified): pending decoded after the next packet → 1 failure; `flush_word_buffer/1` a no-op → 10; word buffer off under `auto_mode` → 4; `next_message/1` not resetting `last_activity` → 1 (slow input); `close_loop/1` skipping `flush_messages/1` → 4.
+
+| Check (fix pass) | Result |
+|-------|--------|
+| `mix test` ×5 (seeds 507243, 917882, 482225, 291911, 847852) and `mix test --seed 0` ×2 | all exit 0; 590 doctests, 33 properties, 4799 tests, 0 failures, 14 excluded, 1 skipped |
+| `mix format --check-formatted`, `mix credo --strict`, `mix dialyzer` | exit 0; no issues; `Total errors: 0` |
+| `mix compile --warnings-as-errors --force` (dev and test) | exit 0 |
+| `mix docs 2>&1 \| grep -ciE 'warning\|error'` | 0 |
+| `mix run scripts/audit_user_docs.exs` on `support/web_socket.ex`, `support/web_socket/mint.ex`, `elevenlabs/speech.ex` | no matches each |
+| pump-protocol guard / speech DRY predicate | exit 1 (empty) / exit 1 (empty) |
+| async grep (`… \| xargs grep -L 'async: false' \| wc -l`) | 12, unchanged |
+| `cd conformance && mix test && mix credo --strict && mix format --check-formatted` | 194 tests, 0 failures, 1 skipped; no issues; exit 0 |
+| `README.md` | not modified |

@@ -1,0 +1,26 @@
+{
+  "frames": [
+    {
+      "dir": "out",
+      "upgrade_body": {
+        "detail": {
+          "code": "unsupported_model",
+          "message": "Model 'eleven_v3' is not supported on the text-to-speech websocket endpoint. Use the text-to-dialogue websocket endpoint instead.",
+          "param": "model_id",
+          "request_id": "de223f028f2f8d667b8ca21b4f52833d",
+          "status": "unsupported_model",
+          "type": "validation_error"
+        }
+      }
+    }
+  ],
+  "status": 400,
+  "summary": {
+    "audio_bytes": 0,
+    "audio_frames": 0,
+    "close": null,
+    "final_after_flush_ms": null,
+    "first_audio_ms": null
+  },
+  "url": "wss://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream-input?inactivity_timeout=60&model_id=eleven_v3&output_format=pcm_24000"
+}

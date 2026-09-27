@@ -1,3 +1,21 @@
+## [FEAT] Add WebSocket transport and ElevenLabs TTS streaming
+*Sunday, September 27th at 10am*
+Phase 26.7 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 streaming audio). 
+Adds ALLM.Providers.Support.WebSocket, a behaviour with a shared owner loop, 
+and Support.WebSocket.Mint on the new mint_web_socket ~> 1.0 dependency. 
+ElevenLabs.Speech gains stream_synthesize/2, HTTP /stream on the shared 
+SpeechAdapter stream machine, and stream_synthesize_input/3, text-in over 
+/stream-input with InputPump. Live-verified: an OpenAI chat stream piped 
+through text_deltas/1 produced first audio 167 ms after the first token. Owner 
+decision: auto_mode stays on for latency, but text is buffered to whole words 
+so token fragments are never voiced separately. The fix pass also fixed 
+out-of-order decoding of bytes that arrive with the 101, and added cross-packet 
+frame tests against a local RFC 6455 server (WebSocket.Mint coverage 90.9%). It 
+corrected the bad-key doc: ElevenLabs upgrades first and then closes with 1008, 
+so the input may already be consumed.
+
+---
+
 ## [FEAT] Add ElevenLabs speech and transcription adapters
 *Sunday, September 27th at 2am*
 Phase 26.6 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37; §35.7 

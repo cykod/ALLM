@@ -71,6 +71,25 @@ defmodule ALLM.Providers.Support.ElevenLabs do
     "output_format_not_allowed"
   ]
 
+  # WebSocket error codes: the `error` value of a text-to-speech error frame
+  # (observed 2026-09-27: `invalid_api_key`, `authentication_required`,
+  # `voice_id_does_not_exist`) and the documented `message_type` values of
+  # the realtime speech-to-text errors, each with its reason.
+  @ws_code_reasons Map.new(
+                     [
+                       {~w(invalid_api_key authentication_required auth_error unaccepted_terms),
+                        :authentication_failed},
+                       {@quota_codes, :invalid_request},
+                       {~w(rate_limited commit_throttled queue_overflow resource_exhausted),
+                        :rate_limited},
+                       {~w(session_time_limit_exceeded), :context_length_exceeded},
+                       {~w(input_error invalid_request chunk_size_exceeded
+                           insufficient_audio_activity voice_id_does_not_exist), :invalid_request},
+                       {~w(error transcriber_error), :provider_unavailable}
+                     ]
+                     |> Enum.flat_map(fn {codes, reason} -> Enum.map(codes, &{&1, reason}) end)
+                   )
+
   @typedoc "The resolved output of `output_format/2`."
   @type output :: %{
           output_format: String.t(),
@@ -204,6 +223,74 @@ defmodule ALLM.Providers.Support.ElevenLabs do
        metadata: HTTPResponse.build_metadata(Map.put(meta, :status, status), opts)
      ]}
   end
+
+  @doc false
+  # `{reason, fields}` for an error a WebSocket session reports after the
+  # upgrade: `payload` is the decoded error frame and `close_code` the code
+  # of the close frame, when one arrived without an error frame (`nil`
+  # otherwise). The error code is the frame's `error` (text-to-speech) or
+  # `message_type` (realtime speech-to-text) value; `ws_reason/2` maps it.
+  @spec ws_error_fields(map(), non_neg_integer() | nil, keyword()) :: {atom(), keyword()}
+  def ws_error_fields(payload, close_code, opts) when is_map(payload) do
+    code = ws_code(payload)
+    close_code = close_code || integer_or_nil(Map.get(payload, "code"))
+    reason = ws_reason(code, close_code)
+
+    message =
+      case Map.get(payload, "message") do
+        text when is_binary(text) and text != "" -> redact_key_material(text)
+        _ -> "ElevenLabs WebSocket error #{inspect(code || close_code)}"
+      end
+
+    {reason,
+     [
+       provider: :elevenlabs,
+       message: message,
+       metadata:
+         HTTPResponse.build_metadata(%{code: redact_optional(code), close_code: close_code}, opts)
+     ]}
+  end
+
+  @doc false
+  # Whether a decoded WebSocket server frame reports an error: it carries a
+  # string `error` (the text-to-speech shape, observed 2026-09-27) or a
+  # `message_type` ending in `error` (the realtime speech-to-text shape).
+  @spec ws_error?(map()) :: boolean()
+  def ws_error?(%{"error" => code}) when is_binary(code), do: true
+
+  def ws_error?(%{"message_type" => type}) when is_binary(type),
+    do: String.ends_with?(type, "error")
+
+  def ws_error?(_payload), do: false
+
+  @doc false
+  # The reason for a WebSocket error `code` (the `error` or `message_type`
+  # value of an error frame), falling back on the close code. Observed
+  # 2026-09-27: a bad key, a missing key and an unknown voice each answer
+  # with an error frame `{"error", "message", "code": 1008}` and then close
+  # 1008, so 1008 alone does not mean an authentication failure.
+  @spec ws_reason(String.t() | nil, non_neg_integer() | nil) :: atom()
+  def ws_reason(code, close_code) do
+    case Map.fetch(@ws_code_reasons, code) do
+      {:ok, reason} -> reason
+      :error -> close_reason(close_code)
+    end
+  end
+
+  defp close_reason(1008), do: :invalid_request
+  defp close_reason(code) when is_integer(code), do: :network_error
+  defp close_reason(_code), do: :unknown
+
+  defp ws_code(payload) do
+    case payload do
+      %{"error" => code} when is_binary(code) -> code
+      %{"message_type" => code} when is_binary(code) -> code
+      _ -> nil
+    end
+  end
+
+  defp integer_or_nil(n) when is_integer(n), do: n
+  defp integer_or_nil(_n), do: nil
 
   @doc false
   # Replaces an ElevenLabs API key (`sk_` followed by at least 16

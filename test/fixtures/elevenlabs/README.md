@@ -12,6 +12,9 @@ Response envelopes used by `test/allm/providers/elevenlabs/*_test.exs` and
   (`speech/recorded/tts_default.json`, `speech/recorded/error_401_bad_key.json`
   and `transcriptions/recorded/probe_audio_bin.json` on 2026-09-27). None
   carries a `_comment` marker, and a raw-bytes test per file keeps it so.
+- `speech_stream/recorded/` — live `POST /v1/text-to-speech/{voice_id}/stream`
+  (`stream_chunked.json`) and `wss://…/stream-input` sessions (`ws_*.json`),
+  written by the same recorder on 2026-09-27 (Phase 26.7).
 - `speech/synthesized/`, `transcriptions/synthesized/` — hand-written error
   envelopes for classification rows the probe did not (or could not cheaply)
   observe, plus the planted-key 401 for the redaction test. Each carries a
@@ -22,6 +25,17 @@ Response envelopes used by `test/allm/providers/elevenlabs/*_test.exs` and
 
 - Audio: `{"status", "headers", "header_names", "body_base64", "byte_size", "sha256"}`.
 - JSON (including errors): `{"status", "headers", "header_names", "body"}`.
+- HTTP stream: the audio envelope plus `"chunks": [{"byte_size", "t_ms"}]`,
+  one entry per data message, `t_ms` since the request was sent.
+- WebSocket session: `{"status", "url", "frames", "summary"}`. `status` is the
+  upgrade status (101, or the refusal's status with the body in the first
+  frame's `upgrade_body`); `url` never carries the key. Each frame is
+  `{"dir", "t_ms", "text" | "close" | "closed"}`, where `dir` is from the
+  server's side: `"in"` is a client frame, `"out"` a server frame. Server
+  audio is replaced by `"<N bytes>"` in every audio frame but the first,
+  which is kept whole so a decode test has real base64;
+  `ElevenLabsTestFixtures.ws_server_frames/1` turns each placeholder back
+  into N zero bytes for replay.
 - Assert-only probe outcomes (`probe_control.json`): `{"status", "expected", "error_body"?}`.
   `transcriptions/recorded/probe_audio_bin.json` is a JSON envelope, because
   the adapter's upload naming depends on its transcript.

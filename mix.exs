@@ -34,6 +34,9 @@ defmodule ALLM.MixProject do
     [
       {:req, "~> 0.5"},
       {:finch, "~> 0.19"},
+      # WebSocket client for the streaming audio paths; process-less, so the
+      # socket is owned by the process that reduces the stream.
+      {:mint_web_socket, "~> 1.0"},
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.2"},
       # llm_db: capability pre-flight + cost. Deferred to a future release; will be re-added as an optional dep.
@@ -154,7 +157,9 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Support.TranscriptionAdapter,
           ALLM.Providers.Support.SpeechAdapter,
           ALLM.Providers.Support.InputPump,
-          ALLM.Providers.Support.ElevenLabs
+          ALLM.Providers.Support.ElevenLabs,
+          ALLM.Providers.Support.WebSocket,
+          ALLM.Providers.Support.WebSocket.Mint
         ],
         Defaults: [
           ALLM.ToolExecutor.Default,
