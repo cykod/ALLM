@@ -1,3 +1,13 @@
+## [TWK] Pin binary-size variables and drop an unused Logger require
+*Sunday, September 27th at 8pm*
+Binary patterns in the ElevenLabs transcription adapter, FakeSpeech, the OpenAI 
+speech fixture loader and the PCM test helper now pin their size variables 
+(binary-size(^n)) for forward compatibility with newer Elixir releases, and 
+ALLM.Providers.OpenAI.Speech drops a require Logger it never used. No behaviour 
+change.
+
+---
+
 ## [DOC] Apply the Phase 27 retro — flake capture, probe arms, live harness
 *Sunday, September 27th at 8pm*
 Folds .work/retro/2026-09-27-prompt-caching_applied.md into the agent docs.

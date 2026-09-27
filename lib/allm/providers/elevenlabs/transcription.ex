@@ -832,7 +832,7 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   defp on_element(chunk, state) when is_binary(chunk) do
     data = state.remainder <> chunk
     whole = byte_size(data) - rem(byte_size(data), 2)
-    <<samples::binary-size(whole), remainder::binary>> = data
+    <<samples::binary-size(^whole), remainder::binary>> = data
     emit(send_audio(%{state | remainder: remainder}, samples))
   end
 
@@ -844,7 +844,7 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
 
   defp send_audio(state, samples) do
     size = min(byte_size(samples), state.max_chunk_bytes)
-    <<frame::binary-size(size), rest::binary>> = samples
+    <<frame::binary-size(^size), rest::binary>> = samples
 
     case send_json(state, audio_chunk_message(frame, false, state.request.sample_rate)) do
       {:ok, state} ->

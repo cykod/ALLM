@@ -188,8 +188,6 @@ defmodule ALLM.Providers.OpenAI.Speech do
   @behaviour ALLM.SpeechStreamAdapter
   @behaviour ALLM.Providers.Support.SpeechAdapter
 
-  require Logger
-
   alias ALLM.{Audio, Keys, SpeechEvent, SpeechRequest, SpeechResponse, Usage}
   alias ALLM.Error.SpeechAdapterError
   alias ALLM.Providers.FakeSpeech

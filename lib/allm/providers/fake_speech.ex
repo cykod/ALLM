@@ -317,7 +317,7 @@ defmodule ALLM.Providers.FakeSpeech do
   end
 
   defp split_bytes(bytes, size, acc) when byte_size(bytes) > size do
-    <<chunk::binary-size(size), rest::binary>> = bytes
+    <<chunk::binary-size(^size), rest::binary>> = bytes
     split_bytes(rest, size, [chunk | acc])
   end
 

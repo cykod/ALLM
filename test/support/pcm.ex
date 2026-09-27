@@ -43,14 +43,14 @@ defmodule ALLM.Test.PCM do
   end
 
   defp read_chunks(<<_id::binary-size(4), size::little-32, rest::binary>>, rate) do
-    <<_skipped::binary-size(size), rest::binary>> = rest
+    <<_skipped::binary-size(^size), rest::binary>> = rest
     read_chunks(rest, rate)
   end
 
   defp slice(pcm, size) when byte_size(pcm) <= size, do: [pcm]
 
   defp slice(pcm, size) do
-    <<chunk::binary-size(size), rest::binary>> = pcm
+    <<chunk::binary-size(^size), rest::binary>> = pcm
     [chunk | slice(rest, size)]
   end
 end

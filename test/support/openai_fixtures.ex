@@ -291,7 +291,7 @@ defmodule ALLM.Providers.OpenAITestFixtures do
   def speech_stream_chunks(%{"body_base64" => _, "chunks" => chunks} = env) do
     {parts, ""} =
       Enum.map_reduce(chunks, envelope_bytes(env), fn %{"byte_size" => n}, rest ->
-        <<part::binary-size(n), tail::binary>> = rest
+        <<part::binary-size(^n), tail::binary>> = rest
         {part, tail}
       end)
 
