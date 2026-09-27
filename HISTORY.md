@@ -1,3 +1,23 @@
+## [FEAT] Add classification adapter behaviour, engine slots and Fake
+*Sunday, September 27th at 11pm*
+Phase 24.2 of steering/2026-09-22_JEV_SUPPORT.md (spec §41): the runtime 
+contract for typed classification and its reference implementation, still with 
+no façade.
+
+- ALLM.ClassificationAdapter behaviour: classify/2 plus optional 
+prepare_request/2, with nine numbered invariants in its moduledoc.
+- ALLM.Engine gains :classification_adapter (module slot) and 
+:classification_model (per-slot model string, following the audio precedent), 
+at all twelve engine.ex sites including the deny-list and decoder.
+- ALLM.Providers.FakeClassification: deterministic defaults, per-type answer 
+shorthands, error and retry_until_call entries, exhaustion error, capture_pid 
+seam, and a cursor and retry budget keyed on engine identity. Review fix: 
+malformed retry_until_call counts now raise.
+- ALLM.Test.ClassificationAdapterConformance (9 cases) in conformance/ with a 
+scripted stub and meta-tests.
+
+---
+
 ## [FEAT] Add Layer A typed-classification data and validator
 *Sunday, September 27th at 11pm*
 Phase 24.1 of steering/2026-09-22_JEV_SUPPORT.md (new spec §41): the 

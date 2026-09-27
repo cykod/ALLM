@@ -380,12 +380,14 @@ defmodule ALLM.EngineTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Audio slots — :speech_adapter / :transcription_adapter and their models
+  # Capability slots with their own model — :speech_adapter /
+  # :transcription_adapter / :classification_adapter and their models
   # ---------------------------------------------------------------------------
 
   for {field, fake} <- [
         speech_adapter: ALLM.Providers.FakeSpeech,
-        transcription_adapter: ALLM.Providers.FakeTranscription
+        transcription_adapter: ALLM.Providers.FakeTranscription,
+        classification_adapter: ALLM.Providers.FakeClassification
       ] do
     describe "#{inspect(field)}" do
       @field field
@@ -421,7 +423,7 @@ defmodule ALLM.EngineTest do
     end
   end
 
-  for field <- [:speech_model, :transcription_model] do
+  for field <- [:speech_model, :transcription_model, :classification_model] do
     describe "#{inspect(field)}" do
       @field field
 
@@ -461,5 +463,18 @@ defmodule ALLM.EngineTest do
       )
 
     assert {:ok, ^engine} = engine |> ALLM.Serializer.to_json!() |> ALLM.Serializer.from_json()
+  end
+
+  test "a serialized engine pairing a chat model with a classification slot round-trips intact" do
+    engine =
+      Engine.new(
+        model: "gpt-4o-mini",
+        classification_adapter: ALLM.Providers.FakeClassification,
+        classification_model: "jev-1.13.0"
+      )
+
+    assert {:ok, ^engine} = engine |> ALLM.Serializer.to_json!() |> ALLM.Serializer.from_json()
+    assert engine.model == "gpt-4o-mini"
+    assert engine.classification_model == "jev-1.13.0"
   end
 end
