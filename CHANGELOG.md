@@ -156,6 +156,65 @@ Other changes:
   `examples/24_transcribe_audio.exs` (`# Provider: openai, gemini`), plus
   `ExamplesHelpers.speech_engine/1` / `transcription_engine/1` and the
   `ALLM_SPEECH_MODEL` / `ALLM_TRANSCRIPTION_MODEL` overrides
+- Add streaming speech: `ALLM.stream_synthesize(engine, "Hello.", format: :pcm)`
+  returns `{:ok, events}`, a lazy stream of `ALLM.SpeechEvent`s
+  (`:speech_started`, `:audio_delta`, `:speech_completed`) whose first audio
+  arrives while the provider is still generating.
+  `ALLM.stream_synthesize_input/3` also takes the text as an enumerable, so an
+  LLM's answer is spoken while it is written
+- Add realtime transcription: `ALLM.stream_transcribe(engine, pcm_chunks,
+  sample_rate: 16_000)` returns `ALLM.TranscriptionEvent`s
+  (`:partial_transcript`, which replaces the previous partial, and
+  `:committed_transcript` segments) while the audio is still arriving. It
+  never reads `engine.transcription_model`, because batch and realtime model
+  names differ
+- Add `ALLM.AudioStream`: `collect_speech/1` and `collect_transcription/1`
+  fold a stream into the response `synthesize/3` / `transcribe/3` return, and
+  `text_deltas/1` turns a chat stream into text chunks. An audio stream that
+  fails after opening ends with `{:error, err}` and the collectors return it,
+  unlike chat's fold into `finish_reason: :error`; a chat error inside
+  `text_deltas/1` ends the speech stream rather than speaking a truncated
+  answer
+- Add the `ALLM.SpeechStreamAdapter` and `ALLM.TranscriptionStreamAdapter`
+  behaviours. An adapter opts in on its existing engine slot; a slot adapter
+  that does not stream returns `EngineError :missing_stream_adapter`.
+  `ALLM.Engine` is unchanged. `FakeSpeech` and `FakeTranscription` implement
+  both, with a `{:events, _}` script entry for mid-stream failures, and three
+  six-case conformance suites are published. `TranscriptionAdapterConformance`
+  gains a `:skip_cases` option
+- Add `ALLM.TranscriptionStreamRequest` and `:sample_rate` on
+  `ALLM.SpeechRequest` / `ALLM.SpeechResponse`. The PCM default is 24,000 Hz
+  on every bundled adapter, and each stream reports its rate on
+  `:speech_started`. Add `ALLM.Validate.speech_request/2` and
+  `transcription_stream_request/1`
+- Add `:unsupported_feature` to `SpeechAdapterError` and
+  `TranscriptionAdapterError`, returned before any request for a field the
+  provider cannot express
+- Stream `ALLM.Providers.OpenAI.Speech` over chunked HTTP
+  (`stream_synthesize/2`). `synthesize/2` now reports `sample_rate: 24_000`
+  for `:pcm` and `:wav`, and refuses any other rate as
+  `:unsupported_feature`
+- Add ElevenLabs: `ALLM.Providers.ElevenLabs.Speech` (`synthesize/2`,
+  `stream_synthesize/2` over `/stream`, and `stream_synthesize_input/3` over
+  its `/stream-input` WebSocket; default `eleven_flash_v2_5`) and
+  `ALLM.Providers.ElevenLabs.Transcription` (`transcribe/2` with `scribe_v2`,
+  and `stream_transcribe/3` over its realtime WebSocket with
+  `scribe_v2_realtime`). The key resolves from `ELEVENLABS_API_KEY` and, on
+  the WebSocket paths, travels in the upgrade headers, never the URL. Text-in
+  streaming turns on ElevenLabs' `auto_mode` (first audio 238 ms against
+  563 ms in one measurement) and sends whole words only, so token deltas are
+  not voiced as separate clips. Like Voyage, ElevenLabs has no chat
+  adapter, so an engine pairs it with a chat provider
+- Add the `[:allm, :stream_synthesize, :*]` and `[:allm, :stream_transcribe, :*]`
+  spans (they stop when the stream is returned, so they carry no audio) and
+  the `[:allm, :audio, :first_chunk]` event, which reports the time from the
+  call to the first audio or partial transcript
+- Add the `:mint_web_socket` dependency for the WebSocket paths
+- Extend `guides/audio.md` with streaming, the voice loop, PCM and sample
+  rates, latency choices, realtime transcription and an ElevenLabs section;
+  add `examples/25_stream_speech.exs`, `26_stream_transcribe.exs` and
+  `27_voice_loop.exs`, and an audio-only `ALLM_PROVIDER=elevenlabs` arm to
+  `examples/run_all.exs`
 
 ## [REL] v0.5.0 — Text embeddings
 

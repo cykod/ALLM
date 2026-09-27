@@ -14,6 +14,8 @@ Companion to `steering/2026-09-25_ELEVENLABS_TTS_SST.md`. Status, ticks, deviati
 | 26.6 | Completed (fix pass re-reviewed: `.work/code-reviews/2026-09-26-phase-26-6-fix.md`) |
 | 26.7 | Completed — fix pass re-reviewed (`.work/code-reviews/2026-09-26-phase-26-7-fix.md`, 7 Lows: F4/F5 carried to 26.8 via HANDOFF, rest to polish); owner decision 2026-09-27: word-buffer + `auto_mode` |
 | 26.8 | Completed — fix-pass edits (owner decision "hold when requested": `elevenlabs/transcription.ex` language hold + `support/web_socket/input_loop.ex` `wake_at`; test repairs) landed after the review checkpoint and are **unreviewed by a review lane**; pinned by the 7-mutant table and a live 3.8 s confirmation in §26.8 "Owner decision (2026-09-27)" |
+| 26.9 | Completed |
+| 26.10 | Completed |
 
 ## Phase 26.1 — `Support.HTTPResponse` + `Support.TranscriptionAdapter`
 
@@ -1022,3 +1024,141 @@ Each mutant was applied to `lib/`, `transcription_stream_test.exs` + `transcript
 | BLOCKING recorder | run 2: 6 live calls, every arm matched; run 3: `0 live calls` |
 | coverage (`mix test --cover test/allm/providers/elevenlabs test/allm/providers/support`) | `ElevenLabs.Transcription` 98.30%, `Support.WebSocket.InputLoop` 100%, `Support.WebSocket` 100%, `Support.ElevenLabs` 97.37%, `ElevenLabs.Speech` 99.49% |
 | `README.md` | not modified |
+
+## Phase 26.9 — Spec, guide, examples, transport rule
+
+Built 2026-09-27 on `977cb9f`. The working tree is uncommitted; the orchestrator commits after review.
+
+### Checklist (26.9.2)
+
+- [x] Spec (`steering/allm_engine_session_streaming_spec_v0_2.md`), every block opening `> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).**` (15 blocks): §37 header note; §37.1 item 2; §37.2.5 (the stale "(9 reasons)" corrected to 10 / 10 + `:content_filter`, with `:unsupported_feature` in the enum listing and its use sites); §37.7 matrix with streaming columns; new §37.7.4 ElevenLabs; §37.10 two items struck, plus a still-out-of-scope list; new §37.11 *Streaming audio* (11 subsections: unions, Layer A, behaviours + invariants 1–9, façades, the no-fold exception, `AudioStream`, the equivalence property, transport, ElevenLabs streaming wire, Fakes/conformance, telemetry); §35.7 third carve-out (Decision #1's text verbatim, plus its beneficiary and the not-a-widening paragraph); §27 module tree; §29 two spans + `[:allm, :audio, :first_chunk]`; §8 pointer (the unions are not `ALLM.Event`); §32.5 and §33 notes superseding "streaming remains out of scope".
+- [x] `guides/audio.md`: intro and provider table (streaming forms, ElevenLabs); ElevenLabs voices are ids; ElevenLabs model defaults and the `stream_transcribe/3` model exception; ElevenLabs content sniffing; `max_audio_bytes/0` doctest row; no local ElevenLabs length gate; `:unsupported_feature` with two keyless doctests; new sections "Streaming speech" (+ "Streaming text in"), "Streaming transcription" (+ "Feeding a live source", the relay Decision #4 asks for), "A failed stream ends with an error", "PCM and sample rates", "The voice loop" (fence), "Choosing for latency" (238 / 563 ms and the word-buffer default), "Realtime transcription on ElevenLabs" (pacing, late partials, the 0.3 s commit, the language hold), "ElevenLabs" (format table, tier gate, differences); telemetry gains the stream spans and the first-chunk event (fence); the Fakes section gains the stream script rules and the three stream conformance suites.
+- [x] `examples/_helpers.exs`: `elevenlabs` row (`adapter: nil`, `key_env: "ELEVENLABS_API_KEY"`, both audio adapters, `speech_voice: "JBFqnCBsd6RMkjVDRZzb"`), `speech_voice: "alloy"` on `openai`, `chat_provider?/1`, `speech_voice/0`, `provider_rows/0` (`@doc false` test seam); `speech_engine/1`'s unavailable message and moduledoc updated.
+- [x] `examples/run_all.exs`: a marker-less script runs only when `ExamplesHelpers.chat_provider?/1`.
+- [x] `examples/23_synthesize_speech.exs`: voice from `speech_voice/0`; the mime assertion is `ALLM.SpeechResponse.format_to_mime(:mp3)` (26.6's outcome: ElevenLabs answers `audio/mpeg` for mp3, so format and mime derive from the response); marker `openai, elevenlabs`. `24_transcribe_audio.exs` marker `openai, gemini, elevenlabs`.
+- [x] `examples/25_stream_speech.exs`, `26_stream_transcribe.exs` (own WAV reader with the `0xFFFFFFFF` rule), `27_voice_loop.exs` (explicit OpenAI chat engine; `SKIP:` line and exit 0 without `OPENAI_API_KEY`); `examples/fixtures/quick_brown_fox.wav` (`cmp`-identical to `test/fixtures/audio/quick_brown_fox.wav`).
+- [x] `examples/README.md`; `test/allm/examples_helpers_test.exs` (+4 tests); `CLAUDE.md` (WebSocket transport bullet; the audio exception appended to the fold-into-response bullet); `CHANGELOG.md` folded into the unreleased `## [REL] v0.6.0` entry.
+
+### Deviations
+
+- `[scope]` **`RUN_OUTPUT_OPENAI.md` regenerated and `RUN_OUTPUT_ELEVENLABS.md` created**, although the Module Tree lists neither. 26.9.3 makes regeneration conditional on a clean full run ("There is no `RUN_OUTPUT_ELEVENLABS.md` unless the run is clean"); both arms ran clean, and each file is that run's captured stdout verbatim (the exit-code line the wrapper appended is dropped). `RUN_OUTPUT_ANTHROPIC.md` and `RUN_OUTPUT_GEMINI.md` are untouched: those arms were not run. Neither file contains key material (`grep -lF "$ELEVENLABS_API_KEY"` / `"$OPENAI_API_KEY"` over `examples/RUN_OUTPUT_*.md`, keys from `.env` in a subshell → exit 1).
+- `[scope]` **No `CHANGELOG` breaking-change line for `:unsupported_feature`.** Both error modules are new since `v0.5.0` (`git show v0.5.0:lib/allm/error/speech_adapter_error.ex` → does not exist), so relative to the prior tag the reason is part of a new enum, not an extension. Derived from `git diff v0.5.0..HEAD lib/`, per the release rule; the Phase 26 lines are the `7499917..HEAD` part of that diff (the image-variation removal at `7499917` was already in the entry).
+- `[scope]` **`ExamplesHelpers.provider_rows/0`** (`@doc false`) is new: the Test Plan's row-shape assertions need the table, and `@providers` had no accessor.
+- `[scope]` **`chat_provider?/1` raises `ArgumentError` for an unknown provider**, so `run_all.exs` with a bad `ALLM_PROVIDER` fails at the first marker-less script instead of running each one to its own raise.
+- `[tactical]` The example scripts' telemetry handlers are module functions with the parent pid as config, not closures: `:telemetry` logs an info line for a local-function handler, which the first live run showed.
+- `[scope]` §37.11 carries the Error Contract, grammar and invariants in the spec rather than pointing at the design, so the spec stays the source of truth for module behaviour (CLAUDE.md "Where things live").
+
+### Provider claims published by the guide and spec (CLAUDE.md docs-sub-phase rule)
+
+Confirmed = observed by a recorder arm or a logged exploratory call (RECORDS §26.5–§26.8 transcripts, or this phase's live runs). Inferred = from provider docs or reasoning only.
+
+| Claim | Where | Status |
+|-------|-------|--------|
+| ElevenLabs voices are ids, sent in the URL path | guide, §37.7.4 | confirmed (`tts_default`) |
+| `JBFqnCBsd6RMkjVDRZzb` answers | guide, §37.7 | confirmed (`tts_default`, and both live arms today) |
+| it is the voice ElevenLabs' quickstart uses / a permanent premade voice | guide | inferred (docs; the key lacks `voices_read`, so `category` was not read) |
+| `GET /v1/voices` lists an account's voice ids | guide | inferred (docs; the call returned 401 `missing_permissions` for this key) |
+| an unknown voice is `:invalid_request` | guide | confirmed (`bad_voice` 404; `ws_bad_voice` `voice_id_does_not_exist`) |
+| `eleven_flash_v2_5` is the low-latency model; `eleven_multilingual_v2` higher quality and slower | guide | inferred (docs) |
+| realtime accepts only `scribe_v2_realtime`; batch and realtime names disjoint | guide, §37.11.4 | inferred (docs); `scribe_v2_realtime` working is confirmed (`rt_*`) |
+| ElevenLabs STT sniffs content; no filename gate | guide, §37.7.4 | confirmed (`stt_audio_bin`) |
+| STT limit "less than 5.0 GB" | guide, §37.7.4 | inferred (docs; not probed) |
+| 40,000 (flash) / 5,000 (`eleven_v3`) character limits | guide, §37.7.4 | inferred (docs); the v3 figure is contradicted by a billed 200 at 5,001, which both documents state |
+| `text_too_long` → `:context_length_exceeded` | guide, §37.7.4 | inferred (docs; synthesized fixture only) |
+| no ElevenLabs field for `instructions` / `prompt`; no AAC/FLAC output | guide, §37.2.5 | inferred (docs) |
+| OpenAI PCM/WAV are 24 kHz only | guide, §37.2.5, §37.11.2 | inferred (OpenAI TTS guide; the rate is not on the wire) |
+| OpenAI text-in streaming is its Realtime API | guide, §37.7 | inferred (docs) |
+| OpenAI streams raw chunked audio on `/v1/audio/speech`; first bytes 1,728 ms / 1,353 ms | guide, §37.11.8 | confirmed (`stream_chunked`, `stream_mp3_tts1`) |
+| ElevenLabs `/stream` is raw chunked audio; first 425 ms | guide, §37.11.8 | confirmed (26.7 `stream_chunked`) |
+| `auto_mode` first audio 238 ms against 563 ms | guide, §37.11.9, CHANGELOG | confirmed (one run each, `ws_tokens*`) |
+| `auto_mode` voices each message as its own clip | guide, §37.11.9 | confirmed (alignment in `ws_tokens_auto_mode`) |
+| the default schedule waits for about 120 characters | guide | inferred (documented `chunk_length_schedule` `[120,160,250,290]`) |
+| unknown body / init / query fields are ignored | guide, §37.7.4 | confirmed (`control`, `stt_control`, `ws_control`, `rt_control`) |
+| `request-id` and `character-cost` on TTS; no `request-id` on STT | guide, §37.7.4 | confirmed |
+| `usage` is all-`nil` (no billing field) | guide, §37.7.4 | confirmed (bodies recorded) |
+| `eleven_v3` refused on `/stream-input` at the upgrade | guide, §37.11.9 | confirmed (`ws_v3`) |
+| out-of-credit / quota is `:invalid_request` | guide, §37.7.4 | inferred (documented codes; never observed) |
+| a quota error may arrive as a 401 | design Error classification | inferred, still `UNVERIFIED` (no quota state reachable) |
+| 44.1 kHz PCM is tier-gated (403) | guide, §37.7.4 | confirmed for `pcm_44100` (`tier_gate`); WAV 44.1 kHz inferred |
+| data-residency hosts | guide, §37.7.4 | inferred (docs) |
+| `output_format` values in the format table | guide, §37.7.4 | confirmed: `mp3_44100_128`, `mp3_24000_48`, `pcm_24000`, `wav_24000`, `opus_48000_64`; the other rates inferred (docs) |
+| ElevenLabs accepts `?authorization=` on the WebSocket | §37.11.8, CLAUDE.md | inferred (docs; never used) |
+| unpaced upload accepted | guide, §37.11.9 | confirmed (`rt_fox`, today's example 26: 38 chunks) |
+| partials can follow their segment's commit | guide, §37.11.9 | confirmed (`rt_fox`) |
+| a commit under 0.3 s is refused with `commit_throttled` + close | guide, §37.11.9 | confirmed (`rt_end`) |
+| language needs `include_timestamps` + `include_language_detection` | guide, §37.11.9 | confirmed for both-on and timestamps-only (language `null`); detection alone inferred (not tried) |
+| timestamped and plain frames arrive in either order | guide, §37.11.9 | confirmed (4 logged segments) |
+| realtime language ISO 639-1, batch ISO 639-3 | guide, §37.7.4 | confirmed (`rt_fox` `"en"`, `stt_default` `"eng"`) |
+| a bad key upgrades with 101, then an error frame | guide, §37.11.9 | confirmed (`ws_bad_key`, `rt_bad_key`) |
+| 1,000 ms and 3,000 ms realtime chunks accepted | §37.11.9 | confirmed (`rt_big_chunk`; 3,000 ms exploratory) |
+| the server does not close after the final commit | §37.11.9 | confirmed (exploratory) |
+
+### Live gates (run 2026-09-27, subshell form, keys from `.env`)
+
+- **BLOCKING** `( set -a; . ./.env; set +a; ALLM_PROVIDER=elevenlabs mix run examples/run_all.exs )` → **exit 0**, run twice (the second after the handler tidy-up, and it is the snapshot). Per script: `01`–`21` SKIP (no chat adapter or marker), `23` OK (mp3, `audio/mpeg`, 44,765 bytes), `24` OK (`scribe_v2`, "The quick brown fox jumps over the lazy dog", 3.72 s), `25` OK (58 deltas, first chunk 434 ms), `26` OK (`scribe_v2_realtime`, 38 chunks, 3 partials, 1 committed segment), `27` OK (heard the fox sentence, 7 reply deltas, first partial 709 ms, first reply audio 1,117 ms). Scripts 23–27 print `OK:`.
+- **openai arm** `( set -a; . ./.env; set +a; ALLM_PROVIDER=openai mix run examples/run_all.exs )` → **exit 0**, full run: `01`–`12` OK, `14`–`21` OK, `23` OK, `24` OK, `25` OK (14 deltas, first chunk 995 ms), `26`–`27` SKIP (marker). No script halted, so there is no blocked arm to re-characterize.
+- Spend: ElevenLabs two arm runs, each about 44 + 83 + ~60 characters of flash plus ~7.5 s of STT (well under $0.05); OpenAI one full arm (image scripts dominate, as before).
+
+### Verification (run 2026-09-27, working tree on `977cb9f`)
+
+| Check | Result |
+|-------|--------|
+| `mix test` | exit 0; 601 doctests, 33 properties, 4906 tests, 0 failures, 14 excluded, 1 skipped (26.8: 593 / 33 / 4902; +8 doctests from `guides/audio.md`, +4 tests in `examples_helpers_test.exs`) |
+| `mix test --seed 0` | exit 0; same counts |
+| `mix format --check-formatted`, `mix credo --strict`, `mix dialyzer` | exit 0; "found no issues"; `Total errors: 0` |
+| `mix docs 2>&1 \| grep -ciE 'warning\|error'` | 0 |
+| `mix test test/guides_test.exs test/guides_doctest_test.exs` | 64 doctests, 62 tests, 0 failures |
+| `mix run scripts/check_guide_fences.exs` | exit 0; `73 fences compiled, 14 skipped.` (corrected 2026-09-27 in the 26.9 fix pass; this row first read "72 … (67 before; `guides/audio.md` 6 fences, 5 new)", none of which reconciled. Re-measured: `mix run scripts/check_guide_fences.exs \| head -1` → `73 fences compiled, 14 skipped.`; `git show 977cb9f:guides/audio.md \| grep -c '^```elixir'` → 3 and `grep -c '^```elixir' guides/audio.md` → 7, so 4 new fences; summing `grep -c '^```elixir'` over `$(grep -oE 'guides/[a-z_]+\.md' mix.exs \| sort -u)` → 83 at `977cb9f` and 87 now, with `grep -c 'fence-check: skip'` summed over the same set → 14 at both, so 69 compiled before and 73 after; only `guides/audio.md` changed) |
+| `mix run scripts/audit_user_docs.exs guides/audio.md` / `CHANGELOG.md` | "No banned-token matches" each |
+| async grep (`grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test/ \| xargs grep -L 'async: false' \| wc -l`) | 12, unchanged; the modified test uses none of the four |
+| `mix hex.build --output <scratchpad>` + `tar -tzf contents.tar.gz` | builds `allm 0.5.0` with `mint_web_socket ~> 1.0`; all 14 `docs[:extras]` files are in the tarball; the tar was deleted. The pre-existing root `allm-0.4.3.tar` / `allm-0.5.0.tar` were not touched (built to the scratchpad to avoid overwriting `allm-0.5.0.tar`) |
+| `conformance/` | not touched; not run |
+| `README.md` | not modified |
+
+### Fix pass (2026-09-27, reviews under `.work/*/2026-09-26-phase-26-9*`)
+
+- F1/F2: `CHANGELOG.md` and the `guides/audio.md` provider table gave the adapters the façade arity; the adapters are `synthesize/2`, `stream_synthesize/2`, `transcribe/2`, `stream_synthesize_input/3`, `stream_transcribe/3` (`grep -n "^  def \(synthesize\|stream_synthesize\|transcribe\|stream_transcribe\|stream_synthesize_input\)(" lib/allm/providers/*/speech.ex lib/allm/providers/*/transcription.ex`).
+- F4: CHANGELOG's "first bundled provider with no chat adapter" was false (Voyage); now "Like Voyage, ElevenLabs has no chat adapter".
+- F3: the guide's language bullet now says *either* option turns on the hold (`@hold_options`, `lib/allm/providers/elevenlabs/transcription.ex:44`, `:1011`).
+- F5: the WAV reader duplicated in scripts 26/27 is `ExamplesHelpers.read_pcm_wav!/1` + `pcm_chunks/3`; `test/allm/examples_helpers_test.exs` pins the fixture at 24,000 Hz / 182,400 bytes / 38 chunks.
+- F6: a self-skip now exits `ExamplesHelpers.skip_exit_status/0` (3) via `ExamplesHelpers.skip!/1`; `run_all.exs` prints `[SKIP] <script> (self-skipped)` and does not count it as a failure. Exercised with two probe scripts in a scratch copy of `run_all.exs` (`[SKIP] 98_probe_skip.exs (self-skipped)`, `[OK] 99_probe_ok.exs`, exit 0). No prior script used a self-skip, so there was no convention to align with.
+- F7: both "marker absent → every provider" comments in `run_all.exs` now say every *chat* provider.
+- C1: the fence-count row above is corrected in place.
+- Live: `( set -a; . ./.env; set +a; ALLM_PROVIDER=elevenlabs mix run examples/run_all.exs )` exit 0, `01–12, 14–21 SKIP (provider gate), 23–27 OK`; `examples/RUN_OUTPUT_ELEVENLABS.md` regenerated from that run's stdout. OpenAI arm untouched and not re-run.
+
+## Phase 26.10 — `[CHORE]` sweep
+
+Built 2026-09-27 on `977cb9f`, in the same working tree as 26.9.
+
+- [x] `steering/2026-09-24_SST_SUPPORT.md`: one pointer line under Alternative D ("Decided in Phase 26 …").
+- [x] `.work/ASKS.md`: the `ulaw`/`alaw` `[FEATURE]` ticket filed (sun 9/27 12pm; predicate `grep -n ':ulaw' lib/allm/speech_request.ex` must match; today exit 1), and a `[DISPOSITION]` line re-running every Phase 26 ticket's predicate.
+- [x] **Every ticket this phase filed is closed or carries a grep predicate.** Re-run today from the repo root:
+  - sat 9/26 8pm HTTP-helper variants — `grep -roE 'defp (provider_message|redact_optional|sanitize_cause)\(' lib/allm/providers/ | sort -u | cut -d: -f2 | sort | uniq -c | awk '$1>1'` → `provider_message` 5, `redact_optional` 4, `sanitize_cause` 6. Open (the 3 → 4 rise is 26.6's per-provider ElevenLabs redactor variant, recorded there).
+  - sat 9/26 9pm FakeSpeech `{:ok, ""}` `[BUG]` — `MIX_ENV=test mix run -e '…elem(0))'` → `:ok`. Open.
+  - sat 9/26 9pm chat-stream `[CARRY]` — first grep: `anthropic.ex:1485`, `gemini.ex:1355`, `openai.ex:839`; second grep: `gemini.ex`, `anthropic.ex`, `openai.ex`. Open. It was never routed into 26.10's Module Tree (no `(MODIFY — 26.10)` amendment exists in this file), so the released chat adapters are not touched here.
+  - sun 9/27 2am stringify `[DEFERRED-DRY]` — `… | wc -l` → 4. Open.
+  - Closed tickets stay closed: the 26.1 transcription predicate prints nothing (exit 0 from `awk`, empty output), and the speech DRY ticket was closed in 26.6.
+- [x] **HANDOFF DONE-WHEN guards** re-run: pump-protocol guard → empty, exit 1; `grep -rnE "defp? await\(|receive do" lib/allm/providers/elevenlabs` → empty, exit 1; `grep -rn "defp await(%{pump:" lib/allm/providers | wc -l` → 0; every `assert_receive {^ref, {:input_error` in `input_pump_test.exs` carries `1_000`.
+- [x] **`UNVERIFIED` rows.** `grep -c UNVERIFIED steering/2026-09-25_ELEVENLABS_TTS_SST.md` → 13 (12 before this sweep's correction line, which contains the word). The predicate counts a token that settled rows keep (corrections are blockquotes beneath the row, never rewrites), so the design carries a dated CORRECTED line under its checklist item, and this table is the check:
+
+  | Design line (at `977cb9f` + this sweep) | Hit | Disposition |
+  |---|---|---|
+  | :52 | Assumption 4 ("doc-sourced until the probes run") | settled: every probe it names ran (26.6–26.8) |
+  | :252 | Decision #10, default voice "permanent premade" | settled that it answers (CORRECTED 2026-09-26 beneath); permanence **still unverified** — the key cannot read `category` |
+  | :616 | HTTP map, default voice | settled (26.6 CORRECTED under the HTTP map) |
+  | :618 | 200 content-type | settled (same) |
+  | :619 | correlation headers | settled (same) |
+  | :620 | unknown body field | settled (same) |
+  | :621 | HTTP stream framing | settled (26.7 CORRECTED under the HTTP map) |
+  | :629 | key-redaction prefix | settled (26.6 CORRECTED) |
+  | :671 | WS error frames | settled (26.7 CORRECTED under the WS map) |
+  | :699 | realtime pacing | settled (26.8 CORRECTED) |
+  | :720 | quota reportedly as 401 | **still unverified**: no quota state is reachable without exhausting the account |
+  | :1358 | the 26.10 checklist line | not a row |
+  | :1360 | this sweep's CORRECTED line | not a row |
+
+  Still unprobed and not marked `UNVERIFIED` in the design: the 5 GB STT cap ("not probed" in the HTTP map).
+
+### Notes
+
+- Nothing in 26.10's tree touches `lib/` or `test/`: no `[CARRY]` was routed to it.

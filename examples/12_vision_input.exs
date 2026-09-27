@@ -52,9 +52,7 @@ case ALLM.generate(engine, request) do
       System.halt(1)
     end
 
-    IO.puts(
-      "OK: vision_input — finish=#{reason} output=#{inspect(String.slice(text, 0, 80))}"
-    )
+    IO.puts("OK: vision_input — finish=#{reason} output=#{inspect(String.slice(text, 0, 80))}")
 
   {:ok, response} ->
     IO.puts(

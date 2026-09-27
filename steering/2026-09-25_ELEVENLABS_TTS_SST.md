@@ -1357,6 +1357,8 @@ Targeted + uniform + conformance + **BLOCKING** recorder. **Success criterion:**
 - [ ] Every ticket this phase filed is closed or re-filed with a grep predicate
 - [ ] Wire maps carry no remaining `UNVERIFIED` row that a probe arm settled: `grep -c UNVERIFIED steering/2026-09-25_ELEVENLABS_TTS_SST.md` counts only rows whose probe was impossible (the 5 GB STT cap), each named in RECORDS
 
+  > CORRECTED 2026-09-27 (26.10): the grep counts the token, not the property. Settled rows are corrected by dated blockquotes beneath them, never rewritten, so their `UNVERIFIED` stays and the count cannot fall to the unprobeable rows (12 hits before this correction, 13 with it). The check is RECORDS §26.10's per-hit table: every hit is either settled by a named blockquote or listed as still unverified with the reason no probe could settle it.
+
 **Verification:** uniform block + both predicates.
 
 ---

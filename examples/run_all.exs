@@ -19,10 +19,23 @@
 #
 # The marker is matched anywhere in the file with the regex
 # `~r/^#\s*Provider:\s*([\w, ]+)\s*$/m`. Marker absent → run on every
-# provider (the default; current behaviour for `01_*` through `09_*`).
+# *chat* provider (`ExamplesHelpers.chat_provider?/1`; current behaviour for
+# `01_*` through `09_*`).
 # Marker present → run only when `ALLM_PROVIDER` matches one of the listed
 # names; otherwise the script is SKIPPED with a `[SKIP]` marker and does
 # NOT count toward `failed`.
+#
+# An audio-only arm (a provider row with `adapter: nil`, e.g.
+# `ALLM_PROVIDER=elevenlabs`) has no chat adapter, so a marker-less script
+# runs only when `ExamplesHelpers.chat_provider?/1` is true. On such an arm
+# only the scripts whose marker names it run.
+#
+# A script can also skip itself at run time, for a reason a marker cannot
+# express (e.g. script 27 without `OPENAI_API_KEY`): it calls
+# `ExamplesHelpers.skip!/1`, which exits with
+# `ExamplesHelpers.skip_exit_status/0`. That status is reported as
+# `[SKIP] <script> (self-skipped)` and, like a gated skip, does NOT count
+# toward `failed` — but it is never reported as `[OK]`.
 
 #
 # Process isolation
@@ -32,7 +45,8 @@
 # `ExamplesHelpers.fail!/1`), which stops the whole VM. Running the scripts
 # in-process meant the FIRST failure killed the run: no summary, and every
 # later script went unobserved rather than passing. Each script therefore
-# runs as its own `mix run` OS process; its exit status is the verdict and a
+# runs as its own `mix run` OS process; its exit status is the verdict (0 is
+# a pass, `ExamplesHelpers.skip_exit_status/0` a self-skip) and a
 # halt ends only that script. A script still running after
 # the per-script timeout (180 s, or `ALLM_EXAMPLE_TIMEOUT_MS`) is killed and
 # counted as a timeout.
@@ -43,9 +57,12 @@ Code.require_file("_helpers.exs", __DIR__)
 defmodule RunAll do
   @moduledoc false
 
+  @skip_exit_status ExamplesHelpers.skip_exit_status()
+
   # Runs one example in a child `mix run` process, streaming its output.
-  # Returns :ok on exit status 0, {:error, {:exit_status, n}} otherwise, or
-  # {:error, :timeout} after killing a script that overran.
+  # Returns :ok on exit status 0, :self_skip on
+  # `ExamplesHelpers.skip_exit_status/0`, {:error, {:exit_status, n}}
+  # otherwise, or {:error, :timeout} after killing a script that overran.
   def run_script(path, timeout_ms) do
     mix = System.find_executable("mix") || raise "mix not found on PATH"
 
@@ -74,6 +91,9 @@ defmodule RunAll do
       {^port, {:exit_status, 0}} ->
         :ok
 
+      {^port, {:exit_status, status}} when status == @skip_exit_status ->
+        :self_skip
+
       {^port, {:exit_status, status}} ->
         {:error, {:exit_status, status}}
     after
@@ -93,7 +113,8 @@ IO.puts("=== Provider: #{provider} ===")
 
 # Provider-marker grammar (closed): one optional `# Provider: <names>` line
 # anywhere in the file; comma-separated provider names; matched as a whole
-# line. Script with no marker runs on every provider.
+# line. Script with no marker runs on every chat provider
+# (`ExamplesHelpers.chat_provider?/1`).
 provider_marker_regex = ~r/^#\s*Provider:\s*([\w, ]+)\s*$/m
 
 # Per-script budget. Image and audio scripts make slow live calls; the
@@ -121,7 +142,13 @@ results =
           |> Enum.reject(&(&1 == ""))
       end
 
-    if allowed_providers == :any or provider in allowed_providers do
+    runnable? =
+      case allowed_providers do
+        :any -> ExamplesHelpers.chat_provider?(provider)
+        names -> provider in names
+      end
+
+    if runnable? do
       IO.puts("--- #{Path.basename(path)} ---")
       {path, RunAll.run_script(path, script_timeout_ms)}
     else
@@ -130,7 +157,7 @@ results =
     end
   end)
 
-failed = Enum.filter(results, fn {_, status} -> status not in [:ok, :skip] end)
+failed = Enum.filter(results, fn {_, status} -> status not in [:ok, :skip, :self_skip] end)
 
 IO.puts("\n=== Summary (provider: #{provider}) ===")
 
@@ -139,6 +166,7 @@ Enum.each(results, fn {path, status} ->
     case status do
       :ok -> "[OK]  "
       :skip -> "[SKIP]"
+      :self_skip -> "[SKIP]"
       _ -> "[FAIL]"
     end
 
@@ -146,6 +174,7 @@ Enum.each(results, fn {path, status} ->
     case status do
       {:error, {:exit_status, n}} -> " (exit #{n})"
       {:error, :timeout} -> " (timed out after #{div(script_timeout_ms, 1000)}s)"
+      :self_skip -> " (self-skipped)"
       _ -> ""
     end
 

@@ -25,7 +25,7 @@ defmodule ExamplesHelpers do
     * `speech_engine/1` — text-to-speech engine; reads `:speech_adapter` /
       `:speech_model` and sets the engine's `:speech_model` field, not
       `:model`. Raises `ArgumentError` for providers without a speech
-      adapter, which today is every provider except OpenAI.
+      adapter, which today is every provider except OpenAI and ElevenLabs.
     * `transcription_engine/1` — speech-to-text engine; reads
       `:transcription_adapter` / `:transcription_model` and sets the
       engine's `:transcription_model` field. Raises `ArgumentError` for
@@ -65,9 +65,21 @@ defmodule ExamplesHelpers do
   carries both audio adapters. Gemini's row carries only a transcription
   adapter: Gemini text-to-speech works but is not bundled yet. Anthropic ships
   no audio endpoint in either direction, so both of its audio adapters are
-  `nil`. The speech script therefore carries `# Provider: openai` and the
-  transcription script `# Provider: openai, gemini`, and `run_all.exs` skips
-  each on the arms it cannot run on.
+  `nil`. The ElevenLabs row carries both audio adapters and nothing else.
+  Each audio script's `# Provider:` marker names the arms it can run on, and
+  `run_all.exs` skips it on the others.
+
+  The OpenAI and ElevenLabs rows also carry `:speech_voice`, read with
+  `speech_voice/0`, because voices are provider strings: OpenAI's are names
+  (`"alloy"`), ElevenLabs' are ids.
+
+  ## The audio-only arm
+
+  The ElevenLabs row has `adapter: nil`: ElevenLabs has no chat adapter.
+  `chat_provider?/1` is `false` for it, and `run_all.exs` runs a script
+  without a `# Provider:` marker (the chat, vision, embedding and tool
+  scripts) only on a chat arm, so that arm runs only the audio scripts that
+  name it.
 
   The audio engines set the slot's own model field (`:speech_model`,
   `:transcription_model`) rather than `:model`, because `ALLM.synthesize/3`
@@ -97,6 +109,7 @@ defmodule ExamplesHelpers do
       moderation_default_model: "omni-moderation-latest",
       speech_adapter: ALLM.Providers.OpenAI.Speech,
       speech_model: "gpt-4o-mini-tts",
+      speech_voice: "alloy",
       transcription_adapter: ALLM.Providers.OpenAI.Transcription,
       transcription_model: "gpt-transcribe"
     },
@@ -143,6 +156,29 @@ defmodule ExamplesHelpers do
       speech_model: nil,
       transcription_adapter: ALLM.Providers.Gemini.Transcription,
       transcription_model: "gemini-flash-latest"
+    },
+    # ElevenLabs is an audio-only arm: there is no chat, image, embedding or
+    # moderation adapter, so `adapter: nil` and `chat_provider?/1` is false.
+    # `run_all.exs` runs only the scripts whose `# Provider:` marker names
+    # elevenlabs. `key_env` is still required: `capability_engine/2` reads it.
+    "elevenlabs" => %{
+      adapter: nil,
+      default_model: nil,
+      vision_default_model: nil,
+      key_env: "ELEVENLABS_API_KEY",
+      image_adapter: nil,
+      image_default_model: nil,
+      embed_adapter: nil,
+      embedding_default_model: nil,
+      moderation_adapter: nil,
+      moderation_default_model: nil,
+      speech_adapter: ALLM.Providers.ElevenLabs.Speech,
+      speech_model: "eleven_flash_v2_5",
+      # ElevenLabs voices are ids, not names. This is the adapter's own
+      # default voice, confirmed live.
+      speech_voice: "JBFqnCBsd6RMkjVDRZzb",
+      transcription_adapter: ALLM.Providers.ElevenLabs.Transcription,
+      transcription_model: "scribe_v2"
     }
   }
 
@@ -304,8 +340,9 @@ defmodule ExamplesHelpers do
   row's chat `:key_env`.
 
   Raises `ArgumentError` naming the provider when the active row has no speech
-  adapter. Only the OpenAI row has one, so the speech script carries a
-  `# Provider: openai` marker and `run_all.exs` skips it on the other arms.
+  adapter. Only the OpenAI and ElevenLabs rows have one, so the speech
+  scripts carry a `# Provider:` marker naming those arms and `run_all.exs`
+  skips them on the others.
 
   `extra_opts` is merged on top of the helper defaults; `ALLM_SPEECH_MODEL`
   overrides the default model when set.
@@ -318,7 +355,7 @@ defmodule ExamplesHelpers do
         engine_model_field: :speech_model,
         key_env_key: nil,
         model_env: "ALLM_SPEECH_MODEL",
-        unavailable: "does not have a speech_adapter; this script is OpenAI-only"
+        unavailable: "does not have a speech_adapter; this script runs on openai and elevenlabs"
       },
       extra_opts
     )
@@ -333,8 +370,9 @@ defmodule ExamplesHelpers do
   `:model`. The key comes from the row's chat `:key_env`.
 
   Raises `ArgumentError` naming the provider when the active row has no
-  transcription adapter (Anthropic). The transcription script carries a
-  `# Provider: openai, gemini` marker so `run_all.exs` skips it there.
+  transcription adapter (Anthropic). The transcription scripts carry a
+  `# Provider:` marker that leaves Anthropic out, so `run_all.exs` skips them
+  there.
 
   `extra_opts` is merged on top of the helper defaults;
   `ALLM_TRANSCRIPTION_MODEL` overrides the default model when set.
@@ -352,6 +390,35 @@ defmodule ExamplesHelpers do
       extra_opts
     )
   end
+
+  @doc """
+  Whether `provider` (default: the active `ALLM_PROVIDER`) has a chat
+  adapter. `run_all.exs` runs a script without a `# Provider:` marker only
+  when this is `true`. Raises `ArgumentError` for an unknown provider.
+  """
+  @spec chat_provider?(String.t()) :: boolean()
+  def chat_provider?(provider \\ active_provider()) do
+    case Map.fetch(@providers, provider) do
+      {:ok, row} ->
+        not is_nil(row.adapter)
+
+      :error ->
+        raise ArgumentError,
+              "Unknown ALLM_PROVIDER #{inspect(provider)}; legal: " <>
+                inspect(Map.keys(@providers))
+    end
+  end
+
+  @doc """
+  The active provider row's default speech voice (`:speech_voice`), or `nil`
+  when the row has none.
+  """
+  @spec speech_voice() :: String.t() | nil
+  def speech_voice, do: Map.get(lookup_provider_row(), :speech_voice)
+
+  # Test seam: the provider table, for `test/allm/examples_helpers_test.exs`.
+  @doc false
+  def provider_rows, do: @providers
 
   # `image_engine/1`, `embedding_engine/1`, `moderation_engine/1`,
   # `speech_engine/1` and `transcription_engine/1` are one constructor
@@ -392,6 +459,70 @@ defmodule ExamplesHelpers do
   def fail!(msg) do
     IO.puts(:stderr, "FAIL: " <> msg)
     System.halt(1)
+  end
+
+  # Exit status a script uses to report that it skipped itself. `run_all.exs`
+  # maps it to a `[SKIP]` summary line, so a self-skip is never reported as
+  # `[OK]` and never counts as a failure.
+  @skip_exit_status 3
+
+  @doc """
+  The exit status `skip!/1` halts with; `run_all.exs` reads it to tell a
+  self-skip from a pass.
+  """
+  @spec skip_exit_status() :: pos_integer()
+  def skip_exit_status, do: @skip_exit_status
+
+  @doc """
+  Prints `SKIP: <msg>` and halts with `skip_exit_status/0`. For a script
+  that cannot run on this arm for a reason its `# Provider:` marker cannot
+  express (a second provider's key is absent). `run_all.exs` reports it as
+  `[SKIP] <script> (self-skipped)` rather than `[OK]`.
+  """
+  @spec skip!(String.t()) :: no_return()
+  def skip!(msg) do
+    IO.puts("SKIP: " <> msg)
+    System.halt(@skip_exit_status)
+  end
+
+  @doc """
+  Reads a mono 16-bit PCM WAV and returns `{sample_rate, pcm_bytes}`.
+
+  A `data` chunk size of `0xFFFFFFFF` ("unknown length", as in a
+  *streaming* WAV such as `fixtures/quick_brown_fox.wav`) means the data
+  runs to the end of the file. Any other format raises `MatchError`.
+  """
+  @spec read_pcm_wav!(Path.t()) :: {pos_integer(), binary()}
+  def read_pcm_wav!(path) do
+    <<"RIFF", _riff_size::little-32, "WAVE", chunks::binary>> = File.read!(path)
+    walk_wav(chunks, nil)
+  end
+
+  defp walk_wav(<<"fmt ", size::little-32, fmt::binary-size(size), rest::binary>>, _rate) do
+    <<1::little-16, 1::little-16, rate::little-32, _::binary>> = fmt
+    walk_wav(rest, rate)
+  end
+
+  defp walk_wav(<<"data", 0xFFFFFFFF::little-32, pcm::binary>>, rate) when is_integer(rate),
+    do: {rate, pcm}
+
+  defp walk_wav(<<"data", size::little-32, pcm::binary-size(size), _::binary>>, rate)
+       when is_integer(rate),
+       do: {rate, pcm}
+
+  defp walk_wav(<<_id::binary-4, size::little-32, rest::binary>>, rate) do
+    <<_skipped::binary-size(size + rem(size, 2)), rest::binary>> = rest
+    walk_wav(rest, rate)
+  end
+
+  @doc """
+  Splits mono 16-bit `pcm` at `rate` Hz into chunks of `ms` milliseconds.
+  A trailing partial chunk is dropped.
+  """
+  @spec pcm_chunks(binary(), pos_integer(), pos_integer()) :: [binary()]
+  def pcm_chunks(pcm, rate, ms) do
+    size = div(rate * 2 * ms, 1000)
+    for <<chunk::binary-size(size) <- pcm>>, do: chunk
   end
 
   defp capability_engine(spec, extra_opts) do

@@ -2,7 +2,8 @@
 
 Self-asserting smoke tests that exercise the public ALLM API against a real
 LLM provider — OpenAI by default, Anthropic via `ALLM_PROVIDER=anthropic`,
-or Gemini via `ALLM_PROVIDER=gemini`. Each script ends with
+or Gemini via `ALLM_PROVIDER=gemini`. `ALLM_PROVIDER=elevenlabs` is an
+audio-only arm: it runs just the audio scripts that name it. Each script ends with
 `unless <assertion>, do: System.halt(1)`, so a script that prints `OK: …`
 and exits `0` is the green signal; any non-zero exit is a real failure.
 
@@ -34,6 +35,7 @@ provider table:
     moderation_default_model: "omni-moderation-latest",
     speech_adapter: ALLM.Providers.OpenAI.Speech,
     speech_model: "gpt-4o-mini-tts",
+    speech_voice: "alloy",
     transcription_adapter: ALLM.Providers.OpenAI.Transcription,
     transcription_model: "gpt-transcribe"
   },
@@ -70,6 +72,16 @@ provider table:
     speech_model: nil,
     transcription_adapter: ALLM.Providers.Gemini.Transcription,
     transcription_model: "gemini-flash-latest"
+  },
+  "elevenlabs" => %{
+    adapter: nil,                          # audio-only: no chat adapter
+    key_env: "ELEVENLABS_API_KEY",
+    # ...every other chat/image/embedding/moderation key is nil...
+    speech_adapter: ALLM.Providers.ElevenLabs.Speech,
+    speech_model: "eleven_flash_v2_5",
+    speech_voice: "JBFqnCBsd6RMkjVDRZzb",  # ElevenLabs voices are ids
+    transcription_adapter: ALLM.Providers.ElevenLabs.Transcription,
+    transcription_model: "scribe_v2"
   }
 }
 ```
@@ -97,7 +109,14 @@ read `:speech_adapter` / `:speech_model` and `:transcription_adapter` /
 engine's per-slot field (`:speech_model`, `:transcription_model`) rather
 than on `:model`, because `ALLM.synthesize/3` and `ALLM.transcribe/3` never
 read the chat model. `ALLM_SPEECH_MODEL` and `ALLM_TRANSCRIPTION_MODEL`
-override them.
+override them. `ExamplesHelpers.speech_voice/0` returns the row's
+`:speech_voice`, because a voice is a provider string (OpenAI's are names,
+ElevenLabs' are ids).
+
+`ExamplesHelpers.chat_provider?/1` is `false` for a row whose `:adapter` is
+`nil` — today only `elevenlabs`. `run_all.exs` runs a script with no
+`# Provider:` marker only on a chat arm, so the ElevenLabs arm runs only the
+audio scripts whose marker names it (23–27).
 
 Every script's first lines are:
 
@@ -130,7 +149,8 @@ So either:
 
 1. Drop a `.env` file at the repository root with whichever keys you want
    to exercise (`OPENAI_API_KEY=sk-...`, `ANTHROPIC_API_KEY=sk-ant-...`,
-   `GEMINI_API_KEY=...`, `VOYAGE_API_KEY=pa-...`) and run
+   `GEMINI_API_KEY=...`, `VOYAGE_API_KEY=pa-...`,
+   `ELEVENLABS_API_KEY=sk_...`) and run
    `mix run examples/run_all.exs` (with `ALLM_PROVIDER=…` to pick a
    non-default provider) — no further setup.
 2. Or export the vars directly:
@@ -138,11 +158,12 @@ So either:
 
 ### Which keys each provider arm needs
 
-| `ALLM_PROVIDER` | Chat / vision / image scripts | Embedding scripts (16–18) | Moderation scripts (19–20) | Speech (23) | Transcription (24) |
-|---|---|---|---|---|---|
-| `openai` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` |
-| `gemini` | `GEMINI_API_KEY` | `GEMINI_API_KEY` | *skipped* | *skipped* | `GEMINI_API_KEY` |
-| `anthropic` | `ANTHROPIC_API_KEY` | **`VOYAGE_API_KEY`** | *skipped* | *skipped* | *skipped* |
+| `ALLM_PROVIDER` | Chat / vision / image scripts | Embedding scripts (16–18) | Moderation scripts (19–20) | Speech (23, 25) | Transcription (24) | Realtime transcription (26) | Voice loop (27) |
+|---|---|---|---|---|---|---|---|
+| `openai` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | *skipped* | *skipped* |
+| `gemini` | `GEMINI_API_KEY` | `GEMINI_API_KEY` | *skipped* | *skipped* | `GEMINI_API_KEY` | *skipped* | *skipped* |
+| `anthropic` | `ANTHROPIC_API_KEY` | **`VOYAGE_API_KEY`** | *skipped* | *skipped* | *skipped* | *skipped* | *skipped* |
+| `elevenlabs` | *skipped* | *skipped* | *skipped* | `ELEVENLABS_API_KEY` | `ELEVENLABS_API_KEY` | `ELEVENLABS_API_KEY` | `ELEVENLABS_API_KEY` + **`OPENAI_API_KEY`** (chat hop; self-skips as `[SKIP]` without it) |
 
 #### Embedding scripts and `VOYAGE_API_KEY`
 
@@ -315,21 +336,46 @@ No `# Provider:` marker: it runs on every arm.
 
 - `23_synthesize_speech.exs` — `ALLM.synthesize/3` turns one sentence into
   MP3 audio and writes it to a temp file (the path is printed, so you can
-  play it). Asserts non-empty bytes, `response.format == :mp3` (read from
-  the response content type, not copied from the request), an
-  `audio/mpeg` MIME type, and an MP3 signature on the first bytes.
-  `# Provider: openai`: Gemini text-to-speech is not bundled yet, and
-  Anthropic has no audio endpoint.
+  play it). The voice is the provider row's `:speech_voice`. Asserts
+  non-empty bytes, `response.format == :mp3` (read from the response
+  content type, not copied from the request), an `audio/mpeg` MIME type,
+  and an MP3 signature on the first bytes. `# Provider: openai,
+  elevenlabs`: Gemini text-to-speech is not bundled yet, and Anthropic has
+  no audio endpoint.
 - `24_transcribe_audio.exs` — `ALLM.transcribe/3` over
   `fixtures/quick_brown_fox.mp3` (one spoken sentence). Asserts the
   transcript is non-empty and mentions "fox", and that `response.usage` is
-  an `%ALLM.Usage{}`. `# Provider: openai, gemini`. On Gemini the
+  an `%ALLM.Usage{}`. `# Provider: openai, gemini, elevenlabs`. On Gemini the
   transcript comes from a chat model prompted to transcribe, so the one
   content assertion is a case-insensitive "fox" rather than the whole
   sentence.
 
 Both cost well under $0.001 per run. The script numbers skip 22, which
 another planned example reserves.
+
+## Streaming audio (25–27)
+
+- `25_stream_speech.exs` — `ALLM.stream_synthesize/3` as raw PCM. Counts
+  the `:audio_delta` events, times the first one through the
+  `[:allm, :audio, :first_chunk]` telemetry event, and asserts at least two
+  deltas, a `:pcm` `:speech_started` with a sample rate, and a
+  `:speech_completed` terminal. `# Provider: openai, elevenlabs`.
+- `26_stream_transcribe.exs` — `ALLM.stream_transcribe/3` over
+  `fixtures/quick_brown_fox.wav` cut into 100 ms chunks, printing each
+  partial and committed transcript; asserts the text mentions "fox". The
+  WAV is a *streaming* WAV whose RIFF and `data` sizes are `0xFFFFFFFF`, so
+  `ExamplesHelpers.read_pcm_wav!/1` takes the data chunk to the end of the file
+  (24 kHz mono 16-bit, 182,400 data bytes). `# Provider: elevenlabs`.
+- `27_voice_loop.exs` — the whole loop: realtime transcription of the WAV,
+  a chat answer on an explicit OpenAI engine, and
+  `ALLM.stream_synthesize_input/3` speaking the answer while it streams.
+  `# Provider: elevenlabs`; the chat hop needs `OPENAI_API_KEY`. Without
+  it the script prints a `SKIP:` line and exits with
+  `ExamplesHelpers.skip_exit_status/0` (3), which `run_all.exs` reports as
+  `[SKIP] 27_voice_loop.exs (self-skipped)` — so a run without the key does
+  not read as an exercised `ALLM.stream_synthesize_input/3`.
+
+Each costs under $0.01 per run.
 
 ## Running
 
@@ -352,15 +398,19 @@ Full suite — run once per provider you want to validate:
 OPENAI_API_KEY=sk-...        ALLM_PROVIDER=openai    mix run examples/run_all.exs
 ANTHROPIC_API_KEY=sk-ant-... ALLM_PROVIDER=anthropic mix run examples/run_all.exs
 GEMINI_API_KEY=...           ALLM_PROVIDER=gemini    mix run examples/run_all.exs
+ELEVENLABS_API_KEY=sk_...    ALLM_PROVIDER=elevenlabs mix run examples/run_all.exs
 ```
 
 `run_all.exs` runs each script in its own `mix run` process, so one
 script's `System.halt(1)` fails only that script: every later script still
 runs and the per-script summary always prints. It exits `0` iff every
-non-skipped script exited `0`; a script exceeding 180 s
+non-skipped script exited `0`; a script that skips itself
+(`ExamplesHelpers.skip!/1`, exit status 3) is reported as `[SKIP] …
+(self-skipped)` and does not fail the run; a script exceeding 180 s
 (`ALLM_EXAMPLE_TIMEOUT_MS`) is killed and reported as timed out. The
 most-recent captured stdouts are committed as `RUN_OUTPUT_OPENAI.md`,
-`RUN_OUTPUT_ANTHROPIC.md`, and `RUN_OUTPUT_GEMINI.md` next to this README.
+`RUN_OUTPUT_ANTHROPIC.md`, `RUN_OUTPUT_GEMINI.md` and
+`RUN_OUTPUT_ELEVENLABS.md` next to this README.
 
 ## Scripts
 
@@ -393,8 +443,11 @@ facade (`generate/3`, `stream/3`, `chat/3`, `step/3`, `generate_image/3`,
 | `19_moderate_text.exs` | tight | C | openai | `ALLM.moderate/3` over an all-strings input; asserts batch cardinality, index order, and that a plain threat is flagged while a benign string is not |
 | `20_moderate_image.exs` | tight | C | openai | multimodal `ALLM.moderate/3` — `ModerationRequest.multimodal?/1` derives the result count before the call, and the script asserts it against the count that came back (two elements in, one result out) |
 | `21_compact_tools.exs` | tight | C | all | `compact: true` tools: the model completes a task through stubs + `tool_help`; asserts step-1 input tokens drop versus the same run with full tools |
-| `23_synthesize_speech.exs` | tight | C | openai | `ALLM.synthesize/3` — text to MP3; asserts non-empty bytes, `format: :mp3`, `audio/mpeg`, and an MP3 signature |
-| `24_transcribe_audio.exs` | loose | C | openai, gemini | `ALLM.transcribe/3` over a checked-in MP3; asserts the transcript mentions "fox" and `usage` is an `%ALLM.Usage{}` |
+| `23_synthesize_speech.exs` | tight | C | openai, elevenlabs | `ALLM.synthesize/3` — text to MP3 with the row's voice; asserts non-empty bytes, `format: :mp3`, `audio/mpeg`, and an MP3 signature |
+| `24_transcribe_audio.exs` | loose | C | openai, gemini, elevenlabs | `ALLM.transcribe/3` over a checked-in MP3; asserts the transcript mentions "fox" and `usage` is an `%ALLM.Usage{}` |
+| `25_stream_speech.exs` | tight | C | openai, elevenlabs | `ALLM.stream_synthesize/3` as PCM; asserts ≥ 2 deltas and the event grammar, prints first-chunk latency |
+| `26_stream_transcribe.exs` | loose | C | elevenlabs | `ALLM.stream_transcribe/3` over 100 ms PCM chunks of a WAV; asserts the transcript mentions "fox" |
+| `27_voice_loop.exs` | loose | C | elevenlabs | realtime transcription → OpenAI chat → `ALLM.stream_synthesize_input/3`; asserts speech came back |
 
 ## Image generation
 

@@ -1,3 +1,21 @@
+## [DOC] Document streaming audio and ElevenLabs; add examples 25-27
+*Sunday, September 27th at 12pm*
+Phases 26.9-26.10 of steering/2026-09-25_ELEVENLABS_TTS_SST.md. The spec gains 
+§37.11 Streaming audio, §37.7.4 ElevenLabs and the scoped §35.7 carve-out, 
+plus the matching §27, §29 and §8 rows. guides/audio.md gains streaming, 
+live-input, voice-loop, latency and ElevenLabs sections. Its four new 
+real-provider fences were paste-tested live, and every provider claim is marked 
+confirmed or inferred in RECORDS. Examples 25-27 cover stream speech, stream 
+transcribe and the chat-to-speech voice loop. run_all.exs runs unmarked scripts 
+only on chat-capable arms and reports script self-skips (exit 3) as SKIP rather 
+than OK. The elevenlabs arm is live green, and RUN_OUTPUT_ELEVENLABS.md and 
+RUN_OUTPUT_OPENAI.md are regenerated from their live runs. CLAUDE.md gains the 
+WebSocket transport rule and the audio-stream exception to the fold rule. The 
+CHANGELOG v0.6.0 entry gains the Phase 26 lines. examples/12_vision_input.exs 
+carries a formatter-only reflow.
+
+---
+
 ## [FEAT] Add ElevenLabs realtime streaming transcription
 *Sunday, September 27th at 12pm*
 Phase 26.8 of steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37 streaming audio). 

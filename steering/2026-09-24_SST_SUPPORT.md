@@ -68,6 +68,8 @@ The two reason enums below are identical in membership. One `ALLM.Error.AudioAda
 
 Deferred. The value is real, because first-audio latency is what voice apps optimize. But the shape is undecided: a new `ALLM.Event` variant (breaking, §8), a separate `Enumerable.t()` of raw byte chunks outside the event protocol, or a `SpeechStreamAdapter` behaviour. OpenAI's SSE mode also carries `usage` that the non-streaming body lacks (probed: `{"type":"speech.audio.done","usage":{"input_tokens":2,"output_tokens":43,"total_tokens":45}}`). Nothing here forecloses it: `SpeechRequest` has no `:stream` field, and `synthesize/3` drops `stream: true` silently, like `embed/3` and `moderate/3`.
 
+> Decided in Phase 26 (`steering/2026-09-25_ELEVENLABS_TTS_SST.md`, spec §37.11): two closed event unions outside `ALLM.Event` plus `SpeechStreamAdapter` / `TranscriptionStreamAdapter` behaviours on the same engine slots; OpenAI streams raw chunked audio, not SSE.
+
 ---
 
 ## Overview

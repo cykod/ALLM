@@ -120,4 +120,55 @@ defmodule ALLM.ExamplesHelpersTest do
       assert merged[:params] == %{temperature: 0, max_tokens: 100}
     end
   end
+
+  describe "provider rows and chat_provider?/1" do
+    test "chat_provider?/1 is false for elevenlabs and true for every other row" do
+      rows = ExamplesHelpers.provider_rows()
+
+      # The rows are iterated, so a new chat row needs no edit here.
+      for {name, _row} <- rows do
+        assert ExamplesHelpers.chat_provider?(name) == (name != "elevenlabs"),
+               "chat_provider?(#{inspect(name)})"
+      end
+
+      assert Map.has_key?(rows, "elevenlabs")
+    end
+
+    test "chat_provider?/1 raises ArgumentError for an unknown provider" do
+      assert_raise ArgumentError, ~r/Unknown ALLM_PROVIDER "nope"/, fn ->
+        ExamplesHelpers.chat_provider?("nope")
+      end
+    end
+
+    test "the elevenlabs row is audio-only, keyed on ELEVENLABS_API_KEY, with a voice id" do
+      row = Map.fetch!(ExamplesHelpers.provider_rows(), "elevenlabs")
+
+      assert row.key_env == "ELEVENLABS_API_KEY"
+      assert row.adapter == nil
+      assert row.speech_adapter == ALLM.Providers.ElevenLabs.Speech
+      assert row.transcription_adapter == ALLM.Providers.ElevenLabs.Transcription
+      assert is_binary(row.speech_voice) and row.speech_voice != ""
+    end
+
+    test "the openai row carries speech_voice \"alloy\"" do
+      assert Map.fetch!(ExamplesHelpers.provider_rows(), "openai").speech_voice == "alloy"
+    end
+  end
+
+  describe "read_pcm_wav!/1 and pcm_chunks/3" do
+    test "reads the streaming-WAV fixture to EOF: 24 kHz, 182,400 PCM bytes (examples/README.md)" do
+      path = Path.expand("../../examples/fixtures/quick_brown_fox.wav", __DIR__)
+
+      assert {24_000, pcm} = ExamplesHelpers.read_pcm_wav!(path)
+      assert byte_size(pcm) == 182_400
+
+      chunks = ExamplesHelpers.pcm_chunks(pcm, 24_000, 100)
+      assert length(chunks) == 38
+      assert Enum.all?(chunks, &(byte_size(&1) == 4_800))
+    end
+  end
+
+  test "skip_exit_status/0 is neither a pass nor fail!/1's status" do
+    assert ExamplesHelpers.skip_exit_status() not in [0, 1]
+  end
 end

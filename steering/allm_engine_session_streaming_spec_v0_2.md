@@ -817,6 +817,8 @@ end
 > the key entirely; consumers that don't read it continue to match
 > non-exhaustively.
 
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Streaming audio does **not** extend this union. Its events live in two separate closed unions, `ALLM.SpeechEvent` (`:speech_started`, `:audio_delta`, `:speech_completed`, `:error`) and `ALLM.TranscriptionEvent` (`:transcription_started`, `:partial_transcript`, `:committed_transcript`, `:transcription_completed`, `:error`), specified in §37.11.1, so no reducer of `ALLM.Event` changes. The same rule applies to them: adding a variant is breaking for their reducers; adding a payload key is not. They round-trip ETF, not JSON (`:audio_delta` carries raw bytes).
+
 ---
 
 ## 9. Request building
@@ -1722,6 +1724,30 @@ lib/
 >
 > Existing modules extended: `ALLM` (`synthesize/3`, `speech_request/2`, `transcribe/3`, `transcription_request/2`), `ALLM.Engine` (`:speech_adapter`, `:transcription_adapter`, `:speech_model`, `:transcription_model`), `ALLM.Validate` (`speech_request/1`, `transcription_request/1`), `ALLM.Telemetry` (`:synthesize` and `:transcribe` spans), `ALLM.Serializer` (seven registry entries), `ALLM.Error.EngineError` (`:no_speech_adapter`, `:no_transcription_adapter`), `ALLM.Error.ValidationError` (`:invalid_speech_request`, `:invalid_transcription_request`). `ALLM.Capability` is **not** extended (§37.1 item 5). The published conformance suites live in the `conformance/` project: `ALLM.Test.SpeechAdapterConformance`, `ALLM.Test.TranscriptionAdapterConformance`.
 
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Streaming audio (§37.11) and the ElevenLabs adapters (§37.7.4) add the following modules, under the shipped `lib/allm/` prefix.
+>
+> ```text
+> lib/allm/speech_event.ex                         # Layer A — closed union (ETF-only)
+> lib/allm/transcription_event.ex                  # Layer A — closed union (ETF-only)
+> lib/allm/transcription_stream_request.ex         # Layer A
+> lib/allm/speech_stream_adapter.ex                # Layer B — behaviour
+> lib/allm/transcription_stream_adapter.ex         # Layer B — behaviour
+> lib/allm/audio_stream.ex                         # Layer C — collect_speech/1, collect_transcription/1, text_deltas/1
+> lib/allm/audio_stream/chat_stream_error.ex       # private exception raised by text_deltas/1 (@moduledoc false)
+> lib/allm/providers/elevenlabs/speech.ex
+> lib/allm/providers/elevenlabs/transcription.ex
+> lib/allm/providers/support/elevenlabs.ex         # headers, base URL, output_format/2, error classification, redaction
+> lib/allm/providers/support/http_response.ex      # provider HTTP helpers shared by every Req-based adapter
+> lib/allm/providers/support/transcription_adapter.ex  # the shared STT contract (gates, Fake hand-off, one attempt)
+> lib/allm/providers/support/speech_adapter.ex     # the shared TTS contract and the Finch stream state machine
+> lib/allm/providers/support/input_pump.ex         # reduces a streamed input in a monitored helper process
+> lib/allm/providers/support/web_socket.ex         # behaviour
+> lib/allm/providers/support/web_socket/mint.ex    # default implementation, over :mint_web_socket
+> lib/allm/providers/support/web_socket/input_loop.ex  # the shared WebSocket owner loop
+> ```
+>
+> Existing modules extended: `ALLM` (`stream_synthesize/3`, `stream_synthesize_input/3`, `stream_transcribe/3`), `ALLM.SpeechRequest` / `ALLM.SpeechResponse` (`:sample_rate`), `ALLM.Validate` (`speech_request/2`, `transcription_stream_request/1`), `ALLM.Serializer` (one registry entry, `TranscriptionStreamRequest`; the event unions are not registered), `ALLM.Telemetry` (two span names and the `[:allm, :audio, :first_chunk]` event), `ALLM.Error.SpeechAdapterError` / `ALLM.Error.TranscriptionAdapterError` (`:unsupported_feature`), `ALLM.Adapter` (`hoist_transport_opts/2`, shared by the chat runner and the audio stream façades), `ALLM.Providers.Support.Transport` (`cancel_and_drain/3`), `ALLM.Providers.FakeSpeech` / `ALLM.Providers.FakeTranscription` (both streaming behaviours) and `ALLM.Providers.OpenAI.Speech` (`stream_synthesize/2`). `ALLM.Engine` is **not** extended. New dependency: `:mint_web_socket` (`~> 1.0`). The published conformance suites gain `ALLM.Test.SpeechStreamAdapterConformance`, `ALLM.Test.SpeechInputStreamAdapterConformance` and `ALLM.Test.TranscriptionStreamAdapterConformance`.
+
 ---
 
 ## 28. Implementation guidance
@@ -1813,6 +1839,21 @@ Additional per-span metadata:
 > - `:exception` on both — measurements `%{duration: integer()}`; metadata `:kind`, `:reason`, `:stacktrace`.
 >
 > Stable keys as for `:embed` and `:moderate`: `audio_bytes` / `text_length` are `0` and `:usage` is `nil` on the error path. `:model` is the audio slot's model (`request.model || engine.speech_model` / `engine.transcription_model`), never the chat `engine.model`, and is `nil` when neither is set (the adapter default applies after the span starts). **`[:allm, :synthesize, :stop]` metadata carries the audio**: `:response` holds the full synthesized bytes, so a handler that ships it wholesale moves the whole clip per call. The namespace note above applies: these events use `[:allm, …]`.
+
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Streaming audio (§37.11) adds two spans and one non-span event:
+>
+> ```elixir
+> [:allm, :stream_synthesize, :start | :stop | :exception]
+> [:allm, :stream_transcribe, :start | :stop | :exception]
+> [:allm, :audio, :first_chunk]
+> ```
+>
+> - `:stream_synthesize` — both `ALLM.stream_synthesize/3` and `ALLM.stream_synthesize_input/3`. `:start` metadata `:request_id`, `:engine`, `:model`, `:input_length` (`nil` for the input form).
+> - `:stream_transcribe` — `:start` metadata `:request_id`, `:engine`, `:model`, `:sample_rate`.
+> - Both spans' `:stop` fires when the enumerable is **returned**, not when it drains (the chat `:stream` carve-out), so its metadata is `%{response: nil}` and carries no audio, usage or error; `:exception` as for the other spans.
+> - `[:allm, :audio, :first_chunk]` — emitted once per stream, at its first `:audio_delta` (speech) or `:partial_transcript` (transcription); never for a stream that fails first. Measurements `%{latency: integer()}` in native units from the façade call; metadata `:request_id`, `:capability` (`:speech | :transcription`), `:provider_model` (the model the start event reports when it is a binary, else the dispatched `request.model`). Because the spans stop before any audio, this is the event that measures time to first audio.
+>
+> None of the three carries audio bytes or transcript text.
 
 ### Relationship to `middleware`
 
@@ -2010,6 +2051,8 @@ All three implement `ALLM.Adapter` and `ALLM.StreamAdapter`. Additional provider
 
 > **Phase 25 amendment (commits `da277bf..e91cdb0`; docs land in the 25.6 commit).** **Audio is no longer out of scope** — it ships in v0.6 as two first-class non-streaming primitives, `ALLM.synthesize/3` (text-to-speech) and `ALLM.transcribe/3` (speech-to-text), with the `ALLM.SpeechAdapter` / `ALLM.TranscriptionAdapter` behaviours and their own engine slots. See **§37**. The "audio" line above is struck rather than deleted, so the record of what v0.2 excluded survives; callers no longer need to drop down to a provider SDK for request/response TTS and STT. Streaming TTS and real-time STT remain out of scope (§37.10).
 
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Streaming TTS and real-time STT are no longer out of scope: they ship as `ALLM.stream_synthesize/3`, `ALLM.stream_synthesize_input/3` and `ALLM.stream_transcribe/3` (**§37.11**). The last sentence of the Phase 25 note above is superseded.
+
 ---
 
 ## 33. v0.2 non-goals
@@ -2032,6 +2075,8 @@ Out of scope for the initial version:
 > Audio input/output remains a genuine non-goal.
 
 > **Phase 25 amendment (commits `da277bf..e91cdb0`; docs land in the 25.6 commit).** The sentence above is superseded, and the `audio input/output` line in the list is struck (not deleted): request/response audio ships in v0.6 (**§37**). What remains a non-goal is *streaming* audio (streaming TTS, real-time STT) and audio as a chat `Message` content part (§37.10).
+
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Streaming audio ships (**§37.11**), so the only remaining audio non-goal from the note above is audio as a chat `Message` content part (§37.10).
 
 ---
 
@@ -2368,6 +2413,18 @@ Third-party image providers (Stability, Replicate, Google Imagen `:predict`, fal
 > Its one beneficiary today is the moderation family. Anthropic ships no moderation endpoint and names no partner for one, so criterion (b) has nothing to admit; Google exposes safety ratings inline on `generateContent` rather than as a standalone classification call, so there is no endpoint to implement `c:ALLM.ModerationAdapter.moderate/2` against. Both absences are documented in §39.7 and in `guides/moderation.md`.
 >
 > **This is a carve-out, not a widening**, on the same terms as the v0.5 one. It does not license shipping a one-provider family for a capability the other bundled providers *do* offer — that is a gap to be filled, not a shape to be documented. It licenses declining to invent a module for a provider that does not offer the capability at all, and it forbids satisfying the family's shape with a proxy (wrapping a chat call, or naming a third party after a provider that never recommended it). Third-party moderation providers remain out of core and ship as separate packages implementing `ALLM.ModerationAdapter`. See §39.7.
+
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** The rule takes a **third scoped carve-out**, for the audio family (§37), on the owner's decision to bundle ElevenLabs in core rather than as a separate package.
+>
+> ElevenLabs fails every criterion above: (a) it has no bundled chat adapter to share maintenance with; (b) no bundled provider names it as a recommended partner; and the Phase 22 family-shape rule requires the provider to be bundled for chat. Yet the audio family's streaming behaviours (§37.11) would otherwise ship with no real provider behind their input-streaming callbacks: OpenAI's text-in and realtime speech are its Realtime API, which is out of scope, and Gemini has no streaming audio endpoint in ALLM.
+>
+> The addition:
+>
+> > An adapter from a provider with no bundled chat adapter may be bundled into the audio family (§37) when it is the family's first bundled implementation of an input-streaming audio callback — `c:ALLM.SpeechStreamAdapter.stream_synthesize_input/3` or `c:ALLM.TranscriptionStreamAdapter.stream_transcribe/3` — so that a published streaming behaviour ships with a real provider behind it. An adapter so admitted may also implement the family's other audio behaviours.
+>
+> Its one beneficiary is ElevenLabs: `ALLM.Providers.ElevenLabs.Speech` (the first `stream_synthesize_input/3`) and `ALLM.Providers.ElevenLabs.Transcription` (the first `stream_transcribe/3`), each also implementing the non-streaming behaviour of its direction. See §37.7.4.
+>
+> **This is a carve-out, not a widening.** Both input-streaming callbacks now have a bundled implementation, so the criterion admits no second specialist: Deepgram, Cartesia, AssemblyAI and other audio providers stay out of core and ship as separate packages implementing the same behaviours. It admits nothing outside §37 — ElevenLabs gets no chat, image, embedding or moderation adapter by this route.
 
 ### 35.8 Testing
 
@@ -2767,10 +2824,13 @@ v0.6 adds two request/response audio primitives: `ALLM.synthesize/3` (text-to-sp
 
 There is no Layer D: audio carries no conversation state and `ALLM.Session` is untouched.
 
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Streaming audio is added as **§37.11**, and ElevenLabs joins the bundled audio adapters (§37.7.4) under a new scoped §35.7 carve-out. This amendment also touches §8 (a pointer: the audio event unions are not `ALLM.Event`), §27 (module tree), §29 (telemetry), §32.5 and §33 (streaming audio struck from out-of-scope), §37.2.5 (`:unsupported_feature`), §37.7 (provider matrix) and §37.10 (two items struck). The design is `steering/2026-09-25_ELEVENLABS_TTS_SST.md`; its probe-corrected wire facts are what this section states.
+
 ### 37.1 Design goals
 
 1. **One behaviour per capability.** `ALLM.SpeechAdapter` and `ALLM.TranscriptionAdapter` are separate behaviours with separate engine slots (`:speech_adapter`, `:transcription_adapter`), so one engine can pair providers per direction (e.g. Gemini STT with OpenAI TTS). A single `AudioAdapter` with an operations enum was rejected: one slot could not serve two providers, and every adapter would need an unsupported-operation path.
 2. **Non-streaming.** Both providers can stream TTS audio, but neither shape fits the closed `ALLM.Event` union (§8), and adding a variant breaks every reducer. `SpeechRequest` has no `:stream` field, and a `stream: true` opt is silently ignored, as for `embed/3` and `moderate/3`. Streaming TTS is deferred to its own design.
+   > **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Decided in §37.11: streaming is a separate set of façades over two new closed event unions outside `ALLM.Event`, so no chat reducer changes. `synthesize/3` and `transcribe/3` stay non-streaming and are unchanged; there is still no `:stream` field, and `stream: true` is still ignored.
 3. **Opt-in per engine.** An engine without the slot returns `{:error, %ALLM.Error.EngineError{reason: :no_speech_adapter | :no_transcription_adapter}}` ahead of every other gate. No fallback to `:adapter` or any other slot.
 4. **No voice catalogue.** Voice names are provider strings forwarded verbatim. OpenAI's valid set differs per model (`tts-1` rejects voices the newer models accept) and Gemini's names are disjoint from OpenAI's, so a library-side enum would be wrong for at least one model.
 5. **Reuse engine plumbing.** Keys (§6.4), retries, telemetry (§29) and deterministic fakes (§31) apply unchanged. No capability pre-flight is added: `llm_db` has no audio capability keys to check (§6.3), and inventing them would be speculative.
@@ -2841,13 +2901,16 @@ On both request structs, `:options` reaches provider fields ALLM does not model 
 
 #### 37.2.5 Errors and enum extensions
 
-`ALLM.Error.SpeechAdapterError` (9 reasons) and `ALLM.Error.TranscriptionAdapterError` (the same 9 plus `:content_filter`), one type per capability as for images, embeddings and moderation, so each façade and conformance suite can pattern-match on the error module:
+`ALLM.Error.SpeechAdapterError` (10 reasons) and `ALLM.Error.TranscriptionAdapterError` (the same 10 plus `:content_filter`), one type per capability as for images, embeddings and moderation, so each façade and conformance suite can pattern-match on the error module:
 
 ```elixir
 :authentication_failed | :rate_limited | :invalid_request | :context_length_exceeded
-| :provider_unavailable | :timeout | :network_error | :malformed_response | :unknown
+| :provider_unavailable | :timeout | :network_error | :malformed_response
+| :unsupported_feature | :unknown
 # TranscriptionAdapterError adds :content_filter
 ```
+
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Both enums gain `:unsupported_feature` (Phase 25 shipped 9 and 10 reasons; the counts above are current). It is returned, before any I/O and before key resolution, for a request field the provider cannot express: ElevenLabs `:instructions`, `format: :aac | :flac`, a `:sample_rate` outside the format's set, and `TranscriptionRequest.prompt`; OpenAI a `:sample_rate` other than `nil`/24,000 for `:pcm`/`:wav` or any non-`nil` rate for other formats. ElevenLabs' tier-gate 403 (`subscription_required`) classifies to it too. Both are closed enums, so this is breaking for an exhaustive `case`.
 
 There is no `:batch_too_large`: neither endpoint takes more than one input per call, so neither behaviour has a `max_batch_size/0`.
 
@@ -2940,6 +3003,16 @@ Gemini documents no per-request TTS character limit (and Gemini TTS is not bundl
 | `ALLM.Providers.OpenAI.Transcription` | `POST /v1/audio/transcriptions`, multipart | `gpt-transcribe` |
 | `ALLM.Providers.Gemini.Transcription` | `POST …/models/<model>:generateContent`, inline audio | `gemini-flash-latest` |
 
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** The matrix gains ElevenLabs (admitted under the §35.7 audio carve-out; §37.7.4) and the streaming columns of §37.11:
+
+| Adapter | `synthesize/3` / `transcribe/3` | `stream_synthesize/3` | `stream_synthesize_input/3` | `stream_transcribe/3` | Default model |
+|---------|------|------|------|------|------|
+| `ALLM.Providers.OpenAI.Speech` | yes | yes — the same `POST /v1/audio/speech`, chunked | — (OpenAI's text-in streaming is its Realtime API; out of scope) | — | `gpt-4o-mini-tts` |
+| `ALLM.Providers.OpenAI.Transcription` | yes | — | — | — | `gpt-transcribe` |
+| `ALLM.Providers.Gemini.Transcription` | yes | — | — | — | `gemini-flash-latest` |
+| `ALLM.Providers.ElevenLabs.Speech` | yes — `POST /v1/text-to-speech/{voice_id}` | yes — `POST …/{voice_id}/stream`, chunked | yes — `wss://…/{voice_id}/stream-input` | — | `eleven_flash_v2_5`; voice `JBFqnCBsd6RMkjVDRZzb` when `nil` |
+| `ALLM.Providers.ElevenLabs.Transcription` | yes — `POST /v1/speech-to-text`, multipart | — | — | yes — `wss://…/v1/speech-to-text/realtime` | `scribe_v2` (batch); `scribe_v2_realtime` (realtime) |
+
 Gemini TTS was probed and works, but is **not bundled** in v0.6. Anthropic has no audio endpoint. Every injected default is stated in the adapter's public `@doc` and its body builder's `@doc false`.
 
 #### 37.7.1 OpenAI speech
@@ -2962,6 +3035,18 @@ Gemini has no transcription endpoint. The adapter sends a fixed instruction ("Ge
 - Unknown body fields are **rejected** (400 `Unknown name`), so a mistyped `:options` key surfaces as `:invalid_request`. A bad key is `API_KEY_INVALID` on a 400 and classifies as `:authentication_failed`. No request-id header came back on recorded responses; `responseId` → `:id`.
 - Audio tokenizes at about 25 tokens per second (observed).
 
+#### 37.7.4 ElevenLabs
+
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** New. Both adapters resolve the key as `:elevenlabs` (`ELEVENLABS_API_KEY`, through `ALLM.Keys`' `<PROVIDER>_API_KEY` fallback) after every local gate; auth is the `xi-api-key` header, including on the WebSocket upgrade. `opts[:base_url]` or `adapter_opts[:base_url]` selects a data-residency host. Probed 2026-09-26..27 by `scripts/record_elevenlabs_audio_fixtures.exs`; every row below is observed unless marked documented or inferred.
+
+- **Speech request.** JSON `{"text", "model_id", "voice_settings"?: {"speed"}}`, voice in the URL path. `:options` merges under the structural fields (a `"voice_settings"` map merges with `speed`); `options["query"]` adds URL query parameters; `output_format`, `model_id` and `text` are reserved and dropped. Unknown body fields are **ignored** (200), so acceptance confirms nothing.
+- **Format map** (`ALLM.Providers.Support.ElevenLabs.output_format/2`, the only home of the table): `:mp3`/`nil` → `mp3_22050_32 | mp3_24000_48 | mp3_44100_128` (default 44,100); `:opus` → `opus_48000_64`; `:pcm`/`:wav` → `pcm_<rate>`/`wav_<rate>` for 8,000, 16,000, 22,050, 24,000 (default), 32,000, 44,100, 48,000; `:aac`, `:flac` → `:unsupported_feature`. 44.1 kHz PCM/WAV is tier-gated (observed 403 `subscription_required` / `output_format_not_allowed`, classified `:unsupported_feature`). The 200 `content-type` is `audio/mpeg`, `audio/pcm`, `audio/wav` or `audio/opus`, each mapping through `mime_to_format/1`, so `response.format` is derived from the response as §37.2.2 requires; `sample_rate` is the requested one (the response does not state it).
+- **Correlation.** Speech: `request-id` header → `response.id`, `character-cost` header → `response.raw` as `%{"character_cost" => n}`. Transcription: no `request-id` header; `transcription_id` → `:id`. `usage` is all-`nil` on both.
+- **Transcription.** Multipart `file`, `model_id`, `language_code`?; `:prompt` → `:unsupported_feature`. ElevenLabs sniffs the content (an MP3 named `audio.bin` transcribed correctly), so there is no filename/MIME gate. `language_code` is ISO 639-3 (`"eng"`), passed through. `max_audio_bytes/0` = 4,999,999,999 (documented "less than 5.0GB"; **not probed**). One attempt per call, as for the other transcription adapters.
+- **Limits.** No local speech length gate (the limit is per model, documented 40,000 characters for flash, 5,000 for `eleven_v3`); the documented 400 `text_too_long` maps to `:context_length_exceeded` (documented only: a 5,001-character `eleven_v3` probe answered 200 and was billed, so no length arm runs).
+- **Errors.** Envelope `{"detail": {"type", "code", "message", "status", "request_id", "param"?}}`; a 422 `detail` is a list. A body with `detail.type: "authentication_error"` is `:authentication_failed` whatever the status (an invalid key is a 400 or a 401 depending on its shape); quota/`payment_required` is `:invalid_request` (never retried); 429 `:rate_limited`; 5xx `:provider_unavailable`. Provider strings pass a redactor for the `sk_…` key shape (the invalid-key body does not echo the key; the redactor is defence in depth).
+- **Retry.** `ElevenLabs.Speech.synthesize/2` runs its own `ALLM.Retry.run/3` per call, as `OpenAI.Speech` does (so a `:timeout` through `synthesize/3` costs up to 9 attempts at the default policy). Streams are never retried.
+
 ### 37.8 Testing
 
 - `ALLM.Providers.FakeSpeech` and `ALLM.Providers.FakeTranscription` ship in `lib/`. With no script, speech returns the bytes `"FAKE-AUDIO:" <> input` (format `request.format || :mp3`) and transcription returns `text: ""`. Scripts under `adapter_opts[:speech_script]` / `[:transcription_script]` accept `{:ok, bytes | text}`, `{:ok, %Response{}}`, `{:error, %AdapterError{}}` and `{:retry_until_call, n}`. A non-empty script that runs dry returns `:unknown` with `metadata.cause: :speech_script_exhausted` / `:transcription_script_exhausted`, never a default answer. Cursors key on engine identity at the façade.
@@ -2975,18 +3060,138 @@ See the §29 amendment: `[:allm, :synthesize, …]` and `[:allm, :transcribe, �
 
 ### 37.10 Out of scope for v0.6
 
-- **streaming TTS / real-time STT** — needs an event-protocol decision (§8)
+- ~~**streaming TTS / real-time STT** — needs an event-protocol decision (§8)~~ (struck by the Phase 26 amendment: see §37.11)
 - **OpenAI `/v1/audio/translations`** — English-only, `whisper-1`-only
 - **timestamps, diarization, `srt`/`vtt`** — model-specific; `response.raw` carries the body
 - **OpenAI custom voices** (`{"id": "voice_…"}`) — gated behind OpenAI's approval process; reachable later through `:options`
 - **Gemini TTS** — probed and working; deferred to a later phase
-- **ElevenLabs TTS / STT** — not bundled for chat, so admission needs a §35.7 criterion; the contracts (string voices, file-format atoms, per-slot models) were checked against its shape
+- ~~**ElevenLabs TTS / STT** — not bundled for chat, so admission needs a §35.7 criterion; the contracts (string voices, file-format atoms, per-slot models) were checked against its shape~~ (struck by the Phase 26 amendment: admitted under the §35.7 audio carve-out; see §37.7.4)
 - **Gemini Files API for audio above the inline cap** — a second upload round trip
 - **`ALLM.Audio.from_url/1`** — neither provider accepts an audio URL
 - **audio as a chat `Message` content part** — a chat-adapter change across both OpenAI translators and Gemini's
 - **capability pre-flight** — no `llm_db` audio capability keys exist
 - **a voice catalogue** — §37.1 item 4
 - **`ALLM.Session` integration** — no conversation state
+
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Still out of scope after streaming shipped: OpenAI STT streaming and OpenAI Realtime; Gemini TTS and any Gemini streaming; `ulaw`/`alaw` telephony formats (`SpeechRequest.formats/0` stays closed); word/character alignment (a new `SpeechEvent` variant, breaking for that union's reducers); ElevenLabs multi-context `/multi-stream-input` (barge-in); single-use tokens for browser clients; voice cloning and voice-library CRUD; batch STT diarization/keyterms/timestamps (reachable through `:options`, body on `:raw`); WebSocket pooling and connection pre-warming; retrying a stream after it has opened; `ALLM.Session` integration.
+
+### 37.11 Streaming audio
+
+> **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** New. The latency-critical voice loop is: microphone PCM → `stream_transcribe/3` → the committed transcript → `ALLM.stream/3` → `AudioStream.text_deltas/1` → `stream_synthesize_input/3` → audio chunks. Transcription must complete before the chat call (it needs the whole question); chat and speech overlap.
+
+#### 37.11.1 Event unions
+
+Two new closed unions, **outside** `ALLM.Event` (§8), so no chat reducer changes:
+
+```elixir
+defmodule ALLM.SpeechEvent do
+  @type t ::
+          {:speech_started, %{request_id, model, provider, format, mime_type, sample_rate}}
+          | {:audio_delta, binary()}                      # non-empty
+          | {:speech_completed, %{request_id, id, usage, metadata}}
+          | {:error, ALLM.Error.SpeechAdapterError.t()}
+end
+
+defmodule ALLM.TranscriptionEvent do
+  @type t ::
+          {:transcription_started, %{request_id, model, provider, session_id}}
+          | {:partial_transcript, %{text: String.t()}}
+          | {:committed_transcript, %{text: String.t(), language: String.t() | nil}}
+          | {:transcription_completed, %{text, language, duration_seconds, request_id, usage, metadata}}
+          | {:error, ALLM.Error.TranscriptionAdapterError.t()}
+end
+```
+
+- **Grammar.** Speech success is `speech_started · audio_delta+ · speech_completed`; transcription success is `transcription_started · (partial* · committed)* · partial* · transcription_completed`. A failure ends `…· {:error, err}`, and nothing follows a terminal event. A speech stream whose input yields no text, or whose provider sends zero audio bytes, ends `:invalid_request` with `metadata.cause: :empty_input`, so a successful speech stream always has ≥ 1 delta.
+- **Semantics.** A partial **replaces** the previous partial of the current segment; a committed segment is final and **appended**. `completed.text` is normative: each committed text `String.trim/1`-ed, empties dropped, joined with one space (the adapter computes it). Streaming `duration_seconds` is **computed** as `bytes_sent / (sample_rate * 2)`, not provider-reported.
+- **Serializability.** Both unions round-trip `:erlang.term_to_binary/1` and are **not** JSON-encoded (`:audio_delta` carries raw bytes); they are not registered with `ALLM.Serializer`. Adding a variant is breaking for reducers of that union, the §8 rule. Constructors (`speech_started/1`, `audio_delta/1` — raises on `""` —, `transcription_started/1`, `committed_transcript/2`, …) and `event?/1` mirror `ALLM.Event`'s style; `event?/1` on `{:error, _}` accepts only the family's own error struct.
+
+#### 37.11.2 Layer A additions
+
+- `ALLM.TranscriptionStreamRequest` — `%{model, language, sample_rate: 16_000, commit_strategy: :vad | :manual, options: %{}, metadata: %{}}`, a bare `struct!/2` constructor, `commit_strategies/0`. JSON-serializable and registered with the serializer; `__from_tagged__/1` decodes the two truthy defaults explicitly, so a persisted `8_000`/`:manual` survives.
+- `SpeechRequest` and `SpeechResponse` gain `:sample_rate` (`pos_integer() | nil`). `nil` on the request means the adapter's default for the format; adapters report the actual rate on the response and on `:speech_started`. **The cross-provider PCM default is 24,000 Hz** (OpenAI PCM is fixed at 24 kHz), so switching providers never changes a playback rate silently.
+- `ALLM.Validate.speech_request/2` (`speech_request/1` delegates with `[]`); `input: :streamed` skips the three `:input` rows. `:sample_rate` not `nil`/`pos_integer()` → `{:sample_rate, :out_of_range}`. `ALLM.Validate.transcription_stream_request/1`: `:sample_rate` (`:out_of_range`), `:commit_strategy` (`:unknown`), `:model`/`:language` (`:invalid_shape`), `:options`/`:metadata` (`:invalid_shape`). Both reuse the existing `:invalid_speech_request` / `:invalid_transcription_request` reasons.
+
+#### 37.11.3 Behaviours
+
+A module opts in to streaming by implementing a **second behaviour on the same engine slot**, detected with `Code.ensure_loaded?/1` + `function_exported?/3` (the chat precedent). `ALLM.Engine` is unchanged.
+
+```elixir
+defmodule ALLM.SpeechStreamAdapter do
+  @callback stream_synthesize(ALLM.SpeechRequest.t(), keyword()) ::
+              {:ok, Enumerable.t(ALLM.SpeechEvent.t())} | {:error, ALLM.Error.SpeechAdapterError.t()}
+  @callback stream_synthesize_input(ALLM.SpeechRequest.t(), Enumerable.t(String.t()), keyword()) ::
+              {:ok, Enumerable.t(ALLM.SpeechEvent.t())} | {:error, ALLM.Error.SpeechAdapterError.t()}
+  @optional_callbacks stream_synthesize_input: 3
+end
+
+defmodule ALLM.TranscriptionStreamAdapter do
+  @callback stream_transcribe(ALLM.TranscriptionStreamRequest.t(), Enumerable.t(binary() | :commit), keyword()) ::
+              {:ok, Enumerable.t(ALLM.TranscriptionEvent.t())} | {:error, ALLM.Error.TranscriptionAdapterError.t()}
+  @callback stream_sample_rates() :: [pos_integer()]
+end
+```
+
+Normative invariants (numbered in each moduledoc):
+
+1. The synchronous return is exactly `{:ok, enumerable}` or `{:error, capability_error}`; `ALLM.Keys.fetch!/2` raising is the one exception.
+2. **Lazy.** No I/O until the enumerable is reduced. Pre-flight gates return `{:error, _}` synchronously, before `Keys.fetch!/2` and before the enumerable is returned.
+3. The enumerable obeys the union's grammar.
+4. **Halt-safe.** A consumer halt releases the transport (Finch ref cancelled, or socket closed and input pump stopped) and leaves no stream-owned message in the consumer's mailbox.
+5. `opts[:stream_timeout]` (ms of silence, default 60,000) resets on every transport message **and** every input element, so a slow input does not time out a waiting socket; expiry ends the stream `:timeout`.
+6. `opts[:request_id]` appears on the start and terminal events; `request.metadata` on the terminal event.
+7. **Input.** An element of the wrong shape (non-UTF-8-string for speech; neither a binary nor `:commit` for transcription) ends the stream `:invalid_request`, `metadata.cause: :invalid_input_chunk`; an empty text chunk is skipped. An input that raises, throws or exits ends it with `:input_raised`, and a crash of a process linked inside the input with `:input_crashed`; `err.cause` is then `%{kind: :error | :throw | :exit, message: String.t()}`, never the raw term (pids and refs are forbidden on Layer A and are not JSON-encodable). The consumer process is never killed. Transcription chunk boundaries are the caller's: an odd trailing byte is carried to the next chunk, and one left at the end of input is `:invalid_input_chunk`; a chunk over the adapter's maximum frame is split.
+8. **End of input** (transcription). Uncommitted audio is committed, and the stream waits for the final committed segment before `:transcription_completed`.
+9. **Ordering of I/O.** On a WebSocket path the socket is connected (and, for STT, the provider's session started) **before** the input is reduced, so a refused upgrade never reduces the input. A provider that accepts the upgrade and then rejects the key by an error frame (ElevenLabs does, on both endpoints) can still see the input reduced on the TTS path; the STT path waits for `session_started` and does not.
+
+`stream_sample_rates/0` plays the role of `max_audio_bytes/0`: a caller checks it before opening a microphone. The input is reduced by `ALLM.Providers.Support.InputPump` in a helper process (unlinked, monitored, with a watchdog and a credit window, default 8) so the consumer can keep reading the socket while the input blocks. **Consequence for callers:** an input that reads the caller's mailbox or process dictionary must be relayed (subscribe from inside the stream's start function). A halt kills the pump; a killed process runs no after functions, so the input's own resources are released by process exit.
+
+#### 37.11.4 Façades
+
+```elixir
+@spec stream_synthesize(Engine.t(), String.t() | SpeechRequest.t(), keyword()) ::
+        {:ok, Enumerable.t(SpeechEvent.t())} | {:error, EngineError.t() | ValidationError.t() | SpeechAdapterError.t()}
+@spec stream_synthesize_input(Engine.t(), Enumerable.t(String.t()), keyword()) ::
+        {:ok, Enumerable.t(SpeechEvent.t())} | {:error, EngineError.t() | ValidationError.t() | SpeechAdapterError.t()}
+@spec stream_transcribe(Engine.t(), Enumerable.t(binary() | :commit), keyword()) ::
+        {:ok, Enumerable.t(TranscriptionEvent.t())} | {:error, EngineError.t() | ValidationError.t() | TranscriptionAdapterError.t()}
+```
+
+- **Request construction.** `stream_synthesize/3` reuses `speech_request/2`'s allow-list. The input forms build from their struct's field opts, or take `opts[:request]` (authoritative). `stream_transcribe/3`'s allow-list is all six `TranscriptionStreamRequest` fields.
+- **Gate order**, each synchronous: (1) nil slot → `EngineError :no_speech_adapter | :no_transcription_adapter`; (2) the slot lacks the callback → `EngineError :missing_stream_adapter` (the chat atom, reused; `stream_synthesize_input/3` also fires it for an adapter that streams whole texts only); (3) input forms only: a binary or non-enumerable input → `ValidationError` with `{:input, :invalid_shape}`; (4) the validator; (5) model stamping; (6) dispatch.
+- **Model resolution.** `stream_synthesize*` use `request.model || engine.speech_model`, then the adapter default. **`stream_transcribe/3` never reads `engine.transcription_model`**: batch and realtime model namespaces are disjoint (ElevenLabs `scribe_v2` vs `scribe_v2_realtime`), so it is `request.model`, else the adapter's realtime default.
+- **No retry.** No `Retry.run/3` on any stream path; a stream is never retried after it opens.
+- **Wrapping.** The returned enumerable is wrapped once: it emits `[:allm, :audio, :first_chunk]` at the first `:audio_delta` / `:partial_transcript`, and raises `ArgumentError` naming the adapter if an element is not an event of the union (or if the synchronous return violates invariant 1).
+
+#### 37.11.5 Mid-stream errors do not fold into a response
+
+Deliberately unlike chat (§10.1's fold into `finish_reason: :error`): a stream that fails after opening ends with a terminal `{:error, err}` event, and `ALLM.AudioStream.collect_speech/1` / `collect_transcription/1` return `{:error, err}`. `SpeechResponse` has no `finish_reason`, and a half-rendered clip is not a valid `SpeechResponse`. What arrived is on the error's metadata: `bytes_received` (speech) or `committed_text` (transcription). Audio bytes never enter an error (errors derive `Jason.Encoder`; raw audio is not UTF-8). Only pre-flight failures are synchronous `{:error, _}`.
+
+#### 37.11.6 `ALLM.AudioStream`
+
+Layer C, pure. `collect_speech/1` folds a speech stream into the `SpeechResponse` `synthesize/3` would return (format, mime, rate, model and provider from `:speech_started`; the rest from `:speech_completed`; a stream without a terminal event is `:malformed_response`). `collect_transcription/1` folds a transcription stream into a `TranscriptionResponse` (`id` is the realtime `session_id`). `text_deltas/1` maps chat `{:text_delta, %{delta: d}}` to `d` and drops everything else; a chat `{:error, err}` **raises** (`ALLM.AudioStream.ChatStreamError`, carrying the reason and message, never the struct), so a TTS stream fed a failed chat stream ends `:input_raised` and a truncated answer is never spoken as a successful clip.
+
+#### 37.11.7 Stream-first, as an equivalence property
+
+`synthesize/3` and `transcribe/3` are **not** re-routed through the streams: every bundled provider streams on a different endpoint (ElevenLabs) or not at all (Gemini, OpenAI STT). §3's stream-first rule is honoured in testable form instead: a StreamData property over the Fakes asserts `synthesize(e, r) ≡ stream_synthesize(e, r) |> collect_speech` (bytes, format, sample rate, model, provider, usage, request id, metadata) and `transcribe(...).text ≡ stream_transcribe(...) |> collect_transcription |> .text`.
+
+#### 37.11.8 Transport
+
+- **HTTP streaming** (OpenAI `/v1/audio/speech`, ElevenLabs `/stream`): `Finch.async_request/3` on the HTTP/1 `ALLM.Finch` pool, as for chat (§7.2). A non-2xx status's body is buffered to its end and classified with the non-streaming table, so the redactor and body-keyed rules see the message. Observed framing: OpenAI raw chunked audio (`gpt-4o-mini-tts`, 405 characters of PCM: 90 data messages, first at 1,728 ms), no SSE (`stream_format` stays reserved); ElevenLabs raw chunked audio (44 characters of `pcm_24000`: 26 messages from 425 ms).
+- **WebSocket** (`ALLM.Providers.Support.WebSocket`, a behaviour; default `…WebSocket.Mint` over `:mint_web_socket`): an HTTP/1 connection opened **in the process that reduces the stream**, no helper process for the socket; the API key goes in the upgrade request's headers, **never the URL** (ElevenLabs also accepts `?authorization=`, which ALLM never uses: URLs reach logs and telemetry). Control frames (ping/pong) never leave the module. `:ws_module` is the test seam, as `:finch_module` is for Finch.
+
+#### 37.11.9 ElevenLabs streaming wire (observed 2026-09-27)
+
+- **`/stream-input` (text in).** Query `model_id`, `output_format`, `inactivity_timeout = min(180, ceil(stream_timeout / 1000))` (180 for `:infinity`) and `auto_mode=true` by default (`options["query"]` may override it). Initial message `{"text": " "}` plus `voice_settings`/other options; text frames `{"text": chunk}` with no space appended; end of input `{"text": "", "flush": true}` then `{"text": ""}`, answered by the last audio, `{"audio": null, "isFinal": true}` and a close 1000. Keep-alive `{"text": " "}` after half of `inactivity_timeout` without a client frame. **Latency default:** first audio 238 ms after the first text frame under `auto_mode`, 563 ms under the default `chunk_length_schedule` (one probe of `["Hel", "lo", " world", "."]`); `auto_mode` voices each frame as its own clip, so while it is on the adapter buffers text to a word boundary (whitespace, `! ? ;`, CJK full-width marks) and sends whole words only; with it off, chunks go verbatim (owner decision 2026-09-27). A bad or missing key and an unknown voice **upgrade with 101**, then send `{"code": 1008, "error": <code>, "message"}` and close 1008 (`invalid_api_key` / `authentication_required` → `:authentication_failed`, `voice_id_does_not_exist` → `:invalid_request`); a bare 1008 is `:invalid_request`; any other close before `isFinal` is `:network_error`. `eleven_v3` is refused **at the upgrade** (HTTP 400 `unsupported_model`, `:invalid_request`); there is no model fallback.
+- **Realtime STT.** `wss://…/v1/speech-to-text/realtime?model_id=scribe_v2_realtime&audio_format=pcm_<rate>&commit_strategy=vad|manual[&language_code]`, other `options` as query parameters; `stream_sample_rates/0` = `[8_000, 16_000, 22_050, 24_000, 44_100, 48_000]`. Client frames `{"message_type": "input_audio_chunk", "audio_base_64", "commit", "sample_rate"}`, at most 1,000 ms of audio each (a 1,000 ms and an exploratory 3,000 ms chunk were accepted); `:commit` sends an empty-audio `commit: true` frame. Unpaced upload is accepted. The server does not close after the final commit (the adapter closes). A commit covering < 0.3 s of new audio is refused with `commit_throttled` and a close: mid-stream `:rate_limited`; after the end of input it completes the stream, and the adapter sends a final commit only when audio went out since the last one. Partials can arrive after their segment's commit. Timestamped commits (`committed_transcript_with_timestamps`) are sent only with `include_timestamps=true`, carry a language (ISO 639-1) only with `include_language_detection=true`, and arrive before or after their plain frame; with either option set, each segment is held until its language arrives or for at most 1,000 ms (`adapter_opts[:language_hold_ms]`), paired by commit order (owner decision 2026-09-27); without them nothing is held and `language` is `nil`. A bad key upgrades with 101, then `auth_error` and a close 1000; the input is not reduced (the pump starts on `session_started`).
+
+#### 37.11.10 Fakes and conformance
+
+`FakeSpeech` and `FakeTranscription` implement both streaming behaviours, reduce input through the same `InputPump` (so a mailbox-dependent input fails under the Fake as in production), advance their script cursor at **call** time, and accept `{:events, [event]}` (emitted verbatim; `:unknown`/`:stream_only_script_entry` on the non-streaming path). `adapter_opts[:chunk_bytes]` (default 1,024) splits scripted speech bytes; `FakeTranscription.stream_sample_rates/0` = `[8_000, 16_000, 24_000]` (overridable by `adapter_opts[:stream_sample_rates]`). Real adapters hand a scripted call to the Fake before their own gates. Published suites, six cases each: `ALLM.Test.SpeechStreamAdapterConformance`, `ALLM.Test.SpeechInputStreamAdapterConformance` (only for adapters exporting the optional callback), `ALLM.Test.TranscriptionStreamAdapterConformance`. `ALLM.Test.TranscriptionAdapterConformance` gains `skip_cases:`; the ElevenLabs mount skips case 4 (its `max_audio_bytes() + 1` clip is 5 GB), and a sparse-file test binds that adapter's size gate instead.
+
+#### 37.11.11 Telemetry
+
+See the §29 amendment: `[:allm, :stream_synthesize, …]`, `[:allm, :stream_transcribe, …]` and the non-span `[:allm, :audio, :first_chunk]`.
 
 ---
 
