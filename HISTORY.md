@@ -1,3 +1,20 @@
+## [DOC] Apply the Phase 27 retro — flake capture, probe arms, live harness
+*Sunday, September 27th at 8pm*
+Folds .work/retro/2026-09-27-prompt-caching_applied.md into the agent docs.
+
+- CLAUDE.md: full mix test runs keep their output in a file and a lost red run 
+is followed by mix test --failed (F1); the async-safety grep now ignores 
+comment lines and defers telemetry sites to the per-process filter it already 
+recommends (F2).
+- agent-spec/DESIGN.md: a wire-field row naming both OpenAI endpoints needs a 
+probe arm per endpoint (F4).
+- agent-spec/REVIEW.md and IMPLEMENTATION.md: the Fake.engine/tracked_engine 
+templates, which never existed, are replaced with the live Engine.new + 
+stream_script + cleanup_observer grammar (verified by running it), and review 
+harnesses must never reach a real host (F3).
+
+---
+
 ## [TWK] Polish Phase 27 prompt caching after the gate cleared
 *Sunday, September 27th at 7pm*
 Phase 27 (2026-09-27_PROMPT_CACHING_DESIGN.md) cleared its gate review (PASS); 

@@ -53,10 +53,12 @@ Pre-existing dialyzer warnings: note but don't block. New warnings on changed li
 iex -S mix
 ```
 
+A review harness must never reach a real host: use Fake, or a stub you assert was hit (a top-level `plug:` is ignored — it goes in `adapter_opts`; `ALLM.generate/3` streams via Finch past `Req.Test`).
+
 For every public function in the diff, do a **complete round-trip**:
 
 1. Construct inputs via public constructors (`ALLM.user/1`, `ALLM.tool/1`, `ALLM.request/2`, `ALLM.Engine.new/1`) — never reach into struct internals.
-2. Build an engine via `ALLM.Providers.Fake.engine/1` with a script that exercises the function.
+2. Build an engine via `ALLM.Engine.new(adapter: ALLM.Providers.Fake, model: "fake:x", adapter_opts: [stream_script: [[...]]])` with a script that exercises the function.
 3. Call the function; inspect the result.
 4. Verify result matches docs and spec.
 5. Trigger at least one Error Contract path; confirm error struct shape.
@@ -65,14 +67,14 @@ Capture the IEx session as a fenced `elixir` block with a 1–2 sentence narrati
 
 ````markdown
 ```elixir
-iex(1)> engine = ALLM.Providers.Fake.engine(stream: [
-...(1)>   {:message_start, :assistant},
-...(1)>   {:content_delta, "hello"},
-...(1)>   {:content_delta, " world"},
-...(1)>   {:message_end, :stop}
-...(1)> ])
+iex(1)> engine = ALLM.Engine.new(adapter: ALLM.Providers.Fake, model: "fake:x",
+...(1)>   adapter_opts: [stream_script: [[
+...(1)>     {:text_delta, "hello"},
+...(1)>     {:text_delta, " world"},
+...(1)>     {:finish, :stop}
+...(1)>   ]]])
 iex(2)> {:ok, response} = ALLM.generate(engine, ALLM.request([ALLM.user("hi")]))
-iex(3)> response.content
+iex(3)> response.output_text
 "hello world"
 ```
 
@@ -97,7 +99,7 @@ Either round-trip failing is a Layer A invariant violation — blocker. For tagg
 #### Layer B — Runtime
 
 ```elixir
-iex> engine = ALLM.Providers.Fake.engine(reply: "ok")
+iex> engine = ALLM.Engine.new(adapter: ALLM.Providers.Fake, model: "fake:x", adapter_opts: [stream_script: [[{:text_delta, "ok"}, {:finish, :stop}]]])
 iex> :erlang.term_to_binary(engine)              # engine itself must be serializable
 ```
 
@@ -120,18 +122,18 @@ iex> ^response = ALLM.StreamCollector.collect(Enum.to_list(stream))
 4. Trigger one Error Contract path:
 
 ```elixir
-iex> bad = ALLM.Providers.Fake.engine(error: {:authentication_failed, "no key"})
+iex> bad = ALLM.Engine.new(adapter: ALLM.Providers.Fake, model: "fake:x", adapter_opts: [stream_script: [[{:preflight_error, :authentication_failed, [message: "no key"]}]]])
 iex> {:error, %ALLM.Error.AdapterError{reason: :authentication_failed}} = ALLM.generate(bad, request)
 ```
 
 5. **Cleanup check** for any new stream — early halt releases resources:
 
 ```elixir
-iex> {:ok, ref} = ALLM.Providers.Fake.tracked_engine()
-iex> {:ok, stream} = ALLM.stream_generate(ref.engine, request)
+iex> counter = :counters.new(1, [:atomics])
+iex> engine = ALLM.Engine.new(adapter: ALLM.Providers.Fake, model: "fake:x", adapter_opts: [stream_script: [[{:text_delta, "a"}, {:finish, :stop}]], cleanup_observer: counter])
+iex> {:ok, stream} = ALLM.stream_generate(engine, request)
 iex> _ = stream |> Enum.take(1)
-iex> Process.sleep(100)
-iex> ALLM.Providers.Fake.released?(ref)    # true
+iex> :counters.get(counter, 1)    # 1 — the stream's after_fun ran
 ```
 
 #### Layer D — Stateful continuation

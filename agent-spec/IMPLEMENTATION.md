@@ -192,9 +192,9 @@ Summarize:
 
 ```elixir
 iex -S mix
-iex> engine = ALLM.Providers.Fake.engine(messages: [...])
+iex> engine = ALLM.Engine.new(adapter: ALLM.Providers.Fake, model: "fake:x", adapter_opts: [stream_script: [[{:text_delta, "hi"}, {:finish, :stop}]]])
 iex> {:ok, response} = ALLM.generate(engine, ALLM.request([ALLM.user("hello")]))
-iex> response.content
+iex> response.output_text
 ```
 
 Real provider adapters: include a smoke test gated by `@tag :integration`.
@@ -347,7 +347,7 @@ The engine itself gets a **serializability test**: `:erlang.term_to_binary/1` su
   ```elixir
   property "generate/3 equals stream_generate/3 |> StreamCollector.collect/1" do
     check all(script <- fake_event_script_generator()) do
-      engine = Fake.engine(stream: script)
+      engine = ALLM.Engine.new(adapter: Fake, model: "fake:x", adapter_opts: [stream_script: [script]])
       {:ok, response} = ALLM.generate(engine, ALLM.request([ALLM.user("x")]))
       {:ok, stream} = ALLM.stream_generate(engine, ALLM.request([ALLM.user("x")]))
       collected = ALLM.StreamCollector.collect(stream)
@@ -360,10 +360,11 @@ The engine itself gets a **serializability test**: `:erlang.term_to_binary/1` su
 
   ```elixir
   test "stream_generate/3 cleans up when the consumer halts early" do
-    {:ok, ref} = Fake.tracked_engine()
-    {:ok, stream} = ALLM.stream_generate(ref.engine, ALLM.request([ALLM.user("x")]))
+    counter = :counters.new(1, [:atomics])
+    engine = ALLM.Engine.new(adapter: Fake, model: "fake:x", adapter_opts: [stream_script: [[{:text_delta, "a"}, {:finish, :stop}]], cleanup_observer: counter])
+    {:ok, stream} = ALLM.stream_generate(engine, ALLM.request([ALLM.user("x")]))
     _ = stream |> Enum.take(1)
-    assert_receive {:fake_resource_released, ^ref}, 500
+    assert :counters.get(counter, 1) == 1
   end
   ```
 
