@@ -156,4 +156,136 @@ defmodule ALLM.Providers.CacheUsageFamilyTest do
       assert {u.cached_input_tokens, u.cache_write_input_tokens} == {nil, nil}
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Live recordings (scripts/record_prompt_cache_fixtures.exs)
+  # ---------------------------------------------------------------------------
+
+  @recorder "( set -a; . ./.env; set +a; mix run scripts/record_prompt_cache_fixtures.exs )"
+
+  describe "recorded prompt-cache fixtures: provenance" do
+    test "the recorded-fixture list equals the prompt_cache_* files on disk, both directions" do
+      listed = Enum.sort(CF.recorded_paths())
+      found = Enum.sort(CF.discovered_recorded_paths())
+
+      assert listed -- found == [], "listed but missing on disk: #{inspect(listed -- found)}"
+      assert found -- listed == [], "on disk but not listed: #{inspect(found -- listed)}"
+    end
+
+    for path <- CF.recorded_paths() do
+      @path path
+      test "#{Path.relative_to(path, "test/fixtures")} is a live recording (raw bytes)" do
+        raw = File.read!(@path)
+
+        case Path.extname(@path) do
+          ".json" ->
+            refute Map.has_key?(Jason.decode!(raw), "_comment"),
+                   "#{@path} carries a `_comment` placeholder marker; re-record with #{@recorder}"
+
+          ".sse" ->
+            refute raw =~ ~r/^:\s*synthesized/im,
+                   "#{@path} carries a `: synthesized` marker; re-record with #{@recorder}"
+        end
+      end
+    end
+  end
+
+  describe "recorded prompt-cache fixtures: decoded usage on real data" do
+    @responses_hits ["prompt_cache_hit.json", "prompt_cache_hit_gpt6.json"]
+    @anthropic_models ["claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-sonnet-4-6"]
+
+    defp recorded(rel), do: CF.recorded_json(Path.join("test/fixtures", rel))
+
+    for file <- @responses_hits do
+      @file_name file
+      test "OpenAI Responses #{file}: cached count lifted, inclusive input, invariant" do
+        body = recorded("openai/responses/recorded/#{@file_name}")
+        wire = body["usage"]
+        u = OpenAI.from_responses_response(body, []).usage
+
+        assert u.cached_input_tokens == wire["input_tokens_details"]["cached_tokens"]
+        assert u.cached_input_tokens > 0
+        assert u.cache_write_input_tokens == wire["input_tokens_details"]["cache_write_tokens"]
+        assert u.input_tokens == wire["input_tokens"]
+        assert_invariant(u, "recorded #{@file_name}")
+      end
+    end
+
+    for model <- @anthropic_models do
+      @model model
+      test "Anthropic #{model}: inclusive input_tokens on a real cache hit" do
+        body = recorded("anthropic/messages/recorded/prompt_cache_hit_#{@model}.json")
+        wire = body["usage"]
+        u = Anthropic.from_anthropic_response(body, []).usage
+
+        assert u.cached_input_tokens == wire["cache_read_input_tokens"]
+        assert u.cached_input_tokens > 0
+
+        assert u.input_tokens ==
+                 wire["input_tokens"] + wire["cache_read_input_tokens"] +
+                   wire["cache_creation_input_tokens"]
+
+        assert u.extra["uncached_input_tokens"] == wire["input_tokens"]
+        # The falsifier: the raw (exclusive) count is smaller than the read.
+        assert wire["input_tokens"] < wire["cache_read_input_tokens"]
+        assert_invariant(u, "recorded #{@model}")
+      end
+    end
+
+    test "Gemini: cachedContentTokenCount lifted, promptTokenCount inclusive" do
+      body = recorded("gemini/generate_content/recorded/prompt_cache_hit.json")
+      wire = body["usageMetadata"]
+      u = Gemini.decode_response(body, []).usage
+
+      assert u.cached_input_tokens == wire["cachedContentTokenCount"]
+      assert u.cached_input_tokens > 0
+      assert u.cache_write_input_tokens == nil
+      assert u.input_tokens == wire["promptTokenCount"]
+      assert_invariant(u, "recorded gemini")
+    end
+
+    test "OpenAI Chat Completions stream: the final usage chunk's cached count survives the stream" do
+      raw = File.read!("test/fixtures/openai/chat_completions/recorded/prompt_cache_stream.sse")
+      stub = FinchStub.install([raw], [])
+      req = Request.new([%Message{role: :user, content: "hi"}], model: "gpt-5.4-nano")
+
+      {:ok, stream} =
+        OpenAI.stream(req,
+          api_key: "sk-cache-test",
+          endpoint: :chat_completions,
+          finch_module: FinchStub,
+          finch_stub_ref: stub
+        )
+
+      u =
+        stream
+        |> Enum.reduce(StreamCollector.new(), &StreamCollector.apply_event(&2, &1))
+        |> StreamCollector.to_response()
+        |> Map.fetch!(:usage)
+
+      assert u.cached_input_tokens > 0
+      assert u.input_tokens > u.cached_input_tokens
+      assert_invariant(u, "recorded chat stream")
+    end
+
+    test "Anthropic stream: message_start's cache read reaches the collected usage" do
+      raw = File.read!("test/fixtures/anthropic/messages/recorded/prompt_cache_stream.sse")
+      u = stream_usage(Anthropic, "claude-haiku-4-5-20251001", "sk-ant-cache-test", [raw])
+
+      assert u.cached_input_tokens > 0
+      assert u.input_tokens == u.cached_input_tokens + u.extra["uncached_input_tokens"]
+      assert_invariant(u, "recorded anthropic stream")
+    end
+
+    test "each recorded control envelope rejects the invented field by name" do
+      for rel <- [
+            "openai/responses/recorded/prompt_cache_unknown_field.json",
+            "anthropic/messages/recorded/prompt_cache_unknown_field.json",
+            "gemini/generate_content/recorded/prompt_cache_unknown_field.json"
+          ] do
+        %{"error" => error} = recorded(rel)
+        assert error["message"] =~ "totallyNotAField", "#{rel}: #{inspect(error)}"
+      end
+    end
+  end
 end

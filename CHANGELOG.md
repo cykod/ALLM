@@ -1,4 +1,4 @@
-## [REL] v0.6.0 — Content moderation, compact tools and audio
+## [REL] v0.6.0 — Content moderation, compact tools, audio and prompt caching
 
 Breaking changes:
 - An `%ALLM.Image{source: {:base64, _}}` whose data will not decode is now
@@ -32,6 +32,23 @@ Breaking changes:
   :not_allowed_for_operation}`, which only `:variation` produced.
   `allm_conformance`'s `ImageAdapterConformance` drops its variation case (8
   cases, was 9)
+- `ALLM.Providers.Anthropic` now reports `%ALLM.Usage{}` `input_tokens` as
+  the TOTAL prompt count, cached reads and cache writes included
+  (`input_tokens + cache_read_input_tokens + cache_creation_input_tokens`),
+  matching OpenAI and Gemini; the raw provider count moves to
+  `usage.extra["uncached_input_tokens"]`. On a request with cache activity
+  `input_tokens` and `total_tokens` are therefore larger than before, and
+  `input_cost`, which prices every input token at the plain input rate,
+  rises with them. A request with no cache activity is unchanged
+- OpenAI model ids of the `gpt-6` family and later (`gpt-6-sol`,
+  `gpt-6-luna`, `gpt-6-astra`, …) now dispatch to the Responses endpoint
+  like `gpt-5*`, get `max_completion_tokens` on Chat Completions, and keep
+  their reasoning controls. They previously went to Chat Completions with
+  `max_tokens` and had reasoning controls stripped. The model-family match
+  is now case-insensitive in all three tables
+- Streaming Chat Completions request bodies now carry
+  `"stream_options" => %{"include_usage" => true}`, so OpenAI sends usage on
+  a stream. A `stream_options` you set in `request.options` still wins
 
 Other changes:
 - Add content moderation: `ALLM.moderate(engine, "…user text…")` returns
@@ -215,6 +232,32 @@ Other changes:
   add `examples/25_stream_speech.exs`, `26_stream_transcribe.exs` and
   `27_voice_loop.exs`, and an audio-only `ALLM_PROVIDER=elevenlabs` arm to
   `examples/run_all.exs`
+- Add provider prompt caching: `prompt_cache: %{key: "recipe-42", retention: :long}`
+  (or `true`) as a call option or an `engine.params` key on `chat/3`,
+  `stream/3`, `step/3`, `stream_step/3` and every `ALLM.Session` operation.
+  With no `:key`, the call's `:session_id` (a session's id) is the key, so a
+  long-lived session caches without further setup; caching stays off unless
+  asked for. It lands on the new typed `ALLM.Request.prompt_cache` field,
+  which `ALLM.Validate.request/1` checks (`{:prompt_cache, :invalid_shape}`)
+  and which survives JSON round-trips. OpenAI (both endpoints) sends
+  `prompt_cache_key` and, for `:long`, `prompt_cache_retention: "24h"`;
+  Anthropic sends a top-level `cache_control` (`ttl: "1h"` for `:long`) and
+  never the key; Gemini caches implicitly and ignores the option. A raw
+  provider option in `request.options` wins over the translation
+- Add `ALLM.Usage.cache_write_input_tokens`, and report cache reads and
+  writes in `cached_input_tokens` / `cache_write_input_tokens` on every chat
+  adapter, streaming and non-streaming alike: OpenAI Chat Completions and
+  Responses, Anthropic and Gemini previously left some or all of these
+  counters in `usage.extra` or dropped them on a stream. A counter the
+  provider does not send stays `nil`, never `0`. Streamed usage now equals
+  non-streamed usage field for field, and a streamed Anthropic response now
+  reports `input_tokens` (it was `nil`)
+- Add a "Prompt caching" section to `guides/sessions.md` and
+  `examples/28_prompt_cache.exs`, which drives a three-turn session over a
+  ~5k-token prefix on every chat arm and prints each turn's cache reads and
+  writes. Every provider wire field it relies on was confirmed against the
+  live APIs by the prompt-cache recorder script; cache hits and the
+  unknown-field controls are recorded as test fixtures
 
 ## [REL] v0.5.0 — Text embeddings
 

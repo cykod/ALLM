@@ -54,7 +54,13 @@ defmodule ALLM.StreamAdapter do
        `{:error, %AdapterError{reason: :timeout}}` event.
     5. Adapters emitting `{:raw_chunk, {:usage, _}}` events must pre-map
        provider-wire usage keys to `%ALLM.Usage{}` field names before
-       emitting; see `ALLM.StreamCollector`'s usage-fold contract.
+       emitting; see `ALLM.StreamCollector`'s usage-fold contract. The
+       recommended payload is `Map.from_struct/1` of the adapter's own
+       non-streaming usage decoder applied to the wire usage, so the
+       streamed and non-streamed `%Usage{}` are equal by construction
+       (every bundled chat adapter does this: both OpenAI endpoints,
+       Anthropic and Gemini). Emit the usage once per response: the
+       collector's fold replaces, it does not sum.
   """
 
   @doc """

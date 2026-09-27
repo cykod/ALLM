@@ -11,7 +11,7 @@ Companion to `steering/2026-09-27_PROMPT_CACHING_DESIGN.md`. Bookkeeping lives h
 | 27.2 | Completed | Cache-usage normalization: OpenAI (both endpoints), Anthropic, Gemini; streaming + non-streaming |
 | 27.3 | Completed | `put_prompt_cache/2` in OpenAI (both translators) and Anthropic; Gemini doc-only; recorder `--only acceptance` green live 2026-09-27 |
 | 27.4 | Completed | `Chat.build_request/4` resolves + normalizes `prompt_cache:` (session-id key default); prefix-stability pin over four translators |
-| 27.5 | Not Started | |
+| 27.5 | Completed | Recorder recording pass + 11 live fixtures; consuming + provenance tests; redaction tests; `examples/28_prompt_cache.exs`; guide section; spec §5.4/§5.9a/§9 amendments; CHANGELOG folded into unreleased v0.6.0; ASKS sweep |
 
 ## Start Green (2026-09-27, HEAD `94ffa45`)
 
@@ -395,3 +395,154 @@ The one new `iex>` block counts twice because `ALLM` is doctested from both `tes
 | `mix credo --strict` | 0 |
 | `mix dialyzer` | 0 |
 | `mix format --check-formatted` | 0 |
+
+## 27.5 — Live probe, fixtures, example, docs
+
+Status: **Built, gates pending.** Tree = `24d55b7` + this sub-phase + the user's five in-flight files (untouched: `git --no-optional-locks status --short` still lists them as ` M`, never staged or edited).
+
+### Checklist
+
+- [x] `scripts/record_prompt_cache_fixtures.exs` recording pass: `recording_arms/0` (11 targets: OA-P4 ×2, OA-P5, OA-C, AN-P1 ×3, AN-P3, AN-C, GE-P1, GE-C) feeds the overwrite guard; full run = acceptance arms → OA-P6 → recording arms → one assertion pass (want/got table + `System.halt(1)` before ANY write) → write only still-pending targets. Per-run nonce (`allm-probe-<unix>-<unique>`) opens the ~5k-token prefix and is the OpenAI `prompt_cache_key`. Repeat arms: up to 3 calls, 2 s apart, stop at the first qualifying hit; AN-P3 re-sends AN-P1's request so any call may hit. The placeholder "refuse to exit 0" branch is replaced by the real pass. Run line guarded `if Mix.env() != :test` (the `scripts/audit_user_docs.exs` precedent) so the test can `Code.require_file/1` it.
+- [x] Recorded fixtures (11) under `test/fixtures/{openai/responses,openai/chat_completions,anthropic/messages,gemini/generate_content}/recorded/prompt_cache_*`.
+- [x] Consuming tests + per-fixture raw-bytes negative provenance in `test/allm/providers/cache_usage_family_test.exs` (+21 tests); `test/support/cache_usage_fixtures.ex` gains `recorded_paths/0`, `discovered_recorded_paths/0`, `recorded_json/1`.
+- [x] HANDOFF b3 redaction row: `redact/2` + per-provider `@redactors` in the recorder, applied to every recorded body and every stderr body print; `test/scripts/record_prompt_cache_fixtures_test.exs` (NEW, 9 tests).
+- [x] HANDOFF b2 doc row: `lib/allm/stream_adapter.ex` contract item 5 and `lib/allm/stream_collector.ex` usage-fold paragraph (doc-only).
+- [x] `examples/28_prompt_cache.exs` + `examples/README.md` (section, table row, cost note).
+- [x] `guides/sessions.md` "Prompt caching": one `iex>` block (Request + Validate + Usage), one fence (cook-mode engine), per-provider list citing only rows Confirmed below.
+- [x] Spec amendments §5.4, §5.9a, §9, each opening `> **Phase 27 amendment (commits `55196e8..24d55b7`; docs land in the 27.5 commit).**`.
+- [x] CHANGELOG folded into the unreleased `## [REL] v0.6.0` entry, retitled "Content moderation, compact tools, audio and prompt caching": three Breaking-changes bullets (Anthropic `input_tokens`/`total_tokens`/`input_cost`; gpt-6 routing; new `stream_options` wire key), three Other-changes bullets. Derived from `git --no-optional-locks diff 94ffa45..HEAD --stat -- lib/` (10 files; prior tag `git describe --tags --abbrev=0` → `v0.5.0`).
+- [x] ASKS sweep + two Adjacent-findings tickets (below).
+- [x] Design doc: embedded Status column replaced with "see RECORDS" pointer; three `> CORRECTED 2026-09-27` blocks under the Wire-field map tables and one under Adjacent finding 1.
+
+### Live probe (recorder), per arm
+
+Invocation `set -a; . ./.env; set +a; mix run scripts/record_prompt_cache_fixtures.exs`. Prefix 25,714 bytes. Counts read from the raw wire body (`in` = the provider's own input count, `read` = cache read, `write` = cache write).
+
+| Arm | Model | Calls | Want | Got |
+|---|---|---|---|---|
+| OA-P1/P2 acceptance ×8, AN-P2 ×3, OA-C/OA-CC-C/AN-C controls | as 27.3 b3 | 14 | 200 / 400 | all as expected |
+| OA-P6 | gpt-6-luna via `ALLM.generate/3` | 2 | 200 on the dispatched endpoint | default → `/v1/responses` `:stop "ok"`; `endpoint: :chat_completions` → `/v1/chat/completions` `:stop "ok"`; offline: `dispatch_endpoint → :responses`, Chat body has `max_completion_tokens` |
+| OA-P4 | gpt-5.6 (Responses) | 2 | a later call read>0 | #1 in=6263 read=0 write=6260 / #2 in=6263 read=6260 write=0 |
+| OA-P4 | gpt-6-luna (Responses) | 2 | same | #1 in=6263 read=0 write=6260 / #2 in=6263 read=6260 write=0 |
+| OA-P5 | gpt-5.4-nano (Chat, stream, `include_usage`) | 2 | same | #1 in=6263 read=0 write=nil / #2 in=6263 read=5888 write=nil |
+| OA-C | gpt-5.6 (Responses) | 1 | 400 | 400 `unknown_parameter` |
+| AN-P1 | claude-haiku-4-5-20251001 | 2 | #1 write>0, later read>0 | #1 in=3 read=0 write=7308 / #2 in=3 read=7308 write=0 |
+| AN-P1 | claude-sonnet-5 | 2 | same | #1 in=2 read=0 write=9483 / #2 in=2 read=9483 write=0 |
+| AN-P1 | claude-sonnet-4-6 | 2 | same | #1 in=3 read=0 write=7309 / #2 in=3 read=7309 write=0 |
+| AN-P3 | claude-haiku-4-5-20251001 (stream) | 1 | any call read>0 | #1 `message_start` read=7308 |
+| AN-C | claude-haiku-4-5-20251001 | 1 | 400 | 400 "Extra inputs are not permitted" |
+| GE-P1 | gemini-3-flash-preview | 2 | a later call read>0 | #1 in=6719 read=absent / #2 in=6719 read=4079 |
+| GE-C (informational) | gemini-3-flash-preview | 1 | 400 | 400 "Unknown name" (recorded) |
+
+Every hit arm hit on its second call; no repeat count or spacing change was needed.
+
+**HTTP call count (live, whole sub-phase).** Recorder run 1: 34 (halted, nothing written — OA-P6 asserted on `response.id`, which this path leaves `nil`; fixed by observing the request path through a pass-through `finch_module`). An accidental run of the script while testing its load path (`mix run -e 'Code.require_file(...)'` under dev, killed by SIGPIPE): up to 14 tiny acceptance calls, nothing written (checked: no `recorded/prompt_cache*` file existed afterwards). One manual `ALLM.generate/3` inspect call. Recorder run 2: 34, wrote 11. Recorder run 3: 0 ("Nothing to record … No HTTP requests were made."). Example 28 standalone ×3 providers: 9 chat calls. Adjacent-finding checks: `01_plain_text` ×2 (2 calls), 4 raw probes, `08_session_round_trip` ×2 (fail on the first call). Plus the three `run_all.exs` arms. **Cost:** not metered (no billing API read); by token volume each recorder run sends ~20 prompts of 6–9.5k tokens, most of the second-call tokens as cached reads, consistent with the design's ~$0.25/clean-run estimate; total for this sub-phase is estimated at well under $1.
+
+### Wire-field map: final per-row outcome (Definition of Done)
+
+| Row | Outcome | Evidence |
+|---|---|---|
+| OA-1 | Confirmed | acceptance 200 on 4 models × both endpoints, controls 400 (27.3 b3 + this run) |
+| OA-4 | Confirmed (acceptance) | OA-P2 200 on gpt-5.6, gpt-6-luna, gpt-5.4-nano, gpt-4o-mini; honouring of 24h not observable |
+| OA-6 | **Confirmed for Responses; qualified for Chat** | Responses `input_tokens_details.{cached_tokens,cache_write_tokens}` on gpt-5.6 + gpt-6-luna; Chat on gpt-5.4-nano sends `cached_tokens` but **no `cache_write_tokens`** (`openai/chat_completions/recorded/prompt_cache_stream.sse`). No adapter change: an absent counter already decodes to `nil`. Design row corrected in place |
+| OA-7 | Confirmed, both endpoints | input count unchanged miss→hit while cached rose (6263/6260 Responses, 6263/5888 Chat) |
+| O-5 | Confirmed | final chunk `choices: []` carries usage (same fixture) |
+| OA-9 | Confirmed for gpt-6-luna | acceptance + hit (`prompt_cache_hit_gpt6.json`) |
+| O-6 | Confirmed | 400 `unknown_parameter` (`openai/responses/recorded/prompt_cache_unknown_field.json`); Chat 400 too |
+| AN-2 | Confirmed | AN-P1 write→read on three models; example 28 shows the breakpoint moving forward (Anthropic turn 3 read 7,259 > turn 2's 7,236 in the standalone run) |
+| AN-5 | Confirmed | no beta header on any arm |
+| AN-7 | Confirmed | `message_start.message.usage` carries both cache counters (`prompt_cache_stream.sse`) |
+| AN-8 | **Confirmed, cumulative shape** | live `message_delta.usage` repeats input + both cache counters + output; differs from committed `happy_text.sse`; Decision #6's merge covers both, so no code change |
+| AN-C | Confirmed | 400 "totallyNotAField: Extra inputs are not permitted" |
+| G-3 | Confirmed for implicit caching | `promptTokenCount` 6719 on miss and hit, `cachedContentTokenCount` absent → 4079 |
+| G-C | Confirmed (top level, informational) | 400 "Unknown name" |
+| AN-11 (Confirmed, not a probe row) | **Wider than stated** | raw claude-sonnet-5 request: `temperature` 0 AND 0.5 → 400 "`temperature` is deprecated for this model." |
+
+No falsified claim changes an adapter's behaviour, so nothing was escalated as a blocker.
+
+### Tests
+
+- `cache_usage_family_test.exs` +21: discovered-set parity of the recorded list (both directions); one raw-bytes provenance test per recorded fixture (11); Responses ×2, Anthropic ×3, Gemini hit decoding (lifted counter equals the wire value, >0, inclusive input, invariant; Anthropic also asserts the raw `input_tokens` is smaller than the read — the Decision #1 falsifier on real data); OpenAI Chat and Anthropic recorded streams through FinchStub (cached>0, invariant); control envelopes name the invented field.
+- `test/scripts/record_prompt_cache_fixtures_test.exs` (NEW, 9): planted token per provider redacted (OpenAI's plant copies the real masked `sk-proj-****…9900` shape from `test/fixtures/openai/speech/recorded/error_401_bad_key.json`); sibling patterns match nothing in each plant (3); OpenAI's pattern does not claim `sk-ant-`; no recorded fixture carries any provider's key-shaped token; recorder targets == the suite's recorded list.
+- `guides/sessions.md` +1 doctest (runs via `test/guides_doctest_test.exs:11`).
+
+### Mutation checks (each binds: ≥1 failure; sources restored, `cmp`/`md5sum` verified)
+
+| Mutant | First failing test |
+|---|---|
+| R1 OpenAI redactor without `(?!ant-)` | "anthropic: sibling providers' patterns match nothing…" |
+| R2 Anthropic redactor = OpenAI's pattern | "openai: sibling providers' patterns match nothing…" |
+| R3 OpenAI class without `*` | "openai: the planted key-shaped token is redacted" (first plant survived R3; plant changed to the real masked form, then bound) |
+| R4 `redact/2` returns its input | "gemini: the planted key-shaped token is redacted" |
+| F1 Anthropic `inclusive_input` → raw | "Anthropic claude-sonnet-4-6: inclusive input_tokens on a real cache hit" |
+| F2 `_comment` planted into a recorded JSON | its provenance test |
+| F3 `: synthesized` line prepended to a recorded SSE | its provenance test |
+| F4 stray `recorded/prompt_cache_extra.json` | "the recorded-fixture list equals the prompt_cache_* files on disk, both directions" |
+| guide: `{:prompt_cache, :bogus} in errors` | `guides_doctest_test.exs` (1 failure) |
+
+### Live example gate (BLOCKING)
+
+`for p in openai anthropic gemini; do ALLM_PROVIDER=$p mix run examples/run_all.exs; done` → **exit 0 on all three arms, no blocked arm.** openai: 01–12, 14–21, 23–25, 28 OK; 26, 27 SKIP (provider gate). anthropic: 01–09, 12, 14–18, 21, 28 OK; 10, 11, 19, 20, 23–27 SKIP. gemini: 01–12, 14–18, 21, 24, 28 OK; 19, 20, 23, 25–27 SKIP. Script 28 in the gate: turn 2 cached 5,888/6,098 (OpenAI), 7,259/7,262 (Anthropic; turn 1 already hit, the identical system prompt having been cached by the standalone run minutes earlier), 4,074/6,583 (Gemini).
+
+`examples/RUN_OUTPUT_*.md` **not regenerated**: they are not in the Module Tree, and regenerating them is the committer's call in the commit that carries these runs (CLAUDE.md snapshot rule: same commit as a full green run, or untouched).
+
+### Verification
+
+| Command | Exit |
+|---|---|
+| `set -a; . ./.env; set +a; mix run scripts/record_prompt_cache_fixtures.exs` | 0 (all arms asserted; 11 fixtures written; 34 HTTP calls) |
+| same, second run | 0 ("Nothing to record … No HTTP requests were made.") |
+| `mix test test/allm/providers/cache_usage_family_test.exs test/guides_test.exs test/guides_doctest_test.exs` | 0 (76 doctests, 100 tests) |
+| `mix run scripts/check_guide_fences.exs \| head -1` | `69 fences compiled, 14 skipped.` (full run exit 0) |
+| `mix run scripts/audit_user_docs.exs guides/sessions.md` | 0 hits |
+| `mix run scripts/audit_user_docs.exs lib/allm/stream_adapter.ex lib/allm/stream_collector.ex` | 0 hits |
+| `ALLM_PROVIDER=<p> mix run examples/run_all.exs` ×3 | 0 / 0 / 0 |
+| `mix test` (seed 431336; seed 766921 after the credo fix) | 0 / 0 (620 doctests, 33 properties, 5075 tests, 0 failures, 14 excluded, 1 skipped) |
+| `mix test --seed 0` (twice) | 0 / 0 (same counts) |
+| `mix credo --strict` | 0 (after aliasing `CacheUsageFixtures` in the new script test; first run exit 2 on two `[D]` nested-module suggestions) |
+| `mix dialyzer` | 0 |
+| `mix format --check-formatted` | 0 |
+
+Test delta vs 27.4 b4: +30 tests, +1 doctest (5045 → 5075; 619 → 620). The known intermittent full-suite failure did not recur in these 4 full runs.
+
+### ASKS sweep
+
+`grep -n 'prompt_cache\|cached_input\|cache_control' .work/ASKS.md` → the design-time ask and `[DSGN]` entry (lines 367, 369) plus this build's own `[CDRV]`/`[IMPL]`/`[MILE]` log lines; no post-lock ticket. Filed (sun 9/27 7pm), each with a live DONE WHEN measured exit 1 today:
+1. `[BUG]` Anthropic 5-series rejects any `temperature` — `ALLM_PROVIDER=anthropic ALLM_MODEL=claude-sonnet-5 mix run examples/08_session_round_trip.exs`.
+2. `[BUG]` `gpt-6-astra` rejects any `temperature` — `ALLM_PROVIDER=openai ALLM_MODEL=gpt-6-astra mix run examples/08_session_round_trip.exs`.
+
+### Deviations
+
+- `[structural, documented]` `lib/allm/stream_adapter.ex` and `lib/allm/stream_collector.ex` edited (doc-only) although the Module Tree omits them — routed here by the b2 HANDOFF row and the design's spec-amendment item.
+- `[tactical]` `test/scripts/record_prompt_cache_fixtures_test.exs` (NEW, not in the Module Tree) holds the redaction tests the b3 HANDOFF row requires; the redactor lives in the script, so the test loads it (`Code.require_file/1`, run line guarded by `Mix.env() != :test`). `redact/2`, `redactor/1`, `recording_arms/0` became `@doc false def`. `EnvLoader` is now called via `apply(Module.concat(["EnvLoader"]), …)` so the file compiles warning-free under `MIX_ENV=test`, where the dev-only dep is absent.
+- `[tactical]` The recorder's redaction patterns differ from `lib/`'s OpenAI copies (`~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/`): OpenAI's excludes `sk-ant-` (so sibling-pattern tests can bind) and all three admit `*`. **CARRY:** `lib/`'s OpenAI pattern does not match the real masked 401 echo `sk-proj-*****…9900` (`proj-` is 5 chars, then `*`) — harmless there because the provider already masks it, but it means those adapters' redaction of that echo is by the provider, not by ALLM. Not filed as a ticket (masked input, no leak); noted for the retro.
+- `[tactical]` OA-P6 proves the endpoint by recording the request path through a pass-through `finch_module` (`RecordPromptCacheFixtures.PathFinch`), because `ALLM.generate/3` leaves `response.id` `nil` on this path.
+- `[tactical]` OA-P4 / OA-P5 use fixed models (their fixture file names name them); `ALLM_PROBE_GEMINI_MODEL` added for GE-P1/GE-C. GE-C records its body only on a 400 and never halts (informational).
+- `[tactical]` Every recorded body (not only error envelopes) goes through the provider's redactor; success bodies contained no key-shaped token (pinned by the "no recorded fixture…" test).
+- `[tactical]` Example 28 runs three turns (start + two replies) rather than two, and additionally asserts the `cached + write <= input` invariant per turn.
+- `[tactical]` Guide claim on OpenAI writes is endpoint-qualified ("Chat Completions may omit the write counter"), per OA-6's qualification.
+- Out of scope, untouched: the recorder-scaffolding `[CHORE]` (`grep -l 'defp load_dotenv\|defp overwritable?' scripts/record_*.exs | wc -l` → 8, unchanged).
+
+### b5 fix pass (2026-09-27)
+
+Inputs: `.work/reviews/2026-09-27-prompt-caching-b5/overview.md`, `.work/code-reviews/2026-09-27-prompt-caching-b5.md`, `.work/security-reviews/2026-09-27-prompt-caching-b5.md` (clean), `.work/design-reviews/2026-09-27-prompt-caching-b5.md` (N/A).
+
+Fixed:
+- Code-review F1 (Medium): `recording_arms/0` now resolves the `ALLM_PROBE_*` env and delegates to a new `@doc false` `recording_arms/1` (keyword `:anthropic_models` / `:gemini_model`, missing keys take the defaults, never the env); the parity test calls `recording_arms([])`. No env mutation from the `async: true` module. Bound: `ALLM_PROBE_ANTHROPIC_MODELS=claude-foo mix test test/scripts/record_prompt_cache_fixtures_test.exs` → 9 tests, 0 failures. Header comment now names `redact/2`, `redactor/1`, `recording_arms/0,1` (subsumes F3).
+- Security informational: the acceptance stdout line (`run_acceptance/0`), `print_result/1`, and the sibling informational-miss `note:` line in `halt_unless_recorded_ok/1` now pass through `redact/2`. `mix run scripts/record_prompt_cache_fixtures.exs` on the recorded tree → "Nothing to record … No HTTP requests were made", exit 0.
+- Functional-review Known Issue 2 (false sentence, carve-out 1): spec §5.9a's "confirm every row above on real cache hits" reworded — fixtures confirm the `input_tokens` / `cached_input_tokens` columns; every recorded hit's write count is `0` or absent (`grep -oh 'cache_creation_input_tokens"\?: *[0-9]*\|cache_write_tokens"\?: *[0-9]*' test/fixtures/*/*/recorded/prompt_cache_*` → only `0` values), so the write column and the acceptance arms are confirmed live by the recorder's asserts, not recorded. CHANGELOG's "recorded as test fixtures" narrowed to "confirmed against the live APIs by the prompt-cache recorder script; cache hits and the unknown-field controls are recorded as test fixtures".
+- Functional-review Known Issue 1 (carve-out 1): `guides/sessions.md` no longer says "cache writes arrive on the Responses endpoint"; it says the Responses write counter has been observed reading `0` on cache-creating turns and is advisory. `mix run scripts/audit_user_docs.exs guides/sessions.md` → no banned-token matches.
+
+Left for the phase polish pass (Low): F2 (`hit?/3`), F4 (fence → `iex>`), F5 (triplicated Anthropic model list), functional Known Issue 3 (example 28 nonce).
+
+Gates after the fix pass:
+
+| Command | Exit |
+|---|---|
+| `mix test` (unseeded run, then `mix test --seed 17278`) | 0 / 0 (620 doctests, 33 properties, 5075 tests, 0 failures, 14 excluded, 1 skipped) |
+| `mix test --seed 0` | 0 (same counts) |
+| `mix credo --strict` | 0 |
+| `mix dialyzer` | 0 |
+| `mix format --check-formatted` | 0 |
+| `mix test test/guides_test.exs test/guides_doctest_test.exs` | 0 (76 doctests, 62 tests, 0 failures) |
+| `mix run scripts/check_guide_fences.exs \| head -1` | `69 fences compiled, 14 skipped.` |

@@ -334,6 +334,18 @@ defmodule ALLM.Request do
 end
 ```
 
+> **Phase 27 amendment (commits `55196e8..24d55b7`; docs land in the 27.5 commit).** `ALLM.Request` gains one typed field, `prompt_cache :: nil | %{key: String.t() | nil, retention: :short | :long}`, default `nil` (`lib/allm/request.ex:77`, `:89`, `:104`). It is a provider-neutral request to cache the prompt prefix. `:short` keeps the provider's default lifetime and sends no retention field; `:long` asks for the longest per-request lifetime the provider offers. `Request.new/2` stays a `struct!/2` pass-through; shape discipline lives in `ALLM.Validate.request/1`, which adds exactly one `{:prompt_cache, :invalid_shape}` when the value is not `nil` and not a map with exactly `:key` (nil or a non-empty binary) and `:retention` (`:short` or `:long`) (`lib/allm/validate.ex:616-620`, over the shared `defguard Request.is_prompt_cache/1` at `lib/allm/request.ex:215`). JSON decoding restores the atoms without `String.to_atom/1`; an unknown retention string passes through undecoded and fails validation.
+>
+> Adapter translation runs before `request.options` is merged, so a raw provider option in `options` wins on the wire:
+>
+> | Adapter / endpoint | `nil` | `%{key: k, retention: :short}` | `%{key: k, retention: :long}` |
+> |---|---|---|---|
+> | OpenAI Chat Completions and Responses (one helper, `lib/allm/providers/openai.ex:1599-1610`) | body unchanged | `"prompt_cache_key" => k`, omitted when `k` is nil | same plus `"prompt_cache_retention" => "24h"` |
+> | Anthropic (`lib/allm/providers/anthropic.ex:615-618`) | body unchanged | top-level `"cache_control" => %{"type" => "ephemeral"}`; `k` is never sent | `"cache_control" => %{"type" => "ephemeral", "ttl" => "1h"}` |
+> | Gemini | body unchanged | ignored without error (implicit caching; no request field) | ignored |
+>
+> A direct adapter call with an invalid `prompt_cache` leaves the body unchanged (no pre-flight validation runs outside the facade). Acceptance of every translated field, on `gpt-5.6`, `gpt-6-luna`, `gpt-5.4-nano` (Responses), `gpt-4o-mini` (Chat Completions), `claude-haiku-4-5-20251001`, `claude-sonnet-5` and `claude-sonnet-4-6`, is asserted live by `scripts/record_prompt_cache_fixtures.exs --only acceptance`, each paired with an invented-field control that the provider rejects with 400.
+
 #### `response_format` canonical shape
 
 ALLM normalizes structured-output requests into one of the tagged maps above. Adapters translate to each provider's native wire format:
@@ -513,6 +525,17 @@ end
 ```
 
 Token counts come from the provider response. Cost fields are only populated when the engine can resolve per-million pricing for the model — see §6.3. `tool_usage` carries provider-specific tool costs (e.g. `%{web_search: %{count: 2, unit: "call"}}`). `extra` is the escape hatch for provider-specific counters.
+
+> **Phase 27 amendment (commits `55196e8..24d55b7`; docs land in the 27.5 commit).** `ALLM.Usage` gains `cache_write_input_tokens :: non_neg_integer() | nil` (default `nil`), the prompt tokens written to the provider's cache on this call (`lib/allm/usage.ex:40`). The cache counters now have one cross-provider meaning: `input_tokens` is the TOTAL prompt count, cached reads and cache writes included; `cached_input_tokens` is the part served from the cache. So `cached_input_tokens + (cache_write_input_tokens || 0) <= input_tokens` whenever both are integers, and `cached_input_tokens / input_tokens` is a hit ratio on every provider. `nil` means the provider did not report the counter; no adapter substitutes `0`.
+>
+> | Adapter / endpoint | `input_tokens` | `cached_input_tokens` | `cache_write_input_tokens` |
+> |---|---|---|---|
+> | OpenAI Chat Completions | `prompt_tokens` | `prompt_tokens_details.cached_tokens` | `prompt_tokens_details.cache_write_tokens` (absent on `gpt-5.4-nano`, live 2026-09-27 → `nil`) |
+> | OpenAI Responses | `input_tokens` | `input_tokens_details.cached_tokens` | `input_tokens_details.cache_write_tokens` |
+> | Anthropic | `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` (the raw count moves to `extra["uncached_input_tokens"]`) | `cache_read_input_tokens` | `cache_creation_input_tokens` |
+> | Gemini | `promptTokenCount` | `cachedContentTokenCount` | `nil` (not reported) |
+>
+> The lifted keys leave `extra`; any other key of a details object stays (OpenAI's `lift_cache_details/2`, `lib/allm/providers/openai.ex:2129`; Anthropic's `decode_usage/1`, `lib/allm/providers/anthropic.ex:1276`; Gemini's `parse_usage/1`, `lib/allm/providers/gemini.ex:1208`). **Behaviour change for Anthropic:** on a cache-active request `input_tokens` and `total_tokens` are larger than before (inclusive), and because cost population prices every `input_tokens` token at the plain input rate, `input_cost` rises too; a request with no cache activity is unchanged. Cache-aware pricing is not implemented. Each adapter's streaming path emits `Map.from_struct/1` of the same non-streaming decoder, so streamed and non-streamed usage are equal field for field (pinned by `test/allm/providers/cache_usage_family_test.exs`); Anthropic merges `message_start` and `message_delta` usage (non-nil delta keys win) and emits once, and OpenAI Chat Completions streaming bodies now carry `"stream_options" => %{"include_usage" => true}` via `Map.put_new/3`, so a caller's own `stream_options` in `request.options` wins (`lib/allm/providers/openai.ex:996-999`). Recorded live fixtures under `test/fixtures/{openai,anthropic,gemini}/*/recorded/prompt_cache_*` confirm the `input_tokens` and `cached_input_tokens` columns on real cache hits; every recorded hit carries a cache-write count of `0` (or omits it), so the `cache_write_input_tokens` column's field names are confirmed live by `scripts/record_prompt_cache_fixtures.exs`'s asserts (a non-zero Anthropic `cache_creation_input_tokens` was observed live) but not recorded with a non-zero value. The request-side acceptance arms (`prompt_cache_key`, `"24h"`, `cache_control`) are likewise asserted live and write no fixture by design; only their unknown-field controls are recorded.
 
 ### 5.9 `ALLM.ChatResult`
 
@@ -842,6 +865,8 @@ Accepted options:
   metadata: map()
 ]
 ```
+
+> **Phase 27 amendment (commits `55196e8..24d55b7`; docs land in the 27.5 commit).** `prompt_cache:` is accepted as a request option (`ALLM.request/2` sets the typed `Request.prompt_cache` field, §5.4) and, by `chat/3`, `stream/3`, `step/3`, `stream_step/3` and every `ALLM.Session` operation, as a call option or an `engine.params` key (call opts win). `Chat.build_request/4` normalizes it (`lib/allm/chat.ex:2032`, `normalize_prompt_cache/2` at `:2050-2071`): `nil` / `false` → `nil`; `true`, `%{}` or `[]` → `%{key: <session_id or nil>, retention: :short}`; a map or keyword with `:key` and/or `:retention` gets a missing `:retention` defaulted to `:short` and a missing or nil `:key` defaulted to the call's `:session_id` when that is a non-empty binary (`:2084-2087`); a string-keyed map (a JSON round-tripped engine's `params`) is converted to atom keys first; anything else passes through for `Validate.request/1` to reject. `:prompt_cache` is consumed into the typed field and never reaches `request.options`. The key default is opt-in: a `:session_id` alone never turns caching on. `ALLM.Session` already forwards `session.id` as `:session_id`, so a session's id is its cache key unless the caller passes one. `generate/3` and `stream_generate/3` take a caller-built `%Request{}`, so those callers set `Request.prompt_cache` directly.
 
 ---
 

@@ -379,6 +379,21 @@ another planned example reserves.
 
 Each costs under $0.01 per run.
 
+## Prompt caching (28)
+
+- `28_prompt_cache.exs` — a `Session` with an id and a ~5k-token recipe as
+  its system prompt, on an engine with
+  `params: %{prompt_cache: %{retention: :long}}`, driven through three
+  turns. Each turn prints `input_tokens`, `cached_input_tokens` and
+  `cache_write_input_tokens` from `result.final_response.usage` and the
+  cached share. Asserts every turn completes, that
+  `cached + (write || 0) <= input_tokens` wherever both are integers, and
+  that turn 2 reports `cached_input_tokens` as an integer (not `nil`) on
+  OpenAI and Anthropic. It does not assert a hit: provider caching is
+  best-effort, and on Gemini (implicit caching) `nil` means no hit.
+
+No `# Provider:` marker: it runs on every chat arm.
+
 ## Running
 
 Single script (default — OpenAI):
@@ -450,6 +465,7 @@ facade (`generate/3`, `stream/3`, `chat/3`, `step/3`, `generate_image/3`,
 | `25_stream_speech.exs` | tight | C | openai, elevenlabs | `ALLM.stream_synthesize/3` as PCM; asserts ≥ 2 deltas and the event grammar, prints first-chunk latency |
 | `26_stream_transcribe.exs` | loose | C | elevenlabs | `ALLM.stream_transcribe/3` over 100 ms PCM chunks of a WAV; asserts the transcript mentions "fox" |
 | `27_voice_loop.exs` | loose | C | elevenlabs | realtime transcription → OpenAI chat → `ALLM.stream_synthesize_input/3`; asserts speech came back |
+| `28_prompt_cache.exs` | loose | D | all | `prompt_cache:` on a `Session` with an id over a ~5k-token prefix; prints per-turn cache reads and writes; asserts turn 2 reports `cached_input_tokens` on OpenAI and Anthropic |
 
 ## Image generation
 
@@ -544,6 +560,12 @@ tokens total, and Voyage's free tier covers its share outright.
 marker) and makes two short chat runs. Measured on the default models,
 the two runs together use about 2.4k input tokens on OpenAI, 3.8k on
 Gemini and 6.2k on Anthropic, with under 400 output tokens each.
+
+`28_prompt_cache.exs` runs on every chat arm: three turns over a ~5k-token
+prefix, most of turns 2 and 3 served as cached reads where the provider
+hits (on the default models, 2026-09-27, one run each: turn 2 cached
+5,888 of 6,098 input tokens on OpenAI, 7,236 of 7,262 on Anthropic and
+4,074 of 6,585 on Gemini). Under $0.02 per arm.
 
 A full suite typically runs in 60–120 s per provider; the per-script
 budget is 180 s (override with `ALLM_EXAMPLE_TIMEOUT_MS`), enforced by

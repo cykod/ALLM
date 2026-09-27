@@ -80,6 +80,15 @@ defmodule ALLM.StreamCollector do
   load-bearing invariant for any real provider adapter implementing
   `ALLM.StreamAdapter`.
 
+  The recommended payload is `Map.from_struct/1` of the adapter's
+  non-streaming usage decoder: it carries exactly the `%Usage{}` key set
+  (cache counters and `extra` included), and it makes a streamed response's
+  usage equal the non-streamed one by construction. Every bundled chat
+  adapter builds its payload this way. The fold replaces `state.usage`
+  wholesale, so an adapter that sees usage in several wire events merges
+  them itself and emits the result once, or emits cumulative values where
+  the last one wins.
+
   ## Mid-stream errors
 
   A terminal `{:error, struct}` event folds into the collector's `:error`

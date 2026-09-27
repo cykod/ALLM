@@ -1,0 +1,30 @@
+{
+  "candidates": [
+    {
+      "content": {},
+      "finishReason": "MAX_TOKENS",
+      "index": 0
+    }
+  ],
+  "modelVersion": "gemini-3-flash-preview",
+  "responseId": "F2i5aq6oCNbH39IPtqWGoAM",
+  "usageMetadata": {
+    "cacheTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 4079
+      }
+    ],
+    "cachedContentTokenCount": 4079,
+    "promptTokenCount": 6719,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 6719
+      }
+    ],
+    "serviceTier": "standard",
+    "thoughtsTokenCount": 13,
+    "totalTokenCount": 6732
+  }
+}

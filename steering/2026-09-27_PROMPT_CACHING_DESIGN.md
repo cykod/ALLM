@@ -11,14 +11,14 @@
 
 | Phase | Description | Layer | Status |
 |-------|-------------|-------|--------|
-| 27.0 | Refactor-first: route `gpt-6*` (and later) like `gpt-5*` in the OpenAI adapter | B | Not Started |
-| 27.1 | `Usage.cache_write_input_tokens` + `Request.prompt_cache` + validation | A | Not Started |
-| 27.2 | Cache-usage normalization in OpenAI (both endpoints), Anthropic and Gemini, streaming + non-streaming | B | Not Started |
-| 27.3 | Adapter translation of `Request.prompt_cache` | B | Not Started |
-| 27.4 | `chat/3` / `Session` wiring, session-id key default, prefix-stability test | C | Not Started |
-| 27.5 | Live wire probe + recorded fixtures, example `28_prompt_cache.exs`, guide, spec amendments, CHANGELOG | docs / live gate | Not Started |
+| 27.0 | Refactor-first: route `gpt-6*` (and later) like `gpt-5*` in the OpenAI adapter | B | see RECORDS |
+| 27.1 | `Usage.cache_write_input_tokens` + `Request.prompt_cache` + validation | A | see RECORDS |
+| 27.2 | Cache-usage normalization in OpenAI (both endpoints), Anthropic and Gemini, streaming + non-streaming | B | see RECORDS |
+| 27.3 | Adapter translation of `Request.prompt_cache` | B | see RECORDS |
+| 27.4 | `chat/3` / `Session` wiring, session-id key default, prefix-stability test | C | see RECORDS |
+| 27.5 | Live wire probe + recorded fixtures, example `28_prompt_cache.exs`, guide, spec amendments, CHANGELOG | docs / live gate | see RECORDS |
 
-**Overall Progress:** 0/6 phases complete
+**Progress:** tracked in `steering/2026-09-27_PROMPT_CACHING_DESIGN_RECORDS.md` (this table's status column is not maintained).
 
 ---
 
@@ -129,6 +129,8 @@ This table is the single normative home for provider wire facts. Every row is **
 | OA-11 | gpt-5.6+ supports explicit caching: up to 4 `prompt_cache_breakpoint`s, `prompt_cache_options.mode: "explicit"`, lookback over the 80 most recent breakpoints; "Prompt Cache Diagnostics" is GA in Responses for gpt-5.6+ (2026-09-08) | Context7 `/websites/developers_openai_api` (Responses create + deployment checklist); changelog | Confirmed; out of scope |
 | O-6 | Unknown top-level parameters are rejected with 4xx | not in official docs; `scripts/record_openai_moderation_fixtures.exs:60` comment claims it for Chat Completions with no recorded fixture | Probe (OA-C control) |
 
+> CORRECTED 2026-09-27 (27.5 probe, `scripts/record_prompt_cache_fixtures.exs`, one full run): OA-1, OA-4 (acceptance on gpt-5.6, gpt-6-luna, gpt-5.4-nano Responses and gpt-4o-mini Chat Completions), OA-9 and O-6 (Responses `unknown_parameter` 400, recorded `openai/responses/recorded/prompt_cache_unknown_field.json`; Chat Completions 400 too) are **Confirmed**. OA-7 is **Confirmed on both endpoints**: `input_tokens` / `prompt_tokens` stayed 6,263 on the miss and on the hit while `cached_tokens` went 0 → 6,260 (Responses) and 0 → 5,888 (Chat), so the input count includes cached tokens. OA-6 is **Confirmed for Responses only**: `input_tokens_details` carries both `cached_tokens` and `cache_write_tokens` on gpt-5.6 and gpt-6-luna. On **Chat Completions with gpt-5.4-nano** the final stream chunk's `prompt_tokens_details` carried `cached_tokens` and `audio_tokens` but **no `cache_write_tokens`** (`openai/chat_completions/recorded/prompt_cache_stream.sse`); the adapter already leaves an absent counter `nil`, so no code change. O-5's final usage chunk (`choices: []`) is Confirmed by the same fixture.
+
 ### Anthropic (Messages)
 
 | ID | Claim | Source | Status |
@@ -147,6 +149,8 @@ This table is the single normative home for provider wire facts. Every row is **
 | AN-9 | Changing tools invalidates the whole cache; changing `tool_choice` or images invalidates the message cache | prompt-caching page | Confirmed; documented in the guide |
 | AN-C | Unknown top-level fields are rejected with 400 | not in fetched docs | Probe (AN-C control) |
 
+> CORRECTED 2026-09-27 (27.5 probe): AN-2 (automatic caching: first call `cache_creation_input_tokens` 7,308 / 9,483 / 7,309, second call reads the same count, on haiku-4-5, sonnet-5, sonnet-4-6), AN-5 (no beta header on any arm), AN-7 (`message_start.message.usage.cache_read_input_tokens` 7,308 on the stream) and AN-C (`"totallyNotAField: Extra inputs are not permitted"`, 400) are **Confirmed**. AN-8 is **Confirmed in its cumulative shape**: on the live haiku-4-5 stream `message_delta.usage` repeated `input_tokens`, both cache counters and `output_tokens` (`anthropic/messages/recorded/prompt_cache_stream.sse`), unlike the older committed `happy_text.sse`; Decision #6's merge handles both. AN-11 is **wider than stated**: claude-sonnet-5 answered 400 `` "`temperature` is deprecated for this model." `` for `temperature: 0` as well as `0.5` (raw request, 2026-09-27), so ANY `temperature` fails, not only non-default values.
+
 ### Gemini (generateContent)
 
 | ID | Claim | Source | Status |
@@ -155,6 +159,8 @@ This table is the single normative home for provider wire facts. Every row is **
 | G-2 | Implicit minimum 2,048 (2.5 Flash/Pro) to 4,096 (3.x) tokens | same | Confirmed; probe prefix sized above 4,096 |
 | G-3 | `usageMetadata.cachedContentTokenCount`; `promptTokenCount` is inclusive (stated for explicit caching only) | ai.google.dev/api/generate-content | Inferred for implicit; Probe (GE-P1 records) |
 | G-C | Unknown top-level fields are rejected with 400 "Unknown name" | indirect: `test/fixtures/gemini/embeddings/recorded/error_400_unknown_field.json` (sub-request, not top level) | Informational (GE-C). ALLM sends no top-level Gemini field this phase, and `request.options` merges into `generationConfig`, so no acceptance arm depends on it |
+
+> CORRECTED 2026-09-27 (27.5 probe): G-3 is **Confirmed for implicit caching**: on gemini-3-flash-preview `promptTokenCount` stayed 6,719 on the miss and on the hit while `cachedContentTokenCount` went absent → 4,079, so the prompt count is inclusive (`gemini/generate_content/recorded/prompt_cache_hit.json`). On a miss the field is absent, not `0`. G-C is **Confirmed** at the top level: 400 `Invalid JSON payload received. Unknown name "totallyNotAField"` (`gemini/generate_content/recorded/prompt_cache_unknown_field.json`).
 
 ---
 
@@ -567,6 +573,7 @@ mix credo --strict && mix dialyzer && mix format --check-formatted
 These came out of the 2026-09-27 model research. They do not block caching, and 27.5's sweep files each as an `ASKS.md` ticket naming the grep that proves it fixed:
 
 1. **Anthropic 5-series rejects non-default sampling parameters.** `claude-sonnet-5`, `claude-opus-5` and `claude-fable-5-1` return 400 for any non-default `temperature` (AN-11). The Anthropic adapter forwards whatever is set (`anthropic.ex:544`), and `examples/_helpers.exs:214-221` sets `params: %{temperature: 0}` by default. So the examples break the moment the Anthropic row's `default_model` moves to a 5-series model. Today it is `claude-sonnet-4-6` (`_helpers.exs:118`), which is unaffected. Cook mode must not set `temperature` on these models.
+   > CORRECTED 2026-09-27 (27.5 sweep): ANY `temperature` fails on claude-sonnet-5, `0` included (raw request → 400 "`temperature` is deprecated for this model."), and `_helpers.exs` sets `temperature: 0`, so the chat/Session examples already fail when `ALLM_MODEL=claude-sonnet-5` (`examples/08_session_round_trip.exs` exit 1). `examples/01_plain_text.exs` passes only because `generate/3` never reads `engine.params`. Filed as a `[BUG]` in `.work/ASKS.md`; the same holds for `gpt-6-astra` (finding 2, filed separately).
 2. **`gpt-6-astra` rejects custom `temperature` / `top_p` and `reasoning_effort: :none`** (OA-8). 27.0 routes it correctly, but ALLM still forwards a caller's `temperature`. The same examples default applies.
 
 ## Error Contract

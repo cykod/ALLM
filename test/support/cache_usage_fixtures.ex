@@ -69,6 +69,40 @@ defmodule ALLM.Test.CacheUsageFixtures do
 
   def stream_chunks(:gemini), do: GeminiTestFixtures.stream_chunks(:cache_usage)
 
+  # Live recordings written by `scripts/record_prompt_cache_fixtures.exs`.
+  # Hand-maintained on purpose: the family test asserts this list equals
+  # the `prompt_cache_*` files discovered under the `recorded/` directories,
+  # in both directions.
+  @recorded [
+    "openai/responses/recorded/prompt_cache_hit.json",
+    "openai/responses/recorded/prompt_cache_hit_gpt6.json",
+    "openai/responses/recorded/prompt_cache_unknown_field.json",
+    "openai/chat_completions/recorded/prompt_cache_stream.sse",
+    "anthropic/messages/recorded/prompt_cache_hit_claude-haiku-4-5-20251001.json",
+    "anthropic/messages/recorded/prompt_cache_hit_claude-sonnet-5.json",
+    "anthropic/messages/recorded/prompt_cache_hit_claude-sonnet-4-6.json",
+    "anthropic/messages/recorded/prompt_cache_stream.sse",
+    "anthropic/messages/recorded/prompt_cache_unknown_field.json",
+    "gemini/generate_content/recorded/prompt_cache_hit.json",
+    "gemini/generate_content/recorded/prompt_cache_unknown_field.json"
+  ]
+
+  @doc "Every recorded prompt-cache fixture this module serves, repo-relative."
+  @spec recorded_paths() :: [Path.t()]
+  def recorded_paths, do: Enum.map(@recorded, &Path.join(@root, &1))
+
+  @doc "The `prompt_cache_*` files actually present under the `recorded/` directories."
+  @spec discovered_recorded_paths() :: [Path.t()]
+  def discovered_recorded_paths,
+    do: Path.wildcard(Path.join(@root, "{openai,anthropic,gemini}/*/recorded/prompt_cache_*"))
+
+  @doc """
+  A recorded fixture's decoded JSON, read from raw bytes (no `_comment`
+  stripping, so a placeholder would surface rather than be hidden).
+  """
+  @spec recorded_json(Path.t()) :: map()
+  def recorded_json(path), do: path |> File.read!() |> Jason.decode!()
+
   @doc "Every synthesized fixture file this module serves, repo-relative."
   @spec paths() :: [Path.t()]
   def paths, do: @files |> Map.values() |> List.flatten() |> Enum.map(&Path.join(@root, &1))

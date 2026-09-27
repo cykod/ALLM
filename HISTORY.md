@@ -1,3 +1,27 @@
+## [FEAT] Record live prompt-cache fixtures and document caching
+*Sunday, September 27th at 7pm*
+Phase 27.5 of the prompt-caching design, the live gate (spec §5.4, §5.9a, §9 
+amended).
+
+- scripts/record_prompt_cache_fixtures.exs gains its recording pass: per-run 
+nonce prefix, repeat-until-hit arms on OpenAI (Responses and streamed Chat 
+Completions), Anthropic (incl. streamed) and Gemini, unknown-field negative 
+controls, assert-before-write, per-provider key redaction of recorded and 
+printed bodies, and an overwrite guard (a recorded tree costs zero calls).
+- 11 recorded fixtures with raw-bytes negative-provenance tests, fixture/disk 
+parity, usage decoding of every recorded body, and planted-key redaction tests 
+with sibling-pattern controls.
+- examples/28_prompt_cache.exs runs a provider-neutral cached Session; 
+run_all.exs exited 0 on openai, anthropic and gemini (2026-09-27).
+- guides/sessions.md gains a Prompt caching section; 
+StreamAdapter/StreamCollector docs describe the Map.from_struct usage payload; 
+the unreleased v0.6.0 CHANGELOG entry flags the Anthropic 
+input_tokens/total_tokens/input_cost change.
+- Design wire-field rows OA-6, AN-8 and AN-11 corrected from live evidence; two 
+adjacent temperature bugs filed.
+
+---
+
 ## [FEAT] Wire prompt_cache through chat, step and Session
 *Sunday, September 27th at 6pm*
 Phase 27.4 of the prompt-caching design (spec §9, §10). prompt_cache: is now 

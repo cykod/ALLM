@@ -205,6 +205,80 @@ session. Verify in your tests:
     iex> session.status
     :completed
 
+## Prompt caching
+
+A long-lived session re-sends the same prefix every turn: the system
+prompt, the tools, and every earlier message. Providers can serve that
+prefix from a prompt cache, which lowers both the latency to the first
+token and the input cost. Turn it on with `prompt_cache:`, as a call
+option or in the engine's `params` (below, `recipe_text` stands for your
+long, stable system prompt):
+
+```elixir
+engine =
+  ALLM.Engine.new(
+    adapter: ALLM.Providers.OpenAI,
+    model: "gpt-5.6",
+    params: %{prompt_cache: %{retention: :long}}
+  )
+
+session = ALLM.Session.new(id: "recipe-42") |> ALLM.Session.append(ALLM.system(recipe_text))
+{:ok, session, result} = ALLM.Session.start(engine, session)
+{:ok, _session, result} = ALLM.Session.reply(engine, session, "How long does step 12 take?")
+result.final_response.usage.cached_input_tokens
+```
+
+`retention: :short` keeps the provider's default cache lifetime;
+`:long` asks for the longest lifetime the provider offers per request.
+When you give no `:key`, the session's id is used as the cache key, so a
+session whose id carries personal data should pass an explicit
+`prompt_cache: %{key: ..., retention: ...}`. Caching stays off unless you
+ask for it.
+
+The option lands on the request as a typed field that
+`ALLM.Validate.request/1` checks, and usage reports what the cache did:
+
+    iex> req = ALLM.Request.new([ALLM.user("hi")], prompt_cache: %{key: "recipe-42", retention: :long})
+    iex> ALLM.Validate.request(req)
+    :ok
+    iex> bad = ALLM.Request.new([ALLM.user("hi")], prompt_cache: %{retention: :forever})
+    iex> {:error, %ALLM.Error.ValidationError{errors: errors}} = ALLM.Validate.request(bad)
+    iex> {:prompt_cache, :invalid_shape} in errors
+    true
+    iex> usage = %ALLM.Usage{input_tokens: 6263, cached_input_tokens: 6260, cache_write_input_tokens: 0}
+    iex> usage.cached_input_tokens / usage.input_tokens > 0.99
+    true
+
+`input_tokens` counts every prompt token, cached reads and cache writes
+included, on every provider, so `cached_input_tokens / input_tokens` is
+the share of the prompt served from the cache. A counter the provider did
+not report is `nil`, never `0`.
+
+What each provider does with the option:
+
+* **OpenAI** (both endpoints) sends the key as `prompt_cache_key` and
+  `retention: :long` as `prompt_cache_retention: "24h"`. The key steers
+  routing; it does not guarantee a hit. Usage reports cache reads on
+  both endpoints. The Responses endpoint also sends a cache-write
+  counter, but it has been observed reading `0` on turns that created a
+  cache entry, so treat it as advisory; Chat Completions may omit it, and
+  it then stays `nil`. A cacheable prefix needs at least 1,024 tokens.
+* **Anthropic** turns on automatic caching with a top-level
+  `cache_control`, which moves the cache point forward as the
+  conversation grows; `:long` asks for a one-hour lifetime. The key is
+  never sent. Usage reports cache reads and cache writes. Changing the
+  tools invalidates the whole cache, and a cache entry becomes readable
+  only once the first response has begun, so parallel first requests all
+  miss.
+* **Gemini** caches implicitly on its own and takes no cache option, so
+  `prompt_cache` is ignored without error. Usage reports cache reads when
+  a hit happens; a miss leaves `cached_input_tokens` `nil`.
+
+Caching is best-effort on every provider: a hit is likely, never
+promised. Keep the prefix stable (append messages, don't rewrite earlier
+ones) and above the provider's minimum length, which ranges from 512 to
+4,096 tokens depending on the model.
+
 ## Where to next
 
 * `tools.md` — for the manual tool flow that drives
@@ -215,3 +289,5 @@ session. Verify in your tests:
 * `examples/09_ask_user.exs` — runnable ask-user halt and resume.
 * `examples/15_per_tool_manual_session.exs` — runnable per-tool manual
   flow over `Session.*`.
+* `examples/28_prompt_cache.exs` — runnable prompt caching over a
+  three-turn session, printing each turn's cache reads and writes.
