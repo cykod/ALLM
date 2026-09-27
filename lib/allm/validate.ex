@@ -61,6 +61,8 @@ defmodule ALLM.Validate do
     TranscriptionStreamRequest
   }
 
+  require Request
+
   @legal_roles [:system, :user, :assistant, :tool]
   @legal_statuses [:idle, :awaiting_user, :awaiting_tools, :completed, :error]
   @tool_name_regex ~r/^[A-Za-z0-9_-]{1,64}$/
@@ -613,10 +615,7 @@ defmodule ALLM.Validate do
   # `:retention` (`:short | :long`). Any failure adds ONE error.
   defp validate_prompt_cache(errs, nil), do: errs
 
-  defp validate_prompt_cache(errs, %{key: key, retention: retention} = pc)
-       when map_size(pc) == 2 and retention in [:short, :long] and
-              (is_nil(key) or (is_binary(key) and key != "")),
-       do: errs
+  defp validate_prompt_cache(errs, pc) when Request.is_prompt_cache(pc), do: errs
 
   defp validate_prompt_cache(errs, _), do: [{:prompt_cache, :invalid_shape} | errs]
 

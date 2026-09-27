@@ -189,6 +189,8 @@ defmodule ALLM.Providers.OpenAI do
   alias ALLM.ToolCall
   alias ALLM.Usage
 
+  require Request
+
   @typedoc "Endpoint atom; chosen by `dispatch_endpoint/2`."
   @type endpoint :: :responses | :chat_completions
 
@@ -500,6 +502,22 @@ defmodule ALLM.Providers.OpenAI do
       {2048, 1536, nil}
       iex> u.extra["prompt_tokens_details"]
       %{"audio_tokens" => 0}
+
+  ## Prompt caching
+
+  `Request.prompt_cache` is sent the same way on both endpoints. Its `:key` is
+  sent verbatim as `prompt_cache_key`, and a `nil` key sends no key.
+  `retention: :long` adds `prompt_cache_retention: "24h"`, the longest
+  per-request retention OpenAI documents; `:short` sends no retention field, so
+  the model's default cache lifetime applies. A raw `prompt_cache_key` or
+  `prompt_cache_retention` in `Request.options` takes precedence. With
+  `prompt_cache: nil` the body is unchanged.
+
+      iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "hi"}],
+      ...>   model: "gpt-5.6", prompt_cache: %{key: "recipe-42", retention: :long})
+      iex> body = ALLM.Providers.OpenAI.to_openai_request_body(req, :responses, [])
+      iex> {body["prompt_cache_key"], body["prompt_cache_retention"]}
+      {"recipe-42", "24h"}
 
   ## Vision input
 
@@ -1442,6 +1460,7 @@ defmodule ALLM.Providers.OpenAI do
     |> maybe_put_tools(request.tools, :chat_completions)
     |> maybe_put_tool_choice(request.tool_choice, :chat_completions)
     |> maybe_put_response_format(request, :chat_completions)
+    |> put_prompt_cache(request.prompt_cache)
     |> Map.merge(stringify_options(request.options))
     |> merge_reasoning_opts(request, :chat_completions, opts)
   end
@@ -1463,6 +1482,7 @@ defmodule ALLM.Providers.OpenAI do
     |> maybe_put_tools(request.tools, :responses)
     |> maybe_put_tool_choice(request.tool_choice, :responses)
     |> maybe_put_response_format(request, :responses)
+    |> put_prompt_cache(request.prompt_cache)
     |> Map.merge(stringify_options(request.options))
     |> merge_reasoning_opts(request, :responses, opts)
   end
@@ -1567,6 +1587,27 @@ defmodule ALLM.Providers.OpenAI do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # `Request.prompt_cache` → wire, shared by both endpoint translators (the
+  # field names are identical on Chat Completions and Responses). Runs before
+  # the `request.options` merge, so a raw `prompt_cache_key` or
+  # `prompt_cache_retention` in `options` wins. The key is sent verbatim; a nil
+  # key sends no `prompt_cache_key`. `:long` sends `prompt_cache_retention:
+  # "24h"`, the longest per-request retention OpenAI documents. A value that is
+  # not a valid prompt-cache map (only reachable on a direct adapter call, since
+  # `ALLM.Validate.request/1` rejects it upstream) leaves the body unchanged.
+  defp put_prompt_cache(body, prompt_cache) when Request.is_prompt_cache(prompt_cache) do
+    body
+    |> maybe_put("prompt_cache_key", prompt_cache.key)
+    |> put_prompt_cache_retention(prompt_cache.retention)
+  end
+
+  defp put_prompt_cache(body, _prompt_cache), do: body
+
+  defp put_prompt_cache_retention(body, :long),
+    do: Map.put(body, "prompt_cache_retention", "24h")
+
+  defp put_prompt_cache_retention(body, :short), do: body
 
   defp maybe_put_max_tokens(map, %Request{max_tokens: nil}, _endpoint, _opts), do: map
 

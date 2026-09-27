@@ -9,7 +9,7 @@ Companion to `steering/2026-09-27_PROMPT_CACHING_DESIGN.md`. Bookkeeping lives h
 | 27.0 | Completed | GPT-6 / later-family routing in `lib/allm/providers/openai.ex` |
 | 27.1 | Completed | `Usage.cache_write_input_tokens`, `Request.prompt_cache`, `validate_prompt_cache/2`, `@summed_usage_fields` |
 | 27.2 | Completed | Cache-usage normalization: OpenAI (both endpoints), Anthropic, Gemini; streaming + non-streaming |
-| 27.3 | Not Started | |
+| 27.3 | Completed | `put_prompt_cache/2` in OpenAI (both translators) and Anthropic; Gemini doc-only; recorder `--only acceptance` green live 2026-09-27 |
 | 27.4 | Not Started | |
 | 27.5 | Not Started | |
 
@@ -203,4 +203,122 @@ Test delta vs 27.1: +35 tests, +2 doctests (4939 → 4974; 613 → 615).
 | `mix test --seed 0` | 0 (same counts) |
 | `mix credo --strict` | 0 |
 | `mix dialyzer` | 0 |
+| `mix format --check-formatted` | 0 |
+
+## 27.3 — Adapter translation of `prompt_cache`
+
+### Checklist
+
+- [x] `put_prompt_cache/2` in `openai.ex` (private), ONE helper called from both `to_openai_request_body/3` clauses (`:chat_completions`, `:responses`), before the `request.options` merge. `key` → `prompt_cache_key` (verbatim, omitted when nil); `:long` → `prompt_cache_retention: "24h"`; `:short` sends no retention.
+- [x] `put_prompt_cache/2` in `anthropic.ex` (private, same name), in `to_anthropic_request_body/1` before the options merge. `:short` → `cache_control: %{"type" => "ephemeral"}`, `:long` adds `"ttl" => "1h"`; the key is never sent.
+- [x] Gemini: `## Prompt caching` section on `generate/2` (ignored without error), with an `iex>` block proving the body is unchanged. No code change, no helper.
+- [x] `scripts/record_prompt_cache_fixtures.exs` created with `--only acceptance` (OA-P1, OA-P2, AN-P2 plus OA-C / AN-C controls; no fixture writes). Structure ready for 27.5: `recording_arms/0` (empty) feeds the overwrite guard `pending_paths/0` (JSON `_comment` / SSE `: synthesized` markers), so a bare run today makes zero HTTP calls and says so; want/got table + `System.halt(1)` before any write; `.env` loaded via guarded `EnvLoader` (per key: preset values restored after the load).
+- [x] Each adapter's `generate/2` `@doc` gains a `## Prompt caching` section naming the retention value it sends, each with an `iex>` block (OpenAI: `"24h"`; Anthropic: `ttl: "1h"` and no key in the encoded body; Gemini: unchanged body).
+
+### Tests (+25 tests, +2 doctests; 4974 → 4999, 615 → 617)
+
+- `openai_wire_test.exs` describe "prompt_cache translation" (+13): the 2 endpoints × 3 columns table as a `for` comprehension asserting `body == Map.merge(nil_body, added)` (exact added keys, nothing else changed); `nil` byte-identical to a request built without the field (both endpoints); `key: nil` + `:short` adds no key; `key: nil` + `:long` sends only the retention; raw `prompt_cache_key` / `prompt_cache_retention` in `options` win on BOTH endpoints (`:698`); key `"Recipe 42/é ÜBER"` verbatim on both endpoints, decoded and in the raw JSON (`:711`); ten invalid shapes (`:bogus`, `true`, `%{}`, partial, bad retention, `""` key, integer key, three keys, string-keyed) leave the body byte-identical, both endpoints; end-to-end through `generate/2` (`Req.Test` plug in `adapter_opts`, `api_key:` per call) on `gpt-4o-mini` → `/v1/chat/completions` and `gpt-5.6` → `/v1/responses`.
+- `anthropic_wire_test.exs` describe "prompt_cache translation" (+9): the 3-column table; `nil` byte-identical; the key string never appears in the encoded body (`refute Jason.encode!(body) =~ "recipe-42"`); `key: nil` translates the same as a keyed request; raw `cache_control` in `options` wins (`:715`); nine invalid shapes leave the body byte-identical; end-to-end through `generate/2` asserting `cache_control` on the wire and no `anthropic-beta` header.
+- `gemini_wire_test.exs` describe "prompt_cache is ignored" (+3): the 3-column table, each byte-identical to the no-field body (system + user request). Green before any code change, as expected for a no-op row; its falsifier is any future Gemini translation of the field.
+- No test can reach a real host: every translation test calls the body builder directly; the three end-to-end tests route through `adapter_opts: [plug: {Req.Test, stub}]` and non-streaming `generate/2` (no Finch).
+
+### Mutation checks (each binds: ≥1 failure with `--max-failures 1 --timeout 5000` over the three wire files + `validate_test.exs`; sources restored, md5-verified)
+
+| Mutant | First failing test |
+|---|---|
+| M1 `:chat_completions` clause skips `put_prompt_cache` | "key: nil with :long sends only the retention" |
+| M2 `:responses` clause skips it | "responses: prompt_cache %{…:long} adds exactly …" |
+| M3 / M3b translation after the options merge (each endpoint) | "raw prompt_cache_key in options wins … on both endpoints" |
+| M4 `:long` → `"in_memory"` | "chat_completions: prompt_cache %{…:long} adds exactly …" |
+| M4b `:long` sends nothing | same |
+| M4c `:short` also sends `"24h"` | "responses: prompt_cache %{…:short} adds exactly …" |
+| M5 key downcased / M5b spaces replaced | "the key is sent verbatim …" |
+| M6 nil key written as `"prompt_cache_key" => nil` | "key: nil with :short adds no prompt_cache_key at all" |
+| M7 OpenAI guard loosened to `%{retention: r}` | "an invalid prompt_cache … leaves the body unchanged" |
+| A1 Anthropic translation after the options merge | "raw cache_control in options wins over the typed field" |
+| A2 Anthropic sends the key inside `cache_control` | "a key: nil request translates the same as a keyed one"; run alone against the describe, "the cache key never appears anywhere in the encoded body" also fails |
+| A3 `:long` without `ttl` / A3b `:short` with `ttl: "5m"` | end-to-end `generate/2` test / `:short` table cell |
+| A4 Anthropic guard loosened | "an invalid prompt_cache … leaves the body unchanged" |
+| A5 Anthropic not wired | `:short` table cell |
+| A6 `anthropic-beta` header added to every request | "generate/2 puts cache_control on the wire and sends no beta header" |
+| G1 `is_prompt_cache` drops `map_size == 2` | `validate_test` "prompt_cache must be nil or a map with exactly :key and :retention" |
+| G2 `is_prompt_cache` accepts `""` | `validate_test` ":key must be nil or a non-empty binary" |
+
+Recorder parity check: a copy of the script with OA-P2's literal set to `"in_memory"` halted with exit 1 and a probe-vs-adapter table before any HTTP call (dummy keys in the environment).
+
+### Live acceptance (2026-09-27, `set -a; . ./.env; set +a; mix run scripts/record_prompt_cache_fixtures.exs --only acceptance` → exit 0)
+
+Short prompt (`"Reply with the single word: ok"`), `max_output_tokens: 16` / `max_tokens: 16`: acceptance, not hits, so no ~5k prefix. Key per run: `allm-probe-<unix seconds>-<unique int>`. No fixture written. OpenAI arms on `POST /v1/responses`; Anthropic arms with no `anthropic-beta` header.
+
+| Arm | Model | Want | Got |
+|---|---|---|---|
+| OA-P1 (`prompt_cache_key`) | gpt-5.6 | 200 | 200 |
+| OA-P2 (+ `prompt_cache_retention: "24h"`) | gpt-5.6 | 200 | 200 |
+| OA-P1 | gpt-6-luna | 200 | 200 |
+| OA-P2 | gpt-6-luna | 200 | 200 |
+| OA-P1 | gpt-5.4-nano | 200 | 200 |
+| OA-P2 | gpt-5.4-nano | 200 | 200 |
+| AN-P2 (top-level `cache_control`, `ttl: "1h"`) | claude-haiku-4-5-20251001 | 200 | 200 |
+| AN-P2 | claude-sonnet-5 | 200 | 200 |
+| AN-P2 | claude-sonnet-4-6 | 200 | 200 |
+| OA-C control (`totallyNotAField: {}`) | gpt-5.6 | 400 | 400 |
+| AN-C control (`totallyNotAField: {}`) | claude-haiku-4-5-20251001 | 400 | 400 |
+
+Both controls rejected the invented field, so the 200s are evidence of schema membership (Responses endpoint; Chat Completions acceptance of the same fields is not probed here). Decision #9's escalation point did not fire. Response bodies were not recorded (27.5 records the control bodies).
+
+### Verification
+
+| Command | Exit |
+|---|---|
+| `mix test test/allm/providers/openai_wire_test.exs test/allm/providers/anthropic_wire_test.exs test/allm/providers/gemini_wire_test.exs` | 0 |
+| `set -a; . ./.env; set +a; mix run scripts/record_prompt_cache_fixtures.exs --only acceptance` | 0 (11/11 arms as expected) |
+| `mix run scripts/record_prompt_cache_fixtures.exs` (bare) | 0, zero HTTP calls (no recording arms yet) |
+| `mix compile --warnings-as-errors` | 0 |
+| `mix test` | 0 (617 doctests, 33 properties, 4999 tests, 0 failures, 14 excluded, 1 skipped) |
+| `mix test --seed 0` | 0 (same counts) |
+| `mix credo --strict` | 0 (no issues) |
+| `mix dialyzer` | 0 (Total errors: 0) |
+| `mix format --check-formatted` | 0 |
+| `mix run scripts/audit_user_docs.exs lib/allm/providers/openai.ex lib/allm/providers/anthropic.ex lib/allm/providers/gemini.ex lib/allm/request.ex lib/allm/validate.ex` | 0 hits |
+
+Start Green for 27.3 (tree at `b214bcd` + the user's five files): `mix compile --warnings-as-errors && mix test` → 0 (615 doctests, 33 properties, 4974 tests, 0 failures, seed 861830).
+
+### Deviations
+
+- `[structural, documented]` The valid-`prompt_cache` predicate is now ONE `defguard is_prompt_cache/1` (`@doc false`) in `lib/allm/request.ex` (27.1's file, not in 27.3's Module Tree). The design's Error Contract says `put_prompt_cache/2` "pattern-matches only the valid shapes"; writing that guard in both adapters would have made three copies of `validate_prompt_cache/2`'s guard. `ALLM.Validate.validate_prompt_cache/2` now calls the shared guard (private, behaviour-preserving migration-on-extraction, pinned by 27.1's `validate_test.exs` rows — mutants G1/G2). `require Request` added to `validate.ex`, `openai.ex`, `anthropic.ex`.
+- `[tactical]` The acceptance mode also runs the negative controls OA-C and AN-C (without recording them). CLAUDE.md's probe rule pairs every acceptance arm with an invented-field arm in the same run; 27.5 still owns recording their bodies.
+- `[tactical]` The recorder checks offline, before any HTTP call, that each acceptance arm's cache fields equal what the adapter's body builder adds for the same `prompt_cache`, so the probe tests the adapter's output, not a literal copy.
+- `[tactical]` The recorder's `.env` loader handles two keys: it loads `.env` when either is unset, then restores any value that was already set, preserving the Voyage script's "explicit assignment wins" guarantee.
+- `[tactical]` OpenAI acceptance arms run on the Responses endpoint only, as the design's arm table specifies; Chat Completions acceptance of the same two fields is unprobed (the translation is shared, and the unit tests pin both bodies). **Superseded by the b3 fix pass below:** Chat Completions is now probed on `gpt-4o-mini`.
+
+### b3 fix pass (2026-09-27)
+
+Sources: `.work/reviews/2026-09-27-prompt-caching-b3/overview.md`, `.work/code-reviews/2026-09-27-prompt-caching-b3.md`, `.work/security-reviews/2026-09-27-prompt-caching-b3.md` (clean), `.work/design-reviews/2026-09-27-prompt-caching-b3.md` (N/A).
+
+- **Functional review Known Issue 1 (Medium, `retention: :long` → `"24h"` on pre-GPT-5 Chat Completions models unprobed) — CLOSED by a live arm, not deferred.** `scripts/record_prompt_cache_fixtures.exs --only acceptance` now carries an endpoint per arm and runs OA-P1 + OA-P2 on `POST /v1/chat/completions` against `ALLM_PROBE_OPENAI_CHAT_MODELS` (default `gpt-4o-mini`), plus a Chat Completions negative control OA-CC-C. The offline adapter-parity check builds each arm's expected fields with `OpenAI.to_openai_request_body/3` on that arm's endpoint, so the new arms are covered. Live run `set -a; . ./.env; set +a; mix run scripts/record_prompt_cache_fixtures.exs --only acceptance` → exit 0, 14/14 arms as expected:
+
+| Arm | Endpoint | Model | Want | Got |
+|---|---|---|---|---|
+| OA-P1 / OA-P2 | responses | gpt-5.6, gpt-6-luna, gpt-5.4-nano | 200 | 200 (all six) |
+| OA-P1 (`prompt_cache_key`) | chat_completions | gpt-4o-mini | 200 | 200 |
+| OA-P2 (+ `prompt_cache_retention: "24h"`) | chat_completions | gpt-4o-mini | 200 | 200 |
+| AN-P2 | messages | claude-haiku-4-5-20251001, claude-sonnet-5, claude-sonnet-4-6 | 200 | 200 (all three) |
+| OA-C control | responses | gpt-5.6 | 400 | 400 |
+| OA-CC-C control (`totallyNotAField: {}`) | chat_completions | gpt-4o-mini | 400 | 400 |
+| AN-C control | messages | claude-haiku-4-5-20251001 | 400 | 400 |
+
+  The Chat Completions control rejected the invented field, so `gpt-4o-mini`'s 200 on `"24h"` is evidence of acceptance, not of a permissive endpoint. No translation change. (Acceptance is not proof that 24h retention is *honoured* on that model; only that the field is accepted.)
+- **Code-review F4 (Low; gate accept/refuse carve-out)** — fixed: the bare-run branch taken when `pending_paths/0` is non-empty now prints a stderr line and `System.halt(1)` instead of running acceptance and exiting 0 with nothing recorded. Verified with a scratch copy whose `recording_arms/0` returned one absent path → exit 1, zero HTTP calls; the real script's bare run → exit 0, "Nothing to record".
+- **Code-review F1 (Medium DRY, DEFER→HANDOFF)** — not extracted (out-of-fence `[CHORE]`). Appended to `.work/HANDOFF.md`'s existing 22.4-fix and 22.7 item (1) rows: this recorder's `load_dotenv/1` / `overwritable?/1` are the extraction source; predicate `grep -l 'defp load_dotenv\|defp overwritable?' scripts/record_*.exs | wc -l` → 8.
+- **Security informational note (27.5 error-body redaction)** — new Open HANDOFF row for 27.5.
+- **Left for the phase-end polish pass (Lows, severity floor):** F2 (`load_dotenv/1` "scratch copy" comment and "mirrors Voyage" header wording), F3 (`:erlang.map_get/2` → `map_get/2`), functional Known Issue 2 (key check before mode dispatch), Known Issue 3 (`max_retries: 2` ineffective on POST).
+
+Fix-pass gates (tree = batch 3 + this fix pass + the user's five files):
+
+| Command | Exit |
+|---|---|
+| `mix test` | 0 (617 doctests, 33 properties, 4999 tests, 0 failures, 14 excluded, 1 skipped) |
+| `mix test --seed 0` | 0 (same counts) |
+| `mix credo --strict` | 0 |
+| `mix dialyzer` | 0 (passed successfully) |
 | `mix format --check-formatted` | 0 |

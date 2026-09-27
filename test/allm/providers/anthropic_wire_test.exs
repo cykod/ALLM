@@ -667,4 +667,97 @@ defmodule ALLM.Providers.AnthropicWireTest do
       assert response.usage.cache_write_input_tokens == nil
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Request.prompt_cache translation — top-level automatic cache_control
+  # ---------------------------------------------------------------------------
+
+  describe "prompt_cache translation" do
+    # The adapter translation table, Anthropic row. Each cell is the exact set
+    # of keys `prompt_cache` adds to the body built with `prompt_cache: nil`.
+    @prompt_cache_table [
+      {nil, %{}},
+      {%{key: "recipe-42", retention: :short}, %{"cache_control" => %{"type" => "ephemeral"}}},
+      {%{key: "recipe-42", retention: :long},
+       %{"cache_control" => %{"type" => "ephemeral", "ttl" => "1h"}}}
+    ]
+
+    defp pc_body(opts), do: Anthropic.to_anthropic_request_body(req(opts))
+
+    for {pc, added} <- @prompt_cache_table do
+      @pc pc
+      @added added
+
+      test "prompt_cache #{inspect(pc)} adds exactly #{inspect(added)}" do
+        assert pc_body(prompt_cache: @pc) == Map.merge(pc_body([]), @added)
+      end
+    end
+
+    test "prompt_cache: nil is byte-identical to a request built without the field" do
+      assert Jason.encode!(pc_body(prompt_cache: nil)) == Jason.encode!(pc_body([]))
+    end
+
+    test "the cache key never appears anywhere in the encoded body" do
+      for retention <- [:short, :long] do
+        body = pc_body(prompt_cache: %{key: "recipe-42", retention: retention})
+        assert Map.has_key?(body, "cache_control")
+        refute Jason.encode!(body) =~ "recipe-42"
+      end
+    end
+
+    test "a key: nil request translates the same as a keyed one" do
+      for retention <- [:short, :long] do
+        assert pc_body(prompt_cache: %{key: nil, retention: retention}) ==
+                 pc_body(prompt_cache: %{key: "recipe-42", retention: retention})
+      end
+    end
+
+    test "raw cache_control in options wins over the typed field" do
+      raw = %{type: "ephemeral", ttl: "5m"}
+
+      body =
+        pc_body(
+          prompt_cache: %{key: "a", retention: :long},
+          options: %{cache_control: raw}
+        )
+
+      assert body["cache_control"] == raw
+    end
+
+    test "an invalid prompt_cache sent straight to the body builder leaves the body unchanged" do
+      invalid = [
+        :bogus,
+        true,
+        %{},
+        %{retention: :long},
+        %{key: "k", retention: :forever},
+        %{key: "", retention: :short},
+        %{key: 42, retention: :long},
+        %{key: "k", retention: :long, extra: 1},
+        %{"key" => "k", "retention" => "long"}
+      ]
+
+      for pc <- invalid do
+        assert Jason.encode!(pc_body(prompt_cache: pc)) == Jason.encode!(pc_body([])),
+               "#{inspect(pc)} changed the body"
+      end
+    end
+
+    test "generate/2 puts cache_control on the wire and sends no beta header", %{stub: stub} do
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:wire, conn.req_headers, Jason.decode!(raw)})
+        respond_json(conn, 200, Fx.messages_response(:happy_text))
+      end)
+
+      assert {:ok, _} =
+               call(stub, req(prompt_cache: %{key: "recipe-42", retention: :long}), retry: false)
+
+      assert_received {:wire, headers, body}
+      assert body["cache_control"] == %{"type" => "ephemeral", "ttl" => "1h"}
+      refute List.keymember?(headers, "anthropic-beta", 0)
+    end
+  end
 end

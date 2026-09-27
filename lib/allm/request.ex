@@ -205,6 +205,20 @@ defmodule ALLM.Request do
   def decode_retention("short"), do: :short
   def decode_retention("long"), do: :long
   def decode_retention(other), do: other
+
+  @doc false
+  # The one definition of a valid `prompt_cache` value (`nil` excluded):
+  # a map with exactly `:key` (nil or a non-empty binary) and `:retention`
+  # (`:short` or `:long`). `ALLM.Validate.request/1` rejects anything else,
+  # and each adapter's `put_prompt_cache/2` translates only what it accepts,
+  # so a direct adapter call with an invalid value leaves the body unchanged.
+  defguard is_prompt_cache(value)
+           when is_map(value) and map_size(value) == 2 and is_map_key(value, :key) and
+                  is_map_key(value, :retention) and
+                  :erlang.map_get(:retention, value) in [:short, :long] and
+                  (:erlang.map_get(:key, value) == nil or
+                     (is_binary(:erlang.map_get(:key, value)) and
+                        :erlang.map_get(:key, value) != ""))
 end
 
 defimpl Jason.Encoder, for: ALLM.Request do

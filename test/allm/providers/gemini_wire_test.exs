@@ -183,4 +183,28 @@ defmodule ALLM.Providers.GeminiWireTest do
       assert usage.extra["promptTokensDetails"] == [%{"modality" => "TEXT", "tokenCount" => 5000}]
     end
   end
+
+  describe "to_gemini_request_body/2 — prompt_cache is ignored" do
+    # The adapter translation table, Gemini row: implicit caching needs no
+    # request field, so every column leaves the body unchanged.
+    for pc <- [
+          nil,
+          %{key: "recipe-42", retention: :short},
+          %{key: "recipe-42", retention: :long}
+        ] do
+      @pc pc
+
+      test "prompt_cache #{inspect(pc)} leaves the body byte-identical" do
+        messages = [
+          %Message{role: :system, content: "Be brief."},
+          %Message{role: :user, content: "hi"}
+        ]
+
+        with_cache = Gemini.to_gemini_request_body(req(messages, prompt_cache: @pc), [])
+        without = Gemini.to_gemini_request_body(req(messages), [])
+
+        assert Jason.encode!(with_cache) == Jason.encode!(without)
+      end
+    end
+  end
 end

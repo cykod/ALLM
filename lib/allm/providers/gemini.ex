@@ -263,6 +263,21 @@ defmodule ALLM.Providers.Gemini do
       iex> {u.input_tokens, u.cached_input_tokens, u.cache_write_input_tokens, u.extra}
       {5000, 4096, nil, %{}}
 
+  ## Prompt caching
+
+  `Request.prompt_cache` is ignored without error: Gemini caches repeated
+  prompt prefixes implicitly and has no per-request cache key or lifetime, so
+  the request body is the same with or without it. Provider-neutral code can
+  set it for every provider. A hit still shows up as `cached_input_tokens`.
+
+      iex> msgs = [%ALLM.Message{role: :user, content: "hi"}]
+      iex> cached = ALLM.Request.new(msgs, model: "gemini-2.5-flash",
+      ...>   prompt_cache: %{key: "recipe-42", retention: :long})
+      iex> plain = ALLM.Request.new(msgs, model: "gemini-2.5-flash")
+      iex> ALLM.Providers.Gemini.to_gemini_request_body(cached, []) ==
+      ...>   ALLM.Providers.Gemini.to_gemini_request_body(plain, [])
+      true
+
   ## Error reasons
 
   | HTTP | `AdapterError.reason` |

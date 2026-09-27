@@ -1,3 +1,23 @@
+## [FEAT] Translate Request.prompt_cache onto provider wire bodies
+*Sunday, September 27th at 6pm*
+Phase 27.3 of the prompt-caching design (spec §7.1, §9). A typed prompt_cache 
+on %Request{} now reaches the wire, translated before the request.options merge 
+so raw provider options still win.
+
+- OpenAI: one put_prompt_cache/2 shared by the Chat Completions and Responses 
+translators sends prompt_cache_key verbatim and prompt_cache_retention "24h" 
+for :long.
+- Anthropic: put_prompt_cache/2 sets top-level automatic cache_control (ttl 
+"1h" for :long); the key is never sent.
+- Gemini: documented no-op (implicit caching only).
+- A shared Request.is_prompt_cache/1 guard backs both Validate and the adapters.
+- scripts/record_prompt_cache_fixtures.exs --only acceptance live-probes the 
+fields with negative controls; on 2026-09-27 gpt-5.6, gpt-6-luna, gpt-5.4-nano, 
+gpt-4o-mini (Chat Completions), claude-haiku-4-5, claude-sonnet-5 and 
+claude-sonnet-4-6 accepted them and both APIs rejected an invented field.
+
+---
+
 ## [FEAT] Normalize prompt-cache usage across chat adapters
 *Sunday, September 27th at 6pm*
 Phase 27.2 of the prompt-caching design (spec §5.9a, §8). Every chat adapter 

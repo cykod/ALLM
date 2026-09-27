@@ -639,4 +639,128 @@ defmodule ALLM.Providers.OpenAIWireTest do
       refute Map.has_key?(response.usage.extra, "input_tokens_details")
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Request.prompt_cache translation — one helper, both translators
+  # ---------------------------------------------------------------------------
+
+  describe "prompt_cache translation" do
+    # The adapter translation table, OpenAI rows. Each cell is the exact set
+    # of keys `prompt_cache` adds to the body built with `prompt_cache: nil`.
+    @prompt_cache_models %{chat_completions: "gpt-4o-mini", responses: "gpt-5.6"}
+
+    @prompt_cache_table [
+      {nil, %{}},
+      {%{key: "recipe-42", retention: :short}, %{"prompt_cache_key" => "recipe-42"}},
+      {%{key: "recipe-42", retention: :long},
+       %{"prompt_cache_key" => "recipe-42", "prompt_cache_retention" => "24h"}}
+    ]
+
+    defp pc_body(endpoint, opts) do
+      model = Map.fetch!(@prompt_cache_models, endpoint)
+      OpenAI.to_openai_request_body(req([model: model] ++ opts), endpoint, [])
+    end
+
+    for endpoint <- [:chat_completions, :responses],
+        {pc, added} <- @prompt_cache_table do
+      @endpoint endpoint
+      @pc pc
+      @added added
+
+      test "#{endpoint}: prompt_cache #{inspect(pc)} adds exactly #{inspect(added)}" do
+        assert pc_body(@endpoint, prompt_cache: @pc) ==
+                 Map.merge(pc_body(@endpoint, []), @added)
+      end
+    end
+
+    test "prompt_cache: nil is byte-identical to a request built without the field" do
+      for endpoint <- [:chat_completions, :responses] do
+        assert Jason.encode!(pc_body(endpoint, prompt_cache: nil)) ==
+                 Jason.encode!(pc_body(endpoint, []))
+      end
+    end
+
+    test "key: nil with :short adds no prompt_cache_key at all" do
+      for endpoint <- [:chat_completions, :responses] do
+        body = pc_body(endpoint, prompt_cache: %{key: nil, retention: :short})
+        refute Map.has_key?(body, "prompt_cache_key")
+        assert body == pc_body(endpoint, [])
+      end
+    end
+
+    test "key: nil with :long sends only the retention" do
+      for endpoint <- [:chat_completions, :responses] do
+        assert pc_body(endpoint, prompt_cache: %{key: nil, retention: :long}) ==
+                 Map.put(pc_body(endpoint, []), "prompt_cache_retention", "24h")
+      end
+    end
+
+    test "raw prompt_cache_key in options wins over the typed field on both endpoints" do
+      for endpoint <- [:chat_completions, :responses] do
+        body =
+          pc_body(endpoint,
+            prompt_cache: %{key: "a", retention: :long},
+            options: %{prompt_cache_key: "b", prompt_cache_retention: "in_memory"}
+          )
+
+        assert body["prompt_cache_key"] == "b"
+        assert body["prompt_cache_retention"] == "in_memory"
+      end
+    end
+
+    test "the key is sent verbatim — mixed case, spaces and non-ASCII — on both endpoints" do
+      key = "Recipe 42/é ÜBER"
+
+      for endpoint <- [:chat_completions, :responses] do
+        body = pc_body(endpoint, prompt_cache: %{key: key, retention: :short})
+        assert body["prompt_cache_key"] == key
+        assert Jason.encode!(body) =~ ~s("prompt_cache_key":"#{key}")
+      end
+    end
+
+    test "an invalid prompt_cache sent straight to the body builder leaves the body unchanged" do
+      invalid = [
+        :bogus,
+        true,
+        %{},
+        %{key: "k"},
+        %{retention: :long},
+        %{key: "k", retention: :forever},
+        %{key: "", retention: :short},
+        %{key: 42, retention: :short},
+        %{key: "k", retention: :long, extra: 1},
+        %{"key" => "k", "retention" => "long"}
+      ]
+
+      for endpoint <- [:chat_completions, :responses], pc <- invalid do
+        assert Jason.encode!(pc_body(endpoint, prompt_cache: pc)) ==
+                 Jason.encode!(pc_body(endpoint, [])),
+               "#{endpoint}: #{inspect(pc)} changed the body"
+      end
+    end
+
+    test "generate/2 puts the translated fields on the wire for both endpoints", %{stub: stub} do
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:wire_body, conn.request_path, Jason.decode!(raw)})
+        respond_json(conn, 401, %{"error" => %{"message" => "bad"}})
+      end)
+
+      pc = %{key: "Recipe 42/é", retention: :long}
+
+      for {model, path} <- [
+            {"gpt-4o-mini", "/v1/chat/completions"},
+            {"gpt-5.6", "/v1/responses"}
+          ] do
+        assert {:error, %AdapterError{}} =
+                 call(stub, req(model: model, prompt_cache: pc), retry: false)
+
+        assert_received {:wire_body, ^path, body}
+        assert body["prompt_cache_key"] == "Recipe 42/é"
+        assert body["prompt_cache_retention"] == "24h"
+      end
+    end
+  end
 end

@@ -194,6 +194,8 @@ defmodule ALLM.Providers.Anthropic do
   alias ALLM.ToolCall
   alias ALLM.Usage
 
+  require Request
+
   require Logger
 
   # ---------------------------------------------------------------------------
@@ -317,6 +319,25 @@ defmodule ALLM.Providers.Anthropic do
       {4350, 4000, 300, 4375}
       iex> u.extra
       %{"uncached_input_tokens" => 50}
+
+  ## Prompt caching
+
+  `Request.prompt_cache` becomes Anthropic's top-level automatic
+  `cache_control`, which places the cache breakpoint on the last cacheable
+  block. `retention: :short` sends `%{"type" => "ephemeral"}`, keeping
+  Anthropic's default 5-minute lifetime; `retention: :long` adds
+  `"ttl" => "1h"`, the longest per-request lifetime Anthropic documents. The
+  `:key` is not sent, because Anthropic has no cache routing key. A raw
+  `cache_control` in `Request.options` takes precedence. With
+  `prompt_cache: nil` the body is unchanged.
+
+      iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "hi"}],
+      ...>   model: "claude-sonnet-4-6", prompt_cache: %{key: "recipe-42", retention: :long})
+      iex> body = ALLM.Providers.Anthropic.to_anthropic_request_body(req)
+      iex> body["cache_control"]
+      %{"type" => "ephemeral", "ttl" => "1h"}
+      iex> Jason.encode!(body) =~ "recipe-42"
+      false
 
   ## Vision input
 
@@ -572,6 +593,7 @@ defmodule ALLM.Providers.Anthropic do
     |> maybe_put("temperature", request.temperature)
     |> maybe_put_tools(request.tools)
     |> maybe_put_tool_choice(request.tool_choice, request.tools)
+    |> put_prompt_cache(request.prompt_cache)
     |> Map.merge(stringify_options(request.options))
     |> then(&inject_structured_output_tool(request, &1))
   end
@@ -581,6 +603,22 @@ defmodule ALLM.Providers.Anthropic do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # `Request.prompt_cache` → the top-level automatic `cache_control`, which
+  # places the breakpoint on the last cacheable block and moves it forward as
+  # the conversation grows. The key is never sent: Anthropic has no routing
+  # key. Runs before the `request.options` merge, so a raw `cache_control` in
+  # `options` wins. `:long` asks for `ttl: "1h"`, the longest per-request TTL
+  # Anthropic documents; `:short` sends no TTL (the provider's 5-minute
+  # default). A value that is not a valid prompt-cache map (only reachable on a
+  # direct adapter call) leaves the body unchanged.
+  defp put_prompt_cache(body, prompt_cache) when Request.is_prompt_cache(prompt_cache),
+    do: Map.put(body, "cache_control", cache_control(prompt_cache.retention))
+
+  defp put_prompt_cache(body, _prompt_cache), do: body
+
+  defp cache_control(:short), do: %{"type" => "ephemeral"}
+  defp cache_control(:long), do: %{"type" => "ephemeral", "ttl" => "1h"}
 
   defp maybe_put_tools(map, []), do: map
 
