@@ -223,6 +223,18 @@ defmodule ALLM.Providers.Support.WebSocketTest do
       WSMint.flush_messages(conn)
     end
 
+    test "bytes read with the 101 followed by :tcp_closed keep their frames" do
+      server = WSTestServer.start([], greeting: {:text, "early"})
+      {:ok, conn} = WSMint.connect(WSTestServer.url(server), [], [])
+      socket = WSMint.message_tag(conn)
+
+      assert {:ok, conn, [{:text, "early"} | _]} =
+               WSMint.handle_message(conn, {:tcp_closed, socket})
+
+      WSMint.close(conn)
+      WSMint.flush_messages(conn)
+    end
+
     test "a malformed frame read with the 101 is an error on the first message" do
       server = WSTestServer.start([], greeting: {:raw, <<0x83, 0x01, ?x>>})
       {:ok, conn} = WSMint.connect(WSTestServer.url(server), [], [])

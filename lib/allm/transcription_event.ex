@@ -45,7 +45,10 @@ defmodule ALLM.TranscriptionEvent do
 
   Adding a variant is a breaking change for any reducer of this union, the
   same rule as `ALLM.Event`. Adding a key to an existing payload map is not.
-  `event?/1` is `false` on every chat event.
+  `event?/1` is `false` on every chat event. The reverse does not hold:
+  `ALLM.Event.event?/1` treats `:error` payloads as opaque, so it also returns
+  `true` on this union's `:error` event. Route by this module's `event?/1`, or
+  by the error struct.
 
   Build events with the variant constructors, which check the payload's
   required keys. `:error` has no constructor; its payload is the error

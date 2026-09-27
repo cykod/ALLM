@@ -43,7 +43,9 @@ defmodule ALLM.SpeechEvent do
   Adding a variant is a breaking change for any reducer of this union, the
   same rule as `ALLM.Event`. Adding a key to an existing payload map is not.
   The union is separate from `ALLM.Event`: `event?/1` is `false` on every
-  chat event.
+  chat event. The reverse does not hold: `ALLM.Event.event?/1` treats `:error`
+  payloads as opaque, so it also returns `true` on this union's `:error`
+  event. Route by this module's `event?/1`, or by the error struct.
 
   Build events with the variant constructors (`speech_started/1`,
   `audio_delta/1`, `speech_completed/1`), which check the payload's required

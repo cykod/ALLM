@@ -459,6 +459,27 @@ defmodule ALLM.Providers.ElevenLabs.SpeechStreamTest do
              ]
     end
 
+    test "auto_mode \"True\" (any case) turns word buffering on" do
+      stub = WebSocketStub.install([{:after_client, @close_text, [audio("A"), final()]}])
+
+      {:ok, stream} =
+        Speech.stream_synthesize_input(
+          input_req(options: %{"query" => %{"auto_mode" => "True"}}),
+          ["Hel", "lo", " world", "."],
+          ws_opts(stub)
+        )
+
+      assert {:speech_completed, _} = stream |> Enum.to_list() |> List.last()
+
+      assert text_frames(stub) == [
+               %{"text" => " "},
+               %{"text" => "Hello "},
+               %{"text" => "world."},
+               %{"text" => "", "flush" => true},
+               %{"text" => ""}
+             ]
+    end
+
     test "auto_mode (default): a trailing partial word is sent at the end of input, before the flush" do
       stub = WebSocketStub.install([{:after_client, @close_text, [audio("A"), final()]}])
 
@@ -507,10 +528,34 @@ defmodule ALLM.Providers.ElevenLabs.SpeechStreamTest do
           {"Really?", {"Really?", ""}},
           {"a\nb", {"a\n", "b"}},
           {"こんにちは。元気", {"こんにちは。", "元気"}},
-          {"", {"", ""}}
+          {"", {"", ""}},
+          # Documented, not fixed: `?` splits inside a URL.
+          {"see https://x.com/a?q=1", {"see https://x.com/a?", "q=1"}},
+          # Documented: NBSP is whitespace.
+          {"10\u00A0000", {"10\u00A0", "000"}}
         ] do
       test "split_at_word_boundary(#{inspect(text)}) is #{inspect(want)}" do
         assert Speech.split_at_word_boundary(unquote(text)) == unquote(Macro.escape(want))
+      end
+    end
+
+    # Falsifier: an incremental split that disagrees with re-splitting the
+    # whole buffer, on any chunk sequence.
+    test "buffer_words/2 scanning only the chunk matches re-splitting buffer <> chunk" do
+      alphabet = ["a", "b", "é", "語", " ", "\u00A0", "\n", ".", ",", "?", "!", ";", "。", "…", "'"]
+      :rand.seed(:exsss, {26, 7, 2})
+
+      for _ <- 1..300 do
+        chunks =
+          for _ <- 1..Enum.random(1..8) do
+            for(_ <- 1..Enum.random(0..6), into: "", do: Enum.random(alphabet))
+          end
+
+        Enum.reduce(chunks, {"", ""}, fn chunk, {buffer, ref_buffer} ->
+          {words, next} = Speech.buffer_words(buffer, chunk)
+          assert {words, next} == Speech.split_at_word_boundary(ref_buffer <> chunk)
+          {next, next}
+        end)
       end
     end
 

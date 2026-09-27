@@ -68,7 +68,11 @@ defmodule ALLM.Providers.Support.WebSocket.Mint do
   # that reached the mailbox after the 101 (Mint re-arms the socket as soon
   # as it reads the 101) can never be decoded ahead of them. A payload-less
   # `{@buffered, socket}` self-message wakes the owner for the case where no
-  # further transport message arrives.
+  # further transport message arrives. If that same message is a transport
+  # error, the error wins and the decoded pending frames are discarded: a
+  # provider error frame sent with the 101 then surfaces as a transport
+  # failure rather than as its own reason. (`:tcp_closed` is not an error:
+  # Mint turns it into `:closed`, so the pending frames survive it.)
   @buffered __MODULE__
 
   @impl true

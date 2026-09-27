@@ -1,3 +1,19 @@
+## [TWK] Polish Phase 26 streaming audio after the gate cleared
+*Sunday, September 27th at 2pm*
+Phase 26 of steering/2026-09-25_ELEVENLABS_TTS_SST.md passed its gate 
+(.work/gate-reviews/2026-09-27-phase-26-elevenlabs-tts-sst.md). All five 
+headline outcomes were observed live, and no High or Critical finding was open. 
+This polish pass takes the deferred Lows. The ElevenLabs word buffer now scans 
+only each new chunk instead of re-scanning the whole buffer, and auto_mode is 
+read case-insensitively from one shared query parser. A wrongly typed 
+opts[:request] on the input-streaming façades raises a named ArgumentError. 
+Docs are corrected on event-family disjointness, the collect_transcription 
+start-event rule, NBSP and URL word splits, and dropping pending frames on a 
+socket error. ChatStreamError coverage is raised, and the design's embedded 
+status table and the RECORDS status rows now match the shipped state.
+
+---
+
 ## [BUG] Fix held-segment timeout and apply Phase 26 retro fixes
 *Sunday, September 27th at 1pm*
 Final retro fix pass for steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37.11). 

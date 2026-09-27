@@ -153,6 +153,11 @@ defmodule ALLM.AudioStream do
   that ends without a terminal event returns
   `{:error, %ALLM.Error.TranscriptionAdapterError{reason: :malformed_response}}`.
 
+  Unlike `collect_speech/1`, a missing `:transcription_started` is not an
+  error: the transcript itself is on the completed event, so the response
+  is returned with `:model`, `:provider` and `:id` nil. (Speech needs the
+  start event's `:format` and `:mime_type` to build its `ALLM.Audio`.)
+
   ## Examples
 
       iex> events = [

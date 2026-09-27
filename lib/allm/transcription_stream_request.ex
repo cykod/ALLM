@@ -92,10 +92,11 @@ defmodule ALLM.TranscriptionStreamRequest do
   @spec commit_strategies() :: [commit_strategy()]
   def commit_strategies, do: @commit_strategies
 
-  # `sample_rate` and `commit_strategy` have truthy defaults, so the
-  # `data["k"] || default` idiom is not used for them: it would be wrong for
-  # any persisted value the idiom treats as absent. An absent key decodes to
-  # the default; any other value is kept.
+  # Explicit decode pairs for `sample_rate` and `commit_strategy` rather
+  # than `data["k"] || default`, per the CLAUDE.md truthy-default rule.
+  # Neither field has a legal falsy value, so the pair is equivalent to `||`
+  # today; it stays correct if one is ever added. An absent (or `nil`) key
+  # decodes to the default; any other value is kept.
   @doc false
   @spec __from_tagged__(map()) :: t()
   def __from_tagged__(data) when is_map(data) do

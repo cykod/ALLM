@@ -416,8 +416,15 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   out as `"Hello "` and, at the end of input, `"world."`. A boundary is
   whitespace or one of `! ? ;` and the CJK full-width marks; `.`, `,`, `:`
   and `'` are sent at the space that follows them, because they also occur
-  inside words and numbers ("3.14", "don't"). Text with no boundary at all
-  waits for the end of input. To turn both off, pass
+  inside words and numbers ("3.14", "don't"). `?`, `!` and `;` are
+  boundaries even inside a token, so a URL's query string is split after
+  its `?` (`"https://x.com/a?q=1"` goes out as `"https://x.com/a?"` then
+  `"q=1"`). Whitespace includes the no-break space, so a number written
+  with one ("10 000") can be split there when it straddles two chunks.
+  Text with no boundary at all waits for the end of input. Buffering
+  follows `auto_mode`: it is on when the query's `auto_mode` is `true` or
+  a string equal to `"true"` ignoring case, and off otherwise. To turn
+  both off, pass
   `options: %{"query" => %{"auto_mode" => false}}`: each chunk is then sent
   verbatim and ElevenLabs buffers by its `chunk_length_schedule` (tunable
   through
@@ -550,15 +557,9 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
     {:ok, %{output_format: output_format}} =
       Support.output_format(request.format, request.sample_rate)
 
-    user_query =
-      request.options
-      |> SpeechSupport.stringify_keys()
-      |> Map.get("query")
-      |> Support.query_params(["output_format"])
-
     query =
       defaults
-      |> Map.merge(user_query)
+      |> Map.merge(user_query(request))
       |> Map.merge(structural)
       |> Map.put("output_format", output_format)
 
@@ -988,9 +989,23 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   defp speak(%{word_buffer: nil} = state, chunk), do: emit(send_json(state, %{"text" => chunk}))
 
   defp speak(state, chunk) do
-    case split_at_word_boundary(state.word_buffer <> chunk) do
-      {"", rest} -> {[], %{state | word_buffer: rest}}
-      {words, rest} -> emit(send_json(%{state | word_buffer: rest}, %{"text" => words}))
+    case buffer_words(state.word_buffer, chunk) do
+      {"", buffer} -> {[], %{state | word_buffer: buffer}}
+      {words, buffer} -> emit(send_json(%{state | word_buffer: buffer}, %{"text" => words}))
+    end
+  end
+
+  @doc false
+  # `split_at_word_boundary(buffer <> chunk)`, scanning only `chunk`. The
+  # buffer holds no boundary by construction (it is always the `rest` of a
+  # split, or `""`), and every boundary is one codepoint, so the last
+  # boundary of `buffer <> chunk` is `chunk`'s own. Rescanning the buffer
+  # would make a long boundary-free run cost O(n²) across its chunks.
+  @spec buffer_words(String.t(), String.t()) :: {String.t(), String.t()}
+  def buffer_words(buffer, chunk) when is_binary(buffer) and is_binary(chunk) do
+    case split_at_word_boundary(chunk) do
+      {"", rest} -> {"", buffer <> rest}
+      {words, rest} -> {buffer <> words, rest}
     end
   end
 
@@ -1002,11 +1017,14 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   @doc false
   # Splits `text` after its last word boundary: `{words, rest}`, where
   # `words` ends at a boundary (or is `""`) and `rest` is the unfinished
-  # word. A boundary is Unicode whitespace or one of `! ? ;` and the CJK
-  # full-width marks `。 、 ， ！ ？ ； ：` and `…`. `.`, `,`, `:`, `'` and
-  # `-` are not boundaries on their own, because they occur inside words
-  # and numbers ("3.14", "1,000", "10:30", "don't"); followed by a space
-  # they are sent at the space.
+  # word. A boundary is Unicode whitespace (NBSP included, so "10 000"
+  # can split at a chunk end) or one of `! ? ;` and the CJK full-width
+  # marks `。 、 ， ！ ？ ； ：` and `…`. `.`, `,`, `:`, `'` and `-` are not
+  # boundaries on their own, because they occur inside words and numbers
+  # ("3.14", "1,000", "10:30", "don't"); followed by a space they are sent
+  # at the space. `? ! ;` split even inside a token, so a URL's query
+  # string splits after its `?`: kept, and documented, because "Really?"
+  # at a chunk end should go out at once.
   @spec split_at_word_boundary(String.t()) :: {String.t(), String.t()}
   def split_at_word_boundary(text) when is_binary(text) do
     # Greedy `.*` puts the split after the LAST boundary.
@@ -1016,14 +1034,23 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
     end
   end
 
-  defp auto_mode?(%SpeechRequest{options: options}) do
-    user_query =
-      options
-      |> SpeechSupport.stringify_keys()
-      |> Map.get("query")
-      |> Support.query_params(["output_format"])
+  # Case-insensitive, so a `"True"` the server may read as true never goes
+  # out unbuffered: buffering under auto_mode off only costs latency.
+  defp auto_mode?(%SpeechRequest{} = request) do
+    @ws_query_defaults
+    |> Map.merge(user_query(request))
+    |> Map.get("auto_mode")
+    |> to_string()
+    |> String.downcase() == "true"
+  end
 
-    @ws_query_defaults |> Map.merge(user_query) |> Map.get("auto_mode") |> to_string() == "true"
+  # `options["query"]` as query parameters, minus `output_format` (the
+  # adapter derives it from `:format`).
+  defp user_query(%SpeechRequest{options: options}) do
+    options
+    |> SpeechSupport.stringify_keys()
+    |> Map.get("query")
+    |> Support.query_params(["output_format"])
   end
 
   defp on_transport(message, state) do

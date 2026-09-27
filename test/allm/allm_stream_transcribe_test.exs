@@ -175,6 +175,21 @@ defmodule ALLM.ALLMStreamTranscribeTest do
       refute Keyword.has_key?(opts, :language)
       refute Keyword.has_key?(opts, :request)
     end
+
+    test "a non-TranscriptionStreamRequest opts[:request] raises ArgumentError naming the opt" do
+      batch =
+        ALLM.TranscriptionRequest.new(audio: ALLM.Audio.from_binary("secret-bytes", "audio/wav"))
+
+      error =
+        assert_raise ArgumentError, fn ->
+          ALLM.stream_transcribe(fake_engine(), [@pcm], request: batch)
+        end
+
+      assert error.message =~ "opts[:request] must be a %ALLM.TranscriptionStreamRequest{}"
+      assert error.message =~ "got: %ALLM.TranscriptionRequest{}"
+      refute error.message =~ "secret-bytes"
+      assert captured_calls() == []
+    end
   end
 
   # ---------------------------------------------------------------------------

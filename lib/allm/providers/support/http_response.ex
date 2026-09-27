@@ -30,8 +30,9 @@ defmodule ALLM.Providers.Support.HTTPResponse do
   @doc false
   # Case-insensitive lookup on a list of header tuples; exact-key lookup on
   # `Req`'s lower-cased header map. A multi-valued header yields its first
-  # value. Anything other than a map or a list has no headers.
-  @spec header_value(map() | list() | term(), String.t()) :: String.t() | nil
+  # value. Anything other than a map or a list has no headers (hence
+  # `term()`: other shapes are accepted and yield `nil`, not rejected).
+  @spec header_value(term(), String.t()) :: String.t() | nil
   def header_value(headers, name) when is_map(headers) do
     case Map.get(headers, name) do
       nil -> nil
@@ -55,7 +56,7 @@ defmodule ALLM.Providers.Support.HTTPResponse do
   # `Retry-After` in delta-seconds, as milliseconds. The HTTP-date form, a
   # negative number and any other unparseable value all return `nil`, and
   # the caller's retry loop falls back to its computed backoff.
-  @spec retry_after_ms(map() | list() | term()) :: non_neg_integer() | nil
+  @spec retry_after_ms(term()) :: non_neg_integer() | nil
   def retry_after_ms(headers) do
     case header_value(headers, "retry-after") do
       nil -> nil

@@ -1764,7 +1764,8 @@ defmodule ALLM do
   The request is built with `speech_request("", opts)`, so the same
   request-field opts apply, or taken from `opts[:request]`, a pre-built
   `%ALLM.SpeechRequest{}` that is authoritative (other request-field opts
-  are ignored, and its `:input` is not used).
+  are ignored, and its `:input` is not used). Any other `opts[:request]`
+  value raises `ArgumentError` before the span opens.
 
   The adapter reduces `input` in a separate process, so an input that reads
   the calling process's mailbox or process dictionary must be relayed. An
@@ -1814,6 +1815,7 @@ defmodule ALLM do
       case Keyword.get(opts, :request) do
         nil -> speech_request("", opts)
         %SpeechRequest{} = request -> request
+        other -> raise_bad_request_opt!(other, SpeechRequest)
       end
 
     do_stream_synthesize_input(engine, request, input, opts)
@@ -1855,7 +1857,9 @@ defmodule ALLM do
   The request is built from the `ALLM.TranscriptionStreamRequest` field
   opts (`:model`, `:language`, `:sample_rate`, `:commit_strategy`,
   `:options`, `:metadata`), or taken from `opts[:request]`, a pre-built
-  `%ALLM.TranscriptionStreamRequest{}` that is authoritative.
+  `%ALLM.TranscriptionStreamRequest{}` that is authoritative. Any other
+  `opts[:request]` value (a batch `%ALLM.TranscriptionRequest{}`, say)
+  raises `ArgumentError` before the span opens.
 
   The adapter reduces `input` in a separate process, so an input that reads
   the calling process's mailbox must be relayed. Chunk boundaries are free:
@@ -1922,6 +1926,9 @@ defmodule ALLM do
 
         %TranscriptionStreamRequest{} = request ->
           request
+
+        other ->
+          raise_bad_request_opt!(other, TranscriptionStreamRequest)
       end
 
     do_stream_transcribe(engine, request, input, opts)
@@ -2712,7 +2719,7 @@ defmodule ALLM do
         fn -> check_stream_input(input, :invalid_transcription_request) end,
         fn -> ALLM.Validate.transcription_stream_request(request) end
       ],
-      forward_opts: Keyword.drop(opts, [:request | @transcription_stream_request_field_opts]),
+      forward_opts: drop_transcription_stream_opts(opts),
       dispatch: fn adapter, dispatch_opts ->
         adapter.stream_transcribe(request, input, dispatch_opts)
       end
@@ -2761,6 +2768,19 @@ defmodule ALLM do
     end)
   end
 
+  # A wrong `opts[:request]` is a caller bug, not a runtime condition, so it
+  # raises (before the span opens) rather than returning an error tuple.
+  @spec raise_bad_request_opt!(term(), module()) :: no_return()
+  defp raise_bad_request_opt!(other, expected) do
+    raise ArgumentError,
+          "opts[:request] must be a %#{inspect(expected)}{} struct, got: #{describe_request_opt(other)}"
+  end
+
+  # Names a struct by its module only: a mistaken batch request can carry
+  # whole audio bytes, which have no place in an exception message.
+  defp describe_request_opt(%module{}), do: "%#{inspect(module)}{}"
+  defp describe_request_opt(other), do: inspect(other, limit: 5, printable_limit: 40)
+
   defp run_stream_gates(gates) do
     Enum.reduce_while(gates, :ok, fn gate, :ok ->
       case gate.() do
@@ -2774,6 +2794,9 @@ defmodule ALLM do
   # forwarded, alongside the request-field opts.
   defp drop_speech_stream_opts(opts),
     do: opts |> drop_speech_request_opts() |> Keyword.delete(:request)
+
+  defp drop_transcription_stream_opts(opts),
+    do: Keyword.drop(opts, [:request | @transcription_stream_request_field_opts])
 
   defp check_stream_slot(nil, :speech, _fun, _arity),
     do: {:error, EngineError.new(:no_speech_adapter)}

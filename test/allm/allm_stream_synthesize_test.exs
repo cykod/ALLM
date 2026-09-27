@@ -197,6 +197,16 @@ defmodule ALLM.ALLMStreamSynthesizeTest do
       refute Keyword.has_key?(opts, :voice)
       refute Keyword.has_key?(opts, :request)
     end
+
+    test "stream_synthesize_input/3 raises ArgumentError on a non-SpeechRequest opts[:request]" do
+      error =
+        assert_raise ArgumentError, fn ->
+          ALLM.stream_synthesize_input(fake_engine(), ["a"], request: %{voice: "v"})
+        end
+
+      assert error.message =~ "opts[:request] must be a %ALLM.SpeechRequest{}"
+      assert captured_calls() == []
+    end
   end
 
   # ---------------------------------------------------------------------------

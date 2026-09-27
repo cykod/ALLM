@@ -27,16 +27,16 @@
 
 | Phase | Description | Layer | Status |
 |-------|-------------|-------|--------|
-| 26.1 | Refactor: extract `ALLM.Providers.Support.HTTPResponse` (the byte-identical provider HTTP helpers) and `ALLM.Providers.Support.TranscriptionAdapter` (the cloned STT-contract helpers), and migrate every copy | B | Not Started |
-| 26.2 | Layer A: `SpeechEvent`, `TranscriptionEvent`, `TranscriptionStreamRequest`, `sample_rate` fields, `:unsupported_feature` reasons, validators | A | Not Started |
-| 26.3 | Layer B: `SpeechStreamAdapter` + `TranscriptionStreamAdapter`, `Support.InputPump`, Fake streaming, three conformance suites | B | Not Started |
-| 26.4 | Layer C: `stream_synthesize/3`, `stream_synthesize_input/3`, `stream_transcribe/3`, `ALLM.AudioStream`, spans + first-chunk event | C | Not Started |
-| 26.5 | `OpenAI.Speech` HTTP streaming + recorder arms | B | Not Started |
-| 26.6 | `ElevenLabs.Speech` + `ElevenLabs.Transcription` (non-streaming) + `Support.ElevenLabs` + recorder. **Hard stop: needs `ELEVENLABS_API_KEY` in `.env`** (26.6–26.9) | B | Not Started |
-| 26.7 | WebSocket transport (`Support.WebSocket`) + ElevenLabs TTS streaming (HTTP and WebSocket input) | B | Not Started |
-| 26.8 | ElevenLabs realtime STT (`stream_transcribe/3`) | B | Not Started |
-| 26.9 | Spec §37.11 + §35.7 carve-out, guide, examples 25–27, `run_all.exs` chat-arm filter, `CLAUDE.md` transport rule, CHANGELOG | — | Not Started |
-| 26.10 | `[CHORE]` sweep | — | Not Started |
+| 26.1 | Refactor: extract `ALLM.Providers.Support.HTTPResponse` (the byte-identical provider HTTP helpers) and `ALLM.Providers.Support.TranscriptionAdapter` (the cloned STT-contract helpers), and migrate every copy | B | Completed |
+| 26.2 | Layer A: `SpeechEvent`, `TranscriptionEvent`, `TranscriptionStreamRequest`, `sample_rate` fields, `:unsupported_feature` reasons, validators | A | Completed |
+| 26.3 | Layer B: `SpeechStreamAdapter` + `TranscriptionStreamAdapter`, `Support.InputPump`, Fake streaming, three conformance suites | B | Completed |
+| 26.4 | Layer C: `stream_synthesize/3`, `stream_synthesize_input/3`, `stream_transcribe/3`, `ALLM.AudioStream`, spans + first-chunk event | C | Completed |
+| 26.5 | `OpenAI.Speech` HTTP streaming + recorder arms | B | Completed |
+| 26.6 | `ElevenLabs.Speech` + `ElevenLabs.Transcription` (non-streaming) + `Support.ElevenLabs` + recorder. **Hard stop: needs `ELEVENLABS_API_KEY` in `.env`** (26.6–26.9) | B | Completed |
+| 26.7 | WebSocket transport (`Support.WebSocket`) + ElevenLabs TTS streaming (HTTP and WebSocket input) | B | Completed |
+| 26.8 | ElevenLabs realtime STT (`stream_transcribe/3`) | B | Completed |
+| 26.9 | Spec §37.11 + §35.7 carve-out, guide, examples 25–27, `run_all.exs` chat-arm filter, `CLAUDE.md` transport rule, CHANGELOG | — | Completed |
+| 26.10 | `[CHORE]` sweep | — | Completed |
 
 Deviations, probe transcripts and closure ledgers go to `steering/2026-09-25_ELEVENLABS_TTS_SST_RECORDS.md`, which is created on first need.
 

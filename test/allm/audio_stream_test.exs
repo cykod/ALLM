@@ -146,6 +146,22 @@ defmodule ALLM.AudioStreamTest do
       assert {:error, %TranscriptionAdapterError{reason: :malformed_response}} =
                AudioStream.collect_transcription([TranscriptionEvent.partial_transcript("a")])
     end
+
+    test "a :transcription_completed without :transcription_started still succeeds, with nil start fields" do
+      completed =
+        TranscriptionEvent.transcription_completed(%{
+          text: "hi",
+          language: nil,
+          duration_seconds: nil,
+          request_id: "r1",
+          usage: %Usage{},
+          metadata: %{}
+        })
+
+      assert {:ok, resp} = AudioStream.collect_transcription([completed])
+      assert resp.text == "hi"
+      assert {resp.model, resp.provider, resp.id} == {nil, nil, nil}
+    end
   end
 
   describe "text_deltas/1" do
