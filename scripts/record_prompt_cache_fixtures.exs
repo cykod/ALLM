@@ -766,6 +766,12 @@ defmodule RecordPromptCacheFixtures do
     r
   end
 
+  # A qualifying hit: a 200 reporting cache reads, on a repeat attempt (or on
+  # any attempt when the cache was already primed). Decides both when the
+  # repeat loop stops and which attempt is recorded.
+  defp hit?(status, counts, i, first_counts?),
+    do: status == 200 and (i > 1 or first_counts?) and (counts.read || 0) > 0
+
   defp run_arm(%{kind: :control} = arm, prefix, _run) do
     {status, raw} = send_arm(arm, prefix, nil, %{"totallyNotAField" => %{}})
     ok? = status == 400
@@ -781,12 +787,6 @@ defmodule RecordPromptCacheFixtures do
     |> result("400 (informational)", "#{status}", true, 1, record)
     |> Map.put(:informational_miss?, status != 400)
   end
-
-  # A qualifying hit: a 200 reporting cache reads, on a repeat attempt (or on
-  # any attempt when the cache was already primed). Decides both when the
-  # repeat loop stops and which attempt is recorded.
-  defp hit?(status, counts, i, first_counts?),
-    do: status == 200 and (i > 1 or first_counts?) and (counts.read || 0) > 0
 
   defp run_arm(%{kind: kind} = arm, prefix, run) when kind in [:hit, :stream_hit] do
     stream? = kind == :stream_hit

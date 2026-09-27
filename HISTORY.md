@@ -1,3 +1,15 @@
+## [BUG] Group run_arm/3 clauses in the prompt-cache recorder
+*Sunday, September 27th at 9pm*
+The polish pass put hit?/4 between run_arm/3 clauses, so loading the recorder 
+emitted a clauses-not-grouped compile warning. 
+test/scripts/record_prompt_cache_fixtures_test.exs loads the script from an 
+async module, and moderation_adapter_test.exs's compiles-without-warning test 
+captures VM-wide stderr, so the two raced into an intermittent full-suite 
+failure (reproduced at --seed 50960, passing with --max-cases 1; green at that 
+seed after this change).
+
+---
+
 ## [BUG] Make FakeSpeech reject empty audio on the batch path too
 *Sunday, September 27th at 9pm*
 FakeSpeech.synthesize/2 now returns the same {:error, 
