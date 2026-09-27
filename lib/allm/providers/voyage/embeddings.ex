@@ -217,6 +217,7 @@ defmodule ALLM.Providers.Voyage.Embeddings do
   alias ALLM.Error.EmbeddingAdapterError
   alias ALLM.Providers.FakeEmbeddings
   alias ALLM.Providers.Support.HTTPResponse
+  alias ALLM.Providers.Support.Redact
 
   @base_url "https://api.voyageai.com/v1"
   @endpoint "/embeddings"
@@ -933,7 +934,7 @@ defmodule ALLM.Providers.Voyage.Embeddings do
   # same warning the Gemini sibling hit from the other direction. One function
   # owns the shape, one owns the redaction.
   defp redact_key_material(message) do
-    String.replace(message, ~r/\bpa-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
+    Redact.voyage(message)
   end
 
   # ---------------------------------------------------------------------------

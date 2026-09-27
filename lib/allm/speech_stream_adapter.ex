@@ -74,7 +74,10 @@ defmodule ALLM.SpeechStreamAdapter do
        Nothing follows a terminal event. A stream that reaches its end with
        zero audio bytes, including a `c:stream_synthesize_input/3` input
        that yields no non-empty chunk, ends with `:invalid_request` and
-       `metadata.cause: :empty_input`.
+       `metadata.cause: :empty_input`. This differs from
+       `ALLM.SpeechAdapter.synthesize/2`, where a successful response with
+       an empty body is `:malformed_response` (`ALLM.SpeechAdapter`
+       invariant 2).
     4. **Cleanup: halt-safe.** A consumer halt (`Enum.take/2`) releases the
        transport (the HTTP request is cancelled, or the WebSocket is closed
        and the input pump stopped) within 500 ms. The after function stops

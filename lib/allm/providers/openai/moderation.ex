@@ -290,6 +290,7 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   alias ALLM.Providers.Support.HTTPResponse
   alias ALLM.Providers.Support.ImageMime
   alias ALLM.Providers.Support.OpenAIHeaders
+  alias ALLM.Providers.Support.Redact
 
   # OpenAI carries the per-request token-budget discriminator on `type` and the
   # per-input one on `code`, so the classifier checks both fields against this
@@ -430,10 +431,10 @@ defmodule ALLM.Providers.OpenAI.Moderation do
   #                                       fills with `supported_operations/0`.
   #
   #   DIVERGENT, with justification:
-  #   * `redact_key_material/1`'s pattern is inherited from
-  #     `openai/embeddings.ex` VERBATIM, which is correct here and only here:
-  #     the provider is the same one, so the `sk-`/`rk-`/`org-` prefixes are the
-  #     right shapes. The Gemini (`AIza…`/`ya29.…`) and Voyage (`pa-…`) siblings
+  #   * `redact_key_material/1` delegates to `Support.Redact.openai/1`, the
+  #     pattern `openai/embeddings.ex` also uses, which is correct here and
+  #     only here: the provider is the same one, so the `sk-`/`rk-`/`org-`
+  #     prefixes are the right shapes. The Gemini (`AIza…`/`ya29.…`) and Voyage (`pa-…`) siblings
   #     had to widen; a companion test in `moderation_wire_test.exs` asserts
   #     THEIR patterns match nothing here, so an inherited-verbatim regex would
   #     fail loudly rather than redact nothing.
@@ -986,11 +987,12 @@ defmodule ALLM.Providers.OpenAI.Moderation do
     )
   end
 
-  # Inherited VERBATIM from `ALLM.Providers.OpenAI.Embeddings` — same provider,
-  # same key shapes. See the seam banner above for why that is correct here and
-  # would be a silent no-op if carried to another provider.
+  # The OpenAI pattern (`Support.Redact.openai/1`), shared with
+  # `ALLM.Providers.OpenAI.Embeddings` — same provider, same key shapes. See
+  # the seam banner above for why that is correct here and would be a silent
+  # no-op if carried to another provider.
   defp redact_key_material(message) when is_binary(message) do
-    String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
+    Redact.openai(message)
   end
 
   defp redact_key_material(_message), do: "OpenAI moderation error"

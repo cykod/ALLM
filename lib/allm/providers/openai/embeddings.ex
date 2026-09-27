@@ -171,7 +171,7 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
   alias ALLM.{Embedding, EmbeddingRequest, EmbeddingResponse, Keys, Retry, Usage}
   alias ALLM.Error.EmbeddingAdapterError
   alias ALLM.Providers.FakeEmbeddings
-  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders}
+  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders, Redact}
 
   @base_url "https://api.openai.com/v1"
   @endpoint "/embeddings"
@@ -665,7 +665,7 @@ defmodule ALLM.Providers.OpenAI.Embeddings do
   # ("Incorrect API key provided: sk-..."), and that message lands on
   # `:message`. Strip anything key-shaped before it reaches the struct.
   defp redact_key_material(message) when is_binary(message) do
-    String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
+    Redact.openai(message)
   end
 
   defp redact_key_material(_message), do: "OpenAI embeddings error"

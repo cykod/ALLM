@@ -37,10 +37,14 @@ defmodule ALLM.TranscriptionAdapterTest do
       end
       """
 
-      {[{minimal_impl, _bytecode}], captured} =
-        ExUnit.CaptureIO.with_io(:stderr, fn -> Code.compile_string(source) end)
+      # `Code.with_diagnostics/1` collects only the diagnostics of the compile
+      # this process runs, where a `:stderr` capture sees every process's
+      # output: in an async module, a warning from any file compiling
+      # concurrently would fail this test.
+      {[{minimal_impl, _bytecode}], diagnostics} =
+        Code.with_diagnostics(fn -> Code.compile_string(source) end)
 
-      assert captured == ""
+      assert diagnostics == []
       assert minimal_impl.max_audio_bytes() == 2048
     end
   end

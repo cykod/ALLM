@@ -55,7 +55,12 @@ defmodule ALLM.SpeechAdapter do
     2. On success, `response.audio` is an
        `%ALLM.Audio{source: {:binary, bytes}}` with `byte_size(bytes) > 0`
        and a binary `:mime_type` beginning `audio/`. A successful HTTP
-       response whose payload is not audio is `:malformed_response`.
+       response whose payload is not audio is `:malformed_response`, and
+       so is one whose body is empty. The streaming behaviour maps the
+       same condition differently: a stream that closes with zero audio
+       bytes ends with `:invalid_request` and `metadata.cause:
+       :empty_input` (`ALLM.SpeechStreamAdapter` invariant 3). Code that
+       handles an empty clip on both paths matches both reasons.
     3. `response.format` is `nil` or a member of
        `ALLM.SpeechRequest.formats/0`. Derive it from the response content
        type with `ALLM.SpeechResponse.mime_to_format/1` rather than echoing

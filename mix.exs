@@ -154,6 +154,7 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Support.ImageMime,
           ALLM.Providers.Support.Transport,
           ALLM.Providers.Support.HTTPResponse,
+          ALLM.Providers.Support.Redact,
           ALLM.Providers.Support.TranscriptionAdapter,
           ALLM.Providers.Support.SpeechAdapter,
           ALLM.Providers.Support.InputPump,

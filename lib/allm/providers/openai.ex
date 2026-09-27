@@ -180,6 +180,7 @@ defmodule ALLM.Providers.OpenAI do
   alias ALLM.Providers.Support.HTTPResponse
   alias ALLM.Providers.Support.ImageMime
   alias ALLM.Providers.Support.OpenAIHeaders
+  alias ALLM.Providers.Support.Redact
   alias ALLM.Providers.Support.SSE
   alias ALLM.Providers.Support.Transport
   alias ALLM.Request
@@ -686,7 +687,7 @@ defmodule ALLM.Providers.OpenAI do
     error = HTTPResponse.error_object(body)
     code = Map.get(error, "code")
     type = Map.get(error, "type")
-    message = error_message(Map.get(error, "message"), status)
+    message = HTTPResponse.redacted_error_message(error, "OpenAI HTTP #{status}", &Redact.openai/1)
 
     {reason, retry_after} =
       classify_reason(status, code, type, HTTPResponse.retry_after_ms(headers))
@@ -696,21 +697,12 @@ defmodule ALLM.Providers.OpenAI do
       status: status,
       retry_after_ms: retry_after,
       message: message,
-      metadata: %{openai_code: code, openai_type: type}
+      metadata: %{
+        openai_code: HTTPResponse.redact_optional(code, &Redact.openai/1),
+        openai_type: HTTPResponse.redact_optional(type, &Redact.openai/1)
+      }
     )
   end
-
-  # The provider-authored message, with key material redacted: OpenAI's 401
-  # text echoes the key it rejected.
-  defp error_message(message, _status) when is_binary(message),
-    do: redact_key_material(message)
-
-  defp error_message(_message, status), do: "OpenAI HTTP #{status}"
-
-  # OpenAI credential shapes: `sk-` (including `sk-proj-`) and `rk-` keys and
-  # `org-` ids. Same pattern as the OpenAI capability adapters.
-  defp redact_key_material(message),
-    do: String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
 
   defp classify_reason(401, _code, _type, _ra), do: {:authentication_failed, nil}
   defp classify_reason(403, _code, _type, _ra), do: {:authentication_failed, nil}

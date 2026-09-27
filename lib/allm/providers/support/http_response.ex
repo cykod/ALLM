@@ -8,11 +8,11 @@ defmodule ALLM.Providers.Support.HTTPResponse do
   `@doc false` seams: they carry a `@spec` and are callable from tests, but
   are not part of the public API.
 
-  The credential redactor (`redact_key_material/1`) stays in each adapter,
-  because its pattern is per provider: a pattern inherited from a sibling
-  provider redacts nothing. Helpers here that redact take that function as
-  an argument instead, and any provider name in a message is rendered by
-  the caller.
+  Credential redaction is per provider: a pattern inherited from a sibling
+  provider redacts nothing. The patterns live once each in
+  `ALLM.Providers.Support.Redact`, one function per provider. Helpers here
+  that redact take that function (or an adapter's wrapper around it) as an
+  argument, and any provider name in a message is rendered by the caller.
 
   ## Contents
 

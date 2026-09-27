@@ -326,6 +326,7 @@ defmodule ALLM.Providers.Support.SpeechAdapter do
       opts: opts,
       status: nil,
       headers: [],
+      error_headers: [],
       error_body: [],
       bytes: 0,
       started?: false,
@@ -369,36 +370,8 @@ defmodule ALLM.Providers.Support.SpeechAdapter do
     end
   end
 
-  defp handle_stream_message({:headers, headers}, state),
-    do: {[], %{state | headers: state.headers ++ headers}}
-
-  defp handle_stream_message({:data, ""}, state), do: {[], state}
-
-  defp handle_stream_message({:data, chunk}, %{status: status} = state)
-       when status in 200..299 do
-    {[SpeechEvent.audio_delta(chunk)], %{state | bytes: state.bytes + byte_size(chunk)}}
-  end
-
-  defp handle_stream_message({:data, chunk}, state),
-    do: {[], %{state | error_body: [state.error_body | chunk]}}
-
-  defp handle_stream_message(:done, state) do
-    state = %{state | transport_done?: true}
-    %{adapter: adapter, request: request, opts: opts, headers: headers} = state
-
-    case state do
-      %{status: status, bytes: 0} when status in 200..299 ->
-        terminate(state, adapter.empty_audio_error(opts))
-
-      %{status: status} when status in 200..299 ->
-        {[adapter.speech_completed(headers, request, opts)], %{state | terminal?: true}}
-
-      %{status: status} ->
-        body = IO.iodata_to_binary(state.error_body)
-        terminate(state, adapter.to_speech_adapter_error(status || 0, body, headers, opts))
-    end
-  end
-
+  # A transport failure ends the stream whatever the status, so it is
+  # matched before the non-2xx buffering below swallows it.
   defp handle_stream_message({:error, exception}, state) do
     state = %{state | transport_done?: true}
 
@@ -412,6 +385,45 @@ defmodule ALLM.Providers.Support.SpeechAdapter do
         state.opts
       )
     )
+  end
+
+  # A response that is not 2xx: its headers and body frames are buffered by
+  # the helper the chat adapters share, and classified on the transport's
+  # `:done` (the adapter's classifier accepts the decoded body).
+  defp handle_stream_message(message, %{status: status} = state)
+       when status not in 200..299 do
+    case Transport.buffer_error_payload(state, message) do
+      {:cont, state} ->
+        {[], state}
+
+      {:done, body, headers, state} ->
+        state = %{state | transport_done?: true}
+
+        terminate(
+          state,
+          state.adapter.to_speech_adapter_error(status || 0, body, headers, state.opts)
+        )
+    end
+  end
+
+  # HTTP trailers on a 2xx response.
+  defp handle_stream_message({:headers, headers}, state),
+    do: {[], %{state | headers: state.headers ++ headers}}
+
+  defp handle_stream_message({:data, ""}, state), do: {[], state}
+
+  defp handle_stream_message({:data, chunk}, state),
+    do: {[SpeechEvent.audio_delta(chunk)], %{state | bytes: state.bytes + byte_size(chunk)}}
+
+  defp handle_stream_message(:done, state) do
+    state = %{state | transport_done?: true}
+    %{adapter: adapter, request: request, opts: opts, headers: headers} = state
+
+    if state.bytes == 0 do
+      terminate(state, adapter.empty_audio_error(opts))
+    else
+      {[adapter.speech_completed(headers, request, opts)], %{state | terminal?: true}}
+    end
   end
 
   defp handle_stream_message(_other, state), do: {[], state}

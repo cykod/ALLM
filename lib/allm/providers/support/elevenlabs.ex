@@ -48,6 +48,7 @@ defmodule ALLM.Providers.Support.ElevenLabs do
   """
 
   alias ALLM.Providers.Support.HTTPResponse
+  alias ALLM.Providers.Support.Redact
   alias ALLM.SpeechResponse
 
   @base_url "https://api.elevenlabs.io"
@@ -357,8 +358,7 @@ defmodule ALLM.Providers.Support.ElevenLabs do
   # echo the key on 2026-09-26; this is defence in depth for every
   # provider-authored string an error carries.
   @spec redact_key_material(String.t()) :: String.t()
-  def redact_key_material(text) when is_binary(text),
-    do: String.replace(text, ~r/\bsk_[A-Za-z0-9]{16,}/, "[REDACTED]")
+  def redact_key_material(text) when is_binary(text), do: Redact.elevenlabs(text)
 
   # ---------------------------------------------------------------------------
   # Internals

@@ -9,7 +9,6 @@ defmodule ALLM.EmbeddingAdapterTest do
   use ALLM.Test.EmbeddingAdapterConformance, embedding_adapter: ALLM.Providers.FakeEmbeddings
 
   alias ALLM.EmbeddingAdapter
-  alias ALLM.EmbeddingAdapterTest.MinimalImpl
   alias ALLM.Providers.FakeEmbeddings
 
   describe "callback surface" do
@@ -38,13 +37,15 @@ defmodule ALLM.EmbeddingAdapterTest do
       end
       """
 
-      captured =
-        ExUnit.CaptureIO.capture_io(:stderr, fn ->
-          Code.compile_string(source)
-        end)
+      # `Code.with_diagnostics/1` collects only the diagnostics of the compile
+      # this process runs, where a `:stderr` capture sees every process's
+      # output: in an async module, a warning from any file compiling
+      # concurrently would fail this test.
+      {[{minimal_impl, _bytecode}], diagnostics} =
+        Code.with_diagnostics(fn -> Code.compile_string(source) end)
 
-      assert captured == ""
-      assert MinimalImpl.max_batch_size() == 16
+      assert diagnostics == []
+      assert minimal_impl.max_batch_size() == 16
     end
   end
 

@@ -31,13 +31,14 @@ defmodule ALLM.SpeechAdapterTest do
       end
       """
 
-      # `with_io/2` binds the compiled module from `compile_string/1`'s
-      # return, so no alias to the not-yet-compiled module leaks a deferred
-      # undefined-remote warning into the capture.
-      {[{minimal_impl, _bytecode}], captured} =
-        ExUnit.CaptureIO.with_io(:stderr, fn -> Code.compile_string(source) end)
+      # `Code.with_diagnostics/1` collects only the diagnostics of the compile
+      # this process runs, where a `:stderr` capture sees every process's
+      # output: in an async module, a warning from any file compiling
+      # concurrently would fail this test.
+      {[{minimal_impl, _bytecode}], diagnostics} =
+        Code.with_diagnostics(fn -> Code.compile_string(source) end)
 
-      assert captured == ""
+      assert diagnostics == []
       assert {:ok, %ALLM.SpeechResponse{}} = minimal_impl.synthesize(nil, [])
     end
   end

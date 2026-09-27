@@ -2886,7 +2886,7 @@ One value type serves both directions — the STT input and the TTS output — f
 
 ```elixir
 defmodule ALLM.SpeechRequest do
-  @type format :: :mp3 | :opus | :aac | :flac | :wav | :pcm
+  @type format :: :mp3 | :opus | :aac | :flac | :wav | :pcm | :ulaw | :alaw
   defstruct [:model, :voice, :format, :instructions, :speed, input: "", options: %{}, metadata: %{}]
   @spec formats() :: [format()]
 end
@@ -2903,6 +2903,8 @@ end
 - `SpeechResponse.format` is **derived from the response content type** via `mime_to_format/1`, not echoed from the request, and is `nil` when the MIME type is outside the table. The request says what was asked for; the response says what arrived.
 - `SpeechResponse.usage` is never `nil`. OpenAI's non-streaming TTS body is raw audio with no usage, so its counts are all `nil`.
 - The audio bytes live once, in `:audio`. `:raw` is `nil` for OpenAI TTS.
+
+> **v0.6.0 amendment (commit `6e97db3`).** `:format` gains the two G.711 telephony formats `:ulaw` and `:alaw` (8 kHz, the only rate either provider offers), so the enum has eight atoms and the "six atoms are exactly OpenAI's `response_format` values" bullet above now describes only the first six. `format_to_mime/1` maps `:ulaw` → `audio/basic` (RFC 2046) and `:alaw` → `audio/alaw`; `mime_to_format/1` also reads `audio/ulaw` (ElevenLabs' observed 200 `content-type`) as `:ulaw`. ElevenLabs sends them as `ulaw_8000` / `alaw_8000` on the sync, `/stream` and `/stream-input` endpoints and refuses any other `:sample_rate` with `:unsupported_feature` (field `:sample_rate`); OpenAI has no G.711 output and refuses both with `:unsupported_feature` (field `:format`) before any I/O and before key resolution. The enum is closed, so this is breaking for an exhaustive `case` on `SpeechRequest.format()`.
 
 #### 37.2.3 `ALLM.TranscriptionRequest` / `ALLM.TranscriptionResponse`
 
@@ -2936,6 +2938,8 @@ On both request structs, `:options` reaches provider fields ALLM does not model 
 ```
 
 > **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Both enums gain `:unsupported_feature` (Phase 25 shipped 9 and 10 reasons; the counts above are current). It is returned, before any I/O and before key resolution, for a request field the provider cannot express: ElevenLabs `:instructions`, `format: :aac | :flac`, a `:sample_rate` outside the format's set, and `TranscriptionRequest.prompt`; OpenAI a `:sample_rate` other than `nil`/24,000 for `:pcm`/`:wav` or any non-`nil` rate for other formats. ElevenLabs' tier-gate 403 (`subscription_required`) classifies to it too. Both are closed enums, so this is breaking for an exhaustive `case`.
+
+> **v0.6.0 amendment (commits `94f427d`, `6e97db3`).** Two classification changes. (a) ElevenLabs' 403 `invalid_output_format` (`detail.type` `validation_error`, observed 2026-09-27 for an `output_format` the provider does not offer) now classifies to `:unsupported_feature`; it was `:authentication_failed` (`6e97db3`). OpenAI's `:ulaw` / `:alaw` refusal (§37.2.2) is also `:unsupported_feature`. (b) The chat stream adapters (OpenAI on both endpoints, Anthropic, Gemini) no longer classify a streamed 4xx/5xx from the status alone: the error body and headers are buffered to the transport's `:done` and classified with the same `(status, body, headers)` classifier the non-streaming path uses, so a streamed error carries the provider's message (key material redacted), `retry_after_ms` and the body-keyed reasons, as the speech streams already did (§37.11.8). A halted chat stream now also drains its Finch messages (`94f427d`). Streams are still never retried, so `retry_after_ms` on a streamed 429 is informational.
 
 There is no `:batch_too_large`: neither endpoint takes more than one input per call, so neither behaviour has a `max_batch_size/0`.
 
@@ -2971,7 +2975,7 @@ end
 The numbered invariants live in each behaviour's `@moduledoc`; the load-bearing ones:
 
 - **Return shape.** Exactly `{:ok, response}` or `{:error, capability_error}`. The one exception is `ALLM.Keys.fetch!/2` raising `EngineError{reason: :missing_key}`. The façade raises `ArgumentError` on any other shape.
-- **Speech success.** `response.audio` is `%ALLM.Audio{source: {:binary, bytes}}` with `byte_size(bytes) > 0` and a `:mime_type` beginning `audio/`; a successful HTTP response whose payload is not audio is `:malformed_response`. `response.format` is `nil` or in `SpeechRequest.formats/0`, derived via `mime_to_format/1`.
+- **Speech success.** `response.audio` is `%ALLM.Audio{source: {:binary, bytes}}` with `byte_size(bytes) > 0` and a `:mime_type` beginning `audio/`; a successful HTTP response whose payload is not audio, or whose body is empty, is `:malformed_response`. (The streaming mapping of an empty clip differs, §37.11.3: `:invalid_request` with `metadata.cause: :empty_input`. `ALLM.Providers.FakeSpeech` mirrors each path: this corrects `8bfc7d5`, which gave its batch path the stream error.) `response.format` is `nil` or in `SpeechRequest.formats/0`, derived via `mime_to_format/1`.
 - **Speech empty input** is `:invalid_request` before any I/O and before `ALLM.Keys.fetch!/2`.
 - **Transcription gate order.** All before `ALLM.Keys.fetch!/2`: **resolvable** (unresolvable audio → `:invalid_request` with `metadata.cause`) → **size** (over `max_audio_bytes/0` → `:invalid_request` with `metadata.count` and `metadata.max`) → **MIME** (adapter-specific) → key. MIME acceptance is not a behaviour invariant because the accepted set differs per provider.
 - `opts[:request_id]` reflects onto `response.request_id`; `request.metadata` round-trips onto `response.metadata`; `opts[:request_timeout]` expiry is `:timeout`.
@@ -3065,7 +3069,7 @@ Gemini has no transcription endpoint. The adapter sends a fixed instruction ("Ge
 > **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** New. Both adapters resolve the key as `:elevenlabs` (`ELEVENLABS_API_KEY`, through `ALLM.Keys`' `<PROVIDER>_API_KEY` fallback) after every local gate; auth is the `xi-api-key` header, including on the WebSocket upgrade. `opts[:base_url]` or `adapter_opts[:base_url]` selects a data-residency host. Probed 2026-09-26..27 by `scripts/record_elevenlabs_audio_fixtures.exs`; every row below is observed unless marked documented or inferred.
 
 - **Speech request.** JSON `{"text", "model_id", "voice_settings"?: {"speed"}}`, voice in the URL path. `:options` merges under the structural fields (a `"voice_settings"` map merges with `speed`); `options["query"]` adds URL query parameters; `output_format`, `model_id` and `text` are reserved and dropped. Unknown body fields are **ignored** (200), so acceptance confirms nothing.
-- **Format map** (`ALLM.Providers.Support.ElevenLabs.output_format/2`, the only home of the table): `:mp3`/`nil` → `mp3_22050_32 | mp3_24000_48 | mp3_44100_128` (default 44,100); `:opus` → `opus_48000_64`; `:pcm`/`:wav` → `pcm_<rate>`/`wav_<rate>` for 8,000, 16,000, 22,050, 24,000 (default), 32,000, 44,100, 48,000; `:aac`, `:flac` → `:unsupported_feature`. 44.1 kHz PCM/WAV is tier-gated (observed 403 `subscription_required` / `output_format_not_allowed`, classified `:unsupported_feature`). The 200 `content-type` is `audio/mpeg`, `audio/pcm`, `audio/wav` or `audio/opus`, each mapping through `mime_to_format/1`, so `response.format` is derived from the response as §37.2.2 requires; `sample_rate` is the requested one (the response does not state it).
+- **Format map** (`ALLM.Providers.Support.ElevenLabs.output_format/2`, the only home of the table): `:mp3`/`nil` → `mp3_22050_32 | mp3_24000_48 | mp3_44100_128` (default 44,100); `:opus` → `opus_48000_64`; `:pcm`/`:wav` → `pcm_<rate>`/`wav_<rate>` for 8,000, 16,000, 22,050, 24,000 (default), 32,000, 44,100, 48,000; `:ulaw`/`:alaw` → `ulaw_8000`/`alaw_8000` (8,000 only; v0.6.0 amendment, `6e97db3`); `:aac`, `:flac` → `:unsupported_feature`. 44.1 kHz PCM/WAV is tier-gated (observed 403 `subscription_required` / `output_format_not_allowed`, classified `:unsupported_feature`). The 200 `content-type` is `audio/mpeg`, `audio/pcm`, `audio/wav` or `audio/opus`, each mapping through `mime_to_format/1`, so `response.format` is derived from the response as §37.2.2 requires; `sample_rate` is the requested one (the response does not state it).
 - **Correlation.** Speech: `request-id` header → `response.id`, `character-cost` header → `response.raw` as `%{"character_cost" => n}`. Transcription: no `request-id` header; `transcription_id` → `:id`. `usage` is all-`nil` on both.
 - **Transcription.** Multipart `file`, `model_id`, `language_code`?; `:prompt` → `:unsupported_feature`. ElevenLabs sniffs the content (an MP3 named `audio.bin` transcribed correctly), so there is no filename/MIME gate. `language_code` is ISO 639-3 (`"eng"`), passed through. `max_audio_bytes/0` = 4,999,999,999 (documented "less than 5.0GB"; **not probed**). One attempt per call, as for the other transcription adapters.
 - **Limits.** No local speech length gate (the limit is per model, documented 40,000 characters for flash, 5,000 for `eleven_v3`); the documented 400 `text_too_long` maps to `:context_length_exceeded` (documented only: a 5,001-character `eleven_v3` probe answered 200 and was billed, so no length arm runs).
@@ -3099,6 +3103,8 @@ See the §29 amendment: `[:allm, :synthesize, …]` and `[:allm, :transcribe, �
 - **`ALLM.Session` integration** — no conversation state
 
 > **Phase 26 amendment (commits `6167d79..977cb9f`; docs land in the 26.9 commit).** Still out of scope after streaming shipped: OpenAI STT streaming and OpenAI Realtime; Gemini TTS and any Gemini streaming; `ulaw`/`alaw` telephony formats (`SpeechRequest.formats/0` stays closed); word/character alignment (a new `SpeechEvent` variant, breaking for that union's reducers); ElevenLabs multi-context `/multi-stream-input` (barge-in); single-use tokens for browser clients; voice cloning and voice-library CRUD; batch STT diarization/keyterms/timestamps (reachable through `:options`, body on `:raw`); WebSocket pooling and connection pre-warming; retrying a stream after it has opened; `ALLM.Session` integration.
+
+> **v0.6.0 amendment (commit `6e97db3`).** `ulaw`/`alaw` telephony formats are no longer out of scope: `SpeechRequest.formats/0` gains `:ulaw` and `:alaw` (§37.2.2). The rest of the list above stands.
 
 ### 37.11 Streaming audio
 
@@ -3202,7 +3208,7 @@ Layer C, pure. `collect_speech/1` folds a speech stream into the `SpeechResponse
 
 #### 37.11.8 Transport
 
-- **HTTP streaming** (OpenAI `/v1/audio/speech`, ElevenLabs `/stream`): `Finch.async_request/3` on the HTTP/1 `ALLM.Finch` pool, as for chat (§7.2). A non-2xx status's body is buffered to its end and classified with the non-streaming table, so the redactor and body-keyed rules see the message. Observed framing: OpenAI raw chunked audio (`gpt-4o-mini-tts`, 405 characters of PCM: 90 data messages, first at 1,728 ms), no SSE (`stream_format` stays reserved); ElevenLabs raw chunked audio (44 characters of `pcm_24000`: 26 messages from 425 ms).
+- **HTTP streaming** (OpenAI `/v1/audio/speech`, ElevenLabs `/stream`): `Finch.async_request/3` on the HTTP/1 `ALLM.Finch` pool, as for chat (§7.2). A non-2xx status's body is buffered to its end and classified with the non-streaming table, so the redactor and body-keyed rules see the message (since `94f427d` the chat stream adapters do the same, through the same `ALLM.Providers.Support.Transport.buffer_error_payload/2` helper; §37.2.5). Observed framing: OpenAI raw chunked audio (`gpt-4o-mini-tts`, 405 characters of PCM: 90 data messages, first at 1,728 ms), no SSE (`stream_format` stays reserved); ElevenLabs raw chunked audio (44 characters of `pcm_24000`: 26 messages from 425 ms).
 - **WebSocket** (`ALLM.Providers.Support.WebSocket`, a behaviour; default `…WebSocket.Mint` over `:mint_web_socket`): an HTTP/1 connection opened **in the process that reduces the stream**, no helper process for the socket; the API key goes in the upgrade request's headers, **never the URL** (ElevenLabs also accepts `?authorization=`, which ALLM never uses: URLs reach logs and telemetry). Control frames (ping/pong) never leave the module. `:ws_module` is the test seam, as `:finch_module` is for Finch.
 
 #### 37.11.9 ElevenLabs streaming wire (observed 2026-09-27)

@@ -188,7 +188,7 @@ defmodule ALLM.Providers.Gemini.Transcription do
   alias ALLM.{Audio, Keys, TranscriptionRequest, TranscriptionResponse, Usage}
   alias ALLM.Error.TranscriptionAdapterError
   alias ALLM.Providers.{FakeTranscription, Gemini}
-  alias ALLM.Providers.Support.{GeminiHeaders, HTTPResponse}
+  alias ALLM.Providers.Support.{GeminiHeaders, HTTPResponse, Redact}
   alias ALLM.Providers.Support.TranscriptionAdapter, as: TranscriptionSupport
 
   @doc """
@@ -605,13 +605,10 @@ defmodule ALLM.Providers.Gemini.Transcription do
 
   defp api_key_invalid?(_error), do: false
 
-  # Inherited from `ALLM.Providers.Gemini.Embeddings`: same provider, same
-  # Google credential shapes (`AIza…` API keys and `ya29.…` OAuth tokens).
+  # The Google pattern (`Support.Redact.gemini/1`): same provider, same
+  # credential shapes (`AIza…` API keys and `ya29.…` OAuth tokens) as the
+  # other Gemini adapters.
   defp redact_key_material(message) when is_binary(message) do
-    String.replace(
-      message,
-      ~r/\b(?:AIza[A-Za-z0-9_\-]{6,}|ya29\.[A-Za-z0-9_\-.]{6,})/,
-      "[REDACTED]"
-    )
+    Redact.gemini(message)
   end
 end

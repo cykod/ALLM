@@ -149,6 +149,7 @@ defmodule ALLM.Providers.Gemini do
   alias ALLM.Providers.Gemini.Decode
   alias ALLM.Providers.Support.GeminiHeaders
   alias ALLM.Providers.Support.HTTPResponse
+  alias ALLM.Providers.Support.Redact
   alias ALLM.Providers.Support.SSE
   alias ALLM.Providers.Support.Transport
   alias ALLM.Request
@@ -421,7 +422,7 @@ defmodule ALLM.Providers.Gemini do
   def classify_error(status, body, headers) when is_integer(status) and is_map(body) do
     error = HTTPResponse.error_object(body)
     google_status = Map.get(error, "status")
-    message = error_message(Map.get(error, "message"), status)
+    message = HTTPResponse.redacted_error_message(error, "Gemini HTTP #{status}", &Redact.gemini/1)
 
     reason = classify_reason(status, google_status, message)
     retry_after = HTTPResponse.retry_after_ms(headers)
@@ -431,23 +432,7 @@ defmodule ALLM.Providers.Gemini do
       status: status,
       retry_after_ms: retry_after,
       message: message,
-      metadata: %{google_status: google_status}
-    )
-  end
-
-  # The provider-authored message, with key material redacted.
-  defp error_message(message, _status) when is_binary(message),
-    do: redact_key_material(message)
-
-  defp error_message(_message, status), do: "Gemini HTTP #{status}"
-
-  # Google credential shapes: `AIza…` API keys and `ya29.…` OAuth access
-  # tokens. Same pattern as the Gemini capability adapters.
-  defp redact_key_material(message) do
-    String.replace(
-      message,
-      ~r/\b(?:AIza[A-Za-z0-9_\-]{6,}|ya29\.[A-Za-z0-9_\-.]{6,})/,
-      "[REDACTED]"
+      metadata: %{google_status: HTTPResponse.redact_optional(google_status, &Redact.gemini/1)}
     )
   end
 

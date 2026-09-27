@@ -92,32 +92,39 @@ defmodule ALLM.Providers.FakeSpeechTest do
       assert {:ok, ^scripted} = FakeSpeech.synthesize(request(), opts)
     end
 
-    test "{:ok, \"\"} is the same :empty_input error the stream paths end with" do
+    # A real batch adapter reports an empty 200 body as :malformed_response
+    # (SpeechAdapter invariant 2); a real stream that closes without audio
+    # ends with :empty_input (SpeechStreamAdapter invariant 3). The Fake
+    # mirrors each path.
+    test "{:ok, \"\"} is :malformed_response on the batch path and :empty_input on the stream paths" do
       script = [{:ok, ""}]
 
       opts = fn ->
         [adapter_opts: [speech_script: script, script_cursor: FakeSpeech.start_script_cursor()]]
       end
 
-      assert {:error,
-              %SpeechAdapterError{reason: :invalid_request, metadata: %{cause: :empty_input}} =
-                batch_err} = FakeSpeech.synthesize(request(), opts.())
+      assert {:error, %SpeechAdapterError{reason: :malformed_response, message: message}} =
+               FakeSpeech.synthesize(request(), opts.())
+
+      assert message =~ "empty audio body"
 
       for call <- [
             &FakeSpeech.stream_synthesize(request(), &1),
             &FakeSpeech.stream_synthesize_input(request(), ["a"], &1)
           ] do
         assert {:ok, events} = call.(opts.())
-        assert {:error, ^batch_err} = List.last(Enum.to_list(events))
+
+        assert {:error,
+                %SpeechAdapterError{reason: :invalid_request, metadata: %{cause: :empty_input}}} =
+                 List.last(Enum.to_list(events))
       end
     end
 
-    test "{:ok, %SpeechResponse{}} with zero-byte audio is the :empty_input error" do
+    test "{:ok, %SpeechResponse{}} with zero-byte audio is :malformed_response" do
       resp = %SpeechResponse{audio: Audio.from_binary("", "audio/mpeg"), format: :mp3}
       opts = [adapter_opts: [speech_script: [{:ok, resp}]]]
 
-      assert {:error,
-              %SpeechAdapterError{reason: :invalid_request, metadata: %{cause: :empty_input}}} =
+      assert {:error, %SpeechAdapterError{reason: :malformed_response}} =
                FakeSpeech.synthesize(request(), opts)
     end
 

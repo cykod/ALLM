@@ -185,6 +185,7 @@ defmodule ALLM.Providers.Anthropic do
   alias ALLM.Message
   alias ALLM.Providers.Support.HTTPResponse
   alias ALLM.Providers.Support.ImageMime
+  alias ALLM.Providers.Support.Redact
   alias ALLM.Providers.Support.SSE
   alias ALLM.Providers.Support.Transport
   alias ALLM.Request
@@ -500,7 +501,9 @@ defmodule ALLM.Providers.Anthropic do
       when is_integer(status) and is_map(body) do
     error = HTTPResponse.error_object(body)
     type = Map.get(error, "type")
-    message = error_message(Map.get(error, "message"), status)
+
+    message =
+      HTTPResponse.redacted_error_message(error, "Anthropic HTTP #{status}", &Redact.anthropic/1)
 
     {reason, retry_after} =
       classify_reason(status, type, message, HTTPResponse.retry_after_ms(headers))
@@ -510,7 +513,7 @@ defmodule ALLM.Providers.Anthropic do
       status: status,
       retry_after_ms: retry_after,
       message: message,
-      metadata: %{anthropic_type: type}
+      metadata: %{anthropic_type: HTTPResponse.redact_optional(type, &Redact.anthropic/1)}
     )
   end
 
@@ -520,18 +523,6 @@ defmodule ALLM.Providers.Anthropic do
   # `api_error`, `overloaded_error`. The `prompt is too long` /
   # `max_tokens` markers appear inside `error.message` for 400s that
   # represent context-window-exceeded conditions.
-  # The provider-authored message, with key material redacted.
-  defp error_message(message, _status) when is_binary(message),
-    do: redact_key_material(message)
-
-  defp error_message(_message, status), do: "Anthropic HTTP #{status}"
-
-  # Anthropic credential shape: `sk-ant-` keys (`sk-ant-api03-…`,
-  # `sk-ant-admin01-…`). Narrower than the OpenAI `sk-` pattern on purpose:
-  # each provider redacts its own key format.
-  defp redact_key_material(message),
-    do: String.replace(message, ~r/\bsk-ant-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
-
   defp classify_reason(401, _type, _msg, _ra), do: {:authentication_failed, nil}
   defp classify_reason(403, _type, _msg, _ra), do: {:authentication_failed, nil}
   defp classify_reason(429, _type, _msg, ra), do: {:rate_limited, ra}

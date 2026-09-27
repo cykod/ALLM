@@ -301,6 +301,41 @@ defmodule ALLM.Providers.ChatStreamErrorBodyTest do
       assert Gemini.classify_error(401, body, []).message =~ "sk-proj-SIBLING"
     end
 
+    # The code/type/status fields come off the same untrusted body as the
+    # message, so they pass the same provider pattern (the capability
+    # adapters' `redact_optional/2` treatment).
+    test "provider-authored metadata fields are redacted with the provider's pattern" do
+      openai =
+        OpenAI.from_openai_error(
+          401,
+          %{"error" => %{"code" => "c sk-PLANTEDcode0123", "type" => "t rk-PLANTEDtype0123"}},
+          []
+        )
+
+      assert openai.metadata == %{openai_code: "c [REDACTED]", openai_type: "t [REDACTED]"}
+
+      anthropic =
+        Anthropic.from_anthropic_error(
+          401,
+          %{"error" => %{"type" => "t sk-ant-PLANTEDtype0123"}},
+          []
+        )
+
+      assert anthropic.metadata == %{anthropic_type: "t [REDACTED]"}
+
+      gemini = Gemini.classify_error(401, %{"error" => %{"status" => "s AIzaPLANTED0123"}}, [])
+      assert gemini.metadata == %{google_status: "s [REDACTED]"}
+    end
+
+    test "unredacted classification: a metadata field still drives the reason" do
+      assert %AdapterError{reason: :rate_limited, metadata: %{google_status: "RESOURCE_EXHAUSTED"}} =
+               Gemini.classify_error(
+                 429,
+                 %{"error" => %{"status" => "RESOURCE_EXHAUSTED"}},
+                 []
+               )
+    end
+
     test "a body without a message falls back to the status line" do
       assert OpenAI.from_openai_error(503, %{}, []).message == "OpenAI HTTP 503"
 

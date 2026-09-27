@@ -153,7 +153,7 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   alias ALLM.{Audio, Keys, TranscriptionRequest, TranscriptionResponse, Usage}
   alias ALLM.Error.TranscriptionAdapterError
   alias ALLM.Providers.FakeTranscription
-  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders}
+  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders, Redact}
   alias ALLM.Providers.Support.TranscriptionAdapter, as: TranscriptionSupport
 
   @doc """
@@ -507,9 +507,9 @@ defmodule ALLM.Providers.OpenAI.Transcription do
 
   defp classify_transcription_reason(_status, _ra), do: {:unknown, nil}
 
-  # Inherited from `ALLM.Providers.OpenAI.Moderation`: same provider, same key
-  # shapes.
+  # The OpenAI pattern (`Support.Redact.openai/1`): same provider, same key
+  # shapes as the other OpenAI adapters.
   defp redact_key_material(message) when is_binary(message) do
-    String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
+    Redact.openai(message)
   end
 end

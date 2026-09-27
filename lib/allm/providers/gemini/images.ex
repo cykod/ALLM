@@ -80,7 +80,7 @@ defmodule ALLM.Providers.Gemini.Images do
 
   alias ALLM.Providers.{FakeImages, Gemini}
   alias ALLM.Providers.Gemini.Decode
-  alias ALLM.Providers.Support.{GeminiHeaders, HTTPResponse}
+  alias ALLM.Providers.Support.{GeminiHeaders, HTTPResponse, Redact}
 
   @base_url "https://generativelanguage.googleapis.com/v1beta"
 
@@ -612,19 +612,14 @@ defmodule ALLM.Providers.Gemini.Images do
   # struct. Two more channels come off the untrusted body and do NOT pass
   # through here:
   #
-  #   * `error["status"]` lands on `metadata.google_status` UNREDACTED, via
-  #     `ALLM.Providers.Gemini.classify_error/3` merged in `build_metadata/2`.
-  #     Family-wide and pre-existing (`gemini/embeddings.ex`,
-  #     `openai/{images,embeddings,moderation}.ex`); ticketed in `ASKS.md`.
+  #   * `error["status"]` lands on `metadata.google_status` via
+  #     `ALLM.Providers.Gemini.classify_error/3` merged in `build_metadata/2`;
+  #     that function redacts it with the same Google pattern.
   #   * `promptFeedback.blockReason` arrives on a **200** and so never reaches
   #     `classify_http_error/4`. `decode_image_response/4` therefore calls
   #     `redact_key_material/1` on it directly — see the `:blocked` arm.
   defp redact_key_material(message) when is_binary(message) do
-    String.replace(
-      message,
-      ~r/\b(?:AIza[A-Za-z0-9_\-]{6,}|ya29\.[A-Za-z0-9_\-.]{6,})/,
-      "[REDACTED]"
-    )
+    Redact.gemini(message)
   end
 
   defp redact_key_material(_message), do: "Gemini images error"

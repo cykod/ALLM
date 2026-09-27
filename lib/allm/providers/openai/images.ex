@@ -142,7 +142,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   alias ALLM.Error.ImageAdapterError
   alias ALLM.{Image, ImageRequest, ImageResponse, ImageUsage, Keys, Retry}
   alias ALLM.Providers.FakeImages
-  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders}
+  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders, Redact}
 
   @base_url "https://api.openai.com/v1"
 
@@ -1094,10 +1094,11 @@ defmodule ALLM.Providers.OpenAI.Images do
   # recorded 401 says otherwise. What is certain is that `error["message"]` is
   # free text a provider or an intermediary proxy can populate at will.
   #
-  # Inherited VERBATIM from `ALLM.Providers.OpenAI.Embeddings` — same provider,
-  # same key shapes — which is correct here and would be a silent no-op if
-  # carried to another provider. `ALLM.Providers.Gemini.Images` therefore
-  # widens its own pattern rather than reusing this one.
+  # The OpenAI pattern (`Support.Redact.openai/1`), shared with
+  # `ALLM.Providers.OpenAI.Embeddings` — same provider, same key shapes —
+  # which is correct here and would be a silent no-op if carried to another
+  # provider. `ALLM.Providers.Gemini.Images` therefore uses the Google
+  # pattern (`Support.Redact.gemini/1`) rather than this one.
   #
   # SCOPE — this is not an exhaustive audit of provider-authored bytes in the
   # struct. The only channel that reaches THIS FUNCTION is
@@ -1110,7 +1111,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   # (`openai/embeddings.ex`, `openai/moderation.ex`, `gemini/embeddings.ex`) and
   # is ticketed separately in `ASKS.md`.
   defp redact_key_material(message) when is_binary(message) do
-    String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
+    Redact.openai(message)
   end
 
   defp redact_key_material(_message), do: "OpenAI images error"

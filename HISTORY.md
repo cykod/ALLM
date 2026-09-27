@@ -1,3 +1,27 @@
+## [BUG] Apply review fixes to the open-ticket commits
+*Sunday, September 27th at 10pm*
+Follow-up to the five ticket commits (218c12b..6e97db3), from their code and 
+security reviews.
+
+- FakeSpeech's batch path now returns :malformed_response for an empty clip, as 
+the real batch adapters do (SpeechAdapter invariant 2); only the stream paths 
+return :empty_input. The earlier batch-equals-stream framing was wrong; the 
+per-path mapping is now documented in both behaviours and the spec, and the 
+equivalence property asserts it.
+- New ALLM.Providers.Support.Redact holds one key redactor per provider 
+(openai, anthropic, gemini, voyage, elevenlabs); the 13 copied regexes now call 
+it. The chat error_message/2 clones use HTTPResponse.redacted_error_message/3, 
+Support.SpeechAdapter buffers errors via Transport.buffer_error_payload/2, and 
+chat error metadata (openai_code/type, anthropic_type, google_status) is 
+redacted.
+- The six compiles-without-warning adapter tests use Code.with_diagnostics/1 
+instead of VM-wide stderr capture, removing the flake hazard (30/30 full runs 
+green).
+- Spec §37.2 amended for ulaw/alaw, the ElevenLabs invalid_output_format 
+mapping, and body-classified streamed chat errors.
+
+---
+
 ## [FEAT] Add ulaw and alaw telephony speech formats
 *Sunday, September 27th at 9pm*
 ALLM.SpeechRequest.formats/0 gains :ulaw and :alaw (8 kHz). ElevenLabs maps 

@@ -204,7 +204,7 @@ defmodule ALLM.Providers.Gemini.Embeddings do
   alias ALLM.{Embedding, EmbeddingRequest, EmbeddingResponse, Keys, Retry, Usage}
   alias ALLM.Error.EmbeddingAdapterError
   alias ALLM.Providers.{FakeEmbeddings, Gemini}
-  alias ALLM.Providers.Support.{GeminiHeaders, HTTPResponse}
+  alias ALLM.Providers.Support.{GeminiHeaders, HTTPResponse, Redact}
 
   @base_url "https://generativelanguage.googleapis.com/v1beta"
   @adapter_max_batch_size 100
@@ -840,15 +840,12 @@ defmodule ALLM.Providers.Gemini.Embeddings do
     )
   end
 
-  # Google credential shapes: `AIza…` API keys and `ya29.…` OAuth access
-  # tokens. The OpenAI sibling's `sk-`/`rk-`/`org-` pattern matches neither, so
-  # this is widened rather than inherited.
+  # Google credential shapes (`Support.Redact.gemini/1`): `AIza…` API keys and
+  # `ya29.…` OAuth access tokens. The OpenAI sibling's `sk-`/`rk-`/`org-`
+  # pattern matches neither, so this uses the Google pattern rather than
+  # inheriting.
   defp redact_key_material(message) when is_binary(message) do
-    String.replace(
-      message,
-      ~r/\b(?:AIza[A-Za-z0-9_\-]{6,}|ya29\.[A-Za-z0-9_\-.]{6,})/,
-      "[REDACTED]"
-    )
+    Redact.gemini(message)
   end
 
   defp redact_key_material(_message), do: "Gemini embeddings error"

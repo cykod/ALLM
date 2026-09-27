@@ -199,7 +199,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
   alias ALLM.{Audio, Keys, SpeechEvent, SpeechRequest, SpeechResponse, Usage}
   alias ALLM.Error.SpeechAdapterError
   alias ALLM.Providers.FakeSpeech
-  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders}
+  alias ALLM.Providers.Support.{HTTPResponse, OpenAIHeaders, Redact}
   alias ALLM.Providers.Support.SpeechAdapter, as: SpeechSupport
 
   @doc """
@@ -702,11 +702,11 @@ defmodule ALLM.Providers.OpenAI.Speech do
   defp classify_speech_reason(_status, _message, _ra), do: {:unknown, nil}
 
   @doc false
-  # Inherited from `ALLM.Providers.OpenAI.Moderation`: same provider, same key
-  # shapes.
+  # The OpenAI pattern (`Support.Redact.openai/1`): same provider, same key
+  # shapes as the other OpenAI adapters.
   @impl SpeechSupport
   @spec redact_key_material(String.t()) :: String.t()
   def redact_key_material(message) when is_binary(message) do
-    String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
+    Redact.openai(message)
   end
 end

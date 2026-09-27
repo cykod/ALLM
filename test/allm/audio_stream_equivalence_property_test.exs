@@ -14,10 +14,15 @@ defmodule ALLM.AudioStreamEquivalencePropertyTest do
       it; the streaming Fake computes it from the bytes consumed. Pinned in
       `fake_transcription_test.exs` ("32,000 bytes at 16 kHz gives 1.0").
 
-    * `metadata.bytes_received` on an error — `collect_speech/1` adds it to
-      a stream's terminal error and `synthesize/3` has no stream to count.
-      For a `{:ok, ""}` script the property asserts it is `0` and compares
-      the rest of the error.
+  ## The one documented divergence: an empty clip
+
+  A `{:ok, ""}` script is an error on both paths, but not the same error,
+  because the real adapters differ path-for-path: `synthesize/3` gives
+  `:malformed_response` (an empty 200 body, `ALLM.SpeechAdapter`
+  invariant 2) and the folded stream gives `:invalid_request` with
+  `metadata.cause: :empty_input` and `metadata.bytes_received: 0`
+  (`ALLM.SpeechStreamAdapter` invariant 3). The property asserts that
+  mapping rather than equality.
 
   `model` (transcription) IS compared, but only because both engines carry
   `transcription_model: nil`: `transcribe/3` stamps the engine's slot model
@@ -67,8 +72,8 @@ defmodule ALLM.AudioStreamEquivalencePropertyTest do
   property "synthesize/3 equals stream_synthesize/3 folded by collect_speech/1" do
     check all(
             # Empty bytes are weighted in explicitly: a script entry of `{:ok, ""}`
-            # must fail the same way on both paths, and a plain `binary/1`
-            # generator reaches `""` too rarely to bind that.
+            # must fail with each path's documented error, and a plain
+            # `binary/1` generator reaches `""` too rarely to bind that.
             bytes <-
               StreamData.frequency([
                 {1, StreamData.constant("")},
@@ -111,15 +116,16 @@ defmodule ALLM.AudioStreamEquivalencePropertyTest do
     end
   end
 
-  # Empty bytes are an error on both paths, and it must be the same error.
+  # Empty bytes are an error on both paths, with the per-path mapping the
+  # real adapters give (see the moduledoc).
   defp assert_same_speech("", whole, folded) do
-    assert {:error, %{reason: :invalid_request, metadata: %{cause: :empty_input}} = whole_err} =
-             whole
+    assert {:error, %{reason: :malformed_response}} = whole
 
-    assert {:error, folded_err} = folded
-    {received, folded_meta} = Map.pop!(folded_err.metadata, :bytes_received)
-    assert received == 0
-    assert %{folded_err | metadata: folded_meta} == whole_err
+    assert {:error,
+            %{
+              reason: :invalid_request,
+              metadata: %{cause: :empty_input, bytes_received: 0}
+            }} = folded
   end
 
   defp assert_same_speech(_bytes, whole, folded) do

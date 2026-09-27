@@ -37,18 +37,14 @@ defmodule ALLM.ModerationAdapterTest do
       end
       """
 
-      # `with_io/2` rather than `capture_io/2` + a module alias: aliasing the
-      # about-to-be-compiled module makes the test body itself carry an
-      # undefined-remote-call the compiler defers, and whether that deferred
-      # warning lands inside the capture depends on how many files the run
-      # requires. Binding the module from `compile_string/1`'s return keeps
-      # the assertion about the *compiled source* and nothing else.
-      {[{minimal_impl, _bytecode}], captured} =
-        ExUnit.CaptureIO.with_io(:stderr, fn ->
-          Code.compile_string(source)
-        end)
+      # `Code.with_diagnostics/1` collects only the diagnostics of the compile
+      # this process runs, where a `:stderr` capture sees every process's
+      # output: in an async module, a warning from any file compiling
+      # concurrently would fail this test.
+      {[{minimal_impl, _bytecode}], diagnostics} =
+        Code.with_diagnostics(fn -> Code.compile_string(source) end)
 
-      assert captured == ""
+      assert diagnostics == []
       assert minimal_impl.max_batch_size() == 16
     end
   end
