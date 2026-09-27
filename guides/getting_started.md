@@ -18,13 +18,13 @@ Add ALLM to your `mix.exs` deps:
 ```elixir
 def deps do
   [
-    {:allm, "~> 0.3"}
+    {:allm, "~> 0.6"}
   ]
 end
 ```
 
-Run `mix deps.get`. ALLM pulls in `req`, `finch`, `jason`, and
-`telemetry` as transitive deps; you don't need to declare them yourself.
+Run `mix deps.get`. ALLM pulls in `req`, `finch`, `mint_web_socket`,
+`jason`, and `telemetry` as transitive deps; you don't need to declare them yourself.
 
 The toolchain floor is Elixir `~> 1.17` and Erlang/OTP 27+.
 
@@ -149,7 +149,19 @@ turn truncates (`finish_reason: :length`) before the tools run.
 | Multi-turn auto-loop with tools | `ALLM.chat/3` | `{:ok, %ChatResult{}}` |
 | Multi-turn auto-loop, streaming | `ALLM.stream/3` | `{:ok, Enumerable.t}` |
 | Multi-turn with persistence between turns | `ALLM.Session.*` | `{:ok, %Session{}, %ChatResult{}}` |
-| Generate / edit / vary images | `ALLM.generate_image/3` etc. | `{:ok, %ImageResponse{}}` |
+| Generate / edit images | `ALLM.generate_image/3`, `ALLM.edit_image/4` | `{:ok, %ImageResponse{}}` |
+| Embed text for search or RAG | `ALLM.embed/3` | `{:ok, %EmbeddingResponse{}}` |
+| Screen content for policy violations | `ALLM.moderate/3` | `{:ok, %ModerationResponse{}}` |
+| Text to speech | `ALLM.synthesize/3` | `{:ok, %SpeechResponse{}}` |
+| Speech to text | `ALLM.transcribe/3` | `{:ok, %TranscriptionResponse{}}` |
+| Streaming speech (text or a text stream in) | `ALLM.stream_synthesize/3`, `ALLM.stream_synthesize_input/3` | `{:ok, Enumerable.t}` of `SpeechEvent`s |
+| Realtime transcription | `ALLM.stream_transcribe/3` | `{:ok, Enumerable.t}` of `TranscriptionEvent`s |
+
+Everything below the image row runs on its own engine slot
+(`:embed_adapter`, `:moderation_adapter`, `:speech_adapter`,
+`:transcription_adapter`), so one engine can pair a chat provider
+with a different embeddings or audio provider — see the guide for each
+capability.
 
 ## Swap to a real provider
 
@@ -188,37 +200,44 @@ byte-identical.
 
 ## Where do API keys come from?
 
-You have four resolution paths, in priority order:
+There are five resolution levels, in priority order:
 
 1. **Per-call** — `ALLM.generate(engine, req, api_key: "sk-...")`. Wins
    over everything. Use this for multi-tenant SaaS where the key changes
    per request.
-2. **Engine-level resolver** — `ALLM.Engine.new(adapter: ..., keys: %{my_provider: fn -> System.fetch_env!("MY_KEY") end})`.
+2. **Runtime store** — `ALLM.Keys.put(:openai, "sk-...")`, an
+   in-process store for keys fetched at boot from a secrets manager.
 3. **Application config** — `config :allm, :keys, openai: "sk-..."`.
 4. **Environment variable** — each provider has a default
-   (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`).
+   (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
+   `VOYAGE_API_KEY`, `ELEVENLABS_API_KEY`).
+5. **`.env` file** — read only when `config :allm, load_dotenv: true`.
 
-`%ALLM.Engine{}` has no `:api_key` field; keys resolve per-call via
-`opts[:api_key]` or via the `:allm, :keys` application config (see
-`ALLM.Keys`). An engine struct can be persisted to ETF or JSON safely —
-it carries no secrets.
-
-Engines never persist API keys — they round-trip safely through ETF and
-JSON. See `multi_tenant_keys.md` for the full resolution chain.
+`%ALLM.Engine{}` has no `:api_key` field, so an engine round-trips
+safely through ETF and JSON — it carries no secrets. See
+`multi_tenant_keys.md` for the full resolution chain.
 
 ## Where to next
 
 Pick the path that matches what you're building:
 
 * **Streaming UI** → `streaming.md` — events, filters, cancellation.
-* **Tool calls** → `tools.md` — auto loop, manual mode, ask-user.
+* **Tool calls** → `tools.md` — auto loop, manual mode, ask-user,
+  compact tools for large catalogs.
 * **Multi-turn persistence** → `sessions.md` — `%Session{}` and the
   status union.
 * **Multi-modal input** → `vision.md` — `TextPart` and `ImagePart`.
 * **Image generation** → `image_generation.md` — `generate_image/3`
   and `edit_image/4`.
+* **Embeddings** → `embeddings.md` — `embed/3` and transparent batch
+  chunking.
+* **Moderation** → `moderation.md` — `moderate/3`, `flagged?/1`, and
+  per-category thresholds.
+* **Audio** → `audio.md` — speech in both directions, batch and
+  streaming, and the voice loop.
 * **Production hardening** → `errors_and_retries.md` and
   `multi_tenant_keys.md`.
+* **Testing** → `fakes.md` — the scripted Fake adapters.
 
 ## Testing your integration
 
@@ -236,6 +255,6 @@ infrastructure.
     iex> text
     "ok"
 
-The `examples/` directory in the repository contains 15 numbered scripts
+The `examples/` directory in the repository contains 25 numbered scripts
 you can run against any of the bundled providers — see
 `examples/README.md`.

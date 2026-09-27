@@ -22,7 +22,7 @@ defmodule ALLM.Telemetry do
   | `[:allm, :stream, :start \\| :stop \\| :exception]` | streaming generate | as above; `:stop` `response` is `nil` (lazy) | start metadata + `response: nil` |
   | `[:allm, :step, :start \\| :stop \\| :exception]` | single chat step | as above | start metadata + `step_result` |
   | `[:allm, :chat, :start \\| :stop \\| :exception]` | multi-turn chat loop | as above | start metadata + `chat_result` |
-  | `[:allm, :tool, :start \\| :stop \\| :exception]` | per-tool execution | as above | start metadata + `tool_call_id`, `tool_name`, `result` |
+  | `[:allm, :tool, :start \\| :stop \\| :exception]` | per-tool execution | as above | start metadata (`tool`, `tool_call`, `engine`, `model`, `request_id`) + `result` on `:stop`; a timed-out tool emits `:exception` with `duration: 0` |
   | `[:allm, :image, :start \\| :stop \\| :exception]` | image generation | `duration`, plus `image_count` on `:stop` | `request_id`, `engine`, `model`, `operation`, `n`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :embed, :start \\| :stop \\| :exception]` | text embedding | `duration`, plus `chunk_count` and `embedding_count` on `:stop` | `request_id`, `engine`, `model`, `input_count`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :moderate, :start \\| :stop \\| :exception]` | content moderation | `duration`, plus `result_count` and `flagged_count` on `:stop` | `request_id`, `engine`, `model`, `input_count`, `multimodal`, plus `usage`, `response`, `error` on `:stop` |
@@ -31,7 +31,7 @@ defmodule ALLM.Telemetry do
   | `[:allm, :stream_synthesize, :start \\| :stop \\| :exception]` | streaming text-to-speech (`ALLM.stream_synthesize/3` and `ALLM.stream_synthesize_input/3`) | `duration`; `:stop` fires when the stream is returned, not when it drains | `request_id`, `engine`, `model`, `input_length` (`nil` for the input form), plus `response: nil` on `:stop` |
   | `[:allm, :stream_transcribe, :start \\| :stop \\| :exception]` | streaming speech-to-text (`ALLM.stream_transcribe/3`) | as above | `request_id`, `engine`, `model`, `sample_rate`, plus `response: nil` on `:stop` |
   | `[:allm, :audio, :first_chunk]` | once per audio stream, at its first `:audio_delta` or `:partial_transcript` | `latency` (native time units from the façade call) | `request_id`, `capability` (`:speech` or `:transcription`), `provider_model` |
-  | `[:allm, :adapter, :retry]` | per-attempt retry (non-streaming) | `system_time` | `attempt`, `delay_ms`, `reason`, `request_id` |
+  | `[:allm, :adapter, :retry]` | per-attempt retry (non-streaming) | `system_time` | the calling façade's metadata (e.g. `request_id`, `model`) + `attempt`, `delay_ms`, `reason` |
 
   `[:allm, :embed, :stop]` carries `embedding_count` and `chunk_count` on
   **both** paths — each is `0` on the error path rather than absent, so the
@@ -203,10 +203,11 @@ defmodule ALLM.Telemetry do
       alongside the common keys.
     * `{result, extra_measurements, stop_metadata_extras}` — the
       3-tuple form, for spans that inject custom `:stop` measurements
-      beyond `:duration` and `:monotonic_time`. `:image`, `:embed` and
-      `:moderate` spans use this form to carry `:image_count` /
-      `:embedding_count` + `:chunk_count` / `:result_count` +
-      `:flagged_count` as measurements (numeric metrics →
+      beyond `:duration` and `:monotonic_time`. `:image`, `:embed`,
+      `:moderate`, `:synthesize` and `:transcribe` spans use this form
+      to carry `:image_count` / `:embedding_count` + `:chunk_count` /
+      `:result_count` + `:flagged_count` / `:audio_bytes` /
+      `:text_length` as measurements (numeric metrics →
       measurements; structured context → metadata).
 
   Caller-supplied `start_metadata` is forwarded to the `:start` event

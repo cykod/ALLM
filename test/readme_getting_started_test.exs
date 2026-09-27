@@ -102,16 +102,19 @@ defmodule ALLM.ReadmeGettingStartedTest do
   test "README Worked examples section cross-links every guide" do
     body = section_body(read_readme(), "## Worked examples")
 
-    for guide <- [
-          "guides/getting_started.md",
-          "guides/streaming.md",
-          "guides/tools.md",
-          "guides/sessions.md",
-          "guides/vision.md",
-          "guides/image_generation.md",
-          "guides/errors_and_retries.md",
-          "guides/multi_tenant_keys.md"
-        ] do
+    # Discovered from mix.exs's registered guides, not a hand-kept list,
+    # so a new guide that the README forgets to link fails here.
+    guides =
+      Mix.Project.config()[:docs][:extras]
+      |> Enum.map(fn
+        {path, _opts} -> to_string(path)
+        path -> to_string(path)
+      end)
+      |> Enum.filter(&String.starts_with?(&1, "guides/"))
+
+    assert guides != [], "expected mix.exs docs[:extras] to register guides"
+
+    for guide <- guides do
       assert String.contains?(body, guide),
              "expected README's Worked examples section to link to #{guide}"
     end

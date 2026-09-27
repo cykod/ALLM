@@ -4,7 +4,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   OpenAI's `/v1/images/generations` and `/v1/images/edits` endpoints.
 
   Layer B — runtime. Constructed via
-  `ALLM.Engine.new(image_adapter: ALLM.Providers.OpenAI.Images, model: "dall-e-2")`
+  `ALLM.Engine.new(image_adapter: ALLM.Providers.OpenAI.Images, model: "gpt-image-1")`
   and consumed through the `ALLM.generate_image/3 · edit_image/4`
   façade. Keys resolve via
   `ALLM.Keys.fetch!(:openai, opts)` at request-build time per the documented contract

@@ -84,23 +84,49 @@ a flat list for a single call or a list-of-lists for multi-call).
 
 ## Cursor patterns
 
-Multi-call scripts advance a per-process cursor on every call. By default
-the cursor lives in the process dictionary keyed by `:erlang.phash2(scripts)`
-— isolated per ExUnit test process (`async: true`), GC'd on pid-down,
-zero-setup for the common case.
+Multi-call scripts advance a per-process cursor on every call. The
+cursor lives in the process dictionary — isolated per ExUnit test
+process (`async: true`), GC'd on pid-down, zero-setup for the common
+case. Its key is chosen in this order:
 
-### Footgun: content-equal scripts collide
+1. `adapter_opts[:script_cursor]` — an explicit Agent pid from
+   `ALLM.Providers.Fake.start_script_cursor/0`.
+2. `adapter_opts[:cursor_key]` — the engine's `:id`. Every call through
+   the façade (`ALLM.generate/3`, `chat/3`, `stream/3`, `step/3`, the
+   `ALLM.Session` functions, …) injects it for you.
+3. `:erlang.phash2(scripts)` — a content hash, used only for direct
+   adapter calls that carry no engine.
 
-Two engines built with byte-identical `:scripts` values in the same
-process share the cursor. Workaround:
+So at the façade the cursor follows engine identity: two engines built
+with byte-identical `:scripts` each start at the first script, even in
+the same process.
+
+    iex> scripts = [[{:text, "first"}, {:finish, :stop}], [{:text, "second"}, {:finish, :stop}]]
+    iex> e1 = ALLM.Engine.new(adapter: ALLM.Providers.Fake, adapter_opts: [scripts: scripts])
+    iex> e2 = ALLM.Engine.new(adapter: ALLM.Providers.Fake, adapter_opts: [scripts: scripts])
+    iex> req = ALLM.request([ALLM.user("hi")])
+    iex> {:ok, r1} = ALLM.generate(e1, req)
+    iex> {:ok, r2} = ALLM.generate(e2, req)
+    iex> {r1.output_text, r2.output_text}
+    {"first", "first"}
+
+Because `:cursor_key` rides in `adapter_opts`, a façade call recorded
+via `adapter_opts[:record]` (below) includes `{:cursor_key, engine.id}`
+in the forwarded opts — account for it if you assert on the exact
+keyword list.
+
+### Direct adapter calls: content-equal scripts collide
+
+`ALLM.Providers.Fake.generate(req, opts)` / `.stream(req, opts)` called
+without an engine get no `:cursor_key` and fall back to the content
+hash, so two direct calls with byte-identical scripts in the same
+process share a cursor. Pass an explicit cursor instead:
 
 ```elixir
 cursor = ALLM.Providers.Fake.start_script_cursor()
 
-engine1 = ALLM.Engine.new(
-  adapter: ALLM.Providers.Fake,
-  adapter_opts: [scripts: scripts, script_cursor: cursor]
-)
+{:ok, response} =
+  ALLM.Providers.Fake.generate(request, adapter_opts: [scripts: scripts, script_cursor: cursor])
 ```
 
 `start_script_cursor/0` returns an Agent pid; `cursor_index/1` reads it
@@ -212,6 +238,44 @@ consumer reduces to `%Response{finish_reason: :error}` — the mid-stream
 error contract. Neither `ALLM.Runner` nor `chat/3` retries the streaming
 arm; see `errors_and_retries.md`.
 
+## Capability fakes
+
+Every capability slot on the engine has its own scripted Fake, with the
+same cursor model as the chat Fake (engine-id keyed at the façade,
+`:script_cursor` for direct calls) and a `{:retry_until_call, n}` entry
+for exercising retries:
+
+| Fake | Engine slot | Script key | Guide |
+|------|-------------|------------|-------|
+| `ALLM.Providers.FakeImages` | `:image_adapter` | `:image_script` | `image_generation.md` |
+| `ALLM.Providers.FakeEmbeddings` | `:embed_adapter` | `:embedding_script` | `embeddings.md` |
+| `ALLM.Providers.FakeModeration` | `:moderation_adapter` | `:moderation_script` | `moderation.md` |
+| `ALLM.Providers.FakeSpeech` | `:speech_adapter` | `:speech_script` | `audio.md` |
+| `ALLM.Providers.FakeTranscription` | `:transcription_adapter` | `:transcription_script` | `audio.md` |
+
+The script key lives in the engine's `adapter_opts`. Some Fakes answer
+with no script at all — FakeModeration returns a clean verdict,
+FakeSpeech returns `"FAKE-AUDIO:" <> input`, FakeTranscription returns
+an empty transcript — but a non-empty script that runs out is an error,
+never a silent fallback, so an off-by-one in your call count surfaces.
+
+    iex> engine =
+    ...>   ALLM.Engine.new(
+    ...>     speech_adapter: ALLM.Providers.FakeSpeech,
+    ...>     adapter_opts: [speech_script: [{:ok, "scripted-bytes"}]]
+    ...>   )
+    iex> {:ok, speech} = ALLM.synthesize(engine, "Hello there")
+    iex> ALLM.Audio.to_binary(speech.audio)
+    {:ok, "scripted-bytes"}
+
+FakeSpeech and FakeTranscription also accept a stream-only
+`{:events, events}` entry: the stream paths (`stream_synthesize/3`,
+`stream_synthesize_input/3`, `stream_transcribe/3`) emit `events`
+verbatim, which is how a mid-stream failure is scripted. The
+non-streaming `synthesize/3` / `transcribe/3` answer that entry with an
+`:unknown` error whose `metadata.cause` is `:stream_only_script_entry`.
+Each Fake's moduledoc carries its full entry grammar.
+
 ## Cross-process engine injection
 
 When a test fans work out across `Task.async/1` and you want the
@@ -242,5 +306,7 @@ registering ancestor's engine — same idiom as `Mox.allow/3` and
 * `streaming.md` — the event-shape vocabulary the scripts emit.
 * `tools.md` — tool-loop tests against scripted tool calls.
 * `sessions.md` — multi-turn persistence tests.
+* `image_generation.md`, `embeddings.md`, `moderation.md`, `audio.md` —
+  the capability Fakes in context.
 * `ALLM.Providers.Fake` and `ALLM.Providers.Fake.Script` moduledocs —
   reference-level documentation of every entry tag.

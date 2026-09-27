@@ -12,7 +12,8 @@ These scripts ship under `examples/` and are **not** part of the published
 
 The scripts are organized as a learning path: start with the quickest
 round-trip, then branch into streaming/tools, multi-turn chat, sessions,
-vision, and per-tool manual control. Each script is independently
+vision, per-tool manual control, embeddings, moderation, compact tools,
+and audio (batch, streaming, and the voice loop). Each script is independently
 runnable; the order below is for reading, not for execution dependencies.
 
 ## How provider switching works
@@ -86,10 +87,10 @@ provider table:
 }
 ```
 
-The map shape lets future fields (`:image_adapter`, `:embed_adapter`,
-`:moderation_adapter`, `:vision_default_model`, …) be added without churning
-the destructure
-pattern in the helper.
+The map shape lets the capability fields (`:image_adapter`,
+`:embed_adapter`, `:moderation_adapter`, `:speech_adapter`,
+`:transcription_adapter`, `:vision_default_model`, …) grow without
+churning the destructure pattern in the helper.
 
 `ExamplesHelpers.embedding_engine/1` reads `:embed_adapter` /
 `:embedding_default_model`, and `:embedding_key_env` — which falls back
@@ -250,14 +251,15 @@ two features that account for most production traffic.
 ## Sessions (08–09, 15)
 
 Sessions wrap the chat loop with persistent state and a richer status
-union (`:idle`, `:halted_for_tools`, `:halted_for_user`).
+union (`:idle`, `:awaiting_user`, `:awaiting_tools`, `:completed`,
+`:error`).
 
 - `08_session_round_trip.exs` builds a `Session`, drives one turn, and
   asserts the session value survives a `:erlang.term_to_binary/1` /
   `binary_to_term/1` round-trip.
 - `09_ask_user.exs` exercises `{:ask_user, _, _}` halt — a tool returns
   an "ask the user" tuple, the session halts with
-  `status: :halted_for_user`, and a follow-up `Session.reply/4` resumes
+  `status: :awaiting_user`, and a follow-up `Session.reply/4` resumes
   the loop.
 - `15_per_tool_manual_session.exs` (also listed under per-tool manual
   mode below) drives the partition entirely through `Session.start/3`,
@@ -435,8 +437,8 @@ facade (`generate/3`, `stream/3`, `chat/3`, `step/3`, `generate_image/3`,
 | `10_generate_image.exs` | tight | C | openai, gemini | `ALLM.generate_image/3` |
 | `11_edit_image.exs` | tight | C | openai, gemini | `ALLM.edit_image/4` with mask (inpaint) |
 | `12_vision_input.exs` | loose | C | all | `ALLM.generate/3` with `[%TextPart{}, %ImagePart{}]` content |
-| `14_per_tool_manual.exs` | tight | C | openai, anthropic | per-tool manual mode via `chat/3`: auto tool runs eagerly, manual tool halts with `:manual_tool_calls`, caller appends `:tool` message and re-issues |
-| `15_per_tool_manual_session.exs` | tight | D | openai, anthropic | per-tool manual mode via `Session.start → submit_tool_result → continue` |
+| `14_per_tool_manual.exs` | tight | C | all | per-tool manual mode via `chat/3`: auto tool runs eagerly, manual tool halts with `:manual_tool_calls`, caller appends `:tool` message and re-issues |
+| `15_per_tool_manual_session.exs` | tight | D | all | per-tool manual mode via `Session.start → submit_tool_result → continue` |
 | `16_embed_single.exs` | tight | C | all | `ALLM.embed/3` with one input; asserts vector shape and `dimensions/1` agreement |
 | `17_embed_batch_chunked.exs` | tight | C | all | 250 inputs through transparent chunking; asserts `chunk_count` against the adapter's `max_batch_size/0` |
 | `18_embed_query_vs_document.exs` | loose | C | all | asymmetric embedding — `task_type: :search_query` vs `:search_document`, ranked by cosine similarity |
@@ -532,7 +534,8 @@ provider pricing page for any tight budget.
 | OpenAI (`gpt-5.4-nano` + `gpt-image-1` + `text-embedding-3-small` + `omni-moderation-latest` + `gpt-4o-mini-tts` + `gpt-transcribe`) | **~$0.13 USD** | bulk of the cost is `11_edit_image.exs` (~$0.04); the moderation scripts are free and the audio scripts cost well under $0.001 together |
 | Anthropic (`claude-sonnet-4-6` + `voyage-3.5-lite`) | **~$0.08 USD** | drops to ~$0.01 with `ALLM_MODEL=claude-haiku-4-5` |
 | Gemini (`gemini-3-flash-preview` + image preview + `gemini-embedding-001` + `gemini-flash-latest` (transcription)) | **~$0.03 USD** | |
-| **All three combined** | **~$0.24 USD** | per clean dual+gemini pass |
+| **All three chat arms combined** | **~$0.24 USD** | per clean dual+gemini pass |
+| ElevenLabs (`eleven_flash_v2_5` + `scribe_v2` / `scribe_v2_realtime`) | not measured | audio scripts only (23–27), each a sentence or two of text or audio, billed against ElevenLabs' character and audio-minute quotas; `27_voice_loop.exs` also makes one short OpenAI chat call and needs `OPENAI_API_KEY` |
 
 The embedding scripts add well under $0.001 per arm — a few thousand
 tokens total, and Voyage's free tier covers its share outright.
@@ -543,7 +546,8 @@ the two runs together use about 2.4k input tokens on OpenAI, 3.8k on
 Gemini and 6.2k on Anthropic, with under 400 output tokens each.
 
 A full suite typically runs in 60–120 s per provider; the per-script
-budget is 180 s, enforced by `run_all.exs`'s `Task.yield/2`.
+budget is 180 s (override with `ALLM_EXAMPLE_TIMEOUT_MS`), enforced by
+`run_all.exs`, which runs each script in its own OS process.
 
 ## SaaS bring-your-own-key (BYOK)
 
@@ -585,9 +589,13 @@ Scripts 19–20 likewise ignore `ALLM_MODEL` and read
 the only arm they run on. The `text-moderation-*` family was shut down on
 2025-10-27 and answers a 400.
 
-Script 23 reads `ALLM_SPEECH_MODEL` (default `gpt-4o-mini-tts`) and
-script 24 reads `ALLM_TRANSCRIPTION_MODEL` (default `gpt-transcribe` on
-OpenAI, `gemini-flash-latest` on Gemini).
+The speech scripts (23, 25, 27) read `ALLM_SPEECH_MODEL` (default
+`gpt-4o-mini-tts` on OpenAI, `eleven_flash_v2_5` on ElevenLabs) and the
+transcription scripts (24, 27) read `ALLM_TRANSCRIPTION_MODEL` (default
+`gpt-transcribe` on OpenAI, `gemini-flash-latest` on Gemini, `scribe_v2`
+on ElevenLabs). The realtime scripts (26, 27) do not read it for
+`stream_transcribe/3`: realtime and batch model names differ, so the
+adapter's realtime default (`scribe_v2_realtime`) applies.
 
 The variables are deliberately separate: a chat model id sent to an
 embeddings or moderations endpoint is a guaranteed 400, so the documented
@@ -603,6 +611,8 @@ ALLM_MODEL=gemini-2.5-flash  ALLM_PROVIDER=gemini    mix run examples/run_all.ex
 
 ALLM_EMBEDDING_MODEL=text-embedding-3-large mix run examples/17_embed_batch_chunked.exs
 ALLM_MODERATION_MODEL=omni-moderation-2024-09-26 mix run examples/19_moderate_text.exs
+ALLM_SPEECH_MODEL=tts-1 mix run examples/23_synthesize_speech.exs
+ALLM_PROVIDER=elevenlabs mix run examples/26_stream_transcribe.exs
 ```
 
 `gpt-4.1-mini` is a non-reasoning model on the Chat Completions endpoint
@@ -633,7 +643,7 @@ free-form prompt once they understand the example.
 
 ## Tool-using scripts run natively on the Responses API (OpenAI)
 
-Scripts 03, 04, 07, and 09 exercise tool calls. On OpenAI they run
+Scripts 03, 04, 07, 09, 14, 15, and 21 exercise tool calls. On OpenAI they run
 through the Responses-API path that `gpt-5.4-nano` selects by default;
 both `from_responses_response/2` and the streaming SSE handler surface
 tool calls from the `output[]` array. On Anthropic these scripts route
@@ -680,20 +690,24 @@ differ (whitespace, key order, number formatting) — see the
   `ALLM_MODEL=<current-model> mix run …`.
 - **Quota exceeded.** `:rate_limited` after retry exhaustion. Wait or
   use a different key.
-- **Per-script timeout.** `run_all.exs` enforces a 180-second budget
-  per script via `Task.yield(task, 180_000) || Task.shutdown(task,
-  :brutal_kill)`. A timed-out script counts as `[FAIL]`.
+- **Per-script timeout.** `run_all.exs` runs each script in its own OS
+  process with a 180-second budget (`ALLM_EXAMPLE_TIMEOUT_MS` overrides
+  it); a script past its deadline is killed and reported as
+  `[FAIL] … (timed out after Ns)`.
 
 ## Contributing
 
 Each example is its own test fixture. When adding a new script:
 
-1. Number it in two-digit form (`16_<name>.exs`); `run_all.exs` picks
+1. Number it in two-digit form (`28_<name>.exs`, the next free number); `run_all.exs` picks
    them up by glob in numeric order.
 2. Follow the common header-comment / engine / body / assertion-or-halt
    layout (see any of the existing scripts).
-3. Use `engine = ExamplesHelpers.engine(extra_opts)` — never call
-   `ALLM.Engine.new/1` directly so the script stays provider-neutral.
+3. Use `engine = ExamplesHelpers.engine(extra_opts)` (or the capability
+   helpers such as `speech_engine/1`) rather than `ALLM.Engine.new/1`,
+   so the script stays provider-neutral. The one deliberate exception is
+   `27_voice_loop.exs`, whose chat leg always runs on OpenAI because the
+   ElevenLabs arm has no chat adapter.
 4. Run it standalone against every provider arm it claims to support
    (per its `# Provider:` marker), then run `run_all.exs` end-to-end
    against each, before opening a PR.

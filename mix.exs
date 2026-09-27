@@ -93,7 +93,7 @@ defmodule ALLM.MixProject do
       # writing — if a name here stops existing, delete the entry rather than
       # letting it mask a real broken reference.
       #
-      #   ALLM.Engine.put_cursor_key/2      lib/allm/engine.ex:239 — `@doc false`
+      #   ALLM.Engine.put_cursor_key/2      lib/allm/engine.ex    — `@doc false`
       #                                     test seam named by the three Fake
       #                                     adapters' moduledocs.
       #   ALLM.StreamRunner.build_dispatch_opts/2

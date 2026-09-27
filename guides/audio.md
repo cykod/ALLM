@@ -718,7 +718,9 @@ observed while it was built:
     and it arrives in a separate message that ElevenLabs sends either before
     or after its segment. Setting *either* option makes the adapter hold
     each `:committed_transcript` until that message arrives, for at most
-    1,000 ms (tunable with `adapter_opts: [language_hold_ms: ms]`), and then
+    1,000 ms (tunable with `adapter_opts: [language_hold_ms: ms]`, a
+    positive integer; anything else is refused before the socket opens),
+    and then
     emit it with the language, or with `nil` if only `"include_timestamps"`
     is set. With neither option, segments are emitted at once and
     `:language` is `nil`.

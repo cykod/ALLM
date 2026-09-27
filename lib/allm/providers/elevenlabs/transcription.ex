@@ -295,6 +295,10 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
     2. **Sample rate.** `request.sample_rate` must be in
        `stream_sample_rates/0`, else `:invalid_request` with
        `metadata.sample_rate`.
+    3. **Language hold.** `adapter_opts[:language_hold_ms]` must be a
+       positive integer (milliseconds), else `:invalid_request` with
+       `metadata.field: :language_hold_ms`. Checked whether or not the
+       request opts in to the hold.
 
   No socket is opened until the enumerable is reduced. The stream then
   connects, waits for the server's `session_started` (emitted as

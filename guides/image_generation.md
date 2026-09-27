@@ -22,19 +22,21 @@ Each returns `{:ok, %ALLM.ImageResponse{}}` with `:images` (list of
 
 ## The image-adapter engine slot
 
-An engine has two adapter slots: `:adapter` for chat and
-`:image_adapter` for images. Set whichever you need:
+An engine has six adapter slots — `:adapter` for chat, `:image_adapter`
+for images, and `:embed_adapter`, `:moderation_adapter`,
+`:speech_adapter`, and `:transcription_adapter` for the other
+capabilities. Set whichever you need:
 
 ```elixir
 engine = ALLM.Engine.new(
   adapter: ALLM.Providers.OpenAI,             # for chat, optional here
   image_adapter: ALLM.Providers.OpenAI.Images,
-  model: "dall-e-2"
+  model: "gpt-image-1"
 )
 ```
 
 The image model comes from the engine's `:model` field, or from a
-per-call `model:` opt (`ALLM.generate_image(engine, prompt, model: "dall-e-3")`)
+per-call `model:` opt (`ALLM.generate_image(engine, prompt, model: "gpt-image-1")`)
 which overrides it.
 
 If you only generate images (no chat), the `:adapter` slot can stay
@@ -58,12 +60,12 @@ unset.
 `ALLM.generate_image/3` accepts opts:
 
 * `:model` — override the engine's default.
-* `:size` — `"512x512"`, `"1024x1024"`, or a `{w, h}` tuple. Provider
-  capabilities differ; OpenAI's `dall-e-2` only supports `256×256`,
-  `512×512`, and `1024×1024`.
+* `:size` — `"1024x1024"`, a `{w, h}` tuple, or `:auto`. Supported sizes
+  differ per provider and model.
 * `:n` — number of images to generate.
-* `:response_format` — `:url` (default for OpenAI 1.x) or `:b64_json`
-  (default for newer models).
+* `:response_format` — `:binary` (the default), `:base64`, or `:url`.
+  `gpt-image-1` only returns base64, so it rejects `:url`.
+* `:request_timeout` — HTTP receive timeout in milliseconds.
 
 ## Editing an image (inpaint)
 
@@ -84,8 +86,12 @@ The base and mask can be raw bytes, a file path
 
 | Operation | OpenAI | Gemini |
 |---|---|---|
-| Generate (`generate_image/3`) | yes (`dall-e-2`, `dall-e-3`, `gpt-image-1`) | yes (`gemini-2.5-flash-image-preview`) |
-| Edit (`edit_image/4`) | yes (`dall-e-2`, `gpt-image-1`) | yes |
+| Generate (`generate_image/3`) | yes (`gpt-image-1`) | yes (`gemini-2.5-flash-image-preview`) |
+| Edit (`edit_image/4`) | yes (`gpt-image-1`) | yes |
+
+OpenAI has retired `dall-e-2` and `dall-e-3`. The OpenAI adapter still
+recognises both names — a request naming one is gated before any HTTP
+call — but new code should use `gpt-image-1`.
 
 Anthropic does not ship an image adapter — set `:image_adapter` to
 OpenAI's or Gemini's even when your chat adapter is Anthropic.
@@ -146,8 +152,12 @@ File.write!(target_path, bytes)
 ### Edit with progress
 
 `generate_image/3` and friends are non-streaming. Long generations
-block until the provider returns the bytes. Set a longer timeout via
-the engine's `:request_options` if needed.
+block until the provider returns the bytes. Pass a longer per-call
+`:request_timeout` (milliseconds) if needed:
+
+```elixir
+ALLM.generate_image(engine, prompt, request_timeout: 180_000)
+```
 
 ### Multi-tenant key resolution
 

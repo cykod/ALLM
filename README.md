@@ -1,14 +1,15 @@
 # ALLM
 
-> Provider-neutral LLM execution and agentic loops for Elixir — one engine surface, swap the adapter to retarget OpenAI, Anthropic, or Gemini without touching call sites.
+> Provider-neutral LLM execution and agentic loops for Elixir — one engine surface, swap the adapter to retarget OpenAI, Anthropic, or Gemini without touching call sites. Embeddings, moderation, image generation, and speech in both directions ride the same engine.
 
 ## Why ALLM?
 
-- **One surface, three providers.** Pick OpenAI, Anthropic, or Gemini by changing one line. Vision input, structured output, tool use, and image generation all share the same caller code.
-- **Streaming is the primitive.** Every non-streaming entry point is a reducer over a token-by-token event stream. Drop into deltas when a UI needs them; pop back up when it doesn't.
+- **One surface, many providers.** Pick OpenAI, Anthropic, or Gemini for chat by changing one line. Vision input, structured output, tool use, image generation, embeddings, moderation, and audio all share the same caller code — and capability-only adapters (Voyage embeddings, ElevenLabs speech and transcription) slot in next to any chat provider.
+- **Built for agents.** Tool loops run automatically or hand control back to you per tool; `compact: true` shrinks a large tool catalog to one-line stubs the model expands on demand.
+- **Streaming is the primitive.** Every non-streaming chat entry point is a reducer over a token-by-token event stream. Drop into deltas when a UI needs them; pop back up when it doesn't. Speech streams the same way — including speaking an LLM's answer while it is still being written, and transcribing audio while it is still arriving.
 - **State is plain data.** Threads, requests, and sessions round-trip through `:erlang.term_to_binary/1` and JSON. Persist them, ship them between nodes, resume them tomorrow — no PIDs, refs, funs, or API keys leak in.
 
-Public API is stable across minor versions within v0.x; we'll bump major before breaking changes.
+ALLM is pre-1.0: a minor release (`0.x` → `0.x+1`) may carry breaking changes, and each one is listed under "Breaking changes" in [`CHANGELOG.md`](CHANGELOG.md). Patch releases do not break.
 
 ## Install
 
@@ -17,7 +18,7 @@ Add ALLM to your `mix.exs` deps:
 ```elixir
 def deps do
   [
-    {:allm, "~> 0.3"}
+    {:allm, "~> 0.6"}
   ]
 end
 ```
@@ -209,7 +210,7 @@ Deeper dive: [`guides/sessions.md`](guides/sessions.md).
 
 ## Worked examples
 
-The `examples/` directory ships 15 runnable scripts that double as
+The `examples/` directory ships 25 runnable scripts that double as
 integration tests. Each is self-asserting and runs against a real
 provider. See `examples/README.md` for the full table; the deeper-dive
 guides cross-link the relevant scripts at the bottom of each section.
@@ -222,25 +223,60 @@ For narrative walkthroughs, jump to a guide:
 - [`guides/sessions.md`](guides/sessions.md) — multi-turn persistence, manual tool round-trips, ask-user resume.
 - [`guides/vision.md`](guides/vision.md) — multimodal `[TextPart, ImagePart]` content across all three providers.
 - [`guides/image_generation.md`](guides/image_generation.md) — `generate_image/3`, `edit_image/4`.
+- [`guides/embeddings.md`](guides/embeddings.md) — `embed/3`, transparent batch chunking, OpenAI / Gemini / Voyage.
+- [`guides/moderation.md`](guides/moderation.md) — `moderate/3`, `flagged?/1` versus per-category thresholds, image input.
+- [`guides/audio.md`](guides/audio.md) — `synthesize/3`, `transcribe/3`, streaming speech and realtime transcription, the voice loop.
 - [`guides/errors_and_retries.md`](guides/errors_and_retries.md) — every error struct, retry policy, telemetry observability.
 - [`guides/multi_tenant_keys.md`](guides/multi_tenant_keys.md) — per-call BYOK and the `ALLM.Keys` resolution chain.
+- [`guides/fakes.md`](guides/fakes.md) — testing with the scripted Fake adapters, no network.
 
 ## Real providers
 
-ALLM ships three production adapters:
+ALLM ships three chat adapters and two capability-only providers:
 
 - **`ALLM.Providers.OpenAI`** — Chat Completions and Responses
-  endpoints; auto-routes by model. Image generation via
-  `ALLM.Providers.OpenAI.Images` (`dall-e-2`, `dall-e-3`,
-  `gpt-image-1`).
-- **`ALLM.Providers.Anthropic`** — Messages API; chat and vision input
-  (no image generation).
+  endpoints; auto-routes by model.
+- **`ALLM.Providers.Anthropic`** — Messages API; chat and vision input.
 - **`ALLM.Providers.Gemini`** — Google Generative Language API
   (`generateContent` / `streamGenerateContent`); chat and vision input.
-  Image generation via `ALLM.Providers.Gemini.Images`.
+- **Voyage** — embeddings only (Anthropic's recommended partner).
+- **ElevenLabs** — speech and transcription only, batch and streaming.
+
+Beyond chat, each capability has its own engine slot, so one engine can
+pair providers — say, Anthropic for chat, Voyage for embeddings, and
+ElevenLabs for speech:
+
+| Capability | Engine slot | Bundled adapters |
+|---|---|---|
+| Image generation / editing | `:image_adapter` | `OpenAI.Images` (`gpt-image-1`), `Gemini.Images` |
+| Embeddings | `:embed_adapter` | `OpenAI.Embeddings`, `Gemini.Embeddings`, `Voyage.Embeddings` |
+| Moderation | `:moderation_adapter` | `OpenAI.Moderation` |
+| Text-to-speech | `:speech_adapter` | `OpenAI.Speech`, `ElevenLabs.Speech` |
+| Speech-to-text | `:transcription_adapter` | `OpenAI.Transcription`, `Gemini.Transcription`, `ElevenLabs.Transcription` |
+
+Streaming speech (`stream_synthesize/3`) works on `OpenAI.Speech` and
+`ElevenLabs.Speech`; speaking a streamed text input
+(`stream_synthesize_input/3`) and realtime transcription
+(`stream_transcribe/3`) are ElevenLabs-only. All adapter modules live
+under `ALLM.Providers.*`.
+
+```elixir
+engine =
+  ALLM.Engine.new(
+    adapter: ALLM.Providers.Anthropic,
+    model: "claude-sonnet-4-6",
+    embed_adapter: ALLM.Providers.Voyage.Embeddings,
+    speech_adapter: ALLM.Providers.ElevenLabs.Speech
+  )
+
+# `engine.model` is the chat model, so embeddings name theirs per call;
+# speech falls back to the adapter's default model when none is set.
+{:ok, embeddings} = ALLM.embed(engine, ["first chunk", "second chunk"], model: "voyage-3.5-lite")
+{:ok, speech} = ALLM.synthesize(engine, "Hello there.")
+```
 
 Configure via env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-`GEMINI_API_KEY`) or per-call:
+`GEMINI_API_KEY`, `VOYAGE_API_KEY`, `ELEVENLABS_API_KEY`) or per-call:
 
 ```elixir
 {:ok, response} = ALLM.generate(engine, request, api_key: tenant_key)
@@ -252,12 +288,14 @@ the runtime store. The engine itself is safe to cache and share across
 tenants. See [`guides/multi_tenant_keys.md`](guides/multi_tenant_keys.md)
 for the full chain.
 
-To run the bundled live-call examples:
+To run the bundled live-call examples, put your keys in a `.env` file
+at the repository root (see `examples/README.md`) and pick an arm:
 
 ```bash
-OPENAI_API_KEY=sk-...     mix run examples/run_all.exs
-ANTHROPIC_API_KEY=sk-...  ALLM_PROVIDER=anthropic mix run examples/run_all.exs
-GEMINI_API_KEY=...        ALLM_PROVIDER=gemini    mix run examples/run_all.exs
+mix run examples/run_all.exs                                # OpenAI (default)
+ALLM_PROVIDER=anthropic  mix run examples/run_all.exs       # embeddings scripts also need VOYAGE_API_KEY
+ALLM_PROVIDER=gemini     mix run examples/run_all.exs
+ALLM_PROVIDER=elevenlabs mix run examples/run_all.exs       # audio scripts only
 ```
 
 ## Compatibility
@@ -265,9 +303,10 @@ GEMINI_API_KEY=...        ALLM_PROVIDER=gemini    mix run examples/run_all.exs
 - **Elixir** `~> 1.17`
 - **Erlang/OTP** 27+
 
-ALLM follows semantic versioning. Within v0.x, public APIs and on-disk
-session shapes are stable across minor releases — we'll bump major
-before any breaking change.
+ALLM follows semantic versioning for pre-1.0 software: breaking
+changes to the public API or to persisted shapes land only in minor
+releases, and are always listed under "Breaking changes" in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ## Development
 

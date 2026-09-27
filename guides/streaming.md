@@ -49,11 +49,20 @@ end)
 |> Stream.run()
 ```
 
-```elixir
-# Collect the full response synchronously (equivalent to generate/3).
-{:ok, stream} = ALLM.stream_generate(engine, req)
-{:ok, response} = ALLM.StreamCollector.collect(stream)
-```
+To collect the full response yourself (what `generate/3` does), fold
+the events with `ALLM.StreamCollector`:
+
+    iex> engine = ALLM.Engine.new(
+    ...>   adapter: ALLM.Providers.Fake,
+    ...>   adapter_opts: [stream_script: [[{:text_delta, "Hel"}, {:text_delta, "lo"}, {:finish, :stop}]]]
+    ...> )
+    iex> {:ok, stream} = ALLM.stream_generate(engine, ALLM.request([ALLM.user("hi")]))
+    iex> response =
+    ...>   stream
+    ...>   |> Enum.reduce(ALLM.StreamCollector.new(), &ALLM.StreamCollector.apply_event(&2, &1))
+    ...>   |> ALLM.StreamCollector.to_response()
+    iex> {response.output_text, response.finish_reason}
+    {"Hello", :stop}
 
 ## The event union
 
@@ -174,11 +183,60 @@ Enum.each(stream, fn
 end)
 ```
 
-If you're using `StreamCollector.collect/1`, the collector folds the
-mid-stream error into the response struct's `:metadata.error` field and
-returns `{:ok, response}` with `finish_reason: :error`. Pre-flight
-errors (validation failures, missing adapter) surface as `{:error, _}`
-at the `stream_generate/3` call site, before the stream is built.
+If you fold the stream with `ALLM.StreamCollector`, the collector puts
+the mid-stream error in the response's `:metadata.error` field and
+`StreamCollector.to_response/1` returns a response with
+`finish_reason: :error` — never `{:error, _}`:
+
+    iex> engine = ALLM.Engine.new(
+    ...>   adapter: ALLM.Providers.Fake,
+    ...>   adapter_opts: [stream_script: [[{:text_delta, "par"}, {:error, :rate_limited}]]]
+    ...> )
+    iex> {:ok, stream} = ALLM.stream_generate(engine, ALLM.request([ALLM.user("hi")]))
+    iex> response =
+    ...>   stream
+    ...>   |> Enum.reduce(ALLM.StreamCollector.new(), &ALLM.StreamCollector.apply_event(&2, &1))
+    ...>   |> ALLM.StreamCollector.to_response()
+    iex> {response.output_text, response.finish_reason, response.metadata.error.reason}
+    {"par", :error, :rate_limited}
+
+Pre-flight errors (validation failures, missing adapter) surface as
+`{:error, _}` at the `stream_generate/3` call site, before the stream is
+built.
+
+Audio streams are the exception to the fold. A stream from
+`ALLM.stream_synthesize/3`, `ALLM.stream_synthesize_input/3` or
+`ALLM.stream_transcribe/3` that fails after opening ends with a terminal
+`{:error, err}` event — nothing follows it — and
+`ALLM.AudioStream.collect_speech/1` / `collect_transcription/1` return
+`{:error, err}` rather than a response. See "A failed stream ends with
+an error" in `audio.md`.
+
+## Audio streams
+
+The streaming audio calls use the same lazy, consume-to-dispatch shape
+but a different event vocabulary: `ALLM.stream_synthesize/3` and
+`ALLM.stream_synthesize_input/3` return a stream of
+`t:ALLM.SpeechEvent.t/0` values (`:speech_started`, `:audio_delta`,
+`:speech_completed`), and `ALLM.stream_transcribe/3` returns
+`t:ALLM.TranscriptionEvent.t/0` values (`:transcription_started`,
+`:partial_transcript`, `:committed_transcript`,
+`:transcription_completed`). They are not `ALLM.Event`
+tuples, so `ALLM.StreamCollector` and the filter opts above don't apply;
+fold them with `ALLM.AudioStream.collect_speech/1` and
+`ALLM.AudioStream.collect_transcription/1` instead.
+
+    iex> engine = ALLM.Engine.new(
+    ...>   speech_adapter: ALLM.Providers.FakeSpeech,
+    ...>   adapter_opts: [chunk_bytes: 8]
+    ...> )
+    iex> {:ok, stream} = ALLM.stream_synthesize(engine, "Hello there.")
+    iex> stream |> Enum.to_list() |> Enum.map(&elem(&1, 0))
+    [:speech_started, :audio_delta, :audio_delta, :audio_delta, :speech_completed]
+
+Audio streams are never retried. `audio.md` covers them in full,
+including feeding a live audio source into `stream_transcribe/3` and
+speaking a chat stream as it is written.
 
 ## Timeouts — reasoning models and the first chunk
 
@@ -223,6 +281,7 @@ provider request body. `ALLM.Adapter.transport_opts/0` lists the full set
 ## Where to next
 
 * `tools.md` — streaming + tool calls.
-* `errors_and_retries.md` — retry policy for transient errors.
+* `errors_and_retries.md` — which calls retry, and the retry policy.
+* `audio.md` — streaming speech and transcription.
 * `examples/02_streaming_text.exs` — runnable smoke test against any
   provider.
