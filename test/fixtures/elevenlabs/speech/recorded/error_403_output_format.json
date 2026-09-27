@@ -1,0 +1,32 @@
+{
+  "body": {
+    "detail": {
+      "code": "invalid_output_format",
+      "message": "Invalid output format 'ulaw_16000'. Must be one of: ['alaw_8000', 'm4a_aac_44100_128', 'mp3_22050_32', 'mp3_24000_48', 'mp3_44100_128', 'mp3_44100_192', 'mp3_44100_32', 'mp3_44100_64', 'mp3_44100_96', 'opus_48000_128', 'opus_48000_192', 'opus_48000_32', 'opus_48000_64', 'opus_48000_96', 'pcm_16000', 'pcm_22050', 'pcm_24000', 'pcm_32000', 'pcm_44100', 'pcm_48000', 'pcm_8000', 'ulaw_8000', 'wav_16000', 'wav_22050', 'wav_24000', 'wav_32000', 'wav_44100', 'wav_48000', 'wav_8000'].",
+      "param": "output_format",
+      "request_id": "cbd3046253cc98300af3d71bcfe892a3",
+      "status": "invalid_output_format",
+      "type": "validation_error"
+    }
+  },
+  "header_names": [
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-origin",
+    "access-control-max-age",
+    "alt-svc",
+    "content-type",
+    "date",
+    "server",
+    "strict-transport-security",
+    "transfer-encoding",
+    "vary",
+    "via",
+    "x-region",
+    "x-trace-id"
+  ],
+  "headers": {
+    "content-type": "application/json"
+  },
+  "status": 403
+}

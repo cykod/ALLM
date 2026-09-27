@@ -1,3 +1,18 @@
+## [FEAT] Add ulaw and alaw telephony speech formats
+*Sunday, September 27th at 9pm*
+ALLM.SpeechRequest.formats/0 gains :ulaw and :alaw (8 kHz). ElevenLabs maps 
+them to ulaw_8000 / alaw_8000 on synthesize, /stream and /stream-input, 
+defaulting and restricting sample_rate to 8000; OpenAI refuses both with 
+:unsupported_feature before key resolution. SpeechResponse maps :ulaw to 
+audio/basic (also reading ElevenLabs' audio/ulaw) and :alaw to audio/alaw. A 
+live probe with a negative control recorded both formats (200, audio/ulaw and 
+audio/alaw) and ElevenLabs' 403 invalid_output_format envelope, which the 
+adapter now classifies as :unsupported_feature instead of 
+:authentication_failed. Additive, but exhaustive matches over 
+SpeechRequest.format() gain two clauses.
+
+---
+
 ## [OTHR] Consolidate provider error and option helpers into Support
 *Sunday, September 27th at 9pm*
 Closes the remaining HTTP-helper and stringify DRY tickets. 

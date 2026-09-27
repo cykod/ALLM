@@ -75,6 +75,28 @@ defmodule ALLM.Providers.Support.ElevenLabsTest do
       assert {:error, {:sample_rate, _}} = ElevenLabs.output_format(:mp3, 48_000)
     end
 
+    for {format, wire, mime} <- [
+          {:ulaw, "ulaw_8000", "audio/basic"},
+          {:alaw, "alaw_8000", "audio/alaw"}
+        ] do
+      test "#{format} defaults to and accepts only 8000 -> #{wire}" do
+        assert {:ok,
+                %{
+                  output_format: unquote(wire),
+                  format: unquote(format),
+                  mime_type: unquote(mime),
+                  sample_rate: 8_000
+                }} = ElevenLabs.output_format(unquote(format), nil)
+
+        assert {:ok, %{output_format: unquote(wire)}} =
+                 ElevenLabs.output_format(unquote(format), 8_000)
+
+        # The recorded `error_403_output_format.json` lists no other rate.
+        assert {:error, {:sample_rate, [8_000]}} =
+                 ElevenLabs.output_format(unquote(format), 16_000)
+      end
+    end
+
     test ":aac and :flac are refused" do
       assert {:error, {:format, :aac}} = ElevenLabs.output_format(:aac, nil)
       assert {:error, {:format, :flac}} = ElevenLabs.output_format(:flac, 24_000)
@@ -110,6 +132,14 @@ defmodule ALLM.Providers.Support.ElevenLabsTest do
     test "403 feature_not_available -> :unsupported_feature" do
       assert {:unsupported_feature, _} =
                classify_fixture(Fixtures.speech_synthesized(:error_403_feature))
+    end
+
+    test "the recorded invented-output_format 403 (invalid_output_format) -> :unsupported_feature" do
+      env = Fixtures.speech_recorded(:error_403_output_format)
+      assert env["status"] == 403
+
+      assert {:unsupported_feature, %{code: "invalid_output_format", type: "validation_error"}} =
+               classify_fixture(env)
     end
 
     test "the recorded tier-gate 403 (subscription_required) -> :unsupported_feature" do

@@ -6,7 +6,9 @@ defmodule ALLM.Providers.ElevenLabs.SpeechWireTest do
   **Provenance.** `recorded/` holds live responses written by
   `scripts/record_elevenlabs_audio_fixtures.exs` on 2026-09-26, including
   the assert-only `probe_*.json` outcomes (`tts_default.json` and
-  `error_401_bad_key.json` on 2026-09-27, from the adapter's own request), and none carries a `_comment`
+  `error_401_bad_key.json` on 2026-09-27, from the adapter's own request;
+  `tts_ulaw.json`, `tts_alaw.json` and `error_403_output_format.json` on
+  2026-09-27), and none carries a `_comment`
   marker. `synthesized/` files each carry one. Both halves are gated below
   by tests that read the raw file bytes, because the loaders strip the
   marker.
@@ -61,8 +63,8 @@ defmodule ALLM.Providers.ElevenLabs.SpeechWireTest do
 
   describe "fixture provenance" do
     @recorded ~w(probe_control tts_default tts_mp3 tts_pcm tts_wav tts_opus
-                 error_403_tier error_400_bad_key error_401_bad_key error_404_voice
-                 error_422)
+                 tts_ulaw tts_alaw error_403_tier error_403_output_format
+                 error_400_bad_key error_401_bad_key error_404_voice error_422)
     @synthesized ~w(error_401 error_429 error_402 error_quota error_403_feature
                     error_403_other error_400_too_long error_409 error_503)
 
@@ -90,7 +92,7 @@ defmodule ALLM.Providers.ElevenLabs.SpeechWireTest do
     end
 
     test "audio envelopes check out against their byte_size and sha256" do
-      for name <- [:tts_default, :tts_mp3, :tts_pcm, :tts_wav, :tts_opus] do
+      for name <- [:tts_default, :tts_mp3, :tts_pcm, :tts_wav, :tts_opus, :tts_ulaw, :tts_alaw] do
         env = Fixtures.speech_recorded(name)
         assert byte_size(OpenAITestFixtures.envelope_bytes(env)) == env["byte_size"]
       end
@@ -144,7 +146,11 @@ defmodule ALLM.Providers.ElevenLabs.SpeechWireTest do
           {:tts_mp3, [format: :mp3, sample_rate: 24_000], :mp3, "audio/mpeg", 24_000},
           {:tts_pcm, [format: :pcm], :pcm, "audio/pcm", 24_000},
           {:tts_wav, [format: :wav], :wav, "audio/wav", 24_000},
-          {:tts_opus, [format: :opus], :opus, "audio/opus", 48_000}
+          {:tts_opus, [format: :opus], :opus, "audio/opus", 48_000},
+          # ElevenLabs sends `audio/ulaw`; the canonical µ-law type is
+          # `audio/basic` (RFC 2046), and `audio/alaw` is what it sends for A-law.
+          {:tts_ulaw, [format: :ulaw], :ulaw, "audio/basic", 8_000},
+          {:tts_alaw, [format: :alaw], :alaw, "audio/alaw", 8_000}
         ] do
       test "recorded/#{name}.json decodes to #{inspect(format)} at #{rate} Hz", %{stub: stub} do
         env = Fixtures.speech_recorded(unquote(name))
@@ -182,6 +188,20 @@ defmodule ALLM.Providers.ElevenLabs.SpeechWireTest do
     test "a wav body starts with a RIFF header" do
       assert <<"RIFF", _::binary>> =
                OpenAITestFixtures.envelope_bytes(Fixtures.speech_recorded(:tts_wav))
+    end
+
+    # The telephony bodies are headerless G.711 samples: the recorded
+    # content types are ElevenLabs' own, and neither body starts with a
+    # RIFF (WAV) or ID3 (MP3) header.
+    for {name, content_type} <- [tts_ulaw: "audio/ulaw", tts_alaw: "audio/alaw"] do
+      test "recorded/#{name}.json is headerless #{content_type}" do
+        env = Fixtures.speech_recorded(unquote(name))
+        assert env["headers"]["content-type"] == unquote(content_type)
+        bytes = OpenAITestFixtures.envelope_bytes(env)
+        assert byte_size(bytes) > 0
+        refute match?(<<"RIFF", _::binary>>, bytes)
+        refute match?(<<"ID3", _::binary>>, bytes)
+      end
     end
 
     test "the recorded default response names request-id and character-cost headers" do
@@ -228,6 +248,28 @@ defmodule ALLM.Providers.ElevenLabs.SpeechWireTest do
                call(stub, req(format: :pcm, sample_rate: 44_100))
 
       assert err.message =~ "Pro tier"
+    end
+
+    # The probe's negative control: ElevenLabs rejects an output_format it
+    # does not know, so the 200s on ulaw_8000 / alaw_8000 are evidence.
+    test "error_403_output_format.json (ulaw_16000) is :unsupported_feature", %{stub: stub} do
+      env = Fixtures.speech_recorded(:error_403_output_format)
+      stub_env(stub, env)
+
+      assert {:error, %SpeechAdapterError{reason: :unsupported_feature, status: 403} = err} =
+               call(stub, req(format: :pcm))
+
+      assert err.metadata.code == "invalid_output_format"
+    end
+
+    test "error_403_output_format.json lists ulaw and alaw at 8000 Hz only" do
+      message = Fixtures.speech_recorded(:error_403_output_format)["body"]["detail"]["message"]
+
+      assert message =~ "Invalid output format 'ulaw_16000'"
+      [_, accepted] = String.split(message, "Must be one of:", parts: 2)
+
+      assert Regex.scan(~r/'(?:ulaw|alaw)_\d+'/, accepted) |> List.flatten() |> Enum.sort() ==
+               ["'alaw_8000'", "'ulaw_8000'"]
     end
 
     test "error_404_voice.json is :invalid_request with the provider code", %{stub: stub} do

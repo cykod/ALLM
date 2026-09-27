@@ -222,6 +222,13 @@ Other changes:
   563 ms in one measurement) and sends whole words only, so token deltas are
   not voiced as separate clips. Like Voyage, ElevenLabs has no chat
   adapter, so an engine pairs it with a chat provider
+- Add telephony speech formats `:ulaw` and `:alaw` (8 kHz G.711) to
+  `ALLM.SpeechRequest.formats/0`: `ALLM.Providers.ElevenLabs.Speech` sends
+  them as `ulaw_8000` / `alaw_8000` and refuses any other rate, and
+  `ALLM.Providers.OpenAI.Speech` refuses both as `:unsupported_feature`
+  before any request. The response MIME types are `audio/basic` and
+  `audio/alaw`. Additive, but an exhaustive `case` over
+  `SpeechRequest.format()` gains two clauses
 - Add the `[:allm, :stream_synthesize, :*]` and `[:allm, :stream_transcribe, :*]`
   spans (they stop when the stream is returned, so they carry no audio) and
   the `[:allm, :audio, :first_chunk]` event, which reports the time from the

@@ -313,10 +313,48 @@ defmodule ALLM.Providers.OpenAI.SpeechTest do
       end
     end
 
-    test "a nil sample_rate passes for every format" do
-      for format <- SpeechRequest.formats() do
+    # MODIFY (semantic change): :ulaw and :alaw are refused by the format
+    # gate, whatever the rate.
+    test "a nil sample_rate passes for every format OpenAI can produce" do
+      for format <- SpeechRequest.formats() -- [:ulaw, :alaw] do
         assert {:ok, %Req.Request{}} =
                  Speech.prepare_request(req(format: format), api_key: "sk-x")
+      end
+    end
+  end
+
+  describe "format gate (keyless)" do
+    for format <- [:ulaw, :alaw] do
+      test "#{inspect(format)} is :unsupported_feature naming the format, before any I/O" do
+        assert {:error,
+                %SpeechAdapterError{
+                  reason: :unsupported_feature,
+                  provider: :openai,
+                  metadata: %{field: :format, format: unquote(format)}
+                } = err} = Speech.synthesize(req(format: unquote(format)), @flunk_plug)
+
+        assert err.message =~ "cannot produce format"
+      end
+
+      test "#{inspect(format)} is refused by prepare_request/2 and stream_synthesize/2 too" do
+        assert {:error, %SpeechAdapterError{metadata: %{field: :format}}} =
+                 Speech.prepare_request(req(format: unquote(format)), @flunk_plug)
+
+        assert {:error, %SpeechAdapterError{metadata: %{field: :format}}} =
+                 Speech.stream_synthesize(req(format: unquote(format)), @flunk_plug)
+      end
+
+      # The format gate runs before the sample-rate gate, so a telephony
+      # request at its natural 8 kHz still names the format.
+      test "#{inspect(format)} at 8_000 names the format, not the rate" do
+        assert {:error, %SpeechAdapterError{metadata: %{field: :format}}} =
+                 Speech.synthesize(req(format: unquote(format), sample_rate: 8_000), @flunk_plug)
+      end
+    end
+
+    test "every other format passes the format gate" do
+      for format <- SpeechRequest.formats() -- [:ulaw, :alaw] do
+        assert :ok = Speech.run_gates(req(format: format), [])
       end
     end
   end

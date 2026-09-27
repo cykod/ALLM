@@ -32,6 +32,12 @@ defmodule ALLM.SpeechResponse do
   tables in the library. They are separate functions so that a provider's
   extra content type can extend the reverse table without changing the
   forward one.
+
+  `:ulaw` maps to `audio/basic`, the registered type for 8 kHz µ-law
+  (RFC 2046), and `:alaw` to `audio/alaw`, which has no registered
+  equivalent. ElevenLabs answers `ulaw_8000` with `audio/ulaw` and
+  `alaw_8000` with `audio/alaw` (observed 2026-09-27), so the reverse table
+  also reads `audio/ulaw` as `:ulaw`.
   """
 
   alias ALLM.{Serializer, SpeechRequest, Usage}
@@ -68,10 +74,18 @@ defmodule ALLM.SpeechResponse do
     aac: "audio/aac",
     flac: "audio/flac",
     wav: "audio/wav",
-    pcm: "audio/pcm"
+    pcm: "audio/pcm",
+    ulaw: "audio/basic",
+    alaw: "audio/alaw"
   }
 
-  @mime_to_format Map.new(@format_to_mime, fn {format, mime} -> {mime, format} end)
+  # Provider content types outside the forward table, read as a format.
+  # `audio/ulaw` is ElevenLabs' `ulaw_8000` content type (observed 2026-09-27).
+  @extra_mime_to_format %{"audio/ulaw" => :ulaw}
+
+  @mime_to_format @format_to_mime
+                  |> Map.new(fn {format, mime} -> {mime, format} end)
+                  |> Map.merge(@extra_mime_to_format)
 
   @doc """
   Build a `%SpeechResponse{}` from keyword opts.
@@ -102,6 +116,9 @@ defmodule ALLM.SpeechResponse do
       iex> ALLM.SpeechResponse.mime_to_format("audio/wav; codecs=1")
       :wav
 
+      iex> ALLM.SpeechResponse.mime_to_format("audio/ulaw")
+      :ulaw
+
       iex> ALLM.SpeechResponse.mime_to_format("video/mp4")
       nil
   """
@@ -119,6 +136,9 @@ defmodule ALLM.SpeechResponse do
 
       iex> ALLM.SpeechResponse.format_to_mime(:mp3)
       "audio/mpeg"
+
+      iex> ALLM.SpeechResponse.format_to_mime(:ulaw)
+      "audio/basic"
   """
   @spec format_to_mime(SpeechRequest.format()) :: String.t()
   def format_to_mime(format) when is_map_key(@format_to_mime, format),

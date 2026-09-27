@@ -39,8 +39,8 @@ defmodule ALLM.SpeechRequestTest do
   end
 
   describe "formats/0" do
-    test "is the closed six-atom list, in order" do
-      assert SpeechRequest.formats() == [:mp3, :opus, :aac, :flac, :wav, :pcm]
+    test "is the closed eight-atom list, in order" do
+      assert SpeechRequest.formats() == [:mp3, :opus, :aac, :flac, :wav, :pcm, :ulaw, :alaw]
     end
   end
 
@@ -81,6 +81,13 @@ defmodule ALLM.SpeechRequestTest do
     test "an absent sample_rate key decodes to nil" do
       json = Jason.encode!(%{"__type__" => "ALLM.SpeechRequest", "data" => %{"input" => "x"}})
       assert {:ok, %SpeechRequest{sample_rate: nil}} = Serializer.from_json(json)
+    end
+
+    for format <- [:ulaw, :alaw] do
+      test "format #{inspect(format)} with sample_rate 8_000 survives JSON as an atom" do
+        req = SpeechRequest.new(input: "x", format: unquote(format), sample_rate: 8_000)
+        assert {:ok, ^req} = req |> Serializer.to_json!() |> Serializer.from_json()
+      end
     end
 
     test "a default request round-trips through JSON" do

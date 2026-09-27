@@ -128,7 +128,18 @@ runs:
 `:format` names a file format, not a provider parameter. The closed set is:
 
     iex> ALLM.SpeechRequest.formats()
-    [:mp3, :opus, :aac, :flac, :wav, :pcm]
+    [:mp3, :opus, :aac, :flac, :wav, :pcm, :ulaw, :alaw]
+
+`:ulaw` and `:alaw` are telephony audio: headerless G.711 µ-law and A-law
+samples at 8,000 Hz mono, the format phone systems and SIP trunks carry.
+ElevenLabs produces both; OpenAI produces neither and refuses them (see
+"Errors and retries"). The response's MIME type is `audio/basic` for µ-law and
+`audio/alaw` for A-law:
+
+    iex> engine = ALLM.Engine.new(speech_adapter: ALLM.Providers.FakeSpeech)
+    iex> {:ok, response} = ALLM.synthesize(engine, "Your call is important.", format: :ulaw, sample_rate: 8_000)
+    iex> {response.format, response.audio.mime_type, response.sample_rate}
+    {:ulaw, "audio/basic", 8000}
 
 `nil` means "the provider's default" (MP3 on OpenAI). An unknown format is
 rejected before any call:
@@ -355,9 +366,9 @@ Both calls return three error types, checked in this order:
 
 `:unsupported_feature` is the adapter error for a request field the
 provider cannot express. ElevenLabs has no `:instructions` field, no AAC or
-FLAC output and no transcription `:prompt`, and OpenAI's PCM and WAV are
-fixed at 24,000 Hz, so each of those is refused before any request, and
-before the key lookup:
+FLAC output and no transcription `:prompt`, OpenAI has no µ-law or A-law
+output, and OpenAI's PCM and WAV are fixed at 24,000 Hz, so each of those
+is refused before any request, and before the key lookup:
 
     iex> engine = ALLM.Engine.new(speech_adapter: ALLM.Providers.ElevenLabs.Speech)
     iex> {:error, error} = ALLM.synthesize(engine, "Hello.", format: :aac)
@@ -367,6 +378,9 @@ before the key lookup:
     iex> {:error, error} = ALLM.synthesize(engine, "Hello.", format: :pcm, sample_rate: 16_000)
     iex> error.reason
     :unsupported_feature
+    iex> {:error, error} = ALLM.synthesize(engine, "Hello.", format: :ulaw)
+    iex> {error.reason, error.metadata.field}
+    {:unsupported_feature, :format}
 
 `:rate_limited`, `:provider_unavailable`, `:timeout` and `:network_error`
 are retried under the engine's retry policy. Every other reason, including
@@ -619,8 +633,8 @@ the playback rate silently.
 
 | Adapter | `:pcm` and `:wav` rates | Other formats |
 |---------|-------------------------|---------------|
-| OpenAI | 24,000 only | `:sample_rate` must be `nil` |
-| ElevenLabs | 8,000, 16,000, 22,050, **24,000**, 32,000, 44,100, 48,000 | `:mp3` 22,050, 24,000, **44,100**; `:opus` **48,000** |
+| OpenAI | 24,000 only | `:sample_rate` must be `nil`; `:ulaw` and `:alaw` are refused |
+| ElevenLabs | 8,000, 16,000, 22,050, **24,000**, 32,000, 44,100, 48,000 | `:mp3` 22,050, 24,000, **44,100**; `:opus` **48,000**; `:ulaw` and `:alaw` **8,000** only |
 
 Bold marks the default. A rate an adapter cannot produce is
 `:unsupported_feature`. On ElevenLabs, 44,100 Hz PCM and WAV need its Pro
@@ -749,6 +763,8 @@ Formats map onto ElevenLabs' `output_format` values:
 | `:opus` | `opus_48000_64` | `opus_48000_64` |
 | `:pcm` | `pcm_<rate>` | `pcm_24000` |
 | `:wav` | `wav_<rate>` | `wav_24000` |
+| `:ulaw` | `ulaw_8000` | `ulaw_8000` |
+| `:alaw` | `alaw_8000` | `alaw_8000` |
 | `:aac`, `:flac` | refused, `:unsupported_feature` | — |
 
 Other differences from OpenAI:

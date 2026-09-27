@@ -19,7 +19,15 @@ defmodule ALLM.Providers.Support.ElevenLabs do
   | `:opus` | 48000 (default) | `opus_48000_64` |
   | `:pcm` | 8000, 16000, 22050, 24000 (default), 32000, 44100, 48000 | `pcm_<rate>` |
   | `:wav` | the same rates as `:pcm`, 24000 by default | `wav_<rate>` |
+  | `:ulaw` | 8000 (default) | `ulaw_8000` |
+  | `:alaw` | 8000 (default) | `alaw_8000` |
   | `:aac`, `:flac` | none | ElevenLabs has no such output |
+
+  `ulaw_8000` and `alaw_8000` are the only G.711 values ElevenLabs lists:
+  its 403 `invalid_output_format` answer to an invented `ulaw_16000` names
+  every accepted value, and no other `ulaw_` or `alaw_` rate is among them
+  (observed 2026-09-27). The two answer with `audio/ulaw` and `audio/alaw`
+  content types and headerless 8-bit samples.
 
   ElevenLabs gates some formats by subscription tier: `pcm_44100` and
   `wav_44100` need the Pro tier, and the provider answers them on a lower
@@ -51,7 +59,9 @@ defmodule ALLM.Providers.Support.ElevenLabs do
     mp3: {[22_050, 24_000, 44_100], 44_100},
     opus: {[48_000], 48_000},
     pcm: {@pcm_rates, 24_000},
-    wav: {@pcm_rates, 24_000}
+    wav: {@pcm_rates, 24_000},
+    ulaw: {[8_000], 8_000},
+    alaw: {[8_000], 8_000}
   }
 
   @mp3_bitrates %{22_050 => 32, 24_000 => 48, 44_100 => 128}
@@ -63,12 +73,15 @@ defmodule ALLM.Providers.Support.ElevenLabs do
 
   # A 403 with one of these means the account or the plan cannot use a
   # feature (a tier-gated `output_format` answers `subscription_required` /
-  # `output_format_not_allowed`, observed 2026-09-26).
+  # `output_format_not_allowed`, observed 2026-09-26), or that ElevenLabs
+  # does not know the `output_format` at all (`invalid_output_format` with
+  # `type: validation_error`, observed 2026-09-27).
   @unsupported_codes [
     "feature_not_available",
     "insufficient_permissions",
     "subscription_required",
-    "output_format_not_allowed"
+    "output_format_not_allowed",
+    "invalid_output_format"
   ]
 
   # WebSocket error codes: the `error` value of a text-to-speech error frame
@@ -94,7 +107,7 @@ defmodule ALLM.Providers.Support.ElevenLabs do
   @typedoc "The resolved output of `output_format/2`."
   @type output :: %{
           output_format: String.t(),
-          format: :mp3 | :opus | :pcm | :wav,
+          format: :mp3 | :opus | :pcm | :wav | :ulaw | :alaw,
           mime_type: String.t(),
           sample_rate: pos_integer()
         }
@@ -157,6 +170,9 @@ defmodule ALLM.Providers.Support.ElevenLabs do
       iex> {:ok, out} = ALLM.Providers.Support.ElevenLabs.output_format(:pcm, 16_000)
       iex> out.output_format
       "pcm_16000"
+
+      iex> ALLM.Providers.Support.ElevenLabs.output_format(:ulaw, nil)
+      {:ok, %{output_format: "ulaw_8000", format: :ulaw, mime_type: "audio/basic", sample_rate: 8_000}}
 
       iex> ALLM.Providers.Support.ElevenLabs.output_format(:flac, nil)
       {:error, {:format, :flac}}

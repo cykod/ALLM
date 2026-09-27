@@ -69,7 +69,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   | `speed` | sent as `voice_settings.speed` |
   | `instructions` | ElevenLabs has no such field; refused (see gates) |
   | Options | merged **under** the fields above into the JSON body; a `"voice_settings"` map is merged with `speed`, so both are sent. `options["query"]` (a map) adds URL query parameters under `output_format`. `output_format`, `model_id` and `text` are dropped |
-  | 200 body | raw audio bytes; `content-type` names the format (`audio/mpeg`, `audio/pcm`, `audio/wav`, `audio/opus`) |
+  | 200 body | raw audio bytes; `content-type` names the format (`audio/mpeg`, `audio/pcm`, `audio/wav`, `audio/opus`, `audio/ulaw`, `audio/alaw`) |
   | Correlation | the `request-id` response header → `response.id` |
   | Cost | the `character-cost` response header → `response.raw` as `%{"character_cost" => n}` |
   | Usage | **none**: the body is raw audio, so `:usage` is an all-`nil` `%ALLM.Usage{}` |
@@ -83,7 +83,15 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   | `:opus` | **48000** | `opus_48000_64` |
   | `:pcm` | 8000, 16000, 22050, **24000**, 32000, 44100, 48000 | `pcm_<rate>` |
   | `:wav` | the same, **24000** by default | `wav_<rate>` |
+  | `:ulaw` | **8000** | `ulaw_8000` |
+  | `:alaw` | **8000** | `alaw_8000` |
   | `:aac`, `:flac` | — | refused, `:unsupported_feature` |
+
+  `:ulaw` and `:alaw` are headerless 8 kHz G.711 telephony audio. ElevenLabs
+  sends them as `audio/ulaw` and `audio/alaw`; the response's
+  `:audio.mime_type` is the canonical `audio/basic` for µ-law and
+  `audio/alaw` for A-law. Any other rate for either is refused with
+  `:unsupported_feature` and `metadata.field: :sample_rate`.
 
   `pcm_44100` and `wav_44100` need ElevenLabs' Pro tier; a lower tier's 403
   surfaces as `:unsupported_feature`.
@@ -215,7 +223,7 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   `"#{@default_model}"` when the request leaves them `nil`; `output_format`
   is `mp3_44100_128` for a `nil` format, and a `nil` `sample_rate` takes the
   format's default (44,100 for mp3, 48,000 for opus, 24,000 for pcm and
-  wav); the receive timeout is #{div(@default_timeout_ms, 1000)} s when
+  wav, 8,000 for ulaw and alaw); the receive timeout is #{div(@default_timeout_ms, 1000)} s when
   `opts[:request_timeout]` is absent.
 
   **Refused before any I/O** with `:unsupported_feature`: `instructions`,

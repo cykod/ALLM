@@ -105,6 +105,15 @@ defmodule ALLM.Providers.ElevenLabs.SpeechTest do
                "https://api.elevenlabs.io/v1/text-to-speech/abc123?output_format=pcm_16000"
     end
 
+    for {format, wire} <- [ulaw: "ulaw_8000", alaw: "alaw_8000"] do
+      test "format #{inspect(format)} sends output_format=#{wire}" do
+        assert Speech.url(req(format: unquote(format)), []) =~ "?output_format=#{unquote(wire)}"
+
+        assert Speech.url(req(format: unquote(format), sample_rate: 8_000), []) =~
+                 "?output_format=#{unquote(wire)}"
+      end
+    end
+
     test "options query merges under output_format" do
       url =
         Speech.url(
@@ -151,6 +160,16 @@ defmodule ALLM.Providers.ElevenLabs.SpeechTest do
 
       assert err.metadata.field == :sample_rate
       assert err.metadata.sample_rate == 24_000
+    end
+
+    for format <- [:ulaw, :alaw] do
+      test "format #{inspect(format)} at 16000 -> :unsupported_feature naming the rate" do
+        assert {:error, %SpeechAdapterError{reason: :unsupported_feature} = err} =
+                 Speech.synthesize(req(format: unquote(format), sample_rate: 16_000), @flunk_plug)
+
+        assert err.metadata.field == :sample_rate
+        assert err.message =~ "[8000]"
+      end
     end
 
     test "empty input -> :invalid_request" do

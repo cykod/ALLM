@@ -21,6 +21,10 @@ defmodule ALLM.SpeechRequest do
     refuses the request, and the atoms are protocol-legal rather than a
     promise that every provider accepts every one. The response reports the
     format that actually arrived (`ALLM.SpeechResponse`'s `:format`).
+    `:ulaw` and `:alaw` are headerless G.711 µ-law and A-law telephony
+    audio, 8,000 Hz mono; of the bundled adapters only
+    `ALLM.Providers.ElevenLabs.Speech` produces them, and
+    `ALLM.Providers.OpenAI.Speech` refuses them with `:unsupported_feature`.
   - `:instructions`: optional delivery guidance for models that accept it.
   - `:sample_rate`: the sample rate in Hz of the audio to produce, or
     `nil` for the adapter's default for the format. It matters most for
@@ -54,7 +58,7 @@ defmodule ALLM.SpeechRequest do
   alias ALLM.Serializer
 
   @typedoc "A synthesized audio file format."
-  @type format :: :mp3 | :opus | :aac | :flac | :wav | :pcm
+  @type format :: :mp3 | :opus | :aac | :flac | :wav | :pcm | :ulaw | :alaw
 
   @type t :: %__MODULE__{
           input: String.t(),
@@ -80,7 +84,7 @@ defmodule ALLM.SpeechRequest do
     metadata: %{}
   ]
 
-  @formats [:mp3, :opus, :aac, :flac, :wav, :pcm]
+  @formats [:mp3, :opus, :aac, :flac, :wav, :pcm, :ulaw, :alaw]
 
   @doc """
   Build a `%SpeechRequest{}` from keyword opts.
@@ -101,10 +105,13 @@ defmodule ALLM.SpeechRequest do
   The closed list of `:format` values, and the single source for the
   validator and every adapter's format mapping.
 
+  An exhaustive `case` over `t:format/0` needs a clause for each. `:ulaw`
+  and `:alaw` (8 kHz G.711 telephony audio) were added after the first six.
+
   ## Examples
 
       iex> ALLM.SpeechRequest.formats()
-      [:mp3, :opus, :aac, :flac, :wav, :pcm]
+      [:mp3, :opus, :aac, :flac, :wav, :pcm, :ulaw, :alaw]
   """
   @spec formats() :: [format()]
   def formats, do: @formats

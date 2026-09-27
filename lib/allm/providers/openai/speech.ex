@@ -33,6 +33,10 @@ defmodule ALLM.Providers.OpenAI.Speech do
   @pcm_sample_rate 24_000
   @pcm_formats [:pcm, :wav]
 
+  # `ALLM.SpeechRequest.formats/0` members OpenAI's `response_format` has no
+  # value for: 8 kHz G.711 telephony audio. Refused before any I/O.
+  @unsupported_formats [:ulaw, :alaw]
+
   # Option keys that would change the RESPONSE SHAPE this decoder relies on.
   # `stream_format: "sse"` turns the raw-audio body into an event stream.
   @reserved_options ["stream_format"]
@@ -63,7 +67,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
   | `input` | `ALLM.SpeechRequest.input`, at most #{@max_input_code_points} code points |
   | `model` | `:model`, or `#{@default_model}` when `nil` |
   | `voice` | `:voice`, or `#{@default_voice}` when `nil`. Forwarded verbatim; OpenAI's valid set differs per model |
-  | `response_format` | `:format` as a string (`mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`); omitted when `nil`, and OpenAI answers `mp3` |
+  | `response_format` | `:format` as a string (`mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`); omitted when `nil`, and OpenAI answers `mp3`. `:ulaw` and `:alaw` have no OpenAI value and are refused (see gates) |
   | `instructions`, `speed` | forwarded when set, omitted when `nil`. OpenAI accepts `instructions` on `tts-1` with a 200 even though it documents that model as ignoring them |
   | Options | `ALLM.SpeechRequest.options` merged **under** the fields above; `stream_format` is dropped |
   | 200 body | raw audio bytes; `content-type` names the format |
@@ -96,14 +100,18 @@ defmodule ALLM.Providers.OpenAI.Speech do
        one counts once. The unit was settled by a live probe on 2026-09-24.
        A provider 400 whose message names `string_too_long` maps to the same
        reason, so a caller whose model has another limit sees one reason.
-    3. **Sample rate.** OpenAI cannot produce a requested rate. For `:pcm`
+    3. **Format.** `:ulaw` and `:alaw` (8 kHz telephony audio) have no
+       `response_format` value → `:unsupported_feature` with
+       `metadata.field: :format`. This runs before the sample-rate gate, so
+       a telephony request at 8,000 Hz names the format.
+    4. **Sample rate.** OpenAI cannot produce a requested rate. For `:pcm`
        and `:wav` a `sample_rate` of `nil` or `#{@pcm_sample_rate}` passes;
        for every other format (and for a `nil` format, which OpenAI answers
        as `mp3`) only `nil` passes. Anything else is `:unsupported_feature`
        with `metadata.field: :sample_rate`.
 
   `synthesize/2`, `prepare_request/2` and `stream_synthesize/2` run the same
-  three gates.
+  four gates.
 
   ## Response
 
@@ -200,12 +208,16 @@ defmodule ALLM.Providers.OpenAI.Speech do
   Returns `{:ok, %ALLM.SpeechResponse{}}` or
   `{:error, %ALLM.Error.SpeechAdapterError{}}`. The one exception is
   `ALLM.Keys.fetch!/2`, which raises `%ALLM.Error.EngineError{reason: :missing_key}`
-  by design; all three pre-flight gates run ahead of it.
+  by design; all four pre-flight gates run ahead of it.
 
   **Sample rate:** `response.sample_rate` is `#{@pcm_sample_rate}` for `:pcm`
   and `:wav` and `nil` for every other format. A request `sample_rate` other
   than `nil` (or `#{@pcm_sample_rate}` for `:pcm` / `:wav`) is refused with
   `:unsupported_feature` before any I/O.
+
+  **Formats:** `:ulaw` and `:alaw` are refused with `:unsupported_feature`
+  and `metadata.field: :format` before any I/O; OpenAI has no telephony
+  output.
 
   **Injected defaults:** `model` is `"#{@default_model}"` and `voice` is
   `"#{@default_voice}"` when the request leaves them `nil`, and the receive
@@ -273,7 +285,7 @@ defmodule ALLM.Providers.OpenAI.Speech do
 
   Returns `{:ok, enumerable}` of `ALLM.SpeechEvent` values, or
   `{:error, %ALLM.Error.SpeechAdapterError{}}` from a pre-flight gate. The
-  three gates of `synthesize/2` run first, then `ALLM.Keys.fetch!/2` (which
+  four gates of `synthesize/2` run first, then `ALLM.Keys.fetch!/2` (which
   raises `%ALLM.Error.EngineError{reason: :missing_key}` by design). No
   HTTP request is made until the enumerable is reduced.
 
@@ -333,6 +345,11 @@ defmodule ALLM.Providers.OpenAI.Speech do
       iex> {:error, err} = ALLM.Providers.OpenAI.Speech.stream_synthesize(req, [])
       iex> err.reason
       :unsupported_feature
+
+      iex> req = ALLM.SpeechRequest.new(input: "Hi.", format: :ulaw)
+      iex> {:error, err} = ALLM.Providers.OpenAI.Speech.stream_synthesize(req, [])
+      iex> {err.reason, err.metadata.field}
+      {:unsupported_feature, :format}
   """
   @impl ALLM.SpeechStreamAdapter
   @spec stream_synthesize(SpeechRequest.t(), keyword()) ::
@@ -499,17 +516,31 @@ defmodule ALLM.Providers.OpenAI.Speech do
   # ---------------------------------------------------------------------------
 
   @doc false
-  # All three gates run ahead of `Keys.fetch!/2`, which is what keeps the
+  # All four gates run ahead of `Keys.fetch!/2`, which is what keeps the
   # unscripted conformance cases green in a keyless environment. Shared by
   # `synthesize/2`, `prepare_request/2` and `stream_synthesize/2`.
   @impl SpeechSupport
   @spec run_gates(SpeechRequest.t(), keyword()) :: :ok | {:error, SpeechAdapterError.t()}
   def run_gates(%SpeechRequest{} = request, opts) do
     with :ok <- SpeechSupport.gate_input_shape(request, :openai, opts),
-         :ok <- gate_input_length(request, opts) do
+         :ok <- gate_input_length(request, opts),
+         :ok <- gate_format(request, opts) do
       gate_sample_rate(request, opts)
     end
   end
+
+  defp gate_format(%SpeechRequest{format: format}, opts) when format in @unsupported_formats do
+    {:error,
+     SpeechAdapterError.new(:unsupported_feature,
+       provider: :openai,
+       message:
+         "OpenAI cannot produce format #{inspect(format)}; its response_format has no " <>
+           "8 kHz telephony output",
+       metadata: HTTPResponse.build_metadata(%{field: :format, format: format}, opts)
+     )}
+  end
+
+  defp gate_format(%SpeechRequest{}, _opts), do: :ok
 
   # OpenAI produces 24 kHz for `pcm` / `wav` and exposes no rate parameter.
   defp gate_sample_rate(%SpeechRequest{sample_rate: nil}, _opts), do: :ok

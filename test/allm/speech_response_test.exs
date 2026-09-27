@@ -10,7 +10,9 @@ defmodule ALLM.SpeechResponseTest do
     aac: "audio/aac",
     flac: "audio/flac",
     wav: "audio/wav",
-    pcm: "audio/pcm"
+    pcm: "audio/pcm",
+    ulaw: "audio/basic",
+    alaw: "audio/alaw"
   ]
 
   describe "new/1" do
@@ -47,6 +49,13 @@ defmodule ALLM.SpeechResponseTest do
       test "#{mime} → #{format}" do
         assert SpeechResponse.mime_to_format(unquote(mime)) == unquote(format)
       end
+    end
+
+    # ElevenLabs answers `ulaw_8000` with `audio/ulaw` (observed 2026-09-27,
+    # recorded in test/fixtures/elevenlabs/speech/recorded/tts_ulaw.json).
+    test "audio/ulaw, ElevenLabs' content type, is also :ulaw" do
+      assert SpeechResponse.mime_to_format("audio/ulaw") == :ulaw
+      assert SpeechResponse.mime_to_format("Audio/ULAW; rate=8000") == :ulaw
     end
 
     test "strips parameters after ';'" do

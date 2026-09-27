@@ -165,12 +165,24 @@ defmodule ALLM.Providers.ElevenLabs.SpeechStreamTest do
       assert [{:speech_started, %{format: :mp3, sample_rate: 44_100, mime_type: "audio/mpeg"}} | _] =
                Enum.to_list(stream)
     end
+
+    test "a ulaw stream (ElevenLabs' audio/ulaw) reports :ulaw, audio/basic, 8000 and requests ulaw_8000" do
+      ref = FinchStub.install([<<255, 126>>], initial_headers: [{"content-type", "audio/ulaw"}])
+      {:ok, stream} = Speech.stream_synthesize(req(format: :ulaw), http_opts(ref))
+
+      assert [{:speech_started, %{format: :ulaw, sample_rate: 8_000, mime_type: "audio/basic"}} | _] =
+               Enum.to_list(stream)
+
+      assert Speech.stream_url(req(format: :alaw), []) =~ "/stream?output_format=alaw_8000"
+    end
   end
 
   describe "stream_synthesize/2 pre-flight gates (keyless, raising :finch_module)" do
     for {label, fields, reason, field} <- [
           {"instructions", [instructions: "x"], :unsupported_feature, :instructions},
           {"format :aac", [format: :aac], :unsupported_feature, :format},
+          {"ulaw at 16_000", [format: :ulaw, sample_rate: 16_000], :unsupported_feature,
+           :sample_rate},
           {"opus at 24_000", [format: :opus, sample_rate: 24_000], :unsupported_feature,
            :sample_rate},
           {"empty input", [input: ""], :invalid_request, :input}

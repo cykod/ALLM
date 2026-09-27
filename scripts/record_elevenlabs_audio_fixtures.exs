@@ -73,7 +73,9 @@
 # the `/stream-input` sessions (the WebSocket error arms are rejected before
 # synthesis). The realtime arms send about 12 s of the fox clip in all
 # (Scribe v2 Realtime is billed per hour of audio). One clean run is well
-# under $0.01; a fully recorded tree costs $0.00.
+# under $0.01; a fully recorded tree costs $0.00. The telephony arms
+# (`tts_ulaw`, `tts_alaw`, added 2026-09-27) send "Hello." twice more (12
+# characters, about $0.0006); their control is rejected before synthesis.
 #
 # This script is NOT in the published Hex package (`scripts/` is excluded).
 
@@ -173,6 +175,28 @@ defmodule RecordElevenLabsAudioFixtures do
       tts_format_arm(:tts_pcm, [format: :pcm], "audio/pcm"),
       tts_format_arm(:tts_wav, [format: :wav], "audio/wav"),
       tts_format_arm(:tts_opus, [format: :opus], "audio/opus"),
+      # Telephony formats (added 2026-09-27). The content types were first
+      # seen in a one-off discovery call the same day and are asserted here
+      # before either envelope is written.
+      tts_format_arm(:tts_ulaw, [format: :ulaw], "audio/ulaw"),
+      tts_format_arm(:tts_alaw, [format: :alaw], "audio/alaw"),
+      %{
+        # The negative control for the two arms above: an invented
+        # `output_format` must be REJECTED, or their 200s prove nothing. The
+        # invented value is `ulaw_16000`, so the same response also settles
+        # the adapter's "8000 only" rate set: the 403 message lists every
+        # accepted value, and the verdict requires ulaw_8000 and alaw_8000 to
+        # be the only G.711 entries. Rejected before synthesis, so unbilled.
+        id: :output_format_control,
+        label:
+          "CONTROL tts invented output_format=ulaw_16000 -> 403 invalid_output_format " <>
+            "listing ulaw_8000 and alaw_8000 as the only G.711 values",
+        targets: [speech_path("error_403_output_format")],
+        run: fn -> tts_output_format(speech_request(format: :ulaw), "ulaw_16000") end,
+        expect: [403],
+        verify: &verify_output_format_control/1,
+        write: :json_envelope
+      },
       %{
         id: :tier_gate,
         label: "tts output_format=pcm_44100 -> 403 subscription_required (Pro tier)",
@@ -956,6 +980,25 @@ defmodule RecordElevenLabsAudioFixtures do
     )
   end
 
+  defp verify_output_format_control({:ok, resp} = result) do
+    detail = resp.body |> decode() |> detail_of()
+    message = if is_map(detail) and is_binary(detail["message"]), do: detail["message"], else: ""
+    # Only the accepted list: the message also echoes the invented value.
+    accepted = message |> String.split("Must be one of:", parts: 2) |> Enum.at(1, "")
+    g711 = ~r/'(?:ulaw|alaw)_\d+'/ |> Regex.scan(accepted) |> List.flatten() |> Enum.sort()
+    code = verify_detail(result, "code", "invalid_output_format")
+
+    verdict(
+      [
+        {code.ok?, "detail.code is not invalid_output_format"},
+        {message =~ "'ulaw_16000'", "the message does not name the rejected value"},
+        {g711 == ["'alaw_8000'", "'ulaw_8000'"],
+         "G.711 values listed are #{inspect(g711)}, want exactly alaw_8000 and ulaw_8000"}
+      ],
+      "  (G.711 values listed: #{inspect(g711)})"
+    )
+  end
+
   defp verify_detail_list({:ok, resp}) do
     detail = resp.body |> decode() |> detail_of()
 
@@ -1231,6 +1274,31 @@ defmodule RecordElevenLabsAudioFixtures do
     Req.post(Speech.url(request, []),
       headers: [{"xi-api-key", key(key_kind)}],
       json: edit_body.(Speech.to_json_body(request, [])),
+      receive_timeout: 120_000,
+      retry: false,
+      decode_body: false
+    )
+  end
+
+  # `tts/3` with the adapter's own URL except for its `output_format`, which
+  # is replaced by `output_format`: the one arm that sends a value the
+  # adapter would never build.
+  defp tts_output_format(%SpeechRequest{} = request, output_format) do
+    bump()
+
+    url =
+      request
+      |> Speech.url([])
+      |> URI.parse()
+      |> then(fn uri ->
+        query = uri.query |> URI.decode_query() |> Map.put("output_format", output_format)
+        %{uri | query: URI.encode_query(query)}
+      end)
+      |> URI.to_string()
+
+    Req.post(url,
+      headers: [{"xi-api-key", key(:live)}],
+      json: Speech.to_json_body(request, []),
       receive_timeout: 120_000,
       retry: false,
       decode_body: false

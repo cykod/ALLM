@@ -37,6 +37,18 @@ defmodule ALLM.Providers.FakeSpeechTest do
       assert resp.audio.mime_type == "audio/wav"
     end
 
+    test "format: :ulaw / :alaw yield audio/basic / audio/alaw, synchronously and streamed" do
+      for {format, mime} <- [ulaw: "audio/basic", alaw: "audio/alaw"] do
+        req = request(format: format, sample_rate: 8_000)
+        assert {:ok, resp} = FakeSpeech.synthesize(req, [])
+        assert {resp.format, resp.audio.mime_type, resp.sample_rate} == {format, mime, 8_000}
+
+        assert {:ok, events} = FakeSpeech.stream_synthesize(req, [])
+        assert [{:speech_started, started} | _] = Enum.to_list(events)
+        assert {started.format, started.mime_type} == {format, mime}
+      end
+    end
+
     test "every format's mime comes from SpeechResponse.format_to_mime/1" do
       for format <- SpeechRequest.formats() do
         assert {:ok, resp} = FakeSpeech.synthesize(request(format: format), [])
