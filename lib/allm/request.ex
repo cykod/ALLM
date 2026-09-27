@@ -19,12 +19,39 @@ defmodule ALLM.Request do
   | `:response_format` | `nil \\| :text \\| %{type: :json_object} \\| %{type: :json_schema, ...}` | `nil` | Build with `ALLM.json_schema/3`. |
   | `:stream` | `boolean` | `false` | |
   | `:structured_finalize` | `boolean` | `false` | Synthetic-tool fallback for providers without native JSON-schema mode. |
+  | `:prompt_cache` | `nil \\| %{key: String.t \\| nil, retention: :short \\| :long}` | `nil` | Provider-neutral prompt-cache request. See "Prompt caching". |
   | `:options` | `map` | `%{}` | Adapter-opaque pass-through. |
   | `:metadata` | `map` | `%{}` | Caller-owned. |
 
   Validation lives in `ALLM.Validate.request/1`. `new/2` itself does not
   validate — it stays composable so callers opt into validation
   explicitly.
+
+  ## Prompt caching
+
+  `:prompt_cache` asks the provider to cache the request's prompt prefix.
+  It is `nil` (no request) or a map with exactly two keys:
+
+    * `:key` — a routing key some providers use to send related requests to
+      the same cache, or `nil`. Sent verbatim; never hashed or transformed.
+    * `:retention` — `:short` keeps the provider's default cache lifetime
+      and sends no lifetime field. `:long` asks for the longest per-request
+      lifetime the provider offers.
+
+  `ALLM.Validate.request/1` rejects any other shape with
+  `{:prompt_cache, :invalid_shape}`. The field is typed rather than an
+  `:options` entry so it has one validated shape and survives a JSON
+  round-trip with its atoms restored. Raw provider cache parameters placed
+  in `:options` are still sent as-is and take precedence over what an
+  adapter derives from this field.
+
+      iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "hi"}],
+      ...>   prompt_cache: %{key: "recipe-42", retention: :long})
+      iex> ALLM.Validate.request(req)
+      :ok
+      iex> {:ok, decoded} = ALLM.Serializer.from_json(ALLM.Serializer.to_json!(req))
+      iex> decoded.prompt_cache
+      %{key: "recipe-42", retention: :long}
 
   ## Round-trip
 
@@ -47,6 +74,8 @@ defmodule ALLM.Request do
 
   @type tool_choice :: :auto | :none | :required | String.t() | map() | nil
 
+  @type prompt_cache :: nil | %{key: String.t() | nil, retention: :short | :long}
+
   @type t :: %__MODULE__{
           model: String.t() | nil,
           messages: [Message.t()],
@@ -57,6 +86,7 @@ defmodule ALLM.Request do
           stream: boolean(),
           response_format: response_format(),
           structured_finalize: boolean(),
+          prompt_cache: prompt_cache(),
           options: map(),
           metadata: map()
         }
@@ -71,6 +101,7 @@ defmodule ALLM.Request do
     tool_choice: nil,
     stream: false,
     structured_finalize: false,
+    prompt_cache: nil,
     options: %{},
     metadata: %{}
   ]
@@ -111,6 +142,7 @@ defmodule ALLM.Request do
       stream: data["stream"] || false,
       response_format: decode_response_format(data["response_format"]),
       structured_finalize: data["structured_finalize"] || false,
+      prompt_cache: decode_prompt_cache(data["prompt_cache"]),
       options: data["options"] || %{},
       metadata: data["metadata"] || %{}
     }
@@ -151,6 +183,28 @@ defmodule ALLM.Request do
   end
 
   defp restore_response_format(other), do: other
+
+  # Restores the atom-keyed `prompt_cache` map. Only the exact two-key shape is
+  # decoded; anything else (a partial or over-full persisted map, a non-map)
+  # passes through unchanged so `ALLM.Validate.request/1` rejects it rather
+  # than the decoder raising or silently dropping keys.
+  defp decode_prompt_cache(nil), do: nil
+
+  defp decode_prompt_cache(%{"key" => key, "retention" => retention} = map)
+       when map_size(map) == 2 do
+    %{key: key, retention: decode_retention(retention)}
+  end
+
+  defp decode_prompt_cache(other), do: other
+
+  @doc false
+  # Shared with the call-opt normalization of `prompt_cache:`, which receives
+  # string-keyed maps from JSON round-tripped engine params. Never mints an
+  # atom: unknown values pass through so validation rejects them.
+  @spec decode_retention(term()) :: term()
+  def decode_retention("short"), do: :short
+  def decode_retention("long"), do: :long
+  def decode_retention(other), do: other
 end
 
 defimpl Jason.Encoder, for: ALLM.Request do

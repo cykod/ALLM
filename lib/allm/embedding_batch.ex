@@ -202,6 +202,7 @@ defmodule ALLM.EmbeddingBatch do
     :input_tokens,
     :output_tokens,
     :cached_input_tokens,
+    :cache_write_input_tokens,
     :reasoning_tokens,
     :total_tokens,
     :input_cost,

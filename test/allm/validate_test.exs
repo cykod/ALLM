@@ -167,6 +167,70 @@ defmodule ALLM.ValidateTest do
       assert {:response_format, :invalid_shape} in errors
     end
 
+    test "prompt_cache: nil and both retentions with a nil or binary key are :ok" do
+      base = [%Message{role: :user, content: "hi"}]
+      assert :ok = Validate.request(Request.new(base, prompt_cache: nil))
+      assert :ok = Validate.request(Request.new(base, prompt_cache: %{key: nil, retention: :short}))
+      assert :ok = Validate.request(Request.new(base, prompt_cache: %{key: "k", retention: :long}))
+    end
+
+    test "prompt_cache must be nil or a map with exactly :key and :retention" do
+      base = [%Message{role: :user, content: "hi"}]
+
+      for bad <- [
+            true,
+            "recipe-42",
+            [key: "k", retention: :short],
+            %{key: "k"},
+            %{retention: :short},
+            %{key: "k", retention: :short, ttl: "1h"}
+          ] do
+        assert {:error, %ValidationError{reason: :invalid_request, errors: errors}} =
+                 Validate.request(Request.new(base, prompt_cache: bad))
+
+        assert {bad, {:prompt_cache, :invalid_shape} in errors} == {bad, true}
+      end
+    end
+
+    test "prompt_cache :key must be nil or a non-empty binary" do
+      base = [%Message{role: :user, content: "hi"}]
+      assert :ok = Validate.request(Request.new(base, prompt_cache: %{key: "k", retention: :short}))
+
+      for bad_key <- ["", :k, 42] do
+        assert {:error, %ValidationError{errors: errors}} =
+                 Validate.request(
+                   Request.new(base, prompt_cache: %{key: bad_key, retention: :short})
+                 )
+
+        assert {bad_key, {:prompt_cache, :invalid_shape} in errors} == {bad_key, true}
+      end
+    end
+
+    test "prompt_cache :retention must be :short or :long" do
+      base = [%Message{role: :user, content: "hi"}]
+      assert :ok = Validate.request(Request.new(base, prompt_cache: %{key: nil, retention: :long}))
+
+      for bad_retention <- ["long", :forever, nil] do
+        assert {:error, %ValidationError{errors: errors}} =
+                 Validate.request(
+                   Request.new(base, prompt_cache: %{key: nil, retention: bad_retention})
+                 )
+
+        assert {bad_retention, {:prompt_cache, :invalid_shape} in errors} ==
+                 {bad_retention, true}
+      end
+    end
+
+    test "prompt_cache failing several rules adds exactly one error" do
+      req =
+        Request.new([%Message{role: :user, content: "hi"}],
+          prompt_cache: %{key: "", retention: :forever}
+        )
+
+      assert {:error, %ValidationError{errors: errors}} = Validate.request(req)
+      assert Enum.count(errors, &(&1 == {:prompt_cache, :invalid_shape})) == 1
+    end
+
     test "propagates per-message errors with [:messages, idx, :field] path prefix" do
       req =
         Request.new([

@@ -104,6 +104,7 @@ defmodule ALLM.Validate do
       |> validate_max_tokens(req.max_tokens)
       |> validate_response_format(req.response_format)
       |> validate_structured_finalize(req.structured_finalize, req.response_format)
+      |> validate_prompt_cache(req.prompt_cache)
       |> Enum.reverse()
 
     finalize(:invalid_request, errors)
@@ -607,6 +608,17 @@ defmodule ALLM.Validate do
 
   defp validate_response_format(errs, _),
     do: [{:response_format, :invalid_shape} | errs]
+
+  # `nil`, or a map with exactly `:key` (nil or non-empty binary) and
+  # `:retention` (`:short | :long`). Any failure adds ONE error.
+  defp validate_prompt_cache(errs, nil), do: errs
+
+  defp validate_prompt_cache(errs, %{key: key, retention: retention} = pc)
+       when map_size(pc) == 2 and retention in [:short, :long] and
+              (is_nil(key) or (is_binary(key) and key != "")),
+       do: errs
+
+  defp validate_prompt_cache(errs, _), do: [{:prompt_cache, :invalid_shape} | errs]
 
   defp validate_structured_finalize(errs, true, %{type: :json_schema}), do: errs
 

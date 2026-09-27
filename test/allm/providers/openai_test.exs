@@ -219,6 +219,73 @@ defmodule ALLM.Providers.OpenAITest do
   end
 
   # ---------------------------------------------------------------------------
+  # gpt-5-and-later model family (GPT-6 routing)
+  # ---------------------------------------------------------------------------
+
+  describe "gpt-5-and-later model family" do
+    @later_family [
+      "gpt-5",
+      "gpt-5.6",
+      "gpt-5.6-luna",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-10-x"
+    ]
+
+    test "every gpt-5+ id dispatches to :responses (gpt-6 ids fell through before)" do
+      for model <- @later_family do
+        assert {model, OpenAI.dispatch_endpoint(model, [])} == {model, :responses}
+      end
+    end
+
+    test "earlier families and gpt-image-* keep their endpoints" do
+      for model <- ["gpt-4o", "gpt-4.1", "gpt-3.5-turbo", "gpt-image-2"] do
+        assert {model, OpenAI.dispatch_endpoint(model, [])} == {model, :chat_completions}
+      end
+    end
+
+    test "forced :chat_completions on gpt-6-sol sends max_completion_tokens" do
+      r = req(model: "gpt-6-sol", max_tokens: 100)
+      body = OpenAI.to_openai_request_body(r, :chat_completions, [])
+      assert body["max_completion_tokens"] == 100
+      refute Map.has_key?(body, "max_tokens")
+    end
+
+    test "forced :chat_completions on gpt-6-sol keeps reasoning_effort on the wire" do
+      import ExUnit.CaptureLog
+
+      log =
+        capture_log([level: :debug], fn ->
+          body =
+            OpenAI.to_openai_request_body(
+              req(model: "gpt-6-sol"),
+              :chat_completions,
+              reasoning_effort: :low,
+              adapter_opts: [endpoint: :chat_completions]
+            )
+
+          assert body["reasoning_effort"] == "low"
+        end)
+
+      refute log =~ "reasoning controls ignored"
+    end
+
+    test "max_tokens rename covers every later family and no earlier non-4o/4.1 id" do
+      for model <- @later_family do
+        result =
+          OpenAI.translate_options([max_tokens: 7, endpoint: :chat_completions], req(model: model))
+
+        assert {model, result[:max_completion_tokens], result[:max_tokens]} == {model, 7, nil}
+      end
+
+      for model <- ["gpt-3.5-turbo", "gpt-4-turbo", "gpt-image-2"] do
+        assert OpenAI.translate_options([max_tokens: 7], req(model: model)) == [max_tokens: 7]
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # prepare_request/2
   # ---------------------------------------------------------------------------
 

@@ -1,3 +1,21 @@
+## [FEAT] Route GPT-6 models and add prompt-cache Layer-A fields
+*Sunday, September 27th at 5pm*
+Phase 27.0-27.1 of the prompt-caching design (spec §5.4, §5.9a). The OpenAI 
+adapter's three model-family tables now share one gpt-5-or-later pattern, so 
+gpt-6-* and later ids route to the Responses endpoint, send 
+max_completion_tokens on Chat Completions and keep their reasoning controls.
+
+- ALLM.Usage gains cache_write_input_tokens and documents input_tokens as 
+inclusive of cached reads and writes.
+- ALLM.Request gains a typed prompt_cache field (nil | %{key, retention: :short 
+| :long}) with an atom-safe JSON decode.
+- ALLM.Validate rejects malformed prompt_cache shapes with a single 
+{:prompt_cache, :invalid_shape}.
+- ALLM.EmbeddingBatch sums the new usage field across chunks.
+- Adds the design doc and its RECORDS companion.
+
+---
+
 ## [DOC] Apply the Phase 26 retro — forward DRY, claim-named mutants
 *Sunday, September 27th at 2pm*
 Applied .work/retro/2026-09-27-phase-26-elevenlabs-tts-sst_applied.md. In 

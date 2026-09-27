@@ -82,5 +82,29 @@ defmodule ALLM.UsageTest do
     end
   end
 
-  # NOTE: ALLM.Serializer JSON round-trip is deferred to sub-phase 1.5.
+  describe "cache_write_input_tokens" do
+    test "defaults to nil and new/1 sets it" do
+      assert Usage.new([]).cache_write_input_tokens == nil
+      assert Usage.new(cache_write_input_tokens: 5).cache_write_input_tokens == 5
+    end
+
+    test "non-nil cache fields survive term_to_binary and JSON round-trips" do
+      usage =
+        Usage.new(
+          input_tokens: 4200,
+          output_tokens: 12,
+          cached_input_tokens: 4096,
+          cache_write_input_tokens: 5,
+          total_tokens: 4212
+        )
+
+      assert usage == usage |> :erlang.term_to_binary() |> :erlang.binary_to_term()
+
+      assert {:ok, decoded} = usage |> Jason.encode!() |> ALLM.Serializer.from_json()
+      assert decoded == usage
+      # Falsifier: a __from_tagged__/1 missing the key decodes 5 as nil.
+      assert decoded.cache_write_input_tokens == 5
+      assert decoded.cached_input_tokens == 4096
+    end
+  end
 end

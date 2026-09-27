@@ -210,6 +210,7 @@ defmodule ALLM.EmbeddingBatchTest do
             input_tokens: 5,
             output_tokens: 1,
             cached_input_tokens: 2,
+            cache_write_input_tokens: 2,
             reasoning_tokens: 3,
             total_tokens: 5,
             input_cost: 0.001,
@@ -226,6 +227,7 @@ defmodule ALLM.EmbeddingBatchTest do
             input_tokens: 7,
             output_tokens: 2,
             cached_input_tokens: 4,
+            cache_write_input_tokens: 4,
             reasoning_tokens: 6,
             total_tokens: 7,
             input_cost: 0.004,
@@ -241,6 +243,7 @@ defmodule ALLM.EmbeddingBatchTest do
       assert merged.input_tokens == 12
       assert merged.output_tokens == 3
       assert merged.cached_input_tokens == 6
+      assert merged.cache_write_input_tokens == 6
       assert merged.reasoning_tokens == 9
       assert merged.total_tokens == 12
       assert_in_delta merged.input_cost, 0.005, 1.0e-9

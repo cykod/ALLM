@@ -10,7 +10,7 @@ defmodule ALLM.Providers.OpenAI do
     * `prepare_request/2` — returns an unfired `%Req.Request{}` with the API
       key already injected as `Authorization: Bearer <key>`.
     * `translate_options/2` — endpoint-aware `:max_tokens` rename per design
-      the documented contract (`:max_completion_tokens` for `gpt-4o*`/`gpt-4.1*`/`gpt-5*`
+      the documented contract (`:max_completion_tokens` for `gpt-4o*`/`gpt-4.1*`/`gpt-5*` and later
       on Chat Completions, `:max_output_tokens` on Responses, passthrough for
       older models). Also handles reasoning controls per the documented contract.
     * `requires_structured_finalize?/1` — capability declaration consumed by
@@ -22,11 +22,13 @@ defmodule ALLM.Providers.OpenAI do
   `dispatch_endpoint/2` selects between `:chat_completions` and `:responses`
   by (in order): explicit `opts[:endpoint]`, explicit
   `adapter_opts[:endpoint]`, the `@endpoint_dispatch` model-family regex
-  table (`gpt-5*` and `o[1-9]*` → `:responses`; `gpt-4*`/`gpt-3.5*` →
+  table (`gpt-5*`, every later numbered family such as `gpt-6*`, and
+  `o[1-9]*` → `:responses`; `gpt-4*`/`gpt-3.5*` →
   `:chat_completions`), and a default fallback of `:chat_completions`.
 
    lifts the prior unsupported-feature guard for `:responses`;
-  `gpt-5*` and o-series models now route to the Responses API end-to-end.
+  `gpt-5*`, later numbered families and o-series models now route to the
+  Responses API end-to-end.
 
   ## Reasoning controls
 
@@ -37,7 +39,7 @@ defmodule ALLM.Providers.OpenAI do
     * On `:responses`: nested under `reasoning: %{effort:..., summary:...}`
       (effort + summary share one sub-map); `verbosity:` passes through as a
       bare key.
-    * On `:chat_completions` for `gpt-5*`: `:reasoning_effort` and
+    * On `:chat_completions` for `gpt-5*` and later: `:reasoning_effort` and
       `:verbosity` pass through as bare keys; `:reasoning_summary` is
       stripped (Chat Completions does not surface it).
     * On `:chat_completions` for non-reasoning models: reasoning keys are
@@ -119,21 +121,32 @@ defmodule ALLM.Providers.OpenAI do
   # Default per-message receive timeout for streaming. Spec §7.2 + Invariant 10.
   @default_stream_timeout 60_000
 
+  # "gpt-5 and every later numbered family" (gpt-5*, gpt-6*, ..., gpt-10*).
+  # One pattern feeds all three model-family tables below, so a future
+  # family cannot be fixed in one table and missed in another. A digit must
+  # follow `gpt-`, so `gpt-image-*` never matches.
+  @gpt5_or_later_family "gpt-(?:[5-9]|[1-9]\\d)"
+  @gpt5_or_later Regex.compile!("^" <> @gpt5_or_later_family, "i")
+
   # Endpoint dispatch (Decision #1) — model-family regex → endpoint atom.
-  # Walked in order; first match wins. `gpt-5*` and `o[1-9]*` route to
-  # `:responses`; `gpt-(4|3.5)*` route to `:chat_completions`. Anything
-  # else falls through to the `:chat_completions` default in
+  # Walked in order; first match wins. `gpt-5*` and later and `o[1-9]*`
+  # route to `:responses`; `gpt-(4|3.5)*` route to `:chat_completions`.
+  # Anything else falls through to the `:chat_completions` default in
   # `dispatch_endpoint/2`.
   @endpoint_dispatch [
-    {~r/^gpt-5/i, :responses},
+    {@gpt5_or_later, :responses},
     {~r/^o[1-9]/i, :responses},
     {~r/^gpt-(4|3\.5)/i, :chat_completions}
   ]
 
   # max-tokens parameter rename (Decision #6).
   @responses_max_tokens_key :max_output_tokens
-  @chat_completions_new_max_tokens_models ~r/^gpt-(4o|4\.1|5)/
-  @chat_completions_reasoning_models ~r/^gpt-5/
+  @chat_completions_new_max_tokens_models Regex.compile!(
+                                            "^(?:gpt-(?:4o|4\\.1)|" <>
+                                              @gpt5_or_later_family <> ")",
+                                            "i"
+                                          )
+  @chat_completions_reasoning_models @gpt5_or_later
 
   # Reasoning-control closed enums (Decision #5). Used by Phase 10.6's
   # full reasoning-control plumbing; landed early so the closed sets are
@@ -268,10 +281,10 @@ defmodule ALLM.Providers.OpenAI do
 
   ## `:max_tokens` rename matrix
 
-  | Endpoint | Model regex | Output key |
+  | Endpoint | Model family | Output key |
   |----------|-------------|------------|
   | `:responses` | any | `:max_output_tokens` |
-  | `:chat_completions` | `~r/^gpt-(4o\|4\\.1\|5)/` | `:max_completion_tokens` |
+  | `:chat_completions` | `gpt-4o*`, `gpt-4.1*`, `gpt-5*` and every later `gpt-<N>*` family | `:max_completion_tokens` |
   | `:chat_completions` | anything else | `:max_tokens` (passthrough) |
 
   ## Reasoning controls
@@ -283,7 +296,7 @@ defmodule ALLM.Providers.OpenAI do
     * `:responses` — `:reasoning_effort` and `:reasoning_summary` merge into
       a single `reasoning: %{effort:..., summary:...}` sub-map; `:verbosity`
       passes through as `verbosity: "<atom>"`.
-    * `:chat_completions` for `gpt-5*` — `:reasoning_effort` and
+    * `:chat_completions` for `gpt-5*` and later — `:reasoning_effort` and
       `:verbosity` pass through as bare `reasoning_effort: "<atom>"` and
       `verbosity: "<atom>"`. `:reasoning_summary` is stripped (Chat
       Completions does not surface it).
@@ -463,7 +476,8 @@ defmodule ALLM.Providers.OpenAI do
   429/5xx/`:timeout`. Returns `{:ok, %Response{}}` on 2xx success or
   `{:error, %AdapterError{}}` on every failure shape.
 
-  Routes models matching `gpt-5*` or `o[1-9]*` to the Responses API
+  Routes `gpt-5*`, every later numbered family (`gpt-6*`, ...) and
+  `o[1-9]*` models to the Responses API
   (`POST /v1/responses`); other models route to Chat Completions
   (`POST /v1/chat/completions`). Both endpoints return canonical
   `%Response{}` shapes so callers do not need to know which wire ran.

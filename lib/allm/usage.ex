@@ -7,13 +7,26 @@ defmodule ALLM.Usage do
   adapter that knows its own pricing or by an optional model-catalog
   integration.
 
+  `nil` means the provider did not report a counter; `0` means it reported
+  zero.
+
+  ## Cached prompt tokens
+
+  `:input_tokens` is defined as the total prompt size: it includes the
+  tokens served from the provider's prompt cache (`:cached_input_tokens`) and
+  the tokens written to it on this call (`:cache_write_input_tokens`). So when
+  all three are integers, `cached_input_tokens + cache_write_input_tokens <=
+  input_tokens`, and `cached_input_tokens / input_tokens` is the cache hit
+  ratio whichever provider served the call.
+
   ## Fields
 
   | Field | Type | Notes |
   |-------|------|-------|
-  | `:input_tokens` | `non_neg_integer \\| nil` | |
+  | `:input_tokens` | `non_neg_integer \\| nil` | Total prompt tokens, including cached reads and cache writes. |
   | `:output_tokens` | `non_neg_integer \\| nil` | |
-  | `:cached_input_tokens` | `non_neg_integer \\| nil` | Provider-cached prompt tokens. |
+  | `:cached_input_tokens` | `non_neg_integer \\| nil` | Prompt tokens served from the provider's prompt cache. |
+  | `:cache_write_input_tokens` | `non_neg_integer \\| nil` | Prompt tokens written to the provider's prompt cache on this call. |
   | `:reasoning_tokens` | `non_neg_integer \\| nil` | Reasoning-model thinking tokens. |
   | `:total_tokens` | `non_neg_integer \\| nil` | |
   | `:input_cost` | `float \\| nil` | USD; populated when the adapter knows pricing. |
@@ -29,6 +42,7 @@ defmodule ALLM.Usage do
           input_tokens: non_neg_integer() | nil,
           output_tokens: non_neg_integer() | nil,
           cached_input_tokens: non_neg_integer() | nil,
+          cache_write_input_tokens: non_neg_integer() | nil,
           reasoning_tokens: non_neg_integer() | nil,
           total_tokens: non_neg_integer() | nil,
           input_cost: cost() | nil,
@@ -42,6 +56,7 @@ defmodule ALLM.Usage do
     :input_tokens,
     :output_tokens,
     :cached_input_tokens,
+    :cache_write_input_tokens,
     :reasoning_tokens,
     :total_tokens,
     :input_cost,
@@ -98,6 +113,7 @@ defmodule ALLM.Usage do
       input_tokens: data["input_tokens"],
       output_tokens: data["output_tokens"],
       cached_input_tokens: data["cached_input_tokens"],
+      cache_write_input_tokens: data["cache_write_input_tokens"],
       reasoning_tokens: data["reasoning_tokens"],
       total_tokens: data["total_tokens"],
       input_cost: data["input_cost"],

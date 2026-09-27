@@ -71,5 +71,62 @@ defmodule ALLM.RequestTest do
     end
   end
 
-  # NOTE: ALLM.Serializer JSON round-trip is deferred to sub-phase 1.5.
+  describe "prompt_cache" do
+    defp json_round_trip(req) do
+      {:ok, decoded} = req |> Jason.encode!() |> ALLM.Serializer.from_json()
+      decoded
+    end
+
+    test "defaults to nil and round-trips JSON as nil" do
+      req = Request.new([%Message{role: :user, content: "hi"}])
+      assert req.prompt_cache == nil
+      assert json_round_trip(req).prompt_cache == nil
+    end
+
+    test "round-trips JSON with the retention atom restored" do
+      req =
+        Request.new([%Message{role: :user, content: "hi"}],
+          prompt_cache: %{key: "k", retention: :long}
+        )
+
+      decoded = json_round_trip(req)
+      # Falsifier: an undecoded value reads %{key: "k", retention: "long"}.
+      assert decoded.prompt_cache == %{key: "k", retention: :long}
+      assert decoded == req
+    end
+
+    test "round-trips a nil key and :short retention" do
+      req =
+        Request.new([%Message{role: :user, content: "hi"}],
+          prompt_cache: %{key: nil, retention: :short}
+        )
+
+      assert json_round_trip(req).prompt_cache == %{key: nil, retention: :short}
+      assert req == req |> :erlang.term_to_binary() |> :erlang.binary_to_term()
+    end
+
+    test "an unknown persisted retention decodes without raising or minting an atom" do
+      data = %{
+        "messages" => [],
+        "prompt_cache" => %{"key" => "k", "retention" => "forever"}
+      }
+
+      assert Request.__from_tagged__(data).prompt_cache == %{key: "k", retention: "forever"}
+    end
+
+    test "a partial or over-full persisted map passes through undecoded" do
+      partial = %{"key" => "k"}
+      extra = %{"key" => "k", "retention" => "long", "ttl" => "1h"}
+
+      assert Request.__from_tagged__(%{"prompt_cache" => partial}).prompt_cache == partial
+      assert Request.__from_tagged__(%{"prompt_cache" => extra}).prompt_cache == extra
+    end
+
+    test "decode_retention/1 maps the two known strings and passes others through" do
+      assert Request.decode_retention("short") == :short
+      assert Request.decode_retention("long") == :long
+      assert Request.decode_retention(:long) == :long
+      assert Request.decode_retention("forever") == "forever"
+    end
+  end
 end
