@@ -82,10 +82,14 @@ defmodule ALLM.Providers.Support.Transport do
   # The after function of a `Stream.resource/3` over `Finch.async_request/3`.
   # Cancels the request unless Finch already sent its last message (`:done`
   # or `{:error, _}`), rescuing a cancel that raises, then drains every
-  # `{ref, _}` Finch had already queued in the reducing process's mailbox,
-  # so a halted stream leaves no stray messages behind. The chat stream
-  # adapters still only cancel; new streaming HTTP adapters call this
-  # instead of hand-rolling their own after function.
+  # `{ref, _}` Finch had already queued in the reducing process's mailbox.
+  # The drain is best-effort: Finch's HTTP/1 cancel sends the request
+  # process an asynchronous exit signal (`Process.exit(pid, :shutdown)`), so
+  # a message that process sends before it actually exits can still arrive
+  # after the `after 0` drain has returned. Waiting for its `:DOWN` would
+  # mean matching Finch's opaque `request_ref` shape, so it is not done. The
+  # chat stream adapters still only cancel; new streaming HTTP adapters call
+  # this instead of hand-rolling their own after function.
   @spec cancel_and_drain(module(), reference(), boolean()) :: :ok
   def cancel_and_drain(finch_module, ref, transport_done?)
       when is_atom(finch_module) and is_boolean(transport_done?) do

@@ -514,6 +514,19 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionStreamTest do
       assert ms >= 2_450, "released after #{ms} ms"
     end
 
+    # stream_timeout shorter than the hold: the silence deadline passes first
+    # on a session that is otherwise complete. Falsifier: `on_wake/1`
+    # consulting `timed_out?/1` before releasing and completing, which ends
+    # a clean session with {:error, :timeout} (unreviewed-fixpass review F1).
+    test "stream_timeout shorter than the hold: the held segment is released and the session completes" do
+      {stub, input} = commits([[committed("one")]])
+      {events, _ms} = run(stub, input, [options: @opted], stream_timeout: 300)
+
+      refute Enum.any?(events, &match?({:error, _}, &1)), inspect(events)
+      assert segments(events) == [{"one", nil}]
+      assert {:transcription_completed, %{text: "one", language: nil}} = terminal(events)
+    end
+
     # Falsifier: waiting out the 5 s bound, or dropping "one".
     test "the next segment's committed frame releases a held segment at once, in order" do
       {stub, input} =
@@ -819,6 +832,22 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionStreamTest do
                )
 
       assert [_ | _] = err.metadata.errors
+    end
+
+    # Falsifier: no gate, so `:infinity` returns {:ok, stream} and raises
+    # ArithmeticError inside enumeration (unreviewed-fixpass review F3).
+    test "adapter_opts[:language_hold_ms] that is not a positive integer -> synchronous :invalid_request" do
+      for bad <- [:infinity, 0, -5, 1.5, "1000", nil] do
+        assert {:error, %TranscriptionAdapterError{reason: :invalid_request} = err} =
+                 Transcription.stream_transcribe(req(), [<<0, 0>>],
+                   ws_module: RaisingWebSocket,
+                   adapter_opts: [language_hold_ms: bad]
+                 ),
+               "language_hold_ms: #{inspect(bad)}"
+
+        assert err.metadata.field == :language_hold_ms
+        assert err.metadata.language_hold_ms == bad
+      end
     end
 
     test "every rate in stream_sample_rates/0 passes the gate" do

@@ -154,7 +154,10 @@ defmodule ALLM.Providers.Support.WebSocket.InputLoop do
   @doc """
   After `:wake`: whether the silence deadline passed (the stream ends with a
   timeout) rather than the keep-alive one (the adapter sends its
-  keep-alive).
+  keep-alive) or the adapter's own `wake_at` deadline (the adapter acts on
+  it, e.g. releases a held segment). More than one can have passed; an
+  adapter that must not report a timeout for work the `wake_at` deadline
+  completes checks that first.
   """
   @spec timed_out?(t()) :: boolean()
   def timed_out?(state) do

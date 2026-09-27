@@ -539,132 +539,7 @@ Cost: the billed arms total about 40 TTS characters and 3 × 3.7 s of STT per ru
 
 ### Owner decision needed
 
-- ~~**`ElevenLabs.Transcription.max_audio_bytes/0` is 4,999,999,999** … Options: keep it; lower the cap …; or give the conformance harness a way to size case 4 differently.~~ **Decided 2026-09-27; see "Fix pass" below.** The owner said: "Let's remove the and make a note". Read as: drop case 4 from the ElevenLabs mount only.
-
-### Mutation checks
-
-| Mutant (in `lib/allm/providers/openai/speech.ex`) | Failing tests |
-|--------|---------------|
-| after function does not drain | 1 (the halt-drain test) |
-| sample-rate gate accepts 24,000 only for `:pcm` | 2 (the `:wav` row in `speech_test.exs` and in `speech_stream_test.exs`) |
-| error status classified from `%{}` instead of the buffered body | 3 (planted-token 401, `string_too_long` 400, recorded 401 replay) |
-| after function does not cancel | 4 (malformed content type, timeout, `Enum.take/2`, halt-drain) |
-| `decode_response/4` reports `sample_rate: nil` | 1 |
-
-The file was restored and `cmp`-verified against a saved copy after each run.
-
-### Notes for later sub-phases
-
-- **26.6–26.8:** `FinchStub.install/2` now takes `:initial_headers` (default `[]`) and `:error_body` (a binary or list; status, headers, body parts, `:done`; `chunks` not sent). The ElevenLabs HTTP stream tests can use both. *(Corrected in the 26.5 fix pass. This bullet said the audio façade does not hoist transport opts and that a second streaming HTTP adapter would be the second copy of the hoist. `OpenAI.Speech`'s private hoist was already the second copy, after `ALLM.StreamRunner`'s.)* Since the fix pass: `run_audio_stream/3` hoists `adapter_opts` transport keys once via `ALLM.Adapter.hoist_transport_opts/2`, so a streaming adapter reads them from the top level and never hoists. A Finch-backed stream's after function is `ALLM.Providers.Support.Transport.cancel_and_drain(finch_module, ref, transport_done?)` (cancel unless the transport finished, then drain `{ref, _}`). Keyless gate tests use `ALLM.Test.RaisingFinch`.
-
-### Verification (run 2026-09-26, working tree on `a44ac31`)
-
-| Check | Result |
-|-------|--------|
-| `mix test` | exit 0, 575 doctests, 33 properties, 4448 tests, 0 failures, 14 excluded (26.4: 573 / 33 / 4400) |
-| `mix test --seed 0` | exit 0, same counts |
-| `mix format --check-formatted` | exit 0 |
-| `mix credo --strict` | no issues |
-| `mix dialyzer` | `Total errors: 0` |
-| `mix compile --warnings-as-errors --force` (dev and test) | exit 0 |
-| `mix docs 2>&1 \| grep -iE 'warning\|error'` | empty |
-| `mix run scripts/audit_user_docs.exs lib/allm/providers/openai/speech.ex` (no new `lib/` file) | "No banned-token matches" |
-| async grep `grep -rl 'Keys.put(\|Logger.configure(\|System.put_env(\|:telemetry.attach' test/ \| xargs grep -L 'async: false' \| wc -l` | 12, unchanged; the two new test files use none of the four calls |
-| Pump-protocol guard `grep -lE --exclude=input_pump.ex ':input_error\|crash_info\(\|@input_window' lib/allm/providers/*.ex lib/allm/providers/*/*.ex` | exit 1 (empty) |
-| Targeted | `speech_stream_test.exs` 28 tests; `speech_stream_conformance_test.exs` 6 suite cases + 1; `speech_test.exs` +9 tests; `speech_wire_test.exs` +4 provenance rows |
-| Coverage (`mix test --cover test/allm/providers/openai/`) | `ALLM.Providers.OpenAI.Speech` 97.48% |
-| BLOCKING recorder | exit 0, `stream_chunked` matched; second run `0 live calls` |
-| `conformance/` | not touched, so its gates were not run |
-| `README.md` | not modified |
-
-### Fix pass (2026-09-26)
-
-From `.work/code-reviews/2026-09-26-phase-26-5.md` (the functional, security and design reviews had no findings). F1 and F3 were tagged DEFER→HANDOFF for 26.6 and were fixed now instead, because 26.6/26.7 build on this plumbing.
-
-- `[structural, fix pass]` **F1:** `ALLM.Adapter.hoist_transport_opts/2` (`@doc false` + `@spec`) is the one hoist body. `ALLM.StreamRunner`'s private copy and `OpenAI.Speech`'s private copy are deleted, and `run_audio_stream/3` in `lib/allm.ex` hoists once on its dispatch opts. `lib/allm/adapter.ex` and `lib/allm/stream_runner.ex` are outside the 26.5 Module Tree; the StreamRunner change moves its private body verbatim (behaviour-preserving, pinned by `test/allm/transport_opts_routing_test.exs:109` and `:125`). The speech test "transport opts arriving in adapter_opts are read" now drives `ALLM.stream_synthesize/3` with engine `adapter_opts`, since a direct adapter call no longer hoists (the chat adapters never did).
-- `[structural, fix pass]` **F3:** `ALLM.Providers.Support.Transport.cancel_and_drain/3` (`@doc false` + `@spec`) is the Finch after function: cancel unless `transport_done?` (rescuing a raising cancel), then drain `{ref, _}` with `receive … after 0`. `OpenAI.Speech.stream_after/1` calls it. The three chat adapters are not migrated (the F2 `[CARRY]` above).
-- `[tactical, fix pass]` **F4:** `stream_request_id/2` is renamed `request_id_for/2`, and `decode_response/4` calls it instead of spelling the fallback inline.
-- **F5:** `ALLM.Test.RaisingFinch` in `test/support/raising_finch.ex`, aliased from both speech stream test files.
-- **F2:** `[CARRY]` line in Deviations above, and the `.work/ASKS.md` ticket.
-
-Mutation re-check after the extraction (each file restored and `cmp`-verified):
-
-| Mutant | Failing tests |
-|--------|---------------|
-| `Transport.cancel_and_drain/3` drains nothing (`{^ref, :never}`) | 1 (the halt-drain test) |
-| `Transport.cancel_and_drain/3` never cancels | 4 (malformed content type, timeout, `Enum.take/2`, halt-drain) |
-| `run_audio_stream/3` hoists from `[]` | 1 (the façade `adapter_opts` transport test) |
-
-| Check (after the fix pass) | Result |
-|-------|--------|
-| `mix test` | exit 0, 575 doctests, 33 properties, 4448 tests, 0 failures, 14 excluded |
-| `mix test --seed 0` | exit 0, same counts |
-| `mix format --check-formatted` | exit 0 |
-| `mix credo --strict` | no issues |
-| `mix dialyzer` | `Total errors: 0` |
-| `mix compile --warnings-as-errors --force` (dev and test) | exit 0 |
-| `mix docs 2>&1 \| grep -iE 'warning\|error'` | empty |
-| `mix run scripts/audit_user_docs.exs lib/allm/providers/openai/speech.ex lib/allm/providers/support/transport.ex lib/allm/adapter.ex` | "No banned-token matches" |
-| Pump-protocol guard `grep -lE --exclude=input_pump.ex ':input_error\|crash_info\(\|@input_window' lib/allm/providers/*.ex lib/allm/providers/*/*.ex` | exit 1 (empty) |
-| async grep (as above) | 12, unchanged |
-| Live recorder | not re-run (no live calls needed) |
-
-
-## Phase 26.6 — ElevenLabs non-streaming adapters
-
-Built 2026-09-26 on `eab71aa`. The working tree is uncommitted; the orchestrator commits after review.
-
-### Checklist (26.6.3)
-
-- [x] `lib/allm/providers/support/elevenlabs.ex` (`ALLM.Providers.Support.ElevenLabs`): `base_url/1`, `headers/1`, `output_format/2` (public, doctested), `classify/2`, `error_fields/4`, `redact_key_material/1`. Both adapters use `Support.HTTPResponse`. `ElevenLabs.Transcription` declares `@behaviour ALLM.Providers.Support.TranscriptionAdapter` with the five `@impl` callbacks and uses it for its gates, Fake hand-off and single attempt; the 26.1 transcription predicate prints nothing with three `*/transcription.ex` files.
-- [x] `ALLM.Providers.ElevenLabs.Speech` and `.Transcription`: script hand-off, keyless gates, injected-default `@doc`s (voice, `model_id`, `output_format` + per-format rate, the 60 s / 120 s receive timeouts) in the public `@doc` and the builders' `@doc false` (`url/2`, `to_json_body/2`, `to_multipart_body/2`); `Speech.synthesize/2`'s adapter-level `Retry.run/3` and its `@doc` "Retry" paragraph.
-- [x] `scripts/record_elevenlabs_audio_fixtures.exs`, 14 recorded + 11 synthesized fixtures, `test/support/elevenlabs_fixtures.ex`, `test/fixtures/elevenlabs/README.md`. The settled wire-map rows carry a dated `> CORRECTED 2026-09-26 (26.6 probe)` blockquote in the design (under the HTTP wire map, under the Error classification table, and under Decision #10's voice sentence).
-- [x] `groups_for_modules`: `ElevenLabs.Speech`, `ElevenLabs.Transcription` and `Support.ElevenLabs` under `Providers`.
-
-### Live probe (run 2026-09-26, `( set -a; . ./.env; set +a; mix run scripts/record_elevenlabs_audio_fixtures.exs )`)
-
-Exploratory calls first, from a scratchpad script (not committed): `GET /v1/user/subscription` and `GET /v1/voices/JBFqnCBsd6RMkjVDRZzb` → **401** `{"detail": {"type": "authentication_error", "code": "unauthorized", "status": "missing_permissions", …}}` (the key lacks `user_read` / `voices_read`); one "Hi." TTS call for the full header set; then one call per format, the control, a bad voice, a body without text, a bad key, `pcm_44100` and `mp3_44100_192` (both 403 `subscription_required`), and three STT calls (fox mp3, as `audio.bin`, with an invented field).
-
-Recorder run 1: exit 1, nothing written. Every arm matched except `too_long`: `eleven_v3` with 5,001 characters answered **200** (audio, billed), not the designed 400 `text_too_long`. The arm was removed (see Deviations). Run 2: 14 live calls, exit 0, every arm matched, 14 files written. Run 3: `0 live calls: every target is already recorded`, exit 0.
-
-| Arm | Got | Observation |
-|-----|-----|-------------|
-| `control` (TTS, `not_a_real_field`) | 200 | unknown body fields are ignored |
-| `tts_default` (default voice, `eleven_flash_v2_5`; 2026-09-26 run sent **no** `output_format`, re-recorded 2026-09-27 with the adapter's own `output_format=mp3_44100_128`) | 200 | `audio/mpeg`, 13,000 bytes; headers include `request-id`, `character-cost: 3`, `history-item-id`, `tts-latency-ms`, `x-trace-id` |
-| `tts_mp3` (`mp3_24000_48`) / `tts_pcm` (`pcm_24000`) / `tts_wav` (`wav_24000`) / `tts_opus` (`opus_48000_64`) | 200 each | `audio/mpeg`, `audio/pcm`, `audio/wav`, `audio/opus`: all map through `mime_to_format/1` |
-| `tier_gate` (`pcm_44100`, new) | 403 | `code: subscription_required`, `status: output_format_not_allowed`, "only available on the Pro tier and above" |
-| `bad_key` (`sk_` + 48 **hex-shaped** characters) | **400** | `type: authentication_error`, `code`/`status: invalid_api_key`, `param: api_key`; no key echo. ~~An invalid key is answered with a 400.~~ CORRECTED 2026-09-27: only a hex-shaped key gets the 400; see `bad_key_401` |
-| `bad_key_401` (`sk_` + 48 mixed-case characters; added 2026-09-27) | **401** | `type: authentication_error`, `code: unauthorized`, `status: invalid_api_key`, message "Invalid API key"; no key echo; `speech/recorded/error_401_bad_key.json` |
-| `bad_voice` | 404 | `code`/`status: voice_not_found` |
-| `error_422` (no `text`) | 422 | `detail` is a list: `[{"type": "missing", "loc": ["body", "text"], "msg": "Field required", "input": null}]` |
-| `stt_control` (invented multipart field, new) | 200 | unknown fields are ignored |
-| `stt_default` (`scribe_v2`, fox mp3) | 200 | "The quick brown fox jumps over the lazy dog.", `language_code: "eng"`, `audio_duration_secs: 3.72`; headers have `character-cost` but **no `request-id`** |
-| `stt_audio_bin` (mp3 as `audio.bin`, `application/octet-stream`) | 200 | content is sniffed. Narrowed 2026-09-27 to expect exactly 200 with a "fox" transcript, and re-recorded as a body envelope |
-| `stt_bad_key` (new) | 400 | same envelope as the TTS bad key |
-
-Cost: the billed arms total about 40 TTS characters and 3 × 3.7 s of STT per run, plus the one accidental 5,001-character `eleven_v3` synthesis (≈ $0.50 at the design's $0.10 / 1K characters).
-
-### Deviations
-
-- `[scope, probe]` **The `too_long` arm is falsified and removed.** `eleven_v3` at 5,001 characters returned 200 and was billed. A longer probe risks a much larger bill if it is also accepted, so no input-length arm runs; the recorder's header comment says why. The `text_too_long` → `:context_length_exceeded` row stays documented only and is pinned by `synthesized/error_400_too_long.json`. The design's Input-limit row carries the correction.
-- `[structural, probe]` **Error classification widened by the probe** (design CORRECTED under the Error classification table). (a) A body with `detail.type == "authentication_error"` → `:authentication_failed` whatever the status, because an invalid key is a 400; without it the recorded bad-key error classifies as `:invalid_request` (mutation M1 below). (b) The 403 → `:unsupported_feature` row also matches `subscription_required` / `output_format_not_allowed`, the observed tier gate. (c) The quota row also matches `payment_required`.
-- `[scope]` **Arms beyond the design's table:** `tier_gate` (the Format table's tier-gate claim), `error_422` (named in the design's Error-envelope row but missing from the 26.6.2 table), `stt_control` (CLAUDE.md pairs every acceptance arm with a control; the design had one for TTS only) and `stt_bad_key` (a recorded STT error for the transcription wire test). `default_voice` and `tts_default` are one arm, as the design's table row groups them.
-- `[scope, probe]` **No STT filename gate.** `stt_audio_bin` → 200, so the OpenAI-style gate is not copied; a non-file source with an unknown mime is uploaded as `audio.bin` (the probed name).
-- `[tactical]` **Format and mime come from the response** (§37 Decision #4); the content-type outcome rule's fallback did not fire. `sample_rate` comes from the requested `output_format`, since the response does not state it.
-- `[tactical]` **Correlation.** TTS: `request-id` → `response.id`, `character-cost` → `raw: %{"character_cost" => n}`. STT: `transcription_id` → `id` (no `request-id` header exists). On both, `request_id` is `opts[:request_id]` only; there is no header fallback, because the provider id already lives on `:id`.
-- `[tactical]` `TranscriptionResponse.language` is ElevenLabs' ISO 639-3 `language_code` (`"eng"`), passed through unmapped.
-- `[tactical]` Error metadata keys are `status`, `code`, `type` and `provider_status` (`detail.status`), all provider strings redacted. The design named `metadata.code` only.
-- `[tactical]` `Support.ElevenLabs.base_url/1` reads `opts[:base_url]`, then `opts[:adapter_opts][:base_url]` (so an engine can pin a residency host), then the global host.
-- `[tactical]` `Support.ElevenLabs.error_fields/4` returns `{reason, fields}` for either error module's `new/2`, so the two adapters' error funnels are one line each rather than two copies of the field assembly.
-- `[structural, documented]` **Promotion on the two-implementations trigger:** `ALLM.Providers.Support.TranscriptionAdapter.optional_field/2` and `option_fields/2` (`@doc false` + `@spec`). `ElevenLabs.Transcription` would otherwise have been a second copy of `OpenAI.Transcription`'s private `optional_field/2`, `option_fields/1` and `form_values/2`. `lib/allm/providers/openai/transcription.ex` is outside the 26.6 Module Tree; the migration is private and behaviour-preserving (it still logs only a dropped `response_format`), pinned by the existing OpenAI tests. Mutation: renaming string fields inside the shared `form_values/2` fails one OpenAI and one ElevenLabs test. Three new tests in `test/allm/providers/support/transcription_adapter_test.exs`.
-- `[scope]` **`test/allm/providers/support/elevenlabs_test.exs`** is not in the Module Tree. The Test Plan put the `output_format/2` and `classify/2` rows under `speech_test.exs`; they test `Support.ElevenLabs`, so they live in that module's own test file (agent-spec/IMPLEMENTATION.md: one test file per `lib/` file), with its doctest.
-- `[tactical]` `test/support/elevenlabs_fixtures.ex` delegates to `ALLM.Providers.OpenAITestFixtures.drop_comment/1` and `envelope_bytes/1` rather than adding a third copy of either.
-- ~~`[DEFERRED-DRY]` `ElevenLabs.Speech` clones nine of `OpenAI.Speech`'s speech-contract helpers (provider atom and message text differ). No `Support.SpeechAdapter` row exists in 26.6's Module Tree; filed in `.work/ASKS.md` (sat 9/26/2026 10pm) with its predicate. Measured today: 9 lines.~~ Closed by the fix pass (below): `Support.SpeechAdapter` extracted. The nine-name count was also low; code review F2 found renamed and unlisted clones.
-- `[scope]` The 26.1 HTTP-variants predicate (`grep -roE 'defp (provider_message|redact_optional|sanitize_cause)\(' lib/allm/providers/ | sort -u | cut -d: -f2 | sort | uniq -c | awk '$1>1'`) now prints `redact_optional` **4** (was 3): `Support.ElevenLabs`'s copy calls the ElevenLabs redactor, the per-provider variant the 26.1 disposition keeps.
-
-### Owner decision needed
-
-- **`ElevenLabs.Transcription.max_audio_bytes/0` is 4,999,999,999** (the design's value, ElevenLabs' documented "less than 5.0GB"). The Phase 25 `TranscriptionAdapterConformance` case 4 builds a `max_audio_bytes() + 1` binary, so `transcription_conformance_test.exs` allocates **5 GB and takes about 22 s** on every `mix test` (measured 2026-09-26: `mix test` 43.4 s with 27.5 s sync; `mix test --exclude module:ALLM.Providers.ElevenLabs.TranscriptionConformanceTest` 21.3 s with 5.8 s sync). The module is `async: false` (so it runs alone) with `@moduletag timeout: 300_000`. Options: keep it; lower the cap to a value the in-memory `Req` multipart path can realistically send (a contract change the design must make); or give the conformance harness a way to size case 4 differently (a `conformance/` change).
+- ~~**`ElevenLabs.Transcription.max_audio_bytes/0` is 4,999,999,999** (the design's value, ElevenLabs' documented "less than 5.0GB"). The Phase 25 `TranscriptionAdapterConformance` case 4 builds a `max_audio_bytes() + 1` binary, so `transcription_conformance_test.exs` allocates **5 GB and takes about 22 s** on every `mix test` (measured 2026-09-26: `mix test` 43.4 s with 27.5 s sync; `mix test --exclude module:ALLM.Providers.ElevenLabs.TranscriptionConformanceTest` 21.3 s with 5.8 s sync). The module is `async: false` (so it runs alone) with `@moduletag timeout: 300_000`. Options: keep it; lower the cap to a value the in-memory `Req` multipart path can realistically send (a contract change the design must make); or give the conformance harness a way to size case 4 differently (a `conformance/` change).~~ **Decided 2026-09-27; see "Fix pass" below.** The owner said: "Let's remove the and make a note". Read as: drop case 4 from the ElevenLabs mount only.
 
 ### Mutation checks
 
@@ -1162,3 +1037,16 @@ Built 2026-09-27 on `977cb9f`, in the same working tree as 26.9.
 ### Notes
 
 - Nothing in 26.10's tree touches `lib/` or `test/`: no `[CARRY]` was routed to it.
+
+## Retro fix pass (2026-09-27)
+
+Sources: `.work/retro/2026-09-27-phase-26-elevenlabs-tts-sst.md` (code-actionable items) and `.work/code-reviews/2026-09-27-phase-26-unreviewed-fixpass.md` (F1–F4). Working tree on `00ec710`.
+
+- **Review F1 (Medium), fixed.** `ElevenLabs.Transcription.on_wake/1` now releases a held segment and runs `maybe_complete/1` before it acts on `InputLoop.timed_out?/1`, and reports `:timeout` only when the session is still incomplete after that. Reproduced first: the new test "stream_timeout shorter than the hold: the held segment is released and the session completes" (`test/allm/providers/elevenlabs/transcription_stream_test.exs`, `stream_timeout: 300`, default 1,000 ms hold) failed at HEAD with `[transcription_started, committed_transcript, {:error, :timeout}]`. The moduledoc now lists `:stream_timeout` among the release triggers and says such a session completes.
+- **Review F3 (Low), fixed.** New pre-flight `gate_language_hold/1` refuses any `adapter_opts[:language_hold_ms]` that is not a positive integer with a synchronous `:invalid_request` (`metadata.field: :language_hold_ms`), before key resolution and whether or not the request opts in. Test: "adapter_opts[:language_hold_ms] that is not a positive integer -> synchronous :invalid_request" (`:infinity`, `0`, `-5`, `1.5`, `"1000"`, `nil`). The moduledoc's **Options** paragraph states the rule.
+- **Review F2 (Low, false sentence), reworded.** The comments on `Transport.cancel_and_drain/3` and `SpeechAdapter`'s `stream_after/1`, and the "Halting" paragraphs of `OpenAI.Speech` and `ElevenLabs.Speech`, now say the drain removes *already-queued* messages, best-effort. Waiting for the request process's `:DOWN` was not done: it would match Finch's opaque `request_ref` (`{Finch.HTTP1.Pool, pid}` for HTTP/1, `{_, {pool, _}}` for HTTP/2; `deps/finch/lib/finch/http1/pool.ex:153-157`, `http2/pool.ex:78`). Not reworded: `ALLM.SpeechStreamAdapter` invariant 4 ("leaves no stream-owned message"), a behaviour contract; returned to the owner.
+- **Review F4 (Low, false doc sentence), fixed.** `InputLoop.timed_out?/1`'s `@doc` now names the `wake_at` deadline and says an adapter must check `wake_at` work before reporting a timeout.
+- **Retro F4, fixed at the class.** `test/test_helper.exs` sets `assert_receive_timeout: 1_000`. Checked first: no test sets either receive-timeout option (`grep -rn 'assert_receive_timeout\|refute_receive_timeout' test/ config/ mix.exs` → empty), and no `assert_receive` is asserted to fail. `refute_receive` keeps its own 100 ms default, so no refute window changed.
+- **Mutation checks** (each reverted): `if timed_out? and not state.done?` → `if false` fails "no session_started within stream_timeout -> :timeout"; → `if timed_out?` fails the new F1 test; the `gate_language_hold(opts)` clause → `true` fails the new F3 test.
+- **Done (by the orchestrator, with the owner's explicit go-ahead 2026-09-27): the duplicated 26.6 splice** (retro code-actionable item 3). The subagent's edit had been refused by the permission classifier; the owner then approved it. The stale copy of §26.5's tail, the second `## Phase 26.6` heading and the pre-decision bullet were removed, and that bullet's full text (the suite timings) was folded into the struck-through "Owner decision needed" bullet so no fact is lost. `grep -c '^## Phase 26.6' steering/2026-09-25_ELEVENLABS_TTS_SST_RECORDS.md` → `1`.
+- **Verification:** `mix test` three times plus `mix test --seed 0` gave `601 doctests, 33 properties, 4910 tests, 0 failures, 14 excluded, 1 skipped` each time. `mix format --check-formatted` exited 0, `mix credo --strict` found no issues, and `mix dialyzer` passed. `mix run scripts/audit_user_docs.exs <file>` found 0 hits on each of the six touched `lib/` files. For the async grep, none of the modules it lists were touched by this pass.

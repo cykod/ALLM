@@ -20,7 +20,16 @@ Code.require_file("../examples/fixtures/compact_tools.exs", __DIR__)
 # green run quiet WITHOUT losing diagnostics on red — and it composes with the
 # explicit `ExUnit.CaptureLog.capture_log/2` calls that assert on log content
 # (ExUnit supports nested capture).
+#
+# `assert_receive_timeout: 1_000` raises ExUnit's 100 ms default for every
+# `assert_receive/2` without an explicit timeout. The value only bounds how
+# long a PASSING assertion may wait, so it costs nothing on green; under a
+# loaded `async: true` suite 100 ms was too short for process-hop tests
+# (`input_pump_test.exs` flaked one line at a time across two batches).
+# `refute_receive/3` has its own default (`refute_receive_timeout`, 100 ms),
+# untouched here, so no refute window changes.
 ExUnit.start(
   exclude: [:pending, :live_openai, :live_anthropic, :live_gemini, :live_openai_images],
-  capture_log: true
+  capture_log: true,
+  assert_receive_timeout: 1_000
 )

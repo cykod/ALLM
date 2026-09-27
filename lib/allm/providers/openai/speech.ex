@@ -316,8 +316,9 @@ defmodule ALLM.Providers.OpenAI.Speech do
     * a transport failure: `:network_error`.
 
   **Halting** the stream early (`Enum.take/2`) cancels the HTTP request and
-  removes the request's pending messages from the calling process's
-  mailbox.
+  removes the request's already-queued messages from the calling process's
+  mailbox. This is best-effort: a message the request process sends while
+  it is being shut down can still arrive afterwards.
 
   `opts[:adapter_opts][:speech_script]` hands the call to
   `ALLM.Providers.FakeSpeech.stream_synthesize/2` before any gate runs.

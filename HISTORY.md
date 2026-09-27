@@ -1,3 +1,18 @@
+## [BUG] Fix held-segment timeout and apply Phase 26 retro fixes
+*Sunday, September 27th at 1pm*
+Final retro fix pass for steering/2026-09-25_ELEVENLABS_TTS_SST.md (§37.11). 
+With the realtime STT language hold opted in, a stream_timeout shorter than 
+language_hold_ms ended a clean session in :timeout. on_wake/1 now releases the 
+due held segment and checks for completion first, and a test reproduces the old 
+failure. language_hold_ms is validated synchronously. The halt-safety contract 
+for SpeechStreamAdapter (and spec §37.11) now says the HTTP drain is 
+best-effort, because Finch cancels asynchronously; this was an owner decision. 
+ExUnit's assert_receive_timeout is raised to 1,000 ms to end a recurring 
+input_pump timing flake. RECORDS loses a duplicated 26.6 block left by a 
+mis-anchored edit, removed with the owner's go-ahead.
+
+---
+
 ## [DOC] Document streaming audio and ElevenLabs; add examples 25-27
 *Sunday, September 27th at 12pm*
 Phases 26.9-26.10 of steering/2026-09-25_ELEVENLABS_TTS_SST.md. The spec gains 

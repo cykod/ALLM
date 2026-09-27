@@ -356,8 +356,10 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
       arrives and is then emitted with that frame's language. The hold is
       bounded: the segment is released, with `language: nil`, when the next
       segment's `committed_transcript` arrives, when the stream ends with an
-      error, or after #{@language_hold_ms} ms
-      (`adapter_opts[:language_hold_ms]`), whichever comes first. A
+      error, when `:stream_timeout` passes, or after #{@language_hold_ms} ms
+      (`adapter_opts[:language_hold_ms]`), whichever comes first. A session
+      that is complete but for a held segment completes when the segment is
+      released, even if `:stream_timeout` is the deadline that released it. A
       timestamped frame that arrives first is kept, and its segment is
       emitted at once. Holding never drops or reorders a segment, and
       `:transcription_completed` waits for a held segment.
@@ -387,7 +389,9 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   (default `ALLM.Providers.Support.WebSocket.Mint`).
   `adapter_opts[:input_window]` is the input pump's credit window.
   `adapter_opts[:language_hold_ms]` (default #{@language_hold_ms}) bounds the
-  language hold described under **Events**.
+  language hold described under **Events**; it must be a positive integer
+  (ms), and any other value is refused synchronously with
+  `:invalid_request`.
 
   **Halting** the stream closes the socket, stops the input pump and removes
   the socket's and the pump's pending messages from the calling process's
@@ -655,7 +659,8 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
 
   defp do_stream_transcribe(request, input, opts) do
     with :ok <- gate_stream_request(request, opts),
-         :ok <- gate_sample_rate(request, opts) do
+         :ok <- gate_sample_rate(request, opts),
+         :ok <- gate_language_hold(opts) do
       api_key = Keys.fetch!(:elevenlabs, opts)
 
       {:ok,
@@ -694,6 +699,25 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
          %{field: :sample_rate, sample_rate: rate, supported: @stream_sample_rates},
          opts
        )}
+    end
+  end
+
+  # `language_hold_ms` feeds `System.monotonic_time/1` arithmetic, so a
+  # non-integer (`:infinity` included) would raise mid-enumeration. Refused
+  # here, synchronously, whether or not the request opts in to the hold.
+  defp gate_language_hold(opts) do
+    case language_hold_ms(opts) do
+      ms when is_integer(ms) and ms > 0 ->
+        :ok
+
+      other ->
+        {:error,
+         stream_error(
+           :invalid_request,
+           "adapter_opts[:language_hold_ms] must be a positive integer (ms), got: #{inspect(other)}",
+           %{field: :language_hold_ms, language_hold_ms: other},
+           opts
+         )}
     end
   end
 
@@ -751,21 +775,31 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   end
 
   # No keep-alive runs, so a wake-up is the silence deadline or the end of
-  # a language hold (`wake_at`).
+  # a language hold (`wake_at`). Either one releases a held segment, and
+  # completion is checked BEFORE the timeout: after the final commit the
+  # server sends nothing more if the timestamped frame never comes, so with
+  # `stream_timeout` shorter than the hold the silence deadline passes on a
+  # session that is complete but for the hold. That session completes; only
+  # one still awaiting a commit, or with input left, ends with `:timeout`.
   defp on_wake(state) do
-    if InputLoop.timed_out?(state) do
-      finish(
-        state,
-        stream_error(
-          :timeout,
-          "no server frame or input chunk within stream_timeout (#{state.stream_timeout} ms)",
-          %{},
-          state.opts
+    timed_out? = InputLoop.timed_out?(state)
+    {released, state} = release_held(state)
+    {done, state} = maybe_complete(state)
+
+    if timed_out? and not state.done? do
+      {rest, state} =
+        finish(
+          state,
+          stream_error(
+            :timeout,
+            "no server frame or input chunk within stream_timeout (#{state.stream_timeout} ms)",
+            %{},
+            state.opts
+          )
         )
-      )
+
+      {released ++ rest, state}
     else
-      {released, state} = release_held(state)
-      {done, state} = maybe_complete(state)
       {released ++ done, state}
     end
   end

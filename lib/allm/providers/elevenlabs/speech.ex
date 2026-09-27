@@ -316,8 +316,10 @@ defmodule ALLM.Providers.ElevenLabs.Speech do
   `:stream_timeout` is `:timeout`; a transport failure is `:network_error`.
 
   **Halting** the stream early (`Enum.take/2`) cancels the HTTP request and
-  removes its pending messages from the calling process's mailbox. A
-  stream is never retried once it has been returned.
+  removes its already-queued messages from the calling process's mailbox
+  (best-effort: a message the request process sends while it is being shut
+  down can still arrive afterwards). A stream is never retried once it has
+  been returned.
 
   `opts[:adapter_opts][:speech_script]` hands the call to
   `ALLM.Providers.FakeSpeech.stream_synthesize/2` before any gate runs.

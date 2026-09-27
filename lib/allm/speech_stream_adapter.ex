@@ -77,11 +77,15 @@ defmodule ALLM.SpeechStreamAdapter do
        `metadata.cause: :empty_input`.
     4. **Cleanup: halt-safe.** A consumer halt (`Enum.take/2`) releases the
        transport (the HTTP request is cancelled, or the WebSocket is closed
-       and the input pump stopped) within 500 ms, and leaves no
-       stream-owned message in the consumer's mailbox: the after function
-       stops the pump with `ALLM.Providers.Support.InputPump.stop/2` and
-       drains the transport's messages. The input's own resources are
-       released by process exit, not by its after functions.
+       and the input pump stopped) within 500 ms. The after function stops
+       the pump with `ALLM.Providers.Support.InputPump.stop/2` and drains
+       the transport's messages. On a WebSocket or input-pump path no
+       stream-owned message is left in the consumer's mailbox. On an HTTP
+       path the drain is best-effort: messages already queued at the halt
+       are removed, but the HTTP client cancels asynchronously, so one late
+       message from the cancelled request can still arrive afterwards. The
+       input's own resources are released by process exit, not by its
+       after functions.
     5. `opts[:stream_timeout]` (milliseconds of silence, default 60,000) is
        honoured. The timer resets on every transport message **and** every
        input-pump message, so a slow input does not time out a socket whose

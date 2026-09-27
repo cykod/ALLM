@@ -432,7 +432,9 @@ defmodule ALLM.Providers.Support.SpeechAdapter do
     do: {[{:error, error}], %{state | terminal?: true}}
 
   # Cancel a request Finch has not finished, then drain the messages it had
-  # already queued for this ref, so a halted stream leaves none behind.
+  # already queued for this ref. Best-effort: a message in flight from a
+  # request process that has not yet exited can still arrive afterwards
+  # (see `Transport.cancel_and_drain/3`).
   defp stream_after(%{ref: ref, finch_module: finch_module, transport_done?: done?}),
     do: Transport.cancel_and_drain(finch_module, ref, done?)
 end
