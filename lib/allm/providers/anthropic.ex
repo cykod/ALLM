@@ -290,6 +290,34 @@ defmodule ALLM.Providers.Anthropic do
   `{:ok, %Response{}}` on 2xx success or `{:error, %AdapterError{}}` on
   every failure shape.
 
+  ## Cached prompt usage
+
+  Anthropic's `usage.input_tokens` counts only the prompt tokens after the
+  last cache breakpoint. `Response.usage.input_tokens` is the whole prompt:
+  that count plus `cache_read_input_tokens` and `cache_creation_input_tokens`,
+  which are also reported as `cached_input_tokens` and
+  `cache_write_input_tokens`. `total_tokens` is that `input_tokens` plus
+  `output_tokens`, and the provider's raw count is kept as
+  `usage.extra["uncached_input_tokens"]`. The `cache_creation` breakdown stays
+  in `extra`. A cache counter the provider did not send stays `nil` and adds
+  nothing to `input_tokens`. A streamed response merges the usage from
+  `message_start` with the usage from `message_delta`, so it reports the same
+  `%Usage{}`.
+
+  Because `input_tokens` includes the cached reads and cache writes,
+  `ALLM.Capability.populate_costs/2` prices all of them at the model's plain
+  input rate. For a call with cache activity, `input_cost` therefore differs
+  from what Anthropic bills: cached reads are billed at a discount and cache
+  writes at a premium. Cache-aware pricing is not implemented.
+
+      iex> usage = %{"input_tokens" => 50, "cache_read_input_tokens" => 4000,
+      ...>   "cache_creation_input_tokens" => 300, "output_tokens" => 25}
+      iex> u = ALLM.Providers.Anthropic.from_anthropic_response(%{"usage" => usage}, []).usage
+      iex> {u.input_tokens, u.cached_input_tokens, u.cache_write_input_tokens, u.total_tokens}
+      {4350, 4000, 300, 4375}
+      iex> u.extra
+      %{"uncached_input_tokens" => 50}
+
   ## Vision input
 
   `[%ALLM.TextPart{}, %ALLM.ImagePart{}]` content lists translate to
@@ -1201,29 +1229,54 @@ defmodule ALLM.Providers.Anthropic do
 
   defp decode_content_blocks(_), do: {nil, []}
 
+  # Anthropic's `input_tokens` counts only the tokens after the last cache
+  # breakpoint; its total prompt is `input_tokens + cache_read + cache_creation`.
+  # `Usage.input_tokens` is that inclusive total (so `cached / input` is a hit
+  # ratio on every provider), and the raw count moves to
+  # `extra["uncached_input_tokens"]`. An absent cache counter counts 0 toward
+  # the total but stays `nil` on its own field. Shared by the streaming path.
   defp decode_usage(%{} = usage) do
+    raw_input = Map.get(usage, "input_tokens")
+    read = Map.get(usage, "cache_read_input_tokens")
+    write = Map.get(usage, "cache_creation_input_tokens")
+    input = inclusive_input(raw_input, read, write)
+    output = Map.get(usage, "output_tokens")
+
     %Usage{
-      input_tokens: Map.get(usage, "input_tokens"),
-      output_tokens: Map.get(usage, "output_tokens"),
-      total_tokens: maybe_total(usage),
-      cached_input_tokens: Map.get(usage, "cache_read_input_tokens"),
+      input_tokens: input,
+      output_tokens: output,
+      total_tokens: maybe_total(input, output),
+      cached_input_tokens: read,
+      cache_write_input_tokens: write,
       extra:
-        Map.drop(usage, [
+        usage
+        |> Map.drop([
           "input_tokens",
           "output_tokens",
-          "cache_read_input_tokens"
+          "cache_read_input_tokens",
+          "cache_creation_input_tokens"
         ])
+        |> put_uncached_input(raw_input)
     }
   end
 
   defp decode_usage(_), do: %Usage{}
 
-  defp maybe_total(usage) do
-    case {Map.get(usage, "input_tokens"), Map.get(usage, "output_tokens")} do
-      {i, o} when is_integer(i) and is_integer(o) -> i + o
-      _ -> nil
-    end
-  end
+  defp inclusive_input(raw, read, write) when is_integer(raw),
+    do: raw + count_or_zero(read) + count_or_zero(write)
+
+  defp inclusive_input(_raw, _read, _write), do: nil
+
+  defp count_or_zero(n) when is_integer(n), do: n
+  defp count_or_zero(_), do: 0
+
+  defp put_uncached_input(extra, raw) when is_integer(raw),
+    do: Map.put(extra, "uncached_input_tokens", raw)
+
+  defp put_uncached_input(extra, _raw), do: extra
+
+  defp maybe_total(i, o) when is_integer(i) and is_integer(o), do: i + o
+  defp maybe_total(_i, _o), do: nil
 
   # ---------------------------------------------------------------------------
   # ALLM.StreamAdapter — stream/2
@@ -1261,7 +1314,7 @@ defmodule ALLM.Providers.Anthropic do
   | `content_block_delta` (thinking_delta) | `{:raw_chunk, {:thinking_delta, _}}` |
   | `content_block_stop` (text) | `:text_completed` |
   | `content_block_stop` (tool_use) | `:tool_call_completed` (parsed args) |
-  | `message_delta` | `{:raw_chunk, {:usage, _}}` if usage present; stores stop_reason |
+  | `message_delta` | one `{:raw_chunk, {:usage, _}}` merging `message_start`'s usage with its own; stores stop_reason |
   | `message_stop` | synthetic `:message_completed` |
   | `ping` | dropped silently |
   | unknown | `{:raw_chunk, {:unknown_event, name, data}}` (forward-compat) |
@@ -1450,6 +1503,9 @@ defmodule ALLM.Providers.Anthropic do
       # is %{type: :text | :tool_use | :thinking, ...accumulator fields}.
       content_blocks: %{},
       message_id: nil,
+      # `message_start.message.usage`, merged into the `message_delta` usage
+      # so one `{:raw_chunk, {:usage, _}}` carries input, cache and output.
+      start_usage: nil,
       message_started_emitted?: false,
       message_completed_emitted?: false,
       accumulated_text: "",
@@ -1592,7 +1648,13 @@ defmodule ALLM.Providers.Anthropic do
       metadata: if(is_binary(msg_id), do: %{provider_id: msg_id}, else: %{})
     }
 
-    new_state = %{state | message_id: msg_id, message_started_emitted?: true}
+    new_state = %{
+      state
+      | message_id: msg_id,
+        start_usage: usage_map(Map.get(msg, "usage")),
+        message_started_emitted?: true
+    }
+
     {[{:message_started, %{message: bookend_msg}}], false, new_state}
   end
 
@@ -1673,8 +1735,10 @@ defmodule ALLM.Providers.Anthropic do
 
   # message_delta: carries terminal stop_reason + usage updates. We store
   # the stop_reason for the synthesized :message_completed event AND emit
-  # a {:raw_chunk, {:usage, _}} event when usage is present (so
-  # StreamCollector folds onto Response.usage).
+  # ONE {:raw_chunk, {:usage, _}} event (StreamCollector's usage fold
+  # replaces, so a second emission would lose the first). Its payload merges
+  # message_start's usage (input + cache counts) with this event's usage
+  # (non-nil keys win), run through the non-streaming `decode_usage/1`.
   defp anthropic_chunk_to_events("message_delta", decoded, state) do
     delta = Map.get(decoded, "delta", %{})
     raw_stop = Map.get(delta, "stop_reason")
@@ -1687,17 +1751,12 @@ defmodule ALLM.Providers.Anthropic do
         %{state | finish_reason: finish_reason, raw_finish_reason: raw_keep}
       end
 
-    case Map.get(decoded, "usage") do
-      %{} = usage ->
-        pre_mapped = %{
-          output_tokens: Map.get(usage, "output_tokens"),
-          input_tokens: Map.get(usage, "input_tokens")
-        }
-
-        {[{:raw_chunk, {:usage, pre_mapped}}], false, state}
-
-      _ ->
+    case merge_stream_usage(state.start_usage, usage_map(Map.get(decoded, "usage"))) do
+      nil ->
         {[], false, state}
+
+      usage ->
+        {[{:raw_chunk, {:usage, Map.from_struct(decode_usage(usage))}}], false, state}
     end
   end
 
@@ -1735,6 +1794,18 @@ defmodule ALLM.Providers.Anthropic do
   # future Anthropic event additions.
   defp anthropic_chunk_to_events(name, decoded, state) when is_binary(name) do
     {[{:raw_chunk, {:unknown_event, name, decoded}}], false, state}
+  end
+
+  defp usage_map(%{} = usage), do: usage
+  defp usage_map(_), do: nil
+
+  defp merge_stream_usage(nil, nil), do: nil
+
+  defp merge_stream_usage(start_usage, delta_usage) do
+    Map.merge(
+      start_usage || %{},
+      Map.reject(delta_usage || %{}, fn {_k, v} -> is_nil(v) end)
+    )
   end
 
   # content_block_delta sub-dispatch helpers (extracted to keep the main

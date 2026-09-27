@@ -8,7 +8,9 @@ defmodule ALLM.Usage do
   integration.
 
   `nil` means the provider did not report a counter; `0` means it reported
-  zero.
+  zero. The bundled chat adapters never replace a counter missing from the
+  provider's response with `0` (pinned for every cache counter by
+  `test/allm/providers/cache_usage_family_test.exs:112`).
 
   ## Cached prompt tokens
 
@@ -17,7 +19,16 @@ defmodule ALLM.Usage do
   the tokens written to it on this call (`:cache_write_input_tokens`). So when
   all three are integers, `cached_input_tokens + cache_write_input_tokens <=
   input_tokens`, and `cached_input_tokens / input_tokens` is the cache hit
-  ratio whichever provider served the call.
+  ratio whichever provider served the call. The bundled OpenAI (both
+  endpoints), Anthropic and Gemini adapters report these fields this way on
+  streaming and non-streaming calls alike (pinned by
+  `test/allm/providers/cache_usage_family_test.exs:99`).
+
+  Costs do not distinguish cached tokens. `ALLM.Capability.populate_costs/2`
+  prices every `:input_tokens` token at the model's plain input rate,
+  including cached reads and cache writes, so `:input_cost` for a call with
+  cache activity differs from what the provider bills. Cache-aware pricing is
+  not implemented.
 
   ## Fields
 

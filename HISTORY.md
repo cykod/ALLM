@@ -1,3 +1,25 @@
+## [FEAT] Normalize prompt-cache usage across chat adapters
+*Sunday, September 27th at 6pm*
+Phase 27.2 of the prompt-caching design (spec §5.9a, §8). Every chat adapter 
+now reports cache reads and writes in %Usage{}.cached_input_tokens / 
+cache_write_input_tokens, and each streaming usage site emits Map.from_struct 
+of its non-streaming decoder so both paths yield identical structs by 
+construction.
+
+- OpenAI: one lift_cache_details/2 helper serves Chat Completions and 
+Responses; streaming Chat Completions bodies gain stream_options.include_usage 
+(caller value wins).
+- Anthropic: input_tokens is now inclusive of cached reads and writes (raw 
+count kept in extra["uncached_input_tokens"]), total_tokens follows, and 
+streaming merges message_start usage into message_delta for a single emission. 
+Semantic change: input_cost rises on cache-active calls.
+- Gemini: cachedContentTokenCount is lifted, and the streaming handler no 
+longer drops fields.
+- FinchStub captures the streaming request; a table-driven family test pins 
+streaming == non-streaming usage and cached + write <= input per adapter.
+
+---
+
 ## [FEAT] Route GPT-6 models and add prompt-cache Layer-A fields
 *Sunday, September 27th at 5pm*
 Phase 27.0-27.1 of the prompt-caching design (spec §5.4, §5.9a). The OpenAI 

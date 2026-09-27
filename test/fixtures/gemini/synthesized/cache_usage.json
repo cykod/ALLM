@@ -1,0 +1,18 @@
+{
+  "_comment": "Synthesized — Phase 27.2. generateContent body with an implicit cache hit (usageMetadata.cachedContentTokenCount). Counts match cache_usage.sse. Not recorded from the live API.",
+  "candidates": [
+    {
+      "content": {"role": "model", "parts": [{"text": "ok"}]},
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 5000,
+    "candidatesTokenCount": 30,
+    "totalTokenCount": 5030,
+    "cachedContentTokenCount": 4096,
+    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 5000}]
+  },
+  "modelVersion": "gemini-2.5-flash"
+}

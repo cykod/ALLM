@@ -486,4 +486,63 @@ defmodule ALLM.Providers.OpenAIStreamWireTest do
 
     refute_received {:retry, _}
   end
+
+  # ---------------------------------------------------------------------------
+  # stream_options.include_usage on the Chat Completions streaming body
+  # ---------------------------------------------------------------------------
+
+  describe "streaming request body: stream_options" do
+    defp sent_body(stub, request, extra_opts \\ []) do
+      {:ok, stream} = call_stream(stub, request, extra_opts)
+      _ = consume(stream)
+      stub |> FinchStub.captured_request() |> Map.fetch!(:body) |> Jason.decode!()
+    end
+
+    test "Chat Completions asks for usage with include_usage: true" do
+      stub = install_stub(Fx.stream_chunks(:happy_text_stream))
+      body = sent_body(stub, req())
+
+      assert body["stream"] == true
+      assert body["stream_options"] == %{"include_usage" => true}
+    end
+
+    test "a caller-supplied stream_options in request.options wins" do
+      stub = install_stub(Fx.stream_chunks(:happy_text_stream))
+      body = sent_body(stub, req(options: %{stream_options: %{include_usage: false}}))
+
+      assert body["stream_options"] == %{"include_usage" => false}
+    end
+
+    test "a Responses streaming body carries no stream_options key" do
+      stub = install_stub(Fx.stream_chunks(:cache_usage_responses))
+      body = sent_body(stub, req(model: "gpt-5.5"))
+
+      assert body["stream"] == true
+      refute Map.has_key?(body, "stream_options")
+    end
+  end
+
+  describe "streamed cached-prompt usage" do
+    test "Chat Completions final usage chunk → cache counts on Response.usage" do
+      stub = install_stub(Fx.stream_chunks(:cache_usage_chat_stream))
+      {:ok, stream} = call_stream(stub, req())
+      response = stream |> consume() |> collect()
+
+      assert response.usage.input_tokens == 2048
+      assert response.usage.cached_input_tokens == 1536
+      assert response.usage.cache_write_input_tokens == 256
+      assert response.usage.extra["prompt_tokens_details"] == %{"audio_tokens" => 0}
+    end
+
+    test "Responses response.completed usage → cache counts on Response.usage" do
+      stub = install_stub(Fx.stream_chunks(:cache_usage_responses))
+      {:ok, stream} = call_stream(stub, req(model: "gpt-5.5"))
+      response = stream |> consume() |> collect()
+
+      assert response.usage.input_tokens == 3000
+      assert response.usage.cached_input_tokens == 2048
+      assert response.usage.cache_write_input_tokens == 512
+      assert response.usage.reasoning_tokens == 10
+    end
+  end
 end

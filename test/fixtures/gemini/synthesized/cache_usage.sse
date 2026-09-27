@@ -1,0 +1,6 @@
+: synthesized — Phase 27.2 Gemini stream with an implicit cache hit; the final chunk's usageMetadata matches cache_usage.json
+: not recorded from the live API
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"o"}]},"index":0}],"usageMetadata":{"promptTokenCount":5000,"candidatesTokenCount":1,"totalTokenCount":5001,"cachedContentTokenCount":4096,"promptTokensDetails":[{"modality":"TEXT","tokenCount":5000}]},"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"k"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":5000,"candidatesTokenCount":30,"totalTokenCount":5030,"cachedContentTokenCount":4096,"promptTokensDetails":[{"modality":"TEXT","tokenCount":5000}]},"modelVersion":"gemini-2.5-flash"}
+

@@ -97,7 +97,8 @@ defmodule ALLM.Providers.Gemini do
   `usageMetadata.responseTokenCount` is read as a defensive fallback
   when `candidatesTokenCount` is absent. If both are missing,
   `Usage.output_tokens` is left at `nil` and a one-time
-  `Logger.warning/1` fires per call.
+  `Logger.warning/1` fires per call. `usageMetadata.cachedContentTokenCount`
+  becomes `Usage.cached_input_tokens`.
 
   ## Error envelope mapping
 
@@ -246,6 +247,21 @@ defmodule ALLM.Providers.Gemini do
       adapter's perspective; the content filter is a finish reason).
     * Empty candidates with no `promptFeedback.blockReason` →
       `{:error, %AdapterError{reason: :malformed_response}}`.
+
+  ## Cached prompt usage
+
+  `usageMetadata.cachedContentTokenCount` is reported as
+  `Response.usage.cached_input_tokens` and leaves `usage.extra`.
+  `input_tokens` is `promptTokenCount`, unchanged. Gemini reports no cache-write
+  count, so `cache_write_input_tokens` is always `nil`. Streaming calls report
+  the same `%Usage{}` as non-streaming ones.
+
+      iex> body = %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "ok"}]}}],
+      ...>   "usageMetadata" => %{"promptTokenCount" => 5000, "candidatesTokenCount" => 30,
+      ...>     "cachedContentTokenCount" => 4096}}
+      iex> u = ALLM.Providers.Gemini.decode_response(body, []).usage
+      iex> {u.input_tokens, u.cached_input_tokens, u.cache_write_input_tokens, u.extra}
+      {5000, 4096, nil, %{}}
 
   ## Error reasons
 
@@ -1183,12 +1199,14 @@ defmodule ALLM.Providers.Gemini do
       input_tokens: input,
       output_tokens: output,
       total_tokens: total,
+      cached_input_tokens: Map.get(usage, "cachedContentTokenCount"),
       extra:
         Map.drop(usage, [
           "promptTokenCount",
           "candidatesTokenCount",
           "responseTokenCount",
-          "totalTokenCount"
+          "totalTokenCount",
+          "cachedContentTokenCount"
         ])
     }
   end
@@ -1632,17 +1650,10 @@ defmodule ALLM.Providers.Gemini do
   # usageMetadata handler (Decision #12)
   # ---------------------------------------------------------------------------
 
+  # The whole `parse_usage/1` struct, so every field the non-streaming path
+  # decodes (cache counts included) reaches the stream too.
   defp handle_usage_metadata(%{"usageMetadata" => %{} = um}, state) do
-    usage = parse_usage(um)
-
-    pre_mapped = %{
-      input_tokens: usage.input_tokens,
-      output_tokens: usage.output_tokens,
-      total_tokens: usage.total_tokens,
-      extra: usage.extra
-    }
-
-    {[{:raw_chunk, {:usage, pre_mapped}}], state}
+    {[{:raw_chunk, {:usage, Map.from_struct(parse_usage(um))}}], state}
   end
 
   defp handle_usage_metadata(_other, state), do: {[], state}

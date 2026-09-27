@@ -607,4 +607,36 @@ defmodule ALLM.Providers.OpenAIWireTest do
              ]
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Cached-prompt usage — lifted out of the *_tokens_details objects
+  # ---------------------------------------------------------------------------
+
+  describe "cached-prompt usage" do
+    test "Chat Completions: cache keys lifted; prompt_tokens_details keeps its other keys", %{
+      stub: stub
+    } do
+      body = Fx.synthesized(:cache_usage_chat)
+      Req.Test.stub(stub, fn conn -> respond_json(conn, 200, body) end)
+
+      assert {:ok, response} = call(stub, req())
+      assert response.usage.input_tokens == 2048
+      assert response.usage.cached_input_tokens == 1536
+      assert response.usage.cache_write_input_tokens == 256
+      assert response.usage.extra["prompt_tokens_details"] == %{"audio_tokens" => 0}
+    end
+
+    test "Responses: an input_tokens_details emptied by the lift is dropped from extra", %{
+      stub: stub
+    } do
+      body = Fx.synthesized(:cache_usage_responses)
+      Req.Test.stub(stub, fn conn -> respond_json(conn, 200, body) end)
+
+      assert {:ok, response} = call(stub, req(model: "gpt-5.5"))
+      assert response.usage.input_tokens == 3000
+      assert response.usage.cached_input_tokens == 2048
+      assert response.usage.cache_write_input_tokens == 512
+      refute Map.has_key?(response.usage.extra, "input_tokens_details")
+    end
+  end
 end

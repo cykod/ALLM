@@ -1,0 +1,22 @@
+{
+  "_comment": "Synthesized — Phase 27.2. Chat Completions body with cached-prompt usage (prompt_tokens_details.cached_tokens + cache_write_tokens + audio_tokens). Counts match cache_usage_chat_stream.sse. Not recorded from the live API.",
+  "id": "chatcmpl-cache-1",
+  "object": "chat.completion",
+  "created": 1790000000,
+  "model": "gpt-4o-mini",
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "ok"},
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 2048,
+    "completion_tokens": 20,
+    "total_tokens": 2068,
+    "prompt_tokens_details": {"cached_tokens": 1536, "cache_write_tokens": 256, "audio_tokens": 0},
+    "completion_tokens_details": {"reasoning_tokens": 0}
+  }
+}

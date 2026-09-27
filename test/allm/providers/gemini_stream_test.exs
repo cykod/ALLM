@@ -342,7 +342,8 @@ defmodule ALLM.Providers.GeminiStreamTest do
     :equiv_intermediate_usage,
     :equiv_no_finish_reason,
     :equiv_other_finish,
-    :equiv_long_text
+    :equiv_long_text,
+    :cache_usage
   ]
 
   for fixture <- @full_equivalence_fixtures do
@@ -382,7 +383,27 @@ defmodule ALLM.Providers.GeminiStreamTest do
 
       assert streamed.usage.total_tokens == non_streamed.usage.total_tokens,
              "usage.total_tokens mismatch for #{@fixture}"
+
+      assert streamed.usage.cached_input_tokens == non_streamed.usage.cached_input_tokens,
+             "usage.cached_input_tokens mismatch for #{@fixture}"
+
+      assert streamed.usage.cache_write_input_tokens ==
+               non_streamed.usage.cache_write_input_tokens,
+             "usage.cache_write_input_tokens mismatch for #{@fixture}"
+
+      assert streamed.usage.extra == non_streamed.usage.extra,
+             "usage.extra mismatch for #{@fixture}"
     end
+  end
+
+  test "streamed cachedContentTokenCount lands on cached_input_tokens, not extra" do
+    stub = install_stub(Fx.stream_chunks(:cache_usage))
+    {:ok, stream} = call_stream(stub, req())
+    usage = stream |> consume() |> collect() |> Map.fetch!(:usage)
+
+    assert usage.cached_input_tokens == 4096
+    assert usage.cache_write_input_tokens == nil
+    refute Map.has_key?(usage.extra, "cachedContentTokenCount")
   end
 
   # Sub-projection for functionCall fixtures: text + usage match across

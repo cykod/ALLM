@@ -503,4 +503,104 @@ defmodule ALLM.Providers.AnthropicStreamWireTest do
     assert Jason.decode!(response.output_text) == %{"name" => "Alice", "age" => 30}
     assert response.metadata[:structured_output_tool] == true
   end
+
+  # ---------------------------------------------------------------------------
+  # Cached-prompt usage: message_start usage merged with message_delta usage
+  # ---------------------------------------------------------------------------
+
+  describe "streamed usage merges message_start with message_delta" do
+    defp usage_events(events), do: Enum.filter(events, &match?({:raw_chunk, {:usage, _}}, &1))
+
+    defp stream_collect(chunks) do
+      {:ok, stream} = call_stream(install_stub(chunks), req())
+      events = consume(stream)
+      {events, collect(events)}
+    end
+
+    defp sse(event, data), do: "event: #{event}\ndata: #{Jason.encode!(data)}\n\n"
+
+    defp start_chunk(usage) do
+      sse("message_start", %{
+        "type" => "message_start",
+        "message" => %{"id" => "msg_u", "role" => "assistant", "content" => [], "usage" => usage}
+      })
+    end
+
+    defp delta_chunk(extra) do
+      sse(
+        "message_delta",
+        Map.merge(%{"type" => "message_delta", "delta" => %{"stop_reason" => "end_turn"}}, extra)
+      )
+    end
+
+    defp stop_chunk, do: sse("message_stop", %{"type" => "message_stop"})
+
+    test "output-only message_delta: input_tokens == raw input + cache read + cache creation" do
+      {events, response} = stream_collect(Fx.stream_chunks(:cache_usage_stream))
+
+      assert length(usage_events(events)) == 1
+      assert response.usage.input_tokens == 50 + 4000 + 300
+      assert response.usage.cached_input_tokens == 4000
+      assert response.usage.cache_write_input_tokens == 300
+      assert response.usage.output_tokens == 25
+      assert response.usage.total_tokens == 4375
+      assert response.usage.extra["uncached_input_tokens"] == 50
+    end
+
+    test "cumulative message_delta repeating the cache fields yields the same usage (no double counting)" do
+      {_events, output_only} = stream_collect(Fx.stream_chunks(:cache_usage_stream))
+
+      {events, cumulative} =
+        stream_collect(Fx.stream_chunks(:cache_usage_stream_cumulative))
+
+      assert length(usage_events(events)) == 1
+      assert cumulative.usage == output_only.usage
+      assert cumulative.usage.input_tokens == 4350
+    end
+
+    # (MODIFY — semantic change) before this, a streamed Anthropic response
+    # ignored message_start usage and reported input_tokens: nil here.
+    test "happy_text.sse now reports message_start's input_tokens" do
+      {_events, response} = stream_collect(Fx.stream_chunks(:happy_text))
+
+      assert response.usage.input_tokens == 10
+      assert response.usage.output_tokens == 2
+      assert response.usage.total_tokens == 12
+      assert response.usage.cached_input_tokens == nil
+      assert response.usage.cache_write_input_tokens == nil
+    end
+
+    test "a null input_tokens in message_delta never wipes message_start's integer" do
+      chunks = [
+        start_chunk(%{"input_tokens" => 7, "cache_read_input_tokens" => 3, "output_tokens" => 1}),
+        delta_chunk(%{"usage" => %{"input_tokens" => nil, "output_tokens" => 4}}),
+        stop_chunk()
+      ]
+
+      {_events, response} = stream_collect(chunks)
+      assert response.usage.input_tokens == 10
+      assert response.usage.cached_input_tokens == 3
+      assert response.usage.output_tokens == 4
+    end
+
+    test "a message_delta with no usage key still emits message_start's usage once" do
+      chunks = [
+        start_chunk(%{"input_tokens" => 7, "output_tokens" => 1}),
+        delta_chunk(%{}),
+        stop_chunk()
+      ]
+
+      {events, response} = stream_collect(chunks)
+      assert length(usage_events(events)) == 1
+      assert response.usage.input_tokens == 7
+      assert response.usage.output_tokens == 1
+    end
+
+    test "no message_delta → no usage emitted" do
+      chunks = [start_chunk(%{"input_tokens" => 7, "output_tokens" => 1}), stop_chunk()]
+
+      {events, _response} = stream_collect(chunks)
+      assert usage_events(events) == []
+    end
+  end
 end

@@ -1,0 +1,8 @@
+: synthesized — Phase 27.2 OpenAI Responses stream with cached-prompt usage on response.completed
+: usage block matches cache_usage_responses.json; not recorded from the live API
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"ok"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_cache_1","status":"completed","usage":{"input_tokens":3000,"input_tokens_details":{"cached_tokens":2048,"cache_write_tokens":512},"output_tokens":50,"output_tokens_details":{"reasoning_tokens":10},"total_tokens":3050}}}
+

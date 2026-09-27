@@ -623,4 +623,48 @@ defmodule ALLM.Providers.AnthropicWireTest do
     assert is_binary(response.output_text)
     assert Jason.decode!(response.output_text) == %{"name" => "Alice", "age" => 30}
   end
+
+  # ---------------------------------------------------------------------------
+  # Cached-prompt usage — inclusive input_tokens
+  # ---------------------------------------------------------------------------
+
+  describe "cached-prompt usage" do
+    test "cache fields → inclusive input_tokens, normalized total, raw count in extra", %{
+      stub: stub
+    } do
+      body = Fx.synthesized(:cache_usage)
+      Req.Test.stub(stub, fn conn -> respond_json(conn, 200, body) end)
+
+      assert {:ok, response} = call(stub, req())
+      u = response.usage
+      assert u.input_tokens == 50 + 4000 + 300
+      assert u.cached_input_tokens == 4000
+      assert u.cache_write_input_tokens == 300
+      assert u.total_tokens == u.input_tokens + u.output_tokens
+      assert u.total_tokens == 4375
+      assert u.extra["uncached_input_tokens"] == 50
+
+      # The lifted keys leave `extra`; the 5m/1h split and other keys stay.
+      refute Map.has_key?(u.extra, "input_tokens")
+      refute Map.has_key?(u.extra, "cache_read_input_tokens")
+      refute Map.has_key?(u.extra, "cache_creation_input_tokens")
+
+      assert u.extra["cache_creation"] == %{
+               "ephemeral_5m_input_tokens" => 300,
+               "ephemeral_1h_input_tokens" => 0
+             }
+
+      assert u.extra["service_tier"] == "standard"
+    end
+
+    test "no cache fields → raw input_tokens and nil cache counters, never 0", %{stub: stub} do
+      body = Fx.messages_response(:happy_text)
+      Req.Test.stub(stub, fn conn -> respond_json(conn, 200, body) end)
+
+      assert {:ok, response} = call(stub, req())
+      assert response.usage.input_tokens == 9
+      assert response.usage.cached_input_tokens == nil
+      assert response.usage.cache_write_input_tokens == nil
+    end
+  end
 end

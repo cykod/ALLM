@@ -106,7 +106,12 @@ defmodule ALLM.Test.FinchStub do
 
     Process.put(
       {:allm_finch_stub, ref},
-      Map.merge(frame_opts(chunks, opts), %{cancel_count: 0, captured_opts: nil, caller: self()})
+      Map.merge(frame_opts(chunks, opts), %{
+        cancel_count: 0,
+        captured_opts: nil,
+        captured_request: nil,
+        caller: self()
+      })
     )
 
     ref
@@ -121,7 +126,12 @@ defmodule ALLM.Test.FinchStub do
   def install_shared(chunks, opts) when is_list(chunks) and is_list(opts) do
     {:ok, agent} =
       Agent.start_link(fn ->
-        Map.merge(frame_opts(chunks, opts), %{cancel_count: 0, captured_opts: nil, senders: []})
+        Map.merge(frame_opts(chunks, opts), %{
+          cancel_count: 0,
+          captured_opts: nil,
+          captured_request: nil,
+          senders: []
+        })
       end)
 
     agent
@@ -169,20 +179,25 @@ defmodule ALLM.Test.FinchStub do
   Captures the full `opts` keyword list on the install state (read via
   `captured_opts/1`) so tests can assert which Finch-level options the
   adapter forwarded (e.g. `:receive_timeout`, `:request_timeout`,
-  `:pool_timeout`).
+  `:pool_timeout`), and the request itself (read via `captured_request/1`)
+  so tests can assert the streaming request body the adapter built.
   """
   @spec async_request(any(), atom(), keyword()) :: ref()
   def async_request(req, name, opts) when is_list(opts) do
     case Keyword.fetch!(opts, :finch_stub_ref) do
-      agent when is_pid(agent) -> async_request_shared(agent, opts)
+      agent when is_pid(agent) -> async_request_shared(agent, req, opts)
       stub_ref -> async_request_local(req, name, stub_ref, opts)
     end
   end
 
-  defp async_request_shared(agent, opts) do
+  defp async_request_shared(agent, req, opts) do
     ref = make_ref()
     caller = self()
-    state = Agent.get_and_update(agent, fn s -> {s, %{s | captured_opts: opts}} end)
+
+    state =
+      Agent.get_and_update(agent, fn s ->
+        {s, %{s | captured_opts: opts, captured_request: req}}
+      end)
 
     sender = spawn_link(fn -> send_frames(caller, ref, state) end)
 
@@ -191,10 +206,14 @@ defmodule ALLM.Test.FinchStub do
     ref
   end
 
-  defp async_request_local(_req, _name, stub_ref, opts) do
+  defp async_request_local(req, _name, stub_ref, opts) do
     state = Process.get({:allm_finch_stub, stub_ref}) || raise "no stub installed for ref"
 
-    Process.put({:allm_finch_stub, stub_ref}, %{state | captured_opts: opts})
+    Process.put({:allm_finch_stub, stub_ref}, %{
+      state
+      | captured_opts: opts,
+        captured_request: req
+    })
 
     caller = state.caller
     spawn(fn -> send_frames(caller, stub_ref, state) end)
@@ -213,6 +232,19 @@ defmodule ALLM.Test.FinchStub do
   def captured_opts(ref) when is_reference(ref) do
     %{captured_opts: opts} = Process.get({:allm_finch_stub, ref})
     opts
+  end
+
+  @doc """
+  Read the request (a `%Finch.Request{}` from a real adapter) passed to the
+  most recent `async_request/3` call for this ref or Agent-backed stub.
+  Returns `nil` when the adapter hasn't called `async_request/3` yet.
+  """
+  @spec captured_request(ref() | pid()) :: any()
+  def captured_request(agent) when is_pid(agent), do: Agent.get(agent, & &1.captured_request)
+
+  def captured_request(ref) when is_reference(ref) do
+    %{captured_request: req} = Process.get({:allm_finch_stub, ref})
+    req
   end
 
   @doc """

@@ -13,6 +13,7 @@ defmodule ALLM.Providers.GeminiWireTest do
 
   alias ALLM.Message
   alias ALLM.Providers.Gemini
+  alias ALLM.Providers.GeminiTestFixtures
   alias ALLM.Request
 
   defp req(messages, opts \\ []) do
@@ -167,6 +168,19 @@ defmodule ALLM.Providers.GeminiWireTest do
                "responseMimeType" => "application/json",
                "responseSchema" => schema
              }
+    end
+  end
+
+  describe "decode_response/2 — cached-prompt usage" do
+    test "cachedContentTokenCount → cached_input_tokens; write nil; key leaves extra" do
+      usage =
+        Gemini.decode_response(GeminiTestFixtures.synthesized(:cache_usage), []).usage
+
+      assert usage.input_tokens == 5000
+      assert usage.cached_input_tokens == 4096
+      assert usage.cache_write_input_tokens == nil
+      refute Map.has_key?(usage.extra, "cachedContentTokenCount")
+      assert usage.extra["promptTokensDetails"] == [%{"modality" => "TEXT", "tokenCount" => 5000}]
     end
   end
 end

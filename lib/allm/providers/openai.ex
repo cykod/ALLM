@@ -482,6 +482,25 @@ defmodule ALLM.Providers.OpenAI do
   (`POST /v1/chat/completions`). Both endpoints return canonical
   `%Response{}` shapes so callers do not need to know which wire ran.
 
+  ## Cached prompt usage
+
+  `Response.usage.cached_input_tokens` and `cache_write_input_tokens` are read
+  from `cached_tokens` and `cache_write_tokens` in `usage.prompt_tokens_details`
+  (Chat Completions) or `usage.input_tokens_details` (Responses).
+  `input_tokens` is the provider's own prompt count, passed through unchanged.
+  The two lifted keys leave the details object in `usage.extra`; any other key
+  in it, such as `audio_tokens`, stays, and the object is dropped only when
+  nothing else is left. A counter the provider did not send stays `nil`.
+  Streaming calls report the same `%Usage{}` as non-streaming ones.
+
+      iex> usage = %{"prompt_tokens" => 2048, "completion_tokens" => 20,
+      ...>   "prompt_tokens_details" => %{"cached_tokens" => 1536, "audio_tokens" => 0}}
+      iex> u = ALLM.Providers.OpenAI.from_openai_response(%{"usage" => usage}, :chat_completions).usage
+      iex> {u.input_tokens, u.cached_input_tokens, u.cache_write_input_tokens}
+      {2048, 1536, nil}
+      iex> u.extra["prompt_tokens_details"]
+      %{"audio_tokens" => 0}
+
   ## Vision input
 
   `[%ALLM.TextPart{}, %ALLM.ImagePart{}]` content lists translate to
@@ -727,6 +746,16 @@ defmodule ALLM.Providers.OpenAI do
   it as a no-op. Mid-stream errors append a terminal `{:error, _}` event in
   place of (or after) `:message_completed`.
 
+  ## Usage on a stream
+
+  Chat Completions sends no usage on a stream unless asked, so this adapter
+  adds `"stream_options" => %{"include_usage" => true}` to every Chat
+  Completions streaming body. A `stream_options` value the caller puts in
+  `request.options` is sent instead. Responses streaming bodies get no
+  `stream_options`: that endpoint reports usage on `response.completed`.
+  The usage arrives as one `{:raw_chunk, {:usage, map}}` event whose fields
+  match what `generate/2` reports for the same response.
+
   ## Options
 
     * `:api_key` / `:adapter_opts[:plug]` — see `prepare_request/2`.
@@ -773,7 +802,13 @@ defmodule ALLM.Providers.OpenAI do
     # build the streaming body inline (no `Req` involvement on this path).
     endpoint = dispatch_endpoint(request.model, opts)
     api_key = Keys.fetch!(:openai, opts)
-    body = to_openai_request_body(request, endpoint, opts) |> Map.put("stream", true)
+
+    body =
+      request
+      |> to_openai_request_body(endpoint, opts)
+      |> Map.put("stream", true)
+      |> put_stream_usage_option(endpoint)
+
     json_body = Jason.encode!(body)
     headers = OpenAIHeaders.json_headers(api_key, opts)
     url = @base_url <> path_for(endpoint)
@@ -936,6 +971,14 @@ defmodule ALLM.Providers.OpenAI do
       _ -> malformed_event_response(state, data)
     end
   end
+
+  # Chat Completions sends no usage on a stream unless asked. `put_new` keeps
+  # a caller's `stream_options` from `request.options`. The Responses stream
+  # already carries usage on `response.completed`.
+  defp put_stream_usage_option(body, :chat_completions),
+    do: Map.put_new(body, "stream_options", %{"include_usage" => true})
+
+  defp put_stream_usage_option(body, _endpoint), do: body
 
   defp malformed_event_response(state, data) do
     err = StreamError.new(:malformed_event, message: "could not parse SSE data: #{inspect(data)}")
@@ -1220,25 +1263,11 @@ defmodule ALLM.Providers.OpenAI do
 
   # Emit a `:raw_chunk {:usage, _}` event when the `response.completed` payload
   # carries a `usage` block (gpt-5* and other modern Responses models include
-  # it). `StreamCollector` folds the map through `struct!(%Usage{}, _)`, so
-  # keys MUST be `%Usage{}` field names. Shape matches `decode_responses_usage/1`
-  # so streaming and non-streaming paths produce identical `%Usage{}` structs.
+  # it). The payload is built FROM `decode_responses_usage/1` (non-streaming),
+  # so streaming and non-streaming paths produce identical `%Usage{}` structs
+  # by construction.
   defp responses_usage_events(%{"usage" => %{} = usage}) do
-    pre_mapped = %{
-      input_tokens: usage["input_tokens"],
-      output_tokens: usage["output_tokens"],
-      total_tokens: usage["total_tokens"],
-      reasoning_tokens: extract_reasoning_tokens(usage, "output_tokens_details"),
-      extra:
-        Map.drop(usage, [
-          "input_tokens",
-          "output_tokens",
-          "total_tokens",
-          "output_tokens_details"
-        ])
-    }
-
-    [{:raw_chunk, {:usage, pre_mapped}}]
+    [{:raw_chunk, {:usage, Map.from_struct(decode_responses_usage(usage))}}]
   end
 
   defp responses_usage_events(_), do: []
@@ -1352,14 +1381,10 @@ defmodule ALLM.Providers.OpenAI do
 
   defp maybe_append_usage(events, state, nil), do: {events, state}
 
+  # Built FROM `decode_usage/1` (non-streaming) so both Chat Completions
+  # paths produce identical `%Usage{}` structs by construction.
   defp maybe_append_usage(events, state, %{} = usage_map) do
-    pre_mapped = %{
-      input_tokens: usage_map["prompt_tokens"],
-      output_tokens: usage_map["completion_tokens"],
-      total_tokens: usage_map["total_tokens"]
-    }
-
-    {events ++ [{:raw_chunk, {:usage, pre_mapped}}], state}
+    {events ++ [{:raw_chunk, {:usage, Map.from_struct(decode_usage(usage_map))}}], state}
   end
 
   # after_fun: cancel only when state.done == false (Decision #4a).
@@ -2032,13 +2057,17 @@ defmodule ALLM.Providers.OpenAI do
   end
 
   defp decode_usage(%{} = usage) do
+    {cached, write, rest} = lift_cache_details(usage, "prompt_tokens_details")
+
     %Usage{
       input_tokens: Map.get(usage, "prompt_tokens"),
       output_tokens: Map.get(usage, "completion_tokens"),
       total_tokens: Map.get(usage, "total_tokens"),
+      cached_input_tokens: cached,
+      cache_write_input_tokens: write,
       reasoning_tokens: extract_reasoning_tokens(usage, "completion_tokens_details"),
       extra:
-        Map.drop(usage, [
+        Map.drop(rest, [
           "prompt_tokens",
           "completion_tokens",
           "total_tokens",
@@ -2048,6 +2077,30 @@ defmodule ALLM.Providers.OpenAI do
   end
 
   defp decode_usage(_), do: %Usage{}
+
+  # Lift `cached_tokens` / `cache_write_tokens` out of a usage details object
+  # (`prompt_tokens_details` on Chat Completions, `input_tokens_details` on
+  # Responses). The object stays in the returned usage map minus the two
+  # lifted keys, and is dropped only when that leaves it empty, so any other
+  # key the provider sent (e.g. `audio_tokens`) survives into `extra`.
+  # Returns `{cached, write, usage_without_lifted_keys}`; an absent counter
+  # stays `nil`.
+  defp lift_cache_details(usage, details_key) do
+    case Map.get(usage, details_key) do
+      %{} = details ->
+        rest = Map.drop(details, ["cached_tokens", "cache_write_tokens"])
+
+        usage =
+          if rest == %{},
+            do: Map.delete(usage, details_key),
+            else: Map.put(usage, details_key, rest)
+
+        {Map.get(details, "cached_tokens"), Map.get(details, "cache_write_tokens"), usage}
+
+      _ ->
+        {nil, nil, usage}
+    end
+  end
 
   # Pull `reasoning_tokens` out of either Chat Completions'
   # `completion_tokens_details` sub-map or the Responses-API
@@ -2190,13 +2243,17 @@ defmodule ALLM.Providers.OpenAI do
   defp map_responses_status(_), do: {nil, nil}
 
   defp decode_responses_usage(%{} = usage) do
+    {cached, write, rest} = lift_cache_details(usage, "input_tokens_details")
+
     %Usage{
       input_tokens: Map.get(usage, "input_tokens"),
       output_tokens: Map.get(usage, "output_tokens"),
       total_tokens: Map.get(usage, "total_tokens"),
+      cached_input_tokens: cached,
+      cache_write_input_tokens: write,
       reasoning_tokens: extract_reasoning_tokens(usage, "output_tokens_details"),
       extra:
-        Map.drop(usage, [
+        Map.drop(rest, [
           "input_tokens",
           "output_tokens",
           "total_tokens",

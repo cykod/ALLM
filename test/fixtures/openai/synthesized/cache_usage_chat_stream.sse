@@ -1,0 +1,12 @@
+: synthesized — Phase 27.2 OpenAI Chat Completions stream with cached-prompt usage (stream_options.include_usage)
+: final chunk has choices: [] and the same usage block as cache_usage_chat.json; not recorded from the live API
+data: {"id":"chatcmpl-cache-1","object":"chat.completion.chunk","created":1790000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-cache-1","object":"chat.completion.chunk","created":1790000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-cache-1","object":"chat.completion.chunk","created":1790000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}
+
+data: {"id":"chatcmpl-cache-1","object":"chat.completion.chunk","created":1790000000,"model":"gpt-4o-mini","choices":[],"usage":{"prompt_tokens":2048,"completion_tokens":20,"total_tokens":2068,"prompt_tokens_details":{"cached_tokens":1536,"cache_write_tokens":256,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}
+
+data: [DONE]
+
