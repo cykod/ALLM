@@ -28,6 +28,8 @@ defmodule ALLM.Providers.Support.Transport do
   explicit `opts[:receive_timeout]` still wins.
   """
 
+  alias ALLM.Providers.Support.HTTPResponse
+
   # Transport opts forwarded verbatim to `Finch.async_request/3`.
   # `:finch_stub_ref` is the test-injection ref read by `ALLM.Test.FinchStub`.
   @finch_forwarded_opts [
@@ -87,9 +89,8 @@ defmodule ALLM.Providers.Support.Transport do
   # process an asynchronous exit signal (`Process.exit(pid, :shutdown)`), so
   # a message that process sends before it actually exits can still arrive
   # after the `after 0` drain has returned. Waiting for its `:DOWN` would
-  # mean matching Finch's opaque `request_ref` shape, so it is not done. The
-  # chat stream adapters still only cancel; new streaming HTTP adapters call
-  # this instead of hand-rolling their own after function.
+  # mean matching Finch's opaque `request_ref` shape, so it is not done.
+  # Every streaming HTTP adapter's after function routes through here.
   @spec cancel_and_drain(module(), reference(), boolean()) :: :ok
   def cancel_and_drain(finch_module, ref, transport_done?)
       when is_atom(finch_module) and is_boolean(transport_done?) do
@@ -103,6 +104,33 @@ defmodule ALLM.Providers.Support.Transport do
 
     drain(ref)
   end
+
+  @doc false
+  # One Finch message for a streamed request whose status is 4xx/5xx.
+  # `state` is the adapter's stream state and must carry `:error_headers`
+  # (a header list) and `:error_body` (iodata), both initially `[]`.
+  # Headers and body frames are buffered and `{:cont, state}` returned; on
+  # the transport's `:done` the body is JSON-decoded (`%{}` for an empty or
+  # non-JSON body, or one that is not an object) and returned with the
+  # headers as `{:done, body, headers, state}`, ready for the adapter's
+  # `(status, body, headers)` error classifier. Any other message is
+  # ignored; a transport `{:error, _}` is the caller's to handle before
+  # reaching here.
+  @spec buffer_error_payload(map(), term()) ::
+          {:cont, map()} | {:done, map(), [{String.t(), String.t()}], map()}
+  def buffer_error_payload(%{error_headers: acc} = state, {:headers, headers})
+      when is_list(headers),
+      do: {:cont, %{state | error_headers: acc ++ headers}}
+
+  def buffer_error_payload(%{error_body: acc} = state, {:data, chunk}) when is_binary(chunk),
+    do: {:cont, %{state | error_body: [acc, chunk]}}
+
+  def buffer_error_payload(%{error_body: acc, error_headers: headers} = state, :done) do
+    body = acc |> IO.iodata_to_binary() |> HTTPResponse.decode_json_error_body()
+    {:done, body, headers, state}
+  end
+
+  def buffer_error_payload(state, _other), do: {:cont, state}
 
   defp drain(ref) do
     receive do

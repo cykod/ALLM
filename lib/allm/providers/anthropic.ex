@@ -498,9 +498,9 @@ defmodule ALLM.Providers.Anthropic do
   @spec from_anthropic_error(non_neg_integer(), map(), Enumerable.t()) :: AdapterError.t()
   def from_anthropic_error(status, body, headers)
       when is_integer(status) and is_map(body) do
-    error = Map.get(body, "error", %{})
+    error = HTTPResponse.error_object(body)
     type = Map.get(error, "type")
-    message = Map.get(error, "message", "Anthropic HTTP #{status}")
+    message = error_message(Map.get(error, "message"), status)
 
     {reason, retry_after} =
       classify_reason(status, type, message, HTTPResponse.retry_after_ms(headers))
@@ -520,6 +520,18 @@ defmodule ALLM.Providers.Anthropic do
   # `api_error`, `overloaded_error`. The `prompt is too long` /
   # `max_tokens` markers appear inside `error.message` for 400s that
   # represent context-window-exceeded conditions.
+  # The provider-authored message, with key material redacted.
+  defp error_message(message, _status) when is_binary(message),
+    do: redact_key_material(message)
+
+  defp error_message(_message, status), do: "Anthropic HTTP #{status}"
+
+  # Anthropic credential shape: `sk-ant-` keys (`sk-ant-api03-…`,
+  # `sk-ant-admin01-…`). Narrower than the OpenAI `sk-` pattern on purpose:
+  # each provider redacts its own key format.
+  defp redact_key_material(message),
+    do: String.replace(message, ~r/\bsk-ant-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
+
   defp classify_reason(401, _type, _msg, _ra), do: {:authentication_failed, nil}
   defp classify_reason(403, _type, _msg, _ra), do: {:authentication_failed, nil}
   defp classify_reason(429, _type, _msg, ra), do: {:rate_limited, ra}
@@ -1335,6 +1347,12 @@ defmodule ALLM.Providers.Anthropic do
   into `Response.finish_reason: :error`. Streaming never retries
   .
 
+  A 4xx/5xx response's body is read to the end before that terminal event
+  is emitted, so the `%AdapterError{}` carries the provider's own error
+  message (key material redacted) and `:retry_after_ms` from a
+  `Retry-After` header. Streams are never retried, so acting on
+  `:retry_after_ms` is left to the caller.
+
   ## Anthropic SSE event mapping
 
   Anthropic uses NAMED SSE events (`event: message_start\\ndata: {...}`).
@@ -1537,6 +1555,11 @@ defmodule ALLM.Providers.Anthropic do
       buffered: [],
       status: nil,
       done: false,
+      # A 4xx/5xx body and its headers, buffered until the transport's
+      # `:done` so the error classifier sees the provider's message and
+      # `retry-after` (see `Transport.buffer_error_payload/2`).
+      error_headers: [],
+      error_body: [],
       # Per-content-block accumulators keyed by integer index. Each value
       # is %{type: :text | :tool_use | :thinking, ...accumulator fields}.
       content_blocks: %{},
@@ -1570,14 +1593,38 @@ defmodule ALLM.Providers.Anthropic do
   end
 
   # Handle one Finch payload. Status / headers gate the rest of the
-  # stream — non-2xx terminates with an AdapterError event.
+  # stream — a non-2xx body is buffered, then terminates the stream with an
+  # AdapterError event.
   defp handle_finch_payload(state, {:status, code}) when code in 200..299 do
     {[], %{state | status: code}}
   end
 
+  # A 4xx/5xx status is not terminal yet: the body and headers that follow
+  # are buffered and classified on the transport's `:done`.
   defp handle_finch_payload(state, {:status, code}) when is_integer(code) and code >= 400 do
-    err = from_anthropic_error(code, %{}, [])
+    {[], %{state | status: code}}
+  end
+
+  defp handle_finch_payload(state, {:error, exception}) do
+    err =
+      AdapterError.new(:network_error,
+        provider: :anthropic,
+        message: "transport failure: " <> Exception.message(exception),
+        cause: exception
+      )
+
     finalize_with_event(state, {:error, err})
+  end
+
+  defp handle_finch_payload(%{status: status} = state, payload)
+       when is_integer(status) and status >= 400 do
+    case Transport.buffer_error_payload(state, payload) do
+      {:cont, state} ->
+        {[], state}
+
+      {:done, body, headers, state} ->
+        finalize_with_event(state, {:error, from_anthropic_error(status, body, headers)})
+    end
   end
 
   defp handle_finch_payload(state, {:headers, _headers}), do: {[], state}
@@ -1597,17 +1644,6 @@ defmodule ALLM.Providers.Anthropic do
     else
       {[synthesize_message_completed(state)], %{state | message_completed_emitted?: true}}
     end
-  end
-
-  defp handle_finch_payload(state, {:error, exception}) do
-    err =
-      AdapterError.new(:network_error,
-        provider: :anthropic,
-        message: "transport failure: " <> Exception.message(exception),
-        cause: exception
-      )
-
-    finalize_with_event(state, {:error, err})
   end
 
   defp handle_finch_payload(state, _other), do: {[], state}
@@ -1960,15 +1996,11 @@ defmodule ALLM.Providers.Anthropic do
     {:message_completed, %{message: msg, finish_reason: finish_reason}}
   end
 
-  # after_fun: cancel only when state.done == false (Phase 10.3
-  # Decision #4a — the gated cancel pattern). Defensive rescue:
-  # cancel_async_request/1 may raise on an already-completed ref.
-  defp stream_after_fun(%{done: true}, _finch_module), do: :ok
-
-  defp stream_after_fun(%{ref: ref, finch_module: finch_module}, _) do
-    finch_module.cancel_async_request(ref)
-    :ok
-  rescue
-    _ -> :ok
-  end
+  # after_fun: cancel only when state.done == false, then drain the `{ref, _}`
+  # messages Finch had already queued in this process's mailbox. `done`
+  # covers the transport's `:done` / `{:error, _}`, the provider's
+  # end-of-stream event and every terminal error event, so the cancel gate
+  # is unchanged; the drain is best-effort (see `Transport.cancel_and_drain/3`).
+  defp stream_after_fun(%{ref: ref, done: done}, finch_module),
+    do: Transport.cancel_and_drain(finch_module, ref, done)
 end

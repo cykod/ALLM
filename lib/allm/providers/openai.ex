@@ -683,10 +683,10 @@ defmodule ALLM.Providers.OpenAI do
   @spec from_openai_error(non_neg_integer(), map(), Enumerable.t()) :: AdapterError.t()
   def from_openai_error(status, body, headers)
       when is_integer(status) and is_map(body) do
-    error = Map.get(body, "error", %{})
+    error = HTTPResponse.error_object(body)
     code = Map.get(error, "code")
     type = Map.get(error, "type")
-    message = Map.get(error, "message", "OpenAI HTTP #{status}")
+    message = error_message(Map.get(error, "message"), status)
 
     {reason, retry_after} =
       classify_reason(status, code, type, HTTPResponse.retry_after_ms(headers))
@@ -699,6 +699,18 @@ defmodule ALLM.Providers.OpenAI do
       metadata: %{openai_code: code, openai_type: type}
     )
   end
+
+  # The provider-authored message, with key material redacted: OpenAI's 401
+  # text echoes the key it rejected.
+  defp error_message(message, _status) when is_binary(message),
+    do: redact_key_material(message)
+
+  defp error_message(_message, status), do: "OpenAI HTTP #{status}"
+
+  # OpenAI credential shapes: `sk-` (including `sk-proj-`) and `rk-` keys and
+  # `org-` ids. Same pattern as the OpenAI capability adapters.
+  defp redact_key_material(message),
+    do: String.replace(message, ~r/\b(?:sk|rk|org)-[A-Za-z0-9_\-]{6,}/, "[REDACTED]")
 
   defp classify_reason(401, _code, _type, _ra), do: {:authentication_failed, nil}
   defp classify_reason(403, _code, _type, _ra), do: {:authentication_failed, nil}
@@ -749,6 +761,12 @@ defmodule ALLM.Providers.OpenAI do
   `{:error, _}` event into the enumerable; the consumer's reducer (typically
   `ALLM.StreamCollector`) folds it into `Response.finish_reason: :error`.
   The call-site tuple stays `{:ok, stream}`.
+
+  A 4xx/5xx response's body is read to the end before that terminal event
+  is emitted, so the `%AdapterError{}` carries the provider's own error
+  message (key material redacted) and `:retry_after_ms` from a
+  `Retry-After` header. Streams are never retried, so acting on
+  `:retry_after_ms` is left to the caller.
 
   ## Event sequence
 
@@ -863,6 +881,11 @@ defmodule ALLM.Providers.OpenAI do
       buffered: [{:message_started, %{message: bookend_msg}}],
       done: false,
       status: nil,
+      # A 4xx/5xx body and its headers, buffered until the transport's
+      # `:done` so the error classifier sees the provider's message and
+      # `retry-after` (see `Transport.buffer_error_payload/2`).
+      error_headers: [],
+      error_body: [],
       tool_calls_by_index: %{},
       tool_call_order: [],
       # Bug #5 fix: Responses-API tool-call accumulator. Keys are the
@@ -902,9 +925,32 @@ defmodule ALLM.Providers.OpenAI do
     {[], %{state | status: code}}
   end
 
+  # A 4xx/5xx status is not terminal yet: the body and headers that follow
+  # are buffered and classified on the transport's `:done`.
   defp handle_finch_payload(state, {:status, code}) when is_integer(code) and code >= 400 do
-    err = from_openai_error(code, %{}, [])
+    {[], %{state | status: code}}
+  end
+
+  defp handle_finch_payload(state, {:error, exception}) do
+    err =
+      AdapterError.new(:network_error,
+        provider: :openai,
+        message: "transport failure: " <> Exception.message(exception),
+        cause: exception
+      )
+
     finalize_with_event(state, {:error, err})
+  end
+
+  defp handle_finch_payload(%{status: status} = state, payload)
+       when is_integer(status) and status >= 400 do
+    case Transport.buffer_error_payload(state, payload) do
+      {:cont, state} ->
+        {[], state}
+
+      {:done, body, headers, state} ->
+        finalize_with_event(state, {:error, from_openai_error(status, body, headers)})
+    end
   end
 
   defp handle_finch_payload(state, {:headers, _headers}), do: {[], state}
@@ -925,17 +971,6 @@ defmodule ALLM.Providers.OpenAI do
       events = synthesize_tool_call_completions(state) ++ [synthesize_message_completed(state)]
       {events, %{state | message_completed_emitted?: true}}
     end
-  end
-
-  defp handle_finch_payload(state, {:error, exception}) do
-    err =
-      AdapterError.new(:network_error,
-        provider: :openai,
-        message: "transport failure: " <> Exception.message(exception),
-        cause: exception
-      )
-
-    finalize_with_event(state, {:error, err})
   end
 
   defp handle_finch_payload(state, _other), do: {[], state}
@@ -1405,15 +1440,13 @@ defmodule ALLM.Providers.OpenAI do
     {events ++ [{:raw_chunk, {:usage, Map.from_struct(decode_usage(usage_map))}}], state}
   end
 
-  # after_fun: cancel only when state.done == false (Decision #4a).
-  defp stream_after_fun(%{done: true}, _finch_module), do: :ok
-
-  defp stream_after_fun(%{ref: ref, finch_module: finch_module}, _) do
-    finch_module.cancel_async_request(ref)
-    :ok
-  rescue
-    _ -> :ok
-  end
+  # after_fun: cancel only when state.done == false, then drain the `{ref, _}`
+  # messages Finch had already queued in this process's mailbox. `done`
+  # covers the transport's `:done` / `{:error, _}`, the provider's
+  # end-of-stream event and every terminal error event, so the cancel gate
+  # is unchanged; the drain is best-effort (see `Transport.cancel_and_drain/3`).
+  defp stream_after_fun(%{ref: ref, done: done}, finch_module),
+    do: Transport.cancel_and_drain(finch_module, ref, done)
 
   # Synthesize :tool_call_completed events for every accumulated tool-call
   # index. Called from the :done-sentinel and Finch-:done paths so consumers

@@ -419,9 +419,9 @@ defmodule ALLM.Providers.Gemini do
   @doc false
   @spec classify_error(non_neg_integer(), map(), Enumerable.t()) :: AdapterError.t()
   def classify_error(status, body, headers) when is_integer(status) and is_map(body) do
-    error = Map.get(body, "error", %{})
+    error = HTTPResponse.error_object(body)
     google_status = Map.get(error, "status")
-    message = Map.get(error, "message", "Gemini HTTP #{status}")
+    message = error_message(Map.get(error, "message"), status)
 
     reason = classify_reason(status, google_status, message)
     retry_after = HTTPResponse.retry_after_ms(headers)
@@ -432,6 +432,22 @@ defmodule ALLM.Providers.Gemini do
       retry_after_ms: retry_after,
       message: message,
       metadata: %{google_status: google_status}
+    )
+  end
+
+  # The provider-authored message, with key material redacted.
+  defp error_message(message, _status) when is_binary(message),
+    do: redact_key_material(message)
+
+  defp error_message(_message, status), do: "Gemini HTTP #{status}"
+
+  # Google credential shapes: `AIza…` API keys and `ya29.…` OAuth access
+  # tokens. Same pattern as the Gemini capability adapters.
+  defp redact_key_material(message) do
+    String.replace(
+      message,
+      ~r/\b(?:AIza[A-Za-z0-9_\-]{6,}|ya29\.[A-Za-z0-9_\-.]{6,})/,
+      "[REDACTED]"
     )
   end
 
@@ -1266,6 +1282,12 @@ defmodule ALLM.Providers.Gemini do
   includes 4xx status codes received before the first SSE event (the
   `{:status, code}` Finch frame folds via `handle_finch_payload/2`).
 
+  A 4xx/5xx response's body is read to the end before that terminal event
+  is emitted, so the `%AdapterError{}` carries the provider's own error
+  message (key material redacted) and `:retry_after_ms` from a
+  `Retry-After` header. Streams are never retried, so acting on
+  `:retry_after_ms` is left to the caller.
+
   ## Decision references
 
     * **the documented contract** — request body byte-equal to `generate/2`'s. Only
@@ -1350,6 +1372,11 @@ defmodule ALLM.Providers.Gemini do
       buffered: [{:message_started, %{message: bookend_msg}}],
       done: false,
       status: nil,
+      # A 4xx/5xx body and its headers, buffered until the transport's
+      # `:done` so the error classifier sees the provider's message and
+      # `retry-after` (see `Transport.buffer_error_payload/2`).
+      error_headers: [],
+      error_body: [],
       message_completed_emitted?: false,
       accumulated_text: "",
       tool_calls_by_id: %{},
@@ -1384,9 +1411,32 @@ defmodule ALLM.Providers.Gemini do
     {[], %{state | status: code}}
   end
 
+  # A 4xx/5xx status is not terminal yet: the body and headers that follow
+  # are buffered and classified on the transport's `:done`.
   defp handle_finch_payload(state, {:status, code}) when is_integer(code) and code >= 400 do
-    err = classify_error(code, %{}, [])
+    {[], %{state | status: code}}
+  end
+
+  defp handle_finch_payload(state, {:error, exception}) do
+    err =
+      AdapterError.new(:network_error,
+        provider: :gemini,
+        message: "transport failure: " <> Exception.message(exception),
+        cause: exception
+      )
+
     finalize_with_event(state, {:error, err})
+  end
+
+  defp handle_finch_payload(%{status: status} = state, payload)
+       when is_integer(status) and status >= 400 do
+    case Transport.buffer_error_payload(state, payload) do
+      {:cont, state} ->
+        {[], state}
+
+      {:done, body, headers, state} ->
+        finalize_with_event(state, {:error, classify_error(status, body, headers)})
+    end
   end
 
   defp handle_finch_payload(state, {:headers, _headers}), do: {[], state}
@@ -1407,17 +1457,6 @@ defmodule ALLM.Providers.Gemini do
       events = synthesize_message_completed(state)
       {events, %{state | message_completed_emitted?: true}}
     end
-  end
-
-  defp handle_finch_payload(state, {:error, exception}) do
-    err =
-      AdapterError.new(:network_error,
-        provider: :gemini,
-        message: "transport failure: " <> Exception.message(exception),
-        cause: exception
-      )
-
-    finalize_with_event(state, {:error, err})
   end
 
   defp handle_finch_payload(state, _other), do: {[], state}
@@ -1713,14 +1752,11 @@ defmodule ALLM.Providers.Gemini do
   defp promote_finish_reason(:stop, [_ | _]), do: :tool_calls
   defp promote_finish_reason(other, _tool_calls), do: other
 
-  # after_fun: cancel only when state.done == false. Defensive rescue —
-  # cancel_async_request/1 may raise if the ref already completed.
-  defp stream_after_fun(%{done: true}, _finch_module), do: :ok
-
-  defp stream_after_fun(%{ref: ref, finch_module: finch_module}, _) do
-    finch_module.cancel_async_request(ref)
-    :ok
-  rescue
-    _ -> :ok
-  end
+  # after_fun: cancel only when state.done == false, then drain the `{ref, _}`
+  # messages Finch had already queued in this process's mailbox. `done`
+  # covers the transport's `:done` / `{:error, _}`, the provider's
+  # end-of-stream event and every terminal error event, so the cancel gate
+  # is unchanged; the drain is best-effort (see `Transport.cancel_and_drain/3`).
+  defp stream_after_fun(%{ref: ref, done: done}, finch_module),
+    do: Transport.cancel_and_drain(finch_module, ref, done)
 end

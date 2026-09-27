@@ -1,3 +1,19 @@
+## [BUG] Classify streamed chat errors from their body and drain on halt
+*Sunday, September 27th at 9pm*
+The OpenAI (both endpoints), Anthropic and Gemini stream adapters used to 
+classify a non-2xx response from the status alone and leave queued Finch 
+messages in the caller's mailbox after an early halt. A new 
+Transport.buffer_error_payload/2 now collects the error body and headers so 
+each adapter's existing classifier sees the provider message and Retry-After 
+(retry_after_ms is informational on streams; StreamRunner does not retry), and 
+every stream_after_fun/2 goes through Transport.cancel_and_drain/3. The 
+classifiers gained per-provider key redaction (sk-/rk-/org-, sk-ant-, 
+AIza/ya29.), which also applies on the non-streaming path, and a bare-string 
+error body no longer raises BadMapError. Closes the Phase 26.5 [CARRY]; 39 new 
+tests, 21 mutants killed.
+
+---
+
 ## [BUG] Group run_arm/3 clauses in the prompt-cache recorder
 *Sunday, September 27th at 9pm*
 The polish pass put hit?/4 between run_arm/3 clauses, so loading the recorder 

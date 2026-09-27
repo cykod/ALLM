@@ -258,6 +258,17 @@ Other changes:
   writes. Every provider wire field it relies on was confirmed against the
   live APIs by the prompt-cache recorder script; cache hits and the
   unknown-field controls are recorded as test fixtures
+- A streamed chat request that the provider answers with a 4xx/5xx
+  (OpenAI on both endpoints, Anthropic, Gemini) now reads the error body
+  before ending the stream, so its terminal `%AdapterError{}` carries the
+  provider's own `:message` and a `Retry-After` header's `:retry_after_ms`
+  instead of only `"<Provider> HTTP <status>"`. Streams are still never
+  retried, so `:retry_after_ms` is for the caller to act on. Chat error
+  messages, streamed and non-streamed, now have key material redacted in
+  each provider's own key format, and an `"error"` field that is a bare
+  string becomes the message instead of raising. A chat stream the consumer
+  halts early now also clears the transport's already-queued messages from
+  the reducing process's mailbox
 
 ## [REL] v0.5.0 — Text embeddings
 
