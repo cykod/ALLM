@@ -43,7 +43,11 @@ defmodule LayerADocsTest do
     ALLM.TranscriptionResponse,
     ALLM.TranscriptionStreamRequest,
     ALLM.SpeechEvent,
-    ALLM.TranscriptionEvent
+    ALLM.TranscriptionEvent,
+    ALLM.ClassificationQuestion,
+    ALLM.ClassificationRequest,
+    ALLM.ClassificationAnswer,
+    ALLM.ClassificationResponse
   ]
 
   @audit_paths Enum.map(@layer_a, fn mod ->

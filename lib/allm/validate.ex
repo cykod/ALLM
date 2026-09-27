@@ -37,14 +37,17 @@ defmodule ALLM.Validate do
   Validators are opt-in: constructors like `ALLM.Request.new/2` do not call
   these functions. Users invoke `request/1`, `message/1`, `tool/1`,
   `thread/1`, `session/1`, `image_request/1`, `embedding_request/1`,
-  `moderation_request/1`, `speech_request/1`, `transcription_request/1`, or
-  `transcription_stream_request/1` explicitly when they need a check before dispatch.
+  `moderation_request/1`, `speech_request/1`, `transcription_request/1`,
+  `transcription_stream_request/1`, or `classification_request/1` explicitly
+  when they need a check before dispatch.
   """
 
   alias ALLM.Error.ValidationError
 
   alias ALLM.{
     Audio,
+    ClassificationQuestion,
+    ClassificationRequest,
     EmbeddingRequest,
     Image,
     ImagePart,
@@ -559,6 +562,71 @@ defmodule ALLM.Validate do
     finalize(:invalid_transcription_request, errors)
   end
 
+  @doc """
+  Validate an `%ALLM.ClassificationRequest{}`.
+
+  Returns `:ok` when every rule passes, or
+  `{:error, %ALLM.Error.ValidationError{reason: :invalid_classification_request, errors: [...]}}`.
+
+  All rules accumulate into one error list except `{:questions, :invalid_shape}`,
+  which hard-rejects: every per-question rule presupposes a map.
+
+  Request rules: `:questions` a non-empty map; `:state` a non-empty string,
+  map or list (`nil` is `:empty`; a struct or a keyword list is
+  `:invalid_shape`, since a keyword list is almost always misplaced opts)
+  that can be JSON-encoded (`:not_json_encodable`); `:model` `nil` or a
+  binary.
+
+  Per-question rules, with paths `[:questions, id | ...]`: the id is a
+  non-empty binary (`:invalid_id`); the value is an
+  `%ALLM.ClassificationQuestion{}` (`:invalid_question`); `:type` is
+  `:choice`, `:score` or `:yes_no` (`:invalid_type`); `:instructions` is a
+  non-empty, JSON-encodable string, map or list — as for `:state`, a struct
+  or a non-empty keyword list is `:invalid_shape`. `:criteria` rules run only
+  for a known type, because the shape depends on it: a choice needs a
+  non-empty map whose keys are non-empty binaries (`:invalid_option` per
+  bad key); a score needs a list of at least two levels (`:too_few_levels`
+  for one — a single level always scores zero); a yes/no needs `nil` or a
+  map with keys among `"true"` and `"false"`.
+
+  Provider limits — how many options or levels a provider accepts, or
+  whether each element of a list state is text — are deliberately NOT
+  checked here. They belong to the adapter that knows them. Checking
+  encodability never raises, even for a map with a tuple key.
+
+  ## Examples
+
+      iex> q = ALLM.ClassificationQuestion.yes_no("Is a refund requested?")
+      iex> req = ALLM.ClassificationRequest.new(state: "I want my money back", questions: %{"refund" => q})
+      iex> ALLM.Validate.classification_request(req)
+      :ok
+
+      iex> q = ALLM.ClassificationQuestion.score("How angry?", ["Calm"])
+      iex> req = ALLM.ClassificationRequest.new(state: nil, questions: %{"anger" => q})
+      iex> {:error, err} = ALLM.Validate.classification_request(req)
+      iex> err.reason
+      :invalid_classification_request
+      iex> err.errors
+      [{:state, :empty}, {[:questions, "anger", :criteria], :too_few_levels}]
+  """
+  @spec classification_request(ClassificationRequest.t()) :: :ok | {:error, ValidationError.t()}
+  def classification_request(%ClassificationRequest{questions: questions})
+      when not is_map(questions) or is_struct(questions) do
+    finalize(:invalid_classification_request, [{:questions, :invalid_shape}])
+  end
+
+  def classification_request(%ClassificationRequest{} = req) do
+    errors =
+      []
+      |> validate_questions_non_empty(req.questions)
+      |> validate_structured_field(:state, req.state, &structured_value_shape?/1)
+      |> validate_model_field(req.model)
+      |> validate_classification_questions(req.questions)
+      |> Enum.reverse()
+
+    finalize(:invalid_classification_request, errors)
+  end
+
   # ---------------------------------------------------------------------------
   # Internal: request rules
   # ---------------------------------------------------------------------------
@@ -1015,4 +1083,120 @@ defmodule ALLM.Validate do
       do: errs,
       else: [{:commit_strategy, :unknown} | errs]
   end
+
+  # ---------------------------------------------------------------------------
+  # Internal: classification_request rules
+  # ---------------------------------------------------------------------------
+
+  @classification_types [:choice, :score, :yes_no]
+  @yes_no_criteria_keys ["true", "false"]
+
+  defp validate_questions_non_empty(errs, questions) when map_size(questions) == 0,
+    do: [{:questions, :empty} | errs]
+
+  defp validate_questions_non_empty(errs, _questions), do: errs
+
+  # A state or instructions value: at most one of `:empty`, `:invalid_shape`,
+  # `:not_json_encodable`, evaluated in that order. Encodability runs only
+  # once the shape passes.
+  defp validate_structured_field(errs, path, value, shape?) do
+    cond do
+      value in [nil, "", [], %{}] -> [{path, :empty} | errs]
+      not shape?.(value) -> [{path, :invalid_shape} | errs]
+      not json_encodable?(value) -> [{path, :not_json_encodable} | errs]
+      true -> errs
+    end
+  end
+
+  # Shared by `:state` and `:instructions`. A struct is a map but never a
+  # structured value — one with a `Jason.Encoder` would otherwise reach the
+  # provider as a `{"__type__": ...}` object — and a non-empty keyword list is
+  # almost always misplaced call opts rather than a list of values.
+  defp structured_value_shape?(s) when is_binary(s), do: true
+  defp structured_value_shape?(s) when is_struct(s), do: false
+  defp structured_value_shape?(s) when is_map(s), do: true
+  defp structured_value_shape?(s) when is_list(s), do: not Keyword.keyword?(s)
+  defp structured_value_shape?(_), do: false
+
+  # `Jason.encode/1` returns `{:error, _}` for an unencodable value but
+  # RAISES for some inputs — `Protocol.UndefinedError` for a non-stringable
+  # map key such as a tuple, `FunctionClauseError` for an improper list — so
+  # every outcome other than `{:ok, _}` is treated alike. The exception is
+  # discarded, never stored: it can carry the caller's data.
+  defp json_encodable?(term) do
+    match?({:ok, _}, Jason.encode(term))
+  rescue
+    _ -> false
+  end
+
+  defp validate_classification_questions(errs, questions) do
+    Enum.reduce(questions, errs, fn {id, question}, acc ->
+      acc
+      |> validate_question_id(id)
+      |> validate_question(id, question)
+    end)
+  end
+
+  defp validate_question_id(errs, id) when is_binary(id) and id != "", do: errs
+  defp validate_question_id(errs, id), do: [{[:questions, id], :invalid_id} | errs]
+
+  defp validate_question(errs, id, %ClassificationQuestion{} = q) do
+    errs
+    |> validate_question_type(id, q.type)
+    |> validate_structured_field(
+      [:questions, id, :instructions],
+      q.instructions,
+      &structured_value_shape?/1
+    )
+    |> validate_question_criteria(id, q.type, q.criteria)
+  end
+
+  defp validate_question(errs, id, _other), do: [{[:questions, id], :invalid_question} | errs]
+
+  defp validate_question_type(errs, _id, type) when type in @classification_types, do: errs
+
+  defp validate_question_type(errs, id, _type),
+    do: [{[:questions, id, :type], :invalid_type} | errs]
+
+  # Criteria shape is type-dependent, so an unknown type gets no criteria
+  # errors — `:invalid_type` already names the problem.
+  defp validate_question_criteria(errs, id, type, criteria) when type in @classification_types do
+    path = [:questions, id, :criteria]
+
+    case criteria_errors(type, criteria, path) do
+      [] -> if json_encodable?(criteria), do: errs, else: [{path, :not_json_encodable} | errs]
+      found -> Enum.reverse(found, errs)
+    end
+  end
+
+  defp validate_question_criteria(errs, _id, _type, _criteria), do: errs
+
+  defp criteria_errors(:choice, criteria, path) when not is_map(criteria) or is_struct(criteria),
+    do: [{path, :invalid_shape}]
+
+  defp criteria_errors(:choice, criteria, path) when map_size(criteria) == 0,
+    do: [{path, :empty}]
+
+  defp criteria_errors(:choice, criteria, path) do
+    for {option, _desc} <- criteria,
+        not (is_binary(option) and option != ""),
+        do: {path ++ [option], :invalid_option}
+  end
+
+  defp criteria_errors(:score, criteria, path) when not is_list(criteria),
+    do: [{path, :invalid_shape}]
+
+  defp criteria_errors(:score, [], path), do: [{path, :empty}]
+  defp criteria_errors(:score, [_only], path), do: [{path, :too_few_levels}]
+  defp criteria_errors(:score, _levels, _path), do: []
+
+  defp criteria_errors(:yes_no, nil, _path), do: []
+
+  defp criteria_errors(:yes_no, criteria, path) when is_map(criteria) and not is_struct(criteria) do
+    if Enum.all?(Map.keys(criteria), &(&1 in @yes_no_criteria_keys)),
+      do: [],
+      else: [{path, :invalid_shape}]
+  end
+
+  defp criteria_errors(:yes_no, _criteria, path), do: [{path, :invalid_shape}]
 end

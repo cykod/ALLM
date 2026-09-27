@@ -41,6 +41,7 @@ defmodule ALLM.Error.ValidationError do
           | :invalid_moderation_request
           | :invalid_speech_request
           | :invalid_transcription_request
+          | :invalid_classification_request
 
   @type t :: %__MODULE__{
           reason: reason(),
@@ -63,6 +64,7 @@ defmodule ALLM.Error.ValidationError do
     invalid_moderation_request
     invalid_speech_request
     invalid_transcription_request
+    invalid_classification_request
   )a
 
   defexception [:reason, :message, :cause, errors: [], metadata: %{}]

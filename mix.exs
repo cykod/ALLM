@@ -199,7 +199,11 @@ defmodule ALLM.MixProject do
           ALLM.TranscriptionResponse,
           ALLM.TranscriptionStreamRequest,
           ALLM.SpeechEvent,
-          ALLM.TranscriptionEvent
+          ALLM.TranscriptionEvent,
+          ALLM.ClassificationQuestion,
+          ALLM.ClassificationRequest,
+          ALLM.ClassificationAnswer,
+          ALLM.ClassificationResponse
         ],
         Runtime: [
           ALLM.Engine,
@@ -231,7 +235,8 @@ defmodule ALLM.MixProject do
           ALLM.Error.EmbeddingAdapterError,
           ALLM.Error.ModerationAdapterError,
           ALLM.Error.SpeechAdapterError,
-          ALLM.Error.TranscriptionAdapterError
+          ALLM.Error.TranscriptionAdapterError,
+          ALLM.Error.ClassificationAdapterError
         ]
       ]
     ]

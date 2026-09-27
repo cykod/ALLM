@@ -1,3 +1,24 @@
+## [FEAT] Add Layer A typed-classification data and validator
+*Sunday, September 27th at 11pm*
+Phase 24.1 of steering/2026-09-22_JEV_SUPPORT.md (new spec §41): the 
+serializable data half of the typed-classification capability, with no adapter, 
+engine slot or façade yet.
+
+- New structs ALLM.ClassificationQuestion (choice/score/yes_no builders), 
+ClassificationRequest, ClassificationAnswer and ClassificationResponse, all 
+round-tripping through ETF and JSON and registered in the Serializer.
+- New nine-reason ALLM.Error.ClassificationAdapterError; EngineError gains 
+:no_classification_adapter and ValidationError gains 
+:invalid_classification_request.
+- ALLM.Validate.classification_request/1 with the design's exhaustive 
+per-question vocabulary; review fixes make its JSON-encodability check never 
+raise (improper lists) and give :instructions the same shape rule as :state.
+- The design doc carries the pre-build devil-review revision (cites refreshed 
+against 9510ed9, per-slot :classification_model, Phase 26 precedents) and the 
+new _RECORDS.md companion.
+
+---
+
 ## [BUG] Apply review fixes to the open-ticket commits
 *Sunday, September 27th at 10pm*
 Follow-up to the five ticket commits (218c12b..6e97db3), from their code and 

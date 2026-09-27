@@ -86,6 +86,7 @@ defmodule ALLM.Serializer do
     ALLM.Error.ModerationAdapterError,
     ALLM.Error.SpeechAdapterError,
     ALLM.Error.TranscriptionAdapterError,
+    ALLM.Error.ClassificationAdapterError,
     ALLM.Image,
     ALLM.ImageRequest,
     ALLM.ImageResponse,
@@ -103,7 +104,11 @@ defmodule ALLM.Serializer do
     ALLM.SpeechResponse,
     ALLM.TranscriptionRequest,
     ALLM.TranscriptionResponse,
-    ALLM.TranscriptionStreamRequest
+    ALLM.TranscriptionStreamRequest,
+    ALLM.ClassificationQuestion,
+    ALLM.ClassificationRequest,
+    ALLM.ClassificationAnswer,
+    ALLM.ClassificationResponse
   ]
 
   @type_tag_index Map.new(@known_modules, fn mod -> {inspect(mod), mod} end)

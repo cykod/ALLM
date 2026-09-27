@@ -45,6 +45,11 @@ defmodule ALLM.Error.EngineErrorTest do
       end
     end
 
+    test "accepts :no_classification_adapter (pinned ahead of its first caller)" do
+      assert %EngineError{reason: :no_classification_adapter} =
+               EngineError.new(:no_classification_adapter)
+    end
+
     test "populates :message with the documented default when omitted" do
       err = EngineError.new(:missing_adapter)
       assert err.message == "engine error: missing_adapter"

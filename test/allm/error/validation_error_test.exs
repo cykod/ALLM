@@ -48,6 +48,11 @@ defmodule ALLM.Error.ValidationErrorTest do
       end
     end
 
+    test "accepts :invalid_classification_request" do
+      assert %ValidationError{reason: :invalid_classification_request} =
+               ValidationError.new(:invalid_classification_request, [])
+    end
+
     test "raises ArgumentError when errors is not a list" do
       assert_raise ArgumentError, ~r/errors must be a list/, fn ->
         ValidationError.new(:invalid_request, :not_a_list)

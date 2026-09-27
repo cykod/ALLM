@@ -23,6 +23,7 @@ defmodule ALLM.Error.EngineError do
           | :no_moderation_adapter
           | :no_speech_adapter
           | :no_transcription_adapter
+          | :no_classification_adapter
 
   @type t :: %__MODULE__{
           reason: reason(),
@@ -45,6 +46,7 @@ defmodule ALLM.Error.EngineError do
     no_moderation_adapter
     no_speech_adapter
     no_transcription_adapter
+    no_classification_adapter
   )a
 
   defexception [:reason, :message, :provider, :cause, metadata: %{}]
