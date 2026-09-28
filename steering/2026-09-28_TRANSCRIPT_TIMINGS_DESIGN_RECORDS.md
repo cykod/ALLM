@@ -1,6 +1,6 @@
 # Phase 28 transcript spans — Records
 
-Companion bookkeeping for `steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md`. The design doc's own Status table is not updated; this file is the status of record.
+Companion bookkeeping for `steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md`. This file is the status of record; the design doc's own Status table was synced to it once, in the polish pass below.
 
 ## Status
 
@@ -371,3 +371,18 @@ Sources: `.work/reviews/2026-09-28-transcript-timings-28-6/overview.md`, `.work/
 5. **Code-review F3: `defguardp valid_budget/1`** in `lib/allm/providers/fake_transcription.ex`, used by both resolve arms and `validate_entry!/1`, so the malformed arm's fall-through-to-raise holds by construction. Behaviour-preserving: `mix test test/allm/providers/fake_transcription_test.exs test/guides_test.exs test/guides_doctest_test.exs` → `105 doctests, 146 tests, 0 failures`. File-local; the other four Fakes remain the ASKS remainder (`grep -nE '\{:retry_until_call, [nm]\} ->' lib/allm/providers/fake_*.ex | wc -l` → 7).
 
 Verification after the fix pass: `mix run scripts/audit_user_docs.exs guides/audio.md` → 0 hits; `mix run scripts/check_guide_fences.exs | head -1` → `71 fences compiled, 14 skipped.`; `mix test > "$SP/full.log" 2>&1` → `exit=0`, `695 doctests, 33 properties, 5672 tests, 0 failures, 14 excluded, 1 skipped`, `grep -c 'warning:'` → 0; `mix test --seed 0` → exit 0, same counts; `mix credo --strict` → no issues; `mix dialyzer` → passed; `mix format --check-formatted` → exit 0; `(cd conformance && mix test)` → `206 tests, 0 failures, 1 skipped`.
+
+### Polish pass (2026-09-28, after the gate)
+
+Scope: the deferred Lows only. Each re-verified at `54bd510` before fixing.
+
+1. **28.3 code-review F1:** `logprobs_spelling_check/1`, its call and the `write_result(%{arm: %{write: :none}})` clause deleted from `scripts/record_openai_audio_fixtures.exs`; the O1/O2 comment now says O1's `:require` verdict carries the guarantee. Over the complete tree: `set -a; . ./.env; set +a; mix run scripts/record_openai_audio_fixtures.exs` → `0 live calls: every target is already recorded.`, exit 0.
+2. **28.4 code-review F3:** `hold_language?` → `hold_twin?` (state key + private predicate) in `lib/allm/providers/elevenlabs/transcription.ex`; public `language_hold_ms` unchanged.
+3. **28.4 code-review F4:** `twin/3` moved to module scope in `test/allm/providers/elevenlabs/transcription_stream_test.exs`; `stamped/2` is now `twin(text, [], language)`, call sites untouched.
+4. **28.5 code-review F2 + F3 (same function):** OpenAI `option_fields/2` now takes the full structural list (call site concatenates, as ElevenLabs does) and logs a dropped `include[]` via deferred `Logger.debug(fn -> … end)`. Pinned in `test/allm/providers/openai/transcription_test.exs` ("a caller's include[] option is overridden (and logged) …"); mutant (log disabled) → `57 tests, 1 failure`.
+5. **28.5 functional L1:** OpenAI `token_spans/4` gates on `flag_on?(request, :logprobs)` instead of `spans_requested?/1`. Pinned in `test/allm/providers/openai/transcription_wire_test.exs` ("the decode seam reads spans on logprobs alone …"); mutant (old gate) → `42 tests, 1 failure` naming that test.
+6. **28.5 functional L2:** documented, not changed: the OpenAI moduledoc's escape-hatch paragraph says scripted calls return the Fake's `:word` spans, while the real adapter returns `:token`.
+7. **Gate item:** the design doc's Status table now reads Completed ×7, "Overall Progress: 7/7"; nothing else in the design doc changed.
+8. **Skipped: 28.5 code-review F4** (optional family decode table). The four decode invariants stay pinned separately in each adapter's wire tests; adding the table is not a contained change.
+
+Verification: `mix test > "$SP/polish_full.log" 2>&1` → `exit=0`, `695 doctests, 33 properties, 5673 tests, 0 failures, 14 excluded, 1 skipped`, `grep -c 'warning:'` → 0; `mix test --seed 0` → exit 0, same counts; `mix credo --strict` → no issues; `mix dialyzer` → `Total errors: 0`; `mix format --check-formatted` → exit 0; `(cd conformance && mix test)` → `206 tests, 0 failures, 1 skipped`.

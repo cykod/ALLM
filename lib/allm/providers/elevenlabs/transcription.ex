@@ -866,7 +866,7 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
         awaiting: 0,
         segments: [],
         language: nil,
-        hold_language?: hold_language?(request),
+        hold_twin?: hold_twin?(request),
         spans?: TranscriptionSupport.spans_requested?(request),
         spans: [],
         hold_ms: language_hold_ms(opts),
@@ -1136,7 +1136,7 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
     do: paired(%{state | stamps: Map.delete(state.stamps, index)}, text, twin)
 
   # Opted in: hold the segment for its timestamped frame, bounded by `wake_at`.
-  defp on_committed(:error, index, text, %{hold_language?: true} = state) do
+  defp on_committed(:error, index, text, %{hold_twin?: true} = state) do
     deadline = System.monotonic_time(:millisecond) + state.hold_ms
     {[], %{state | held: %{index: index, text: text}, wake_at: deadline}}
   end
@@ -1215,7 +1215,7 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
 
   # A segment waits for its timestamped frame when a span flag is set or an
   # option asks ElevenLabs to send that frame.
-  defp hold_language?(%TranscriptionStreamRequest{options: options} = request) do
+  defp hold_twin?(%TranscriptionStreamRequest{options: options} = request) do
     params = Support.query_params(options, [])
 
     TranscriptionSupport.spans_requested?(request) or

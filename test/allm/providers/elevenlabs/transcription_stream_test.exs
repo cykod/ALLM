@@ -39,15 +39,19 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionStreamTest do
   defp committed(text), do: {:json, %{"message_type" => "committed_transcript", "text" => text}}
   defp partial(text), do: {:json, %{"message_type" => "partial_transcript", "text" => text}}
 
-  defp stamped(text, language) do
+  # The `committed_transcript_with_timestamps` frame. `stamped/2` is the
+  # language-hold tests' spelling: a twin with no words.
+  defp twin(text, words, language \\ nil) do
     {:json,
      %{
        "message_type" => "committed_transcript_with_timestamps",
        "text" => text,
        "language_code" => language,
-       "words" => []
+       "words" => words
      }}
   end
+
+  defp stamped(text, language), do: twin(text, [], language)
 
   # Accepts a client commit frame.
   defp commit?({:text, json}), do: match?(%{"commit" => true}, Jason.decode!(json))
@@ -583,16 +587,6 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionStreamTest do
   describe "span flags (WebSocketStub)" do
     defp word(text, type, start, end_, logprob) do
       %{"text" => text, "type" => type, "start" => start, "end" => end_, "logprob" => logprob}
-    end
-
-    defp twin(text, words, language \\ nil) do
-      {:json,
-       %{
-         "message_type" => "committed_transcript_with_timestamps",
-         "text" => text,
-         "language_code" => language,
-         "words" => words
-       }}
     end
 
     defp one_words,

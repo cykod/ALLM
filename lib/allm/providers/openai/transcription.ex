@@ -182,6 +182,10 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   Fake's small default cap, and `adapter_opts[:span_flags]` set to
   `[:logprobs]` so the Fake refuses `timestamps: true` exactly as this
   adapter does. `prepare_request/2` returns a stub error under the same key.
+  Refusals match this adapter, but span kinds do not: a scripted
+  `logprobs: true` call returns the Fake's `:word` spans, while this adapter
+  returns `:token` spans. `ALLM.TranscriptionResponse.mean_logprob/1` treats
+  both alike.
   """
 
   @behaviour ALLM.TranscriptionAdapter
@@ -359,7 +363,7 @@ defmodule ALLM.Providers.OpenAI.Transcription do
           TranscriptionSupport.optional_field("language", request.language) ++
           TranscriptionSupport.optional_field("prompt", request.prompt) ++ span_fields
 
-      {:ok, structural ++ option_fields(request.options, span_structural)}
+      {:ok, structural ++ option_fields(request.options, @structural_fields ++ span_structural)}
     end
   end
 
@@ -501,17 +505,24 @@ defmodule ALLM.Providers.OpenAI.Transcription do
 
   # The option-to-field mapping is shared with the other transcription
   # adapters (`ALLM.Providers.Support.TranscriptionAdapter.option_fields/2`).
-  # Only a dropped `response_format` is logged: the other structural fields
-  # are dropped silently. `span_structural` is the call-time addition
-  # (`include[]` under `logprobs: true`); `@structural_fields` is unchanged.
-  defp option_fields(options, span_structural) do
-    {fields, dropped} =
-      TranscriptionSupport.option_fields(options, @structural_fields ++ span_structural)
+  # `structural` is the full structural list, as in the ElevenLabs adapter:
+  # `@structural_fields` plus the call-time `include[]` under `logprobs: true`.
+  # A dropped `response_format` or `include[]` is logged, since the caller set
+  # it on purpose; the other structural fields are dropped silently.
+  defp option_fields(options, structural) do
+    {fields, dropped} = TranscriptionSupport.option_fields(options, structural)
 
     if "response_format" in dropped do
       Logger.debug(fn ->
         "ALLM.Providers.OpenAI.Transcription: dropping reserved option \"response_format\"; " <>
           "the decoder reads only the json response shape."
+      end)
+    end
+
+    if @logprobs_field in dropped do
+      Logger.debug(fn ->
+        "ALLM.Providers.OpenAI.Transcription: dropping option \"include[]\"; " <>
+          "logprobs: true sets it to \"logprobs\"."
       end)
     end
 
@@ -528,8 +539,10 @@ defmodule ALLM.Providers.OpenAI.Transcription do
       else: {[], []}
   end
 
+  # Gated on `logprobs` alone: `logprobs` is OpenAI's only span source, and
+  # `timestamps: true` is refused by `gate_audio/2` before any I/O.
   defp token_spans(body, text, request, opts) do
-    if TranscriptionSupport.spans_requested?(request),
+    if TranscriptionSupport.flag_on?(request, :logprobs),
       do: decode_logprobs(Map.get(body, "logprobs"), text, request, opts),
       else: {:ok, nil}
   end

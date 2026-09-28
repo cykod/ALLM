@@ -11,15 +11,15 @@
 
 | Phase | Description | Layer | Status |
 |-------|-------------|-------|--------|
-| 28.1 | `ALLM.TranscriptSpan`, request flags, `TranscriptionResponse.spans` + `mean_logprob/1`, event `/3` constructor, validation, registrations | A | Not Started |
-| 28.2 | Shared span/gate helpers, `FakeTranscription` spans, `collect_transcription/1`, equivalence property | B/C | Not Started |
-| 28.3 | Live wire probes in three recorder scripts (decides the Gemini branch and the realtime time base) | — (scripts, fixtures) | Not Started |
-| 28.4 | ElevenLabs batch + realtime spans | B | Not Started |
-| 28.5 | OpenAI + Gemini spans / refusals | B | Not Started |
-| 28.6 | Spec amendments, `guides/audio.md`, CHANGELOG | docs | Not Started |
-| 28.7 | `[CHORE]` sweep: `FakeTranscription` malformed `{:retry_until_call, n}` | B | Not Started |
+| 28.1 | `ALLM.TranscriptSpan`, request flags, `TranscriptionResponse.spans` + `mean_logprob/1`, event `/3` constructor, validation, registrations | A | Completed |
+| 28.2 | Shared span/gate helpers, `FakeTranscription` spans, `collect_transcription/1`, equivalence property | B/C | Completed |
+| 28.3 | Live wire probes in three recorder scripts (decides the Gemini branch and the realtime time base) | — (scripts, fixtures) | Completed |
+| 28.4 | ElevenLabs batch + realtime spans | B | Completed |
+| 28.5 | OpenAI + Gemini spans / refusals | B | Completed |
+| 28.6 | Spec amendments, `guides/audio.md`, CHANGELOG | docs | Completed |
+| 28.7 | `[CHORE]` sweep: `FakeTranscription` malformed `{:retry_until_call, n}` | B | Completed |
 
-**Overall Progress:** 0/7 phases complete
+**Overall Progress:** 7/7 phases complete
 
 ---
 

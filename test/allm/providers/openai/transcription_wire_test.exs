@@ -343,6 +343,17 @@ defmodule ALLM.Providers.OpenAI.TranscriptionWireTest do
       assert resp.raw["logprobs"] == env["body"]["logprobs"]
     end
 
+    test "the decode seam reads spans on logprobs alone: timestamps-only gives spans nil" do
+      # Unreachable through the adapter (the gate refuses timestamps: true);
+      # pins that decode never reads `logprobs` for a flag it does not serve.
+      for fixture <- [:logprobs_include_brackets, :mini_tokens] do
+        body = Fixtures.transcription_recorded(fixture)["body"]
+
+        assert {:ok, %TranscriptionResponse{spans: nil}} =
+                 Transcription.decode_response(body, %{}, req(timestamps: true), [])
+      end
+    end
+
     test "mini_tokens.json (no logprobs key, non-blank text) + logprobs: true is " <>
            ":unsupported_feature :absent_from_response, keeping the transcript",
          %{stub: stub} do

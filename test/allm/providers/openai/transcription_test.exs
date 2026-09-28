@@ -576,16 +576,29 @@ defmodule ALLM.Providers.OpenAI.TranscriptionTest do
       assert field(off, "include[]") == []
     end
 
-    test "a caller's include[] option is overridden under logprobs: true, passed through otherwise" do
+    test "a caller's include[] option is overridden (and logged) under logprobs: true, passed through otherwise" do
       options = %{"include[]" => "nope"}
 
-      assert {:ok, on} =
-               Transcription.to_multipart_body(req(mp3(), logprobs: true, options: options), [])
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          assert {:ok, on} =
+                   Transcription.to_multipart_body(
+                     req(mp3(), logprobs: true, options: options),
+                     []
+                   )
 
-      assert field(on, "include[]") == ["logprobs"]
+          assert field(on, "include[]") == ["logprobs"]
+        end)
 
-      assert {:ok, off} = Transcription.to_multipart_body(req(mp3(), options: options), [])
-      assert field(off, "include[]") == ["nope"]
+      assert log =~ ~s(dropping option "include[]")
+
+      quiet =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          assert {:ok, off} = Transcription.to_multipart_body(req(mp3(), options: options), [])
+          assert field(off, "include[]") == ["nope"]
+        end)
+
+      refute quiet =~ "include[]"
     end
   end
 end

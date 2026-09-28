@@ -161,8 +161,6 @@ defmodule RecordOpenAIAudioFixtures do
       clips = load_or_synthesize_clips()
       results = Enum.map(pending, fn arm -> run_arm(arm, clips) end)
 
-      results = results ++ logprobs_spelling_check(results)
-
       Enum.each(results, &print_result/1)
       halt_unless_all_ok(results ++ clips.results)
 
@@ -428,10 +426,10 @@ defmodule RecordOpenAIAudioFixtures do
       # works was unknown, and this endpoint ignores unknown fields with a
       # 200 (the control above), so only the RESPONSE settles it: each arm
       # records whether a top-level `logprobs` list came back.
-      # `logprobs_spelling_check/1` halts the run if neither spelling did.
       # First run 2026-09-28: O1 carried `logprobs`, O2 did not, so O1 now
       # REQUIRES the list and O2 asserts the key ABSENT (a provider change
-      # halts this script).
+      # halts this script). O1's `:require` verdict is also what guarantees
+      # at least one spelling works; no separate cross-arm check is needed.
       %{
         id: :logprobs_brackets,
         label: "O1 stt gpt-transcribe include[]=logprobs -> 200, non-empty logprobs list",
@@ -736,32 +734,6 @@ defmodule RecordOpenAIAudioFixtures do
 
   defp logprobs_list?(_), do: false
 
-  # O1 and O2 are record-only, but at least one spelling must carry
-  # `logprobs`: otherwise OpenAI logprobs are unsupported and the design says
-  # stop (28.5 would refuse the flag). Runs only when both arms ran.
-  defp logprobs_spelling_check(results) do
-    by_id = Map.new(results, &{&1.arm.id, &1})
-
-    with %{response: {:ok, a}} <- by_id[:logprobs_brackets],
-         %{response: {:ok, b}} <- by_id[:logprobs_bare] do
-      carried = for resp <- [a, b], is_map(decode(resp.body)), do: decode(resp.body)["logprobs"]
-      ok? = Enum.any?(carried, &logprobs_list?/1)
-
-      [
-        %{
-          label: "O1/O2: at least one include spelling returns a logprobs list",
-          expect: [true],
-          got: ok?,
-          verdict: %{ok?: ok?, note: ""},
-          ok?: ok?,
-          arm: %{write: :none}
-        }
-      ]
-    else
-      _ -> []
-    end
-  end
-
   defp verify_error_envelope({:ok, resp}) do
     error = resp.body |> decode() |> error_of()
 
@@ -926,8 +898,6 @@ defmodule RecordOpenAIAudioFixtures do
       |> Map.put("chunks", Req.Response.get_private(resp, :chunks, []))
     )
   end
-
-  defp write_result(%{arm: %{write: :none}}), do: :ok
 
   defp write_result(%{arm: %{write: :json_envelope, targets: [path]}, response: {:ok, resp}}) do
     write_json(path, json_envelope(resp))

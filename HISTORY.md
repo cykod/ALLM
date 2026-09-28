@@ -1,3 +1,15 @@
+## [TWK] Polish Phase 28 transcript spans after gate review
+*Monday, September 28th at 12pm*
+Post-gate polish for steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md (gate 
+PASS). OpenAI now reads logprob spans only when logprobs is set, logs a caller 
+include[] it overrides, and shares ElevenLabs' reserved-field convention; 
+ElevenLabs' twin-hold predicate is renamed hold_twin?; a redundant recorder 
+check and a duplicated test helper are removed; the OpenAI moduledoc notes that 
+scripted calls return :word spans; the design doc's embedded status table now 
+agrees with RECORDS (7/7).
+
+---
+
 ## [DOC] Document transcript spans; guard Fake retry budgets (28.6-28.7)
 *Monday, September 28th at 12pm*
 Phases 28.6 and 28.7 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md.
