@@ -1,3 +1,15 @@
+## [DOC] Apply Phase 24 retro learnings to agent docs
+*Monday, September 28th at 1am*
+Folds .work/retro/2026-09-28-phase-24-jev-support_applied.md into the 
+instruction files. agent-spec/DESIGN.md's audit-gate table gains the 
+fail-closed README guide-link gate plus a discovery grep to re-derive the 
+table. agent-spec/IMPLEMENTATION.md requires a recorded fuzz run before any 
+never-raises claim. CLAUDE.md's leading-entry clause now says it is 
+load-bearing for detection (verified true by mutation). SKILL_NOTES gains a 
+/devil proposal to run a design's verification predicates before the build.
+
+---
+
 ## [TWK] Polish Phase 24 classification after gate review
 *Monday, September 28th at 12am*
 Post-gate polish for Phase 24 (steering/2026-09-22_JEV_SUPPORT.md, spec §41), 

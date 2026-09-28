@@ -213,6 +213,9 @@ Test files mirror source 1:1. Test-only fixtures live under `test/support/` (in 
 | `test/layer_a_docs_test.exs` | new Layer A struct → `@layer_a` literal | **open** (hand-maintained) |
 | `test/allm_facade_doctest_inventory_test.exs` | new public `ALLM` function → `@public_facade` literal | **open** (hand-maintained) |
 | `test/guides_test.exs` + `test/guides_doctest_test.exs` | new guide → each file's own `@guides` / `doctest_file/1` list | **open** (hand-maintained) |
+| `test/readme_getting_started_test.exs` | new guide in `docs.extras` → README "Worked examples" link (README is outside phase trees: plan a stand-alone `[DOC]` commit before the registering sub-phase) | **closed** |
+
+Re-derive this table before locking: `grep -lE 'docs\[:extras\]|:extras|Mix.Project.config' test/*.exs` must name only tabled files (see `.work/retro/2026-09-28-phase-24-jev-support_applied.md` F1).
 
 A Module Tree row deferring one of these to a later sub-phase is structurally wrong. Fail-closed gates merely break the phase's own "`mix test` zero failures" criterion. **Fail-open gates ship a silent gap** — a subject absent from a hand-maintained list is never checked, so the defect the gate exists to catch reaches `main`. Fail-open gates therefore need the explicit row most, and per `CLAUDE.md` each wants a meta-test asserting its literal against a discovered set. Worked example: PHASE_20 assigned `mix.exs` `groups_for_modules` to 20.7; the fail-closed gate broke 20.1 immediately and the tree was amended in-commit. The same design never mentioned `test/layer_a_docs_test.exs`; its three new Layer A structs went unregistered and all three shipped banned `(spec §36.2)` tokens in their user-facing `@moduledoc`.
 

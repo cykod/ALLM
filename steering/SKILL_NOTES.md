@@ -48,6 +48,13 @@ Proposed changes to the pipeline skills in `~/.claude/skills/`. This project can
 **Proposed wording:** "For each pair of sub-phases that build the same capability or transport, name the loop or helper the later one will need from the earlier one. If no Module Tree row owns it, flag it (auto-fixable: add the shared-module row to the earlier sub-phase)."
 **Argument against:** some clones only become visible once code exists, and a speculative seam can fit badly and need rework anyway.
 
+### 7. `/devil`: run the design's Verification predicates and re-derive its gate lists
+*Raised 2026-09-28, Phase 24 `/auto-build` run (`.work/retro/2026-09-28-phase-24-jev-support_applied.md` F1, "Pipeline notes").*
+**Target:** `~/.claude/skills/devil/SKILL.md` (and so `/quick-devil`), the pass over a design's Verification / `[G]` blocks.
+**Evidence:** two `[G]` literals were wrong as written (24.1's `comm -13 … # must be empty`; 24.4's `noul` grep), and the audit-gate table missed the fail-closed `test/readme_getting_started_test.exs`, which one grep discovers and which halted 24.5. The pre-build quick-devil applied 24 findings without running any of them.
+**Proposed wording:** "For every predicate in the design's Verification/`[G]` blocks, run it against HEAD and state the post-phase value it must reach; a predicate whose post-phase value cannot be derived is rewritten. Re-derive any gate *list* the design tabulates from a discovery command, not from the spec's table."
+**Argument against:** many `[G]` predicates only make sense after the code exists; the devil can check their shape, not their result.
+
 ## Discharged
 
 (none)

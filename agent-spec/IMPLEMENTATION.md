@@ -402,6 +402,7 @@ Each struct has at minimum `:reason` (atom from a closed set), `:message` (no se
 - **No `raise` in public functions.** Public returns error tuples; internal helpers may raise on programmer errors (`ALLM.ArgumentError` etc.).
 - **No swallowed errors.** Every `try/rescue` has a `Logger` call OR an error-tuple return — never both silent.
 - **`:cause` for debugging.** Chain the underlying exception so users can `inspect/1` it.
+- **Fuzz before claiming totality.** Before a `@doc`, behaviour invariant or RECORDS line says a function "never raises" / "returns exactly X or Y" / "rejects every malformed Z", run a scratch fuzz over hostile values (improper list, tuple key or value, pid, nil, wrong-type leaf) and record `<N> inputs → 0 raises` in RECORDS. Template: the Phase 24.4 decoder sweep (`.work/retro/2026-09-28-phase-24-jev-support_applied.md` F2).
 
 **Required pieces of every error module.** ALLM ships seven error structs (AdapterError, EngineError, StreamError, ToolError, SessionError, ValidationError, ImageAdapterError); v0.4 will add at least AudioAdapterError. Every closed-enum exception module ships **eight required pieces**:
 
