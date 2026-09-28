@@ -1,0 +1,26 @@
+{
+  "body": {
+    "error": {
+      "code": 400,
+      "message": "Logprobs is not enabled for this model",
+      "status": "INVALID_ARGUMENT"
+    }
+  },
+  "header_names": [
+    "alt-svc",
+    "content-type",
+    "date",
+    "server",
+    "server-timing",
+    "transfer-encoding",
+    "vary",
+    "x-content-type-options",
+    "x-frame-options",
+    "x-gemini-service-tier",
+    "x-xss-protection"
+  ],
+  "headers": {
+    "content-type": "application/json; charset=UTF-8"
+  },
+  "status": 400
+}

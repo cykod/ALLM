@@ -1,3 +1,19 @@
+## [TST] Record live span wire probes for three STT providers (28.3)
+*Monday, September 28th at 11am*
+Phase 28.3 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md adds live probe 
+arms to the ElevenLabs, OpenAI and Gemini audio recorders and records nine 
+fixtures that decide the shape of 28.4/28.5 (spec §37.2.3). Findings: OpenAI 
+returns token logprobs only for the include[]=logprobs spelling (bare include 
+is silently ignored) and omits the key on silence; Gemini rejects unknown 
+generationConfig fields (control) and refuses responseLogprobs on 
+gemini-flash-latest, so the adapter will refuse the flag; ElevenLabs realtime 
+word times are session-relative with one timestamped twin per commit, including 
+a twin-first empty segment carrying words: null. Each fixture has a raw-bytes 
+negative provenance test and every recorder re-run over the recorded tree makes 
+zero live calls.
+
+---
+
 ## [FEAT] Honour transcript span flags in FakeTranscription (28.2)
 *Monday, September 28th at 11am*
 Phase 28.2 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md makes the Fake 

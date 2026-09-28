@@ -57,7 +57,10 @@
 #
 # Settled outcomes (first run 2026-09-24) are recorded in
 # `steering/2026-09-24_SST_SUPPORT_RECORDS.md` §25.4 and in the design's
-# wire-field map.
+# wire-field map. The Phase 28.3 logprobs arms (O1-O4; first run
+# 2026-09-28, 4 live calls on the 4 s fox clip or 2 s of silence, about
+# $0.001 in all) are recorded in
+# `steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN_RECORDS.md` §28.3.
 #
 # Cost: OpenAI's pricing page (fetched 2026-09-24) lists tts-1 at
 # $15.00 / 1M characters, gpt-4o-mini-tts audio output at $12.00 / 1M tokens,
@@ -119,6 +122,14 @@ defmodule RecordOpenAIAudioFixtures do
     {25 * 1024 * 1024 + 1, [413]}
   ]
 
+  # The logprobs include spelling, settled 2026-09-28 by arms O1/O2: the
+  # array form `include[]=logprobs` returns a top-level `logprobs` list
+  # (test/fixtures/openai/transcriptions/recorded/logprobs_include_brackets.json)
+  # and the bare `include=logprobs` is silently ignored, no `logprobs` key
+  # (test/fixtures/openai/transcriptions/recorded/probe_logprobs_include_bare.json).
+  # O3 and O4 send this spelling only.
+  @logprobs_include {"include[]", "logprobs"}
+
   # Duration arm: > 1500 s of audio under the byte cap. No ffmpeg in this
   # container, so this is 8 kHz 8-bit mono PCM silence in a WAV (1800 s,
   # ~14.4 MB) rather than a low-bitrate mp3. The design allowed 200 or 400;
@@ -149,6 +160,8 @@ defmodule RecordOpenAIAudioFixtures do
       Process.put(:live_calls, 0)
       clips = load_or_synthesize_clips()
       results = Enum.map(pending, fn arm -> run_arm(arm, clips) end)
+
+      results = results ++ logprobs_spelling_check(results)
 
       Enum.each(results, &print_result/1)
       halt_unless_all_ok(results ++ clips.results)
@@ -411,6 +424,73 @@ defmodule RecordOpenAIAudioFixtures do
         verify: &verify_text/1,
         write: :probe
       },
+      # Phase 28.3 (transcript spans). Which spelling of the logprobs include
+      # works was unknown, and this endpoint ignores unknown fields with a
+      # 200 (the control above), so only the RESPONSE settles it: each arm
+      # records whether a top-level `logprobs` list came back.
+      # `logprobs_spelling_check/1` halts the run if neither spelling did.
+      # First run 2026-09-28: O1 carried `logprobs`, O2 did not, so O1 now
+      # REQUIRES the list and O2 asserts the key ABSENT (a provider change
+      # halts this script).
+      %{
+        id: :logprobs_brackets,
+        label: "O1 stt gpt-transcribe include[]=logprobs -> 200, non-empty logprobs list",
+        targets: [stt_path("logprobs_include_brackets")],
+        run: fn clips ->
+          stt(clips.mp3, "quick_brown_fox.mp3", "audio/mpeg", "gpt-transcribe", [
+            {"include[]", "logprobs"}
+          ])
+        end,
+        expect: [200],
+        verify: &verify_logprobs(&1, :require),
+        write: :json_envelope
+      },
+      %{
+        id: :logprobs_bare,
+        label: "O2 stt gpt-transcribe include=logprobs (bare) -> 200, bare include IGNORED",
+        targets: [stt_path("probe_logprobs_include_bare")],
+        run: fn clips ->
+          stt(clips.mp3, "quick_brown_fox.mp3", "audio/mpeg", "gpt-transcribe", [
+            {"include", "logprobs"}
+          ])
+        end,
+        expect: [200],
+        verify: &verify_logprobs(&1, :absent),
+        write: :json_envelope
+      },
+      %{
+        id: :logprobs_mini,
+        label: "O3 stt gpt-4o-mini-transcribe include[]=logprobs -> 200, non-empty logprobs list",
+        targets: [stt_path("logprobs_mini")],
+        run: fn clips ->
+          stt(clips.mp3, "quick_brown_fox.mp3", "audio/mpeg", "gpt-4o-mini-transcribe", [
+            @logprobs_include
+          ])
+        end,
+        expect: [200],
+        verify: &verify_logprobs(&1, :require),
+        write: :json_envelope
+      },
+      # O4: 2 s of 16 kHz 16-bit mono silence. The design recorded whether
+      # `logprobs` is absent, `[]` or non-empty on a silent clip. First run
+      # 2026-09-28: key ABSENT with text "", now asserted, so the adapter's
+      # blank-text rule (absent key + blank text -> spans []) rests on it.
+      %{
+        id: :logprobs_silence,
+        label:
+          "O4 stt gpt-transcribe 2 s silent WAV include[]=logprobs -> 200, text \"\", logprobs ABSENT",
+        targets: [stt_path("logprobs_silence")],
+        run: fn _ ->
+          pcm = :binary.copy(<<0>>, 16_000 * 2 * 2)
+
+          stt(wav(pcm, 16_000, 16), "silence.wav", "audio/wav", "gpt-transcribe", [
+            @logprobs_include
+          ])
+        end,
+        expect: [200],
+        verify: &verify_logprobs(&1, :absent_silent),
+        write: :json_envelope
+      },
       %{
         id: :stt_bad_key,
         label: "stt BAD KEY -> 401",
@@ -615,6 +695,73 @@ defmodule RecordOpenAIAudioFixtures do
     )
   end
 
+  # Every mode needs a `text` field and notes what came back. `:require`
+  # also demands a non-empty `logprobs` list of `{token, logprob}`;
+  # `:absent` demands no `logprobs` key; `:absent_silent` demands no key and
+  # a blank `text`.
+  defp verify_logprobs({:ok, resp}, mode) do
+    body = decode(resp.body)
+    logprobs = if is_map(body), do: body["logprobs"], else: nil
+    present? = logprobs_list?(logprobs)
+
+    shape =
+      cond do
+        not is_map(body) or not Map.has_key?(body, "logprobs") -> "logprobs ABSENT"
+        logprobs == [] -> "logprobs []"
+        present? -> "logprobs: #{length(logprobs)} tokens, first #{inspect(hd(logprobs))}"
+        true -> "logprobs malformed: #{inspect(logprobs) |> String.slice(0, 120)}"
+      end
+
+    absent? = is_map(body) and not Map.has_key?(body, "logprobs")
+    blank? = is_map(body) and is_binary(body["text"]) and String.trim(body["text"]) == ""
+
+    checks =
+      [{is_map(body) and is_binary(body["text"]), "no text field"}] ++
+        case mode do
+          :require ->
+            [{present?, "no non-empty logprobs list (#{shape})"}]
+
+          :absent ->
+            [{absent?, "a logprobs key came back (#{shape})"}]
+
+          :absent_silent ->
+            [{absent?, "a logprobs key came back (#{shape})"}, {blank?, "text not blank"}]
+        end
+
+    verdict(checks, "  (#{shape}; text #{inspect(is_map(body) && body["text"])})")
+  end
+
+  defp logprobs_list?([_ | _] = list),
+    do: Enum.all?(list, &(is_map(&1) and is_binary(&1["token"]) and is_number(&1["logprob"])))
+
+  defp logprobs_list?(_), do: false
+
+  # O1 and O2 are record-only, but at least one spelling must carry
+  # `logprobs`: otherwise OpenAI logprobs are unsupported and the design says
+  # stop (28.5 would refuse the flag). Runs only when both arms ran.
+  defp logprobs_spelling_check(results) do
+    by_id = Map.new(results, &{&1.arm.id, &1})
+
+    with %{response: {:ok, a}} <- by_id[:logprobs_brackets],
+         %{response: {:ok, b}} <- by_id[:logprobs_bare] do
+      carried = for resp <- [a, b], is_map(decode(resp.body)), do: decode(resp.body)["logprobs"]
+      ok? = Enum.any?(carried, &logprobs_list?/1)
+
+      [
+        %{
+          label: "O1/O2: at least one include spelling returns a logprobs list",
+          expect: [true],
+          got: ok?,
+          verdict: %{ok?: ok?, note: ""},
+          ok?: ok?,
+          arm: %{write: :none}
+        }
+      ]
+    else
+      _ -> []
+    end
+  end
+
   defp verify_error_envelope({:ok, resp}) do
     error = resp.body |> decode() |> error_of()
 
@@ -779,6 +926,8 @@ defmodule RecordOpenAIAudioFixtures do
       |> Map.put("chunks", Req.Response.get_private(resp, :chunks, []))
     )
   end
+
+  defp write_result(%{arm: %{write: :none}}), do: :ok
 
   defp write_result(%{arm: %{write: :json_envelope, targets: [path]}, response: {:ok, resp}}) do
     write_json(path, json_envelope(resp))

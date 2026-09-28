@@ -1172,7 +1172,7 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionStreamTest do
   end
 
   describe "recorded fixture provenance (raw bytes)" do
-    @recorded ~w(rt_bad_key rt_big_chunk rt_control rt_end rt_fox rt_manual_commit)
+    @recorded ~w(rt_bad_key rt_big_chunk rt_control rt_end rt_fox rt_manual_commit rt_two_segments)
 
     test "@recorded enumerates every file under realtime/recorded/" do
       assert Fixtures.names_on_disk("realtime/recorded") == @recorded

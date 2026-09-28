@@ -50,7 +50,9 @@ defmodule ALLM.Providers.OpenAI.TranscriptionWireTest do
 
   describe "fixture provenance" do
     @recorded ~w(gpt_transcribe mini_tokens error_400_format error_401_bad_key error_413
-                 probe_control probe_audio_bin probe_size_ladder probe_duration)
+                 probe_control probe_audio_bin probe_size_ladder probe_duration
+                 logprobs_include_brackets probe_logprobs_include_bare logprobs_mini
+                 logprobs_silence)
     @synthesized ~w(error_401 error_429)
 
     defp raw(kind, name),

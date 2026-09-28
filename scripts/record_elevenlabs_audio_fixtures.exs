@@ -63,7 +63,10 @@
 #
 # Settled outcomes (first run 2026-09-26) are recorded in
 # `steering/2026-09-25_ELEVENLABS_TTS_SST_RECORDS.md` §26.6 and as dated
-# corrections under the design's wire-field map.
+# corrections under the design's wire-field map. The Phase 28.3 span arms
+# (E1-E3; first run 2026-09-28, 3 live calls: the fox clip and 2 s of
+# silence on batch, about 9 s of audio on realtime, well under $0.01) are
+# recorded in `steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN_RECORDS.md` §28.3.
 #
 # Cost: ElevenLabs' pricing page (fetched 2026-09-25) lists Flash at $0.05 per
 # 1K characters and Scribe v2 at $0.22 per hour. The billed arms send "Hello."
@@ -280,6 +283,36 @@ defmodule RecordElevenLabsAudioFixtures do
         verify: &verify_stt/1,
         write: :json_envelope
       },
+      # Phase 28.3 (transcript spans). This endpoint ignores unknown fields
+      # (the control above), so a 200 proves nothing about
+      # `timestamps_granularity`; E1 verifies the response body instead.
+      %{
+        id: :stt_words_explicit,
+        label:
+          "E1 stt #{@stt_model} fox mp3 timestamps_granularity=word -> 200, words[] each with " <>
+            "numeric start/end/logprob and a binary type",
+        targets: [stt_path("words_explicit")],
+        run: fn -> stt("fox.mp3", "audio/mpeg", [{"timestamps_granularity", "word"}]) end,
+        expect: [200],
+        verify: &verify_words/1,
+        write: :json_envelope
+      },
+      # E3 sends what a flagged adapter call will (`timestamps_granularity=word`)
+      # over 2 s of silence. The design recorded what `words` and `text` look
+      # like; first run 2026-09-28: `words: []` and `text: ""`, now asserted
+      # (the key is present, so the blank-text rule is moot on this endpoint).
+      %{
+        id: :stt_silence,
+        label:
+          "E3 stt #{@stt_model} 2 s silent WAV timestamps_granularity=word -> 200, words [], text \"\"",
+        targets: [stt_path("silence")],
+        run: fn ->
+          stt_bytes(silent_wav(), "silence.wav", "audio/wav", [{"timestamps_granularity", "word"}])
+        end,
+        expect: [200],
+        verify: &verify_silence/1,
+        write: :json_envelope
+      },
       %{
         id: :stt_bad_key,
         label: "stt BAD sk_ KEY -> 400 invalid_api_key",
@@ -488,6 +521,23 @@ defmodule RecordElevenLabsAudioFixtures do
         verify: &verify_rt_end/1,
         write: :rt_frames
       },
+      # Phase 28.3 (transcript spans), arm E2. Three manual commits (fox,
+      # 1 s of silence, fox) with `include_timestamps=true`: settles the word
+      # time base (session vs segment) and whether every committed segment,
+      # the empty one included, gets exactly one timestamped twin with the
+      # same trimmed text. Every commit follows >= 1 s of uncommitted audio
+      # (a commit without audio gets `commit_throttled`, see `rt_end`).
+      %{
+        id: :rt_two_segments,
+        label:
+          "E2 rt manual include_timestamps: fox, commit, 1 s silence, commit, fox, commit -> " <>
+            "twins == commits, twin text == committed text, time_base session",
+        targets: [rt_path("rt_two_segments")],
+        run: fn -> rt_two_segments() end,
+        expect: [101],
+        verify: &verify_rt_two_segments/1,
+        write: :rt_frames
+      },
       %{
         id: :rt_control,
         label: "CONTROL rt: not_a_real_param in the query -> accepted or rejected, recorded",
@@ -579,6 +629,37 @@ defmodule RecordElevenLabsAudioFixtures do
 
       other ->
         other
+    end
+  end
+
+  defp rt_two_segments do
+    {rate, fox} = fox_pcm()
+    silence = List.duplicate(:binary.copy(<<0>>, div(rate * 2, 10)), 10)
+
+    sends = Enum.flat_map([fox, silence, fox], &(audio_sends(&1) ++ [:commit]))
+
+    request =
+      rt_request(commit_strategy: :manual, options: %{"include_timestamps" => true})
+
+    case rt_session(request, :live, sends, 3) do
+      {:ws, session} -> {:ws, Map.put(session, :time_base, time_base(session.twins))}
+      other -> other
+    end
+  end
+
+  # Over the first and last twins with non-empty `words`: "session" when the
+  # last one's first `start` is at or after the first one's last `end` (word
+  # times run on from the session start), else "segment" (each segment
+  # restarts near 0). nil when fewer than two twins carry words.
+  defp time_base(twins) do
+    case for(%{"words" => [_ | _] = words} <- twins, do: words) do
+      [first | [_ | _] = rest] ->
+        if hd(List.last(rest))["start"] >= List.last(first)["end"],
+          do: "session",
+          else: "segment"
+
+      _ ->
+        nil
     end
   end
 
@@ -745,6 +826,7 @@ defmodule RecordElevenLabsAudioFixtures do
           do: t
         ),
       committed: for(%{"message_type" => "committed_transcript", "text" => t} <- texts, do: t),
+      twins: for(%{"message_type" => "committed_transcript_with_timestamps"} = p <- texts, do: p),
       partials: for(%{"message_type" => "partial_transcript", "text" => t} <- texts, do: t),
       error: error,
       close:
@@ -815,6 +897,45 @@ defmodule RecordElevenLabsAudioFixtures do
       "  [committed #{inspect(s.committed)}; then #{inspect(s.error)}; close #{inspect(s.close)}]"
     )
   end
+
+  # Assumption 3 of the Phase 28 design: pairing is by commit order, so the
+  # twin count must equal the committed count, and each pair's trimmed texts
+  # must agree (28.4's sanity check, probed live). The design recorded the
+  # time base; first run 2026-09-28 gave "session" (second segment's words
+  # start at 4.9 s, after the first's end at 3.44 s:
+  # test/fixtures/elevenlabs/realtime/recorded/rt_two_segments.json), now
+  # asserted, because 28.4 passes word times through on that basis. The same
+  # run delivered the empty segment's twin BEFORE its committed frame, with
+  # `"words": null` and `"language_code": null` (nil in the note below).
+  defp verify_rt_two_segments({:ws, s}) do
+    twin_texts = Enum.map(s.twins, &(&1["text"] || ""))
+    pairs = Enum.zip(s.committed, twin_texts)
+
+    mismatched =
+      for {c, t} <- pairs, String.trim(c) != String.trim(t), do: {c, t}
+
+    verdict(
+      [
+        {s.session_started?, "no session_started"},
+        {s.error == nil, "error frame #{inspect(s.error)}"},
+        {length(s.committed) >= 2, "#{length(s.committed)} committed segment(s), want >= 2"},
+        {length(s.twins) == length(s.committed),
+         "Assumption 3 FALSIFIED: #{length(s.twins)} timestamped twins for " <>
+           "#{length(s.committed)} committed segments"},
+        {mismatched == [],
+         "Assumption 3 FALSIFIED: twin text differs from its committed text: #{inspect(mismatched)}"},
+        {s.time_base == "session",
+         "time base is #{inspect(s.time_base)}, not \"session\" (nil: fewer than two twins " <>
+           "carry words); 28.4 passes word times through only on a session time base"}
+      ],
+      "  [time_base #{inspect(s.time_base)}; committed #{inspect(s.committed)}; " <>
+        "twin texts #{inspect(twin_texts)}; words per twin " <>
+        "#{inspect(Enum.map(s.twins, &if(is_list(&1["words"]), do: length(&1["words"]))))}; " <>
+        "commit-frame order #{inspect(s.order)}]"
+    )
+  end
+
+  defp verify_rt_two_segments(_), do: %{ok?: false, note: "  <- transport error"}
 
   defp verify_rt_control({:ws, %{status: 101} = s}) do
     outcome =
@@ -964,6 +1085,52 @@ defmodule RecordElevenLabsAudioFixtures do
       ],
       "  (text #{inspect(text)}; language_code #{inspect(is_map(body) && body["language_code"])}; " <>
         "request-id header #{inspect(header(resp, "request-id"))})"
+    )
+  end
+
+  # E1: every entry of `words` carries numeric `start`/`end`/`logprob` and a
+  # binary `type` (the span mapping 28.4 decodes).
+  defp verify_words({:ok, resp}) do
+    body = decode(resp.body)
+    words = if is_map(body), do: body["words"], else: nil
+
+    well_formed? =
+      is_list(words) and words != [] and
+        Enum.all?(words, fn w ->
+          is_map(w) and is_number(w["start"]) and is_number(w["end"]) and
+            is_number(w["logprob"]) and is_binary(w["type"]) and is_binary(w["text"])
+        end)
+
+    verdict(
+      [
+        {well_formed?, "words absent, empty, or an entry lacks start/end/logprob/type/text"},
+        {is_map(body) and is_binary(body["text"]) and body["text"] =~ ~r/fox/i,
+         "text absent or without \"fox\""}
+      ],
+      "  (#{if is_list(words), do: length(words), else: 0} words; types " <>
+        "#{inspect(if is_list(words), do: words |> Enum.map(& &1["type"]) |> Enum.uniq())})"
+    )
+  end
+
+  # E3: the silent clip answers `words: []` and a blank `text`.
+  defp verify_silence({:ok, resp}) do
+    body = decode(resp.body)
+
+    words =
+      cond do
+        not is_map(body) -> "not JSON"
+        not Map.has_key?(body, "words") -> "words ABSENT"
+        body["words"] == [] -> "words []"
+        true -> "words: #{length(List.wrap(body["words"]))} entries #{snippet(body["words"])}"
+      end
+
+    verdict(
+      [
+        {is_map(body) and body["words"] == [], "words is not [] (#{words})"},
+        {is_map(body) and is_binary(body["text"]) and String.trim(body["text"]) == "",
+         "text not blank"}
+      ],
+      "  (#{words}; text #{inspect(is_map(body) && body["text"])})"
     )
   end
 
@@ -1199,7 +1366,9 @@ defmodule RecordElevenLabsAudioFixtures do
         "error" => session.error,
         "close" => session.close,
         "pacing" => session[:pacing],
-        "chunk_ms" => session[:chunk_ms]
+        "chunk_ms" => session[:chunk_ms],
+        "twins" => length(session.twins),
+        "time_base" => session[:time_base]
       }
     })
   end
@@ -1305,12 +1474,15 @@ defmodule RecordElevenLabsAudioFixtures do
     )
   end
 
-  defp stt(filename, content_type, extra \\ [], key_kind \\ :live) do
+  defp stt(filename, content_type, extra \\ [], key_kind \\ :live),
+    do: stt_bytes(File.read!(@fox_mp3), filename, content_type, extra, key_kind)
+
+  defp stt_bytes(bytes, filename, content_type, extra, key_kind \\ :live) do
     bump()
 
     form =
       [
-        {"file", {File.read!(@fox_mp3), filename: filename, content_type: content_type}},
+        {"file", {bytes, filename: filename, content_type: content_type}},
         {"model_id", @stt_model}
       ] ++ extra
 
@@ -1321,6 +1493,16 @@ defmodule RecordElevenLabsAudioFixtures do
       retry: false,
       decode_body: false
     )
+  end
+
+  # 2 s of 16 kHz 16-bit mono zeros behind a 44-byte WAV header.
+  defp silent_wav do
+    pcm = :binary.copy(<<0>>, 16_000 * 2 * 2)
+    size = byte_size(pcm)
+
+    <<"RIFF", 36 + size::little-32, "WAVE", "fmt ", 16::little-32, 1::little-16, 1::little-16,
+      16_000::little-32, 32_000::little-32, 2::little-16, 16::little-16, "data",
+      size::little-32>> <> pcm
   end
 
   # The `/stream` transport: `Finch.stream/5` on the adapter's own pool,

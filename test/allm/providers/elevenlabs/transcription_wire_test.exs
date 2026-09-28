@@ -35,7 +35,7 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionWireTest do
   defp stub_env(stub, env), do: Req.Test.stub(stub, &Fixtures.replay(&1, env))
 
   describe "fixture provenance" do
-    @recorded ~w(probe_control scribe_v2 probe_audio_bin error_400_bad_key)
+    @recorded ~w(probe_control scribe_v2 probe_audio_bin error_400_bad_key words_explicit silence)
     @synthesized ~w(error_401 error_429)
 
     for name <- @recorded do

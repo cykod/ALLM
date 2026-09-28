@@ -1,0 +1,37 @@
+{
+  "body": {
+    "language_code": "en",
+    "language_probability": 0.0,
+    "text": "",
+    "transcription_id": "yzhbQfAsNrVeDIxFnUi4",
+    "words": []
+  },
+  "header_names": [
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-origin",
+    "access-control-expose-headers",
+    "access-control-max-age",
+    "alt-svc",
+    "character-cost",
+    "content-type",
+    "current-concurrent-requests",
+    "date",
+    "fiat-cost-before-overages",
+    "fiat-currency",
+    "maximum-concurrent-requests",
+    "server",
+    "strict-transport-security",
+    "transfer-encoding",
+    "vary",
+    "via",
+    "workspace-concurrent-requests",
+    "x-region",
+    "x-trace-id"
+  ],
+  "headers": {
+    "character-cost": "2",
+    "content-type": "application/json"
+  },
+  "status": 200
+}

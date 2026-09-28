@@ -1,0 +1,15 @@
+{
+  "body": {
+    "languages": [],
+    "text": "",
+    "usage": {
+      "seconds": 2,
+      "type": "duration"
+    }
+  },
+  "headers": {
+    "content-type": "application/json",
+    "x-request-id": "req_a142078fae8a41cfb3cffbdd6b573c45"
+  },
+  "status": 200
+}

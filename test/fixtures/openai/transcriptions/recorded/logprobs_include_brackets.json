@@ -1,0 +1,125 @@
+{
+  "body": {
+    "languages": [
+      {
+        "code": "en"
+      }
+    ],
+    "logprobs": [
+      {
+        "bytes": [
+          84,
+          104,
+          101
+        ],
+        "logprob": -6.866455078125e-5,
+        "token": "The"
+      },
+      {
+        "bytes": [
+          32,
+          113,
+          117,
+          105,
+          99,
+          107
+        ],
+        "logprob": -3.0517578125e-5,
+        "token": " quick"
+      },
+      {
+        "bytes": [
+          32,
+          98,
+          114,
+          111,
+          119,
+          110
+        ],
+        "logprob": 1.52587890625e-5,
+        "token": " brown"
+      },
+      {
+        "bytes": [
+          32,
+          102,
+          111,
+          120
+        ],
+        "logprob": 3.814697265625e-5,
+        "token": " fox"
+      },
+      {
+        "bytes": [
+          32,
+          106,
+          117,
+          109,
+          112,
+          115
+        ],
+        "logprob": -4.3487548828125e-4,
+        "token": " jumps"
+      },
+      {
+        "bytes": [
+          32,
+          111,
+          118,
+          101,
+          114
+        ],
+        "logprob": -1.1444091796875e-4,
+        "token": " over"
+      },
+      {
+        "bytes": [
+          32,
+          116,
+          104,
+          101
+        ],
+        "logprob": 3.0517578125e-5,
+        "token": " the"
+      },
+      {
+        "bytes": [
+          32,
+          108,
+          97,
+          122,
+          121
+        ],
+        "logprob": -2.288818359375e-5,
+        "token": " lazy"
+      },
+      {
+        "bytes": [
+          32,
+          100,
+          111,
+          103
+        ],
+        "logprob": -3.0517578125e-5,
+        "token": " dog"
+      },
+      {
+        "bytes": [
+          46
+        ],
+        "logprob": -6.103515625e-5,
+        "token": "."
+      }
+    ],
+    "text": "The quick brown fox jumps over the lazy dog.",
+    "usage": {
+      "seconds": 4,
+      "type": "duration"
+    }
+  },
+  "headers": {
+    "content-type": "application/json",
+    "x-request-id": "req_3f8ccf12a2cc4d759018f34e6d3f61c8"
+  },
+  "status": 200
+}

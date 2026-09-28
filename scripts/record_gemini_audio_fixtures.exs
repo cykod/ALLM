@@ -53,7 +53,9 @@
 #
 # Settled outcomes (first run 2026-09-24) are recorded in
 # `steering/2026-09-24_SST_SUPPORT_RECORDS.md` §25.5 and in the design's
-# Gemini wire-field map.
+# Gemini wire-field map. The Phase 28.3 span arms (G0, G1; first run
+# 2026-09-28, 2 live calls, each 400 before generation so under $0.001) are
+# recorded in `steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN_RECORDS.md` §28.3.
 #
 # Cost: Google's pricing page (https://ai.google.dev/gemini-api/docs/pricing,
 # fetched 2026-09-24) lists Gemini 3.8 Flash audio input at "$3.00 or
@@ -200,6 +202,35 @@ defmodule RecordGeminiAudioFixtures do
         verify: &verify_candidates/1,
         write: :probe
       },
+      # Phase 28.3 (transcript spans). G0 is the negative control for G1: an
+      # invented field INSIDE `generationConfig`. Gemini rejects an unknown
+      # top-level field (the control above); only a 400 here makes G1's
+      # outcome evidence about `responseLogprobs` itself.
+      #
+      # First run 2026-09-28, both tightened to the observed outcome:
+      # G0 -> 400 `Unknown name "notARealField" at 'generation_config'`
+      # (test/fixtures/gemini/transcriptions/recorded/probe_generation_config_control.json),
+      # G1 -> 400 "Logprobs is not enabled for this model"
+      # (test/fixtures/gemini/transcriptions/recorded/probe_logprobs.json).
+      # So the field IS in the schema and `gemini-flash-latest` refuses it:
+      # the Gemini adapter takes the REFUSE branch for `logprobs: true`, and
+      # the silent-clip arm G2 (support branch only) does not exist.
+      %{
+        label: "G0 CONTROL: generationConfig.notARealField -> 400 Unknown name",
+        target: path("probe_generation_config_control"),
+        run: fn -> post(clip_body("mp3", nil, %{"notARealField" => true})) end,
+        expect: [400],
+        verify: &verify_generation_config_control/1,
+        write: :envelope
+      },
+      %{
+        label: "G1: generationConfig.responseLogprobs=true -> 400 Logprobs is not enabled",
+        target: path("probe_logprobs"),
+        run: fn -> post(clip_body("mp3", nil, %{"responseLogprobs" => true})) end,
+        expect: [400],
+        verify: &verify_logprobs/1,
+        write: :envelope
+      },
       %{
         label: "BAD KEY -> 400 API_KEY_INVALID",
         target: path("error_400_bad_key"),
@@ -217,18 +248,21 @@ defmodule RecordGeminiAudioFixtures do
   # Bodies — the adapter's own builder
   # ---------------------------------------------------------------------------
 
-  defp clip_body(ext, mime \\ nil) do
+  defp clip_body(ext, mime \\ nil, options \\ %{}) do
     audio = Audio.from_file(Path.join(@clip_dir, "quick_brown_fox.#{ext}"))
     audio = if mime, do: %{audio | mime_type: mime}, else: audio
-    build!(audio)
+    build!(audio, options)
   end
 
   defp silence_body(raw_bytes) do
     build!(Audio.from_binary(wav(:binary.copy(<<0>>, raw_bytes - 44)), "audio/wav"))
   end
 
-  defp build!(audio) do
-    {:ok, body} = Transcription.to_json_body(TranscriptionRequest.new(audio: audio), [])
+  # `options` becomes `generationConfig` through the adapter's own
+  # `put_generation_config`, so the span arms send what the adapter would.
+  defp build!(audio, options \\ %{}) do
+    request = TranscriptionRequest.new(audio: audio, options: options)
+    {:ok, body} = Transcription.to_json_body(request, [])
     body
   end
 
@@ -342,6 +376,16 @@ defmodule RecordGeminiAudioFixtures do
       "  (#{error_message(resp)}; #{echo})"
     )
   end
+
+  # G0 must name the invented field and G1 must say logprobs are not enabled
+  # (both observed 2026-09-28). A 200 on either halts the run via `expect`;
+  # if Google ever enables logprobs, re-open the design's G1 outcome rule
+  # (support branch: `candidates[0].logprobsResult.chosenCandidates`) before
+  # widening `expect`.
+  defp verify_generation_config_control(resp),
+    do: verify_error_mentions(resp, ~s(Unknown name "notARealField"))
+
+  defp verify_logprobs(resp), do: verify_error_mentions(resp, "Logprobs is not enabled")
 
   defp verdict(checks, extra) do
     case for({false, why} <- checks, do: why) do

@@ -52,7 +52,7 @@ defmodule ALLM.Providers.Gemini.TranscriptionWireTest do
   describe "fixture provenance" do
     @recorded ~w(mp3 wav flac aac error_400_unknown_field error_400_bad_key
                  probe_opus_as_ogg probe_opus_as_opus probe_boundary_at_cap
-                 probe_boundary_over_cap)
+                 probe_boundary_over_cap probe_generation_config_control probe_logprobs)
     @synthesized ~w(error_400_key error_400_token_limit error_429 max_tokens thought_part
                     safety prompt_blocked)
 

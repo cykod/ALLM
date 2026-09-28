@@ -1,0 +1,126 @@
+{
+  "body": {
+    "logprobs": [
+      {
+        "bytes": [
+          84,
+          104,
+          101
+        ],
+        "logprob": -1.2964145571459085e-4,
+        "token": "The"
+      },
+      {
+        "bytes": [
+          32,
+          113,
+          117,
+          105,
+          99,
+          107
+        ],
+        "logprob": 0.0,
+        "token": " quick"
+      },
+      {
+        "bytes": [
+          32,
+          98,
+          114,
+          111,
+          119,
+          110
+        ],
+        "logprob": -1.9361264946837764e-7,
+        "token": " brown"
+      },
+      {
+        "bytes": [
+          32,
+          102,
+          111,
+          120
+        ],
+        "logprob": -1.9361264946837764e-7,
+        "token": " fox"
+      },
+      {
+        "bytes": [
+          32,
+          106,
+          117,
+          109,
+          112,
+          115
+        ],
+        "logprob": -4.320199877838604e-7,
+        "token": " jumps"
+      },
+      {
+        "bytes": [
+          32,
+          111,
+          118,
+          101,
+          114
+        ],
+        "logprob": 0.0,
+        "token": " over"
+      },
+      {
+        "bytes": [
+          32,
+          116,
+          104,
+          101
+        ],
+        "logprob": 0.0,
+        "token": " the"
+      },
+      {
+        "bytes": [
+          32,
+          108,
+          97,
+          122,
+          121
+        ],
+        "logprob": -3.054500666621607e-6,
+        "token": " lazy"
+      },
+      {
+        "bytes": [
+          32,
+          100,
+          111,
+          103
+        ],
+        "logprob": 0.0,
+        "token": " dog"
+      },
+      {
+        "bytes": [
+          46
+        ],
+        "logprob": 0.0,
+        "token": "."
+      }
+    ],
+    "text": "The quick brown fox jumps over the lazy dog.",
+    "usage": {
+      "input_token_details": {
+        "audio_tokens": 37,
+        "text_tokens": 0
+      },
+      "input_tokens": 37,
+      "output_tokens": 12,
+      "total_tokens": 49,
+      "type": "tokens"
+    }
+  },
+  "headers": {
+    "content-type": "application/json",
+    "x-request-id": "req_54b1b80f05af4ad9ad6df8e20c798ed1"
+  },
+  "status": 200
+}

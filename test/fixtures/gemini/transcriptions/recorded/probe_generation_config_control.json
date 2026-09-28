@@ -1,0 +1,36 @@
+{
+  "body": {
+    "error": {
+      "code": 400,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.BadRequest",
+          "fieldViolations": [
+            {
+              "description": "Invalid JSON payload received. Unknown name \"notARealField\" at 'generation_config': Cannot find field.",
+              "field": "generation_config"
+            }
+          ]
+        }
+      ],
+      "message": "Invalid JSON payload received. Unknown name \"notARealField\" at 'generation_config': Cannot find field.",
+      "status": "INVALID_ARGUMENT"
+    }
+  },
+  "header_names": [
+    "alt-svc",
+    "content-type",
+    "date",
+    "server",
+    "server-timing",
+    "transfer-encoding",
+    "vary",
+    "x-content-type-options",
+    "x-frame-options",
+    "x-xss-protection"
+  ],
+  "headers": {
+    "content-type": "application/json; charset=UTF-8"
+  },
+  "status": 400
+}
