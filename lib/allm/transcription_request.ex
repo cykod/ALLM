@@ -27,8 +27,12 @@ defmodule ALLM.TranscriptionRequest do
     The two flags are separate because providers support them separately:
     some return both, some only log-probabilities. An adapter that cannot
     honour a flag that is `true` refuses the request with
-    `:unsupported_feature` before sending anything. With both flags
-    `false`, the response's `:spans` is `nil`.
+    `:unsupported_feature` before sending anything. If the provider
+    accepted the request but its response carries no span data, a blank
+    transcript succeeds with `spans: []`, and any other transcript fails
+    with `:unsupported_feature` whose `metadata.cause` is
+    `:absent_from_response` and whose `metadata.text` holds the
+    transcript. With both flags `false`, the response's `:spans` is `nil`.
   - `:options`: a raw provider-body passthrough for fields ALLM does not
     model. An adapter merges it *under* the fields it sets itself, so an
     option can never override a structural field, and fields that would

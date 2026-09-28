@@ -27,7 +27,9 @@ defmodule ALLM.TranscriptSpan do
     them. Not checked for `start_seconds <= end_seconds`; they are the
     provider's values.
   - `:logprob`: the natural-log probability the model assigned to the
-    unit, normally zero or negative. Set only when the request asked for
+    unit, normally zero or negative; a provider can report a tiny positive
+    value for a near-certain unit, so do not assume `logprob <= 0`. Set
+    only when the request asked for
     `logprobs: true`, and `nil` otherwise, even when the provider sent it.
 
   A requested attribute can still be `nil` on a span when the provider

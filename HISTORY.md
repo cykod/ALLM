@@ -1,3 +1,25 @@
+## [DOC] Document transcript spans; guard Fake retry budgets (28.6-28.7)
+*Monday, September 28th at 12pm*
+Phases 28.6 and 28.7 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md.
+
+- Spec §37.2.3, §37.2.5, §37.2.6, §37.10, §37.11.1 and §37.11.2 carry 
+Phase 28 amendments describing the shipped span flags, the post-I/O 
+:absent_from_response case, the :invalid_shape rows, the narrowed out-of-scope 
+list and the streaming :spans keys.
+- guides/audio.md gains a Word timings and confidence section with executable 
+FakeTranscription examples and a per-provider support table (confirmed rows 
+only), and names the flags as a realtime hold trigger; ALLM.transcribe/3 and 
+stream_transcribe/3 docs gain a timings paragraph; TranscriptionRequest and 
+TranscriptSpan moduledocs corrected (post-I/O refusal, logprobs may be slightly 
+positive).
+- CHANGELOG lines added to the unreleased v0.6.0 entry, derived from git diff 
+d3bcb3b..HEAD lib/.
+- FakeTranscription now raises on a malformed {:retry_until_call, n} reached at 
+call time (head or chained), sharing one valid_budget guard with script 
+validation; previously 0/-1/non-integer budgets were silently skipped or looped.
+
+---
+
 ## [FEAT] Add OpenAI logprob spans and Gemini span refusals (28.5)
 *Monday, September 28th at 12pm*
 Phase 28.5 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md closes the 

@@ -1,4 +1,4 @@
-## [REL] v0.6.0 — Content moderation, compact tools, audio, prompt caching and typed classification
+## [REL] v0.6.0 — Content moderation, compact tools, audio, prompt caching, typed classification and transcript timings
 
 Breaking changes:
 - An `%ALLM.Image{source: {:base64, _}}` whose data will not decode is now
@@ -308,6 +308,43 @@ Other changes:
   string becomes the message instead of raising. A chat stream the consumer
   halts early now also clears the transport's already-queued messages from
   the reducing process's mailbox
+- Add opt-in word timings and confidence to transcription:
+  `ALLM.transcribe(engine, audio, timestamps: true, logprobs: true)` fills
+  the new `ALLM.TranscriptionResponse.spans` with `%ALLM.TranscriptSpan{}`
+  structs (`:text`, `:kind`, `:start_seconds`, `:end_seconds`, `:logprob`),
+  and `TranscriptionResponse.mean_logprob/1` averages the spoken units.
+  `ALLM.TranscriptionRequest` and `ALLM.TranscriptionStreamRequest` gain
+  the two boolean flags (default `false`), which
+  `ALLM.Validate.transcription_request/1` and
+  `transcription_stream_request/1` check (`:invalid_shape`). With both
+  flags off `spans` is `nil` and nothing else changes; an attribute that
+  was not asked for is `nil` on every span
+- `ALLM.Providers.ElevenLabs.Transcription` honours both flags, batch and
+  realtime. On the realtime path each committed segment carries its spans,
+  with times measured from the start of the session, and a flag makes the
+  adapter hold each segment up to 1,000 ms for its timing data
+- `ALLM.Providers.OpenAI.Transcription` honours `logprobs: true` (it sends
+  `include[]=logprobs` and returns one `:token` span per token) and refuses
+  `timestamps: true`. `ALLM.Providers.Gemini.Transcription` refuses both;
+  its `logprobs` refusal rests on one probe on `gemini-flash-latest`. A
+  refused flag is `:unsupported_feature`, returned before any upload or key
+  lookup. When a provider accepts a flag but returns no span data, a blank
+  transcript succeeds with `spans: []` and any other fails with
+  `:unsupported_feature`, `metadata.cause: :absent_from_response` and the
+  transcript on `metadata.text`
+- Add `ALLM.TranscriptionEvent.committed_transcript/3` and an optional
+  `:spans` key on `:committed_transcript` and `:transcription_completed`,
+  written only when a flag is set;
+  `ALLM.AudioStream.collect_transcription/1` copies the completed spans
+  onto the response. `ALLM.Providers.FakeTranscription` honours both flags
+  on both paths, and a scripted real adapter refuses what its provider
+  would
+- `ALLM.Providers.FakeTranscription` now raises `ArgumentError` naming the
+  entry when a call reaches a `{:retry_until_call, n}` whose `n` is not a
+  positive integer, instead of retrying forever or skipping it
+- Add a "Word timings and confidence" section to `guides/audio.md`, with a
+  per-provider support table, and flagged calls to
+  `examples/24_transcribe_audio.exs` and `26_stream_transcribe.exs`
 
 ## [REL] v0.5.0 — Text embeddings
 

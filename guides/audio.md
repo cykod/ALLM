@@ -582,6 +582,115 @@ runs no cleanup code, so the `unsubscribe` above does not run then; a
 subscription that monitors its subscriber is released when the helper
 exits.
 
+## Word timings and confidence
+
+Two request flags ask for more than the text. `timestamps: true` asks for
+the start and end time of each word, and `logprobs: true` asks for the
+model's log-probability of each word or token. Both land on
+`response.spans`, a list of `ALLM.TranscriptSpan` structs in transcript
+order:
+
+    iex> engine = ALLM.Engine.new(
+    ...>   transcription_adapter: ALLM.Providers.FakeTranscription,
+    ...>   adapter_opts: [transcription_script: [{:ok, "the quick fox"}]]
+    ...> )
+    iex> audio = ALLM.Audio.from_binary("ID3...", "audio/mpeg")
+    iex> {:ok, response} = ALLM.transcribe(engine, audio, timestamps: true, logprobs: true)
+    iex> for span <- response.spans, do: {span.text, span.kind, span.end_seconds, span.logprob}
+    [{"the", :word, 0.5, -0.1}, {"quick", :word, 1.0, -0.1}, {"fox", :word, 1.5, -0.1}]
+    iex> ALLM.TranscriptionResponse.mean_logprob(response) |> Float.round(6)
+    -0.1
+
+A span's `:kind` is `:word`, `:spacing` (the gap between two words),
+`:audio_event` (a non-speech sound such as laughter), `:token` (a model
+token) or `:other`. `mean_logprob/1` averages the `:word` and `:token`
+spans only, so spacing and sound events do not skew it, and returns `nil`
+when no span carries a log-probability. Log-probabilities are normally
+zero or negative, but OpenAI has returned tiny positive values for
+near-certain tokens, so do not assume `logprob <= 0`.
+
+The output depends on the request, not on the provider. With both flags
+`false`, `response.spans` is `nil`. An attribute you did not ask for is
+`nil` on every span even when the provider sent it, so
+`logprobs: true` alone gives spans with `nil` times:
+
+    iex> engine = ALLM.Engine.new(
+    ...>   transcription_adapter: ALLM.Providers.FakeTranscription,
+    ...>   adapter_opts: [transcription_script: [{:ok, "hello"}, {:ok, "hello"}]]
+    ...> )
+    iex> audio = ALLM.Audio.from_binary("ID3...", "audio/mpeg")
+    iex> {:ok, response} = ALLM.transcribe(engine, audio, logprobs: true)
+    iex> [%ALLM.TranscriptSpan{text: "hello", start_seconds: nil, logprob: -0.1}] = response.spans
+    iex> {:ok, response} = ALLM.transcribe(engine, audio)
+    iex> response.spans
+    nil
+
+What each bundled adapter supports:
+
+| Adapter | `timestamps: true` | `logprobs: true` | Spans |
+|---------|--------------------|------------------|-------|
+| `ALLM.Providers.ElevenLabs.Transcription`, batch (`scribe_v2`) | yes | yes | one per word, space and sound event |
+| `ALLM.Providers.ElevenLabs.Transcription`, realtime (`scribe_v2_realtime`) | yes | yes | as batch, per committed segment |
+| `ALLM.Providers.OpenAI.Transcription` (`gpt-transcribe`, `gpt-4o-mini-transcribe`) | refused | yes | one `:token` span per token, times `nil` |
+| `ALLM.Providers.Gemini.Transcription` | refused | refused | none |
+| `ALLM.Providers.FakeTranscription` | yes | yes | one `:word` span per word |
+
+Each "yes" row for a real provider was confirmed against the live provider
+on 2026-09-28 for the models named. The adapter refuses log-probabilities for every Gemini
+model on the basis of one probe on `gemini-flash-latest`, which answered
+"Logprobs is not enabled for this model". That is a statement about what
+this adapter sends, not a finding that no Gemini model can return them.
+OpenAI models other than the two named were not probed.
+
+A refused flag is an `:unsupported_feature` error returned before any
+upload and before the key is looked up:
+
+    iex> engine = ALLM.Engine.new(transcription_adapter: ALLM.Providers.OpenAI.Transcription)
+    iex> audio = ALLM.Audio.from_binary("ID3...", "audio/mpeg")
+    iex> {:error, error} = ALLM.transcribe(engine, audio, timestamps: true)
+    iex> {error.reason, error.metadata.field}
+    {:unsupported_feature, :timestamps}
+
+When the provider accepts the request but its response carries no span
+data, the outcome depends on the transcript. A blank transcript (a silent
+clip) succeeds with `spans: []`, so a silence check never costs you the
+call. Any other transcript fails with `:unsupported_feature`,
+`metadata.cause: :absent_from_response`, and the transcript you paid for on
+`metadata.text`. An OpenAI model that does not return log-probabilities
+lands here. A provider that sends an empty word list for a transcript that
+is not blank is taken at its word: the result is `spans: []`, on the batch
+and the realtime paths alike.
+
+### Spans on a stream
+
+`ALLM.stream_transcribe/3` takes the same two flags. With either one set,
+every `:committed_transcript` payload has a `:spans` key with that
+segment's spans, and `:transcription_completed` has `:spans`, every
+segment's spans in order. `ALLM.AudioStream.collect_transcription/1`
+copies that list onto the response, `[]` when nothing was said:
+
+    iex> engine = ALLM.Engine.new(
+    ...>   transcription_adapter: ALLM.Providers.FakeTranscription,
+    ...>   adapter_opts: [transcription_script: [{:ok, "the quick fox"}]]
+    ...> )
+    iex> pcm = :binary.copy(<<0, 0>>, 16_000)
+    iex> {:ok, stream} = ALLM.stream_transcribe(engine, [pcm], sample_rate: 16_000, timestamps: true)
+    iex> events = Enum.to_list(stream)
+    iex> for {:committed_transcript, %{spans: spans}} <- events, span <- spans, do: span.text
+    ["the", "quick", "fox"]
+    iex> {:ok, response} = ALLM.AudioStream.collect_transcription(events)
+    iex> for span <- response.spans, do: span.end_seconds
+    [0.5, 1.0, 1.5]
+
+With both flags `false`, neither event has a `:spans` key at all, so a
+reducer written before the flags existed sees exactly the payloads it
+always did. On ElevenLabs a segment's `:spans` is `nil` rather than a list
+when its timing data cannot be trusted (it never arrived, or it does not
+match the segment's text); a blank segment has `[]`. Word times are
+measured from the start of the session's audio, not from the start of the
+segment. Asking for spans can delay each segment by up to a second; see
+"Realtime transcription on ElevenLabs" below.
+
 ## A failed stream ends with an error
 
 A streaming call returns `{:error, _}` synchronously only for problems found
@@ -730,14 +839,15 @@ observed while it was built:
     language is reported only when `options` sets both
     `"include_timestamps" => true` and `"include_language_detection" => true`,
     and it arrives in a separate message that ElevenLabs sends either before
-    or after its segment. Setting *either* option makes the adapter hold
-    each `:committed_transcript` until that message arrives, for at most
-    1,000 ms (tunable with `adapter_opts: [language_hold_ms: ms]`, a
-    positive integer; anything else is refused before the socket opens),
-    and then
-    emit it with the language, or with `nil` if only `"include_timestamps"`
-    is set. With neither option, segments are emitted at once and
-    `:language` is `nil`.
+    or after its segment. That message also carries the segment's word
+    timings. Setting *either* option, or passing `timestamps: true` or
+    `logprobs: true`, makes the adapter hold each `:committed_transcript`
+    until that message arrives, for at most 1,000 ms (tunable with
+    `adapter_opts: [language_hold_ms: ms]`, a positive integer; anything
+    else is refused before the socket opens), and then emit it with the
+    language (or `nil` without `"include_language_detection"`) and, with a
+    flag set, its spans. With none of the three, segments are emitted at
+    once and `:language` is `nil`.
     The realtime language is a two-letter code (`"en"`), while batch
     `transcribe/3` reports ElevenLabs' three-letter code (`"eng"`).
   * **A bad key opens the socket.** ElevenLabs accepts the WebSocket and then

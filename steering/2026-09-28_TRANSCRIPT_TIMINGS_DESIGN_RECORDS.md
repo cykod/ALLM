@@ -11,8 +11,8 @@ Companion bookkeeping for `steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md`. Th
 | 28.3 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-3; no fix pass needed (two Lows: one carried to polish, one recorded in Notes for 28.4 / 28.5) |
 | 28.4 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-4; live gate: 01–21 SKIP, 23–26 OK, 27 FAIL on ElevenLabs account TTS quota (external, not a code defect — see §28.4) |
 | 28.5 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-5; live gates: openai `exit=0` (second run; first run's 25 timed out, see §28.5), gemini `exit=0`; snapshots regenerated before the behaviour-preserving fix-pass decoder extraction |
-| 28.6 | Not Started |
-| 28.7 | Not Started |
+| 28.6 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-6 (batch shared with 28.7) |
+| 28.7 | Completed (2026-09-28) — reviewed in the 28.6 batch (slug 2026-09-28-transcript-timings-28-6) |
 
 ## 28.1 Layer A: span struct, flags, response field, event constructors
 
@@ -311,3 +311,63 @@ Built against `ae35cb2` (28.4 commit). Cited sites located by content: `gate_aud
 ### Notes for later sub-phases
 
 - **28.6 docs:** per-provider table rows now confirmed — OpenAI `logprobs` supported (`include[]=logprobs`, gpt-transcribe + gpt-4o-mini-transcribe), `timestamps` refused; Gemini refuses both (logprobs on the basis of one `gemini-flash-latest` probe); ElevenLabs both. OpenAI's absent-key case lands `whisper-1` on `:unsupported_feature` `:absent_from_response` (inferred from decision 8, not probed live).
+
+## 28.6 Spec, guide, CHANGELOG (docs)
+
+Built against `530f788` (28.5 commit). Documents what shipped per the sections above, not the design's prospective text.
+
+### Checklist
+
+- [x] Spec amendments in `steering/allm_engine_session_streaming_spec_v0_2.md`, each opening `> **Phase 28 amendment (commits `d3bcb3b..530f788`, plus the commit that carries this amendment (28.6 docs + the 28.7 FakeTranscription guard)).**` (`git rev-parse --short HEAD` → `530f788` at write time; stamp reworded in the fix pass below): §37.2.3 (flags, `:spans`, `mean_logprob/1`, `TranscriptSpan`, population invariant by reference to the span moduledoc, per-provider support, no `<= 0` guard, present-but-empty `words: []` → `[]`), §37.2.5 (pre-I/O refusals; post-I/O `cause: :absent_from_response` with `metadata.text`; blank-text success `spans: []`; Fake hand-off refusal; realtime never refuses), §37.2.6 (batch `:invalid_shape` rows), §37.10 (timestamps narrowed; `whisper-1`/`verbose_json` out with reason), §37.11.1 (`committed_transcript/3`, optional completed `:spans`, invariants 9–11 by reference, realtime blank twin → `[]`, untrustworthy twin → `nil`, session-relative times, hold window), §37.11.2 (stream request flags + validator rows). `grep -c 'Phase 28 amendment' steering/allm_engine_session_streaming_spec_v0_2.md` → 6.
+- [x] `guides/audio.md`: new `## Word timings and confidence` section (with `### Spans on a stream`) after `## Streaming transcription` / `### Feeding a live source`, four `iex>` blocks (batch flags + `mean_logprob/1`, attribute dropping + flags-off `nil`, OpenAI keyless `timestamps` refusal via the façade, stream committed/completed spans), per-provider table with confirmed rows only (ElevenLabs batch + realtime, OpenAI `gpt-transcribe`/`gpt-4o-mini-transcribe`, Gemini refused, Fake), Gemini phrased as "refuses log-probabilities for every Gemini model on the basis of one probe on `gemini-flash-latest`". "Realtime transcription on ElevenLabs" hold paragraph names `timestamps: true` / `logprobs: true` as a third hold trigger.
+- [x] `ALLM.transcribe/3` `@doc`: "Timings and log-probabilities" section + one flagged doctest; `ALLM.stream_transcribe/3` `@doc`: "Timings and log-probabilities" section. Both point at `ALLM.TranscriptSpan`.
+- [x] `lib/allm/transcription_request.ex` `@moduledoc` refusal sentence widened to the post-I/O `:absent_from_response` case (HANDOFF item from 28.1, discharged).
+- [x] `CHANGELOG.md`: six "Other changes" lines folded into the unreleased `## [REL] v0.6.0` entry (retitled "…, typed classification and transcript timings"), derived from `git diff d3bcb3b..HEAD lib/` plus the 28.7 guard; no breaking line (every touched transcription struct is new since `v0.5.0`). `mix.exs @version` untouched.
+
+### Deviations
+
+1. **[tactical] `lib/allm/transcript_span.ex` `@moduledoc` edited** (not in 28.6's Module Tree): its `:logprob` bullet said "normally zero or negative" with nothing more; it now adds that a provider can report a tiny positive value, so do not assume `logprob <= 0` (28.5 observation, `logprobs_include_brackets.json`). IMPLEMENTATION.md: a docs sub-phase fixes the origin module's docs in the same commit rather than leaving guide and moduledoc disagreeing.
+2. **[tactical] Guide `mean_logprob/1` doctest pipes through `Float.round(6)`**: three `-0.1` spans average to `-0.10000000000000002`, which failed the first doctest run. The `ALLM.transcribe/3` doctest uses two spans, where the mean is exactly `-0.1`.
+3. **[tactical] Amendment stamp wording** names the range `d3bcb3b..530f788` (28.1–28.5) plus the commit carrying the amendment. The first draft called `530f788` "the phase's last implementation commit", false once 28.7's `lib/` change commits; reworded in the fix pass.
+
+### Verification (2026-09-28)
+
+- Baseline before editing: `mix run scripts/audit_user_docs.exs guides/audio.md` → 0 hits; `mix run scripts/check_guide_fences.exs | head -1` → `71 fences compiled, 14 skipped.`; full suite `689 doctests, 33 properties, 5666 tests, 0 failures`.
+- `mix test test/guides_test.exs test/guides_doctest_test.exs` → `94 doctests, 66 tests, 0 failures`.
+- `mix run scripts/audit_user_docs.exs guides/audio.md lib/allm.ex lib/allm/transcription_request.ex lib/allm/transcript_span.ex lib/allm/providers/fake_transcription.ex` → "No banned-token matches" (0 hits, unchanged vs. baseline).
+- `mix run scripts/check_guide_fences.exs | head -1` → `71 fences compiled, 14 skipped.` (no new fence).
+- `mix docs` → exit 0, the same two pre-existing `ALLM.SpeechAdapter.synthesize/2` warnings, none new.
+- Full-suite gates: see §28.7 (one run covers both).
+
+## 28.7 `[CHORE]` FakeTranscription malformed `{:retry_until_call, n}`
+
+Built against `530f788`. Scope: `lib/allm/providers/fake_transcription.ex` only.
+
+### Checklist
+
+- [x] `resolve_script/1`'s head arm and `resolve_retry_until_call/4`'s chained arm guarded `when valid_budget(n)` (resp. `m`; `defguardp valid_budget(n) when is_integer(n) and n >= 1`, shared with `validate_entry!/1`'s positive clause since the fix pass); a malformed `{:retry_until_call, _}` in either position goes through the existing `validate_entry!/1`, which raises `ArgumentError` "invalid FakeTranscription script entry: {:retry_until_call, …} (expected …)". Moduledoc (`{:retry_until_call, n}` paragraph and `script/1` doc) says a malformed budget raises when a call reaches it.
+- [x] Behavioural test: `test/allm/providers/fake_transcription_test.exs` describe `"{:retry_until_call, n}"`, test `"a malformed {:retry_until_call, <bad>} at the <head|chained> raises from transcribe/2 and stream_transcribe/3"` — 6 generated tests (`0`, `-1`, `:x` × head, chained), each driving `transcribe/2` AND `stream_transcribe/3` directly (not `script/1`) and asserting the raise message names the entry.
+- [x] Red before the fix: `mix test test/allm/providers/fake_transcription_test.exs` → `11 doctests, 80 tests, 6 failures`, each "Expected exception ArgumentError but nothing was raised". Green after: `11 doctests, 80 tests, 0 failures`. The chained cases bind the chained arm: with only the head arm guarded, a chained `:x` still reaches `resolve_retry_until_call/4` and returns `:rate_limited`.
+- [x] Companion predicate: `grep -nE '\{:retry_until_call, [nm]\} ->' lib/allm/providers/fake_transcription.ex` → no output, exit 1.
+- [x] `[DISPOSITION]` appended to `.work/ASKS.md` (ticket located by content: the mon 9/28 12am Phase 24.6 `[DISPOSITION]`, item 3, at `.work/ASKS.md:553` today): narrowed, remainder = the other four Fakes; `grep -nE '\{:retry_until_call, [nm]\} ->' lib/allm/providers/fake_*.ex | wc -l` → 7 (was 9; DONE at 0).
+- Not swept (design): the `:cause` exception-struct ticket.
+
+### Verification (2026-09-28, covers 28.6 + 28.7)
+
+- `mix test > "$SP/28_67.log" 2>&1` → `exit=0`; `695 doctests, 33 properties, 5672 tests, 0 failures, 14 excluded, 1 skipped` (baseline `689 / 5666`: +6 doctests from the guide and `transcribe/3`, +6 tests from 28.7). `grep -c 'warning:' "$SP/28_67.log"` → 0.
+- `mix test --seed 0` → exit 0, same counts.
+- `mix credo --strict` → "found no issues". `mix dialyzer` → "Total errors: 0". `mix format --check-formatted` → exit 0. `mix compile --warnings-as-errors` → exit 0.
+- `(cd conformance && mix test)` → `206 tests, 0 failures, 1 skipped`.
+- README.md untouched (`git status --short README.md` → empty).
+
+### Fix pass (2026-09-28, covers 28.6 + 28.7)
+
+Sources: `.work/reviews/2026-09-28-transcript-timings-28-6/overview.md`, `.work/code-reviews/2026-09-28-transcript-timings-28-6.md`, security (clean), design review (N/A). All findings Low; the four doc items fixed under the false-sentence-in-a-governed-document carve-out.
+
+1. **Code-review F1: amendment stamps.** All six Phase 28 stamps now read `(commits `d3bcb3b..530f788`, plus the commit that carries this amendment (28.6 docs + the 28.7 FakeTranscription guard))`. `grep -c 'plus the commit that carries this amendment (28.6 docs + the 28.7 FakeTranscription guard)' steering/allm_engine_session_streaming_spec_v0_2.md` → 6; `grep -c "phase's last implementation commit"` on the same file → 0. The 28.6 checklist line and deviation 3 above updated to match.
+2. **Code-review F2: §37.2.3 self-contradiction.** Parenthetical restating the per-attribute rules dropped; the sentence now reads "The per-attribute rules are normative in `ALLM.TranscriptSpan`'s moduledoc."
+3. **Functional F1: §37.2.5 gate order.** "refused before any I/O and before key resolution" → "refused after the local audio gates, before key resolution and any network I/O" (the flag gate runs after `measure`'s file stat in `gate_audio/2`; functional review observed `/nonexistent.mp3` + `timestamps: true` → `:invalid_request` `cause: :enoent`). Guide/`@doc`/CHANGELOG wording ("before any upload"/"before any request") already accurate; `grep -n 'before any I/O' guides/audio.md lib/allm/transcription_request.ex lib/allm/transcript_span.ex` → no output.
+4. **Code-review F4 + functional F2 (same site, `guides/audio.md:638`, both Low, both reached unprompted): table caption.** Now "Each "yes" row for a real provider was confirmed against the live provider on 2026-09-28 …", so the Fake row is excluded.
+5. **Code-review F3: `defguardp valid_budget/1`** in `lib/allm/providers/fake_transcription.ex`, used by both resolve arms and `validate_entry!/1`, so the malformed arm's fall-through-to-raise holds by construction. Behaviour-preserving: `mix test test/allm/providers/fake_transcription_test.exs test/guides_test.exs test/guides_doctest_test.exs` → `105 doctests, 146 tests, 0 failures`. File-local; the other four Fakes remain the ASKS remainder (`grep -nE '\{:retry_until_call, [nm]\} ->' lib/allm/providers/fake_*.ex | wc -l` → 7).
+
+Verification after the fix pass: `mix run scripts/audit_user_docs.exs guides/audio.md` → 0 hits; `mix run scripts/check_guide_fences.exs | head -1` → `71 fences compiled, 14 skipped.`; `mix test > "$SP/full.log" 2>&1` → `exit=0`, `695 doctests, 33 properties, 5672 tests, 0 failures, 14 excluded, 1 skipped`, `grep -c 'warning:'` → 0; `mix test --seed 0` → exit 0, same counts; `mix credo --strict` → no issues; `mix dialyzer` → passed; `mix format --check-formatted` → exit 0; `(cd conformance && mix test)` → `206 tests, 0 failures, 1 skipped`.

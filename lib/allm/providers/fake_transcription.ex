@@ -55,7 +55,9 @@ defmodule ALLM.Providers.FakeTranscription do
   `{:retry_until_call, n}` returns a synthetic
   `%ALLM.Error.TranscriptionAdapterError{reason: :rate_limited, retry_after_ms: 0}`
   for the first `n - 1` calls against this entry, then advances to the next
-  entry on call `n`. Consecutive entries of this shape chain.
+  entry on call `n`. Consecutive entries of this shape chain. `n` must be a
+  positive integer: any other budget raises `ArgumentError` naming the entry
+  when a call reaches it, whether or not the script went through `script/1`.
 
   | Entry | `transcribe/2` | `stream_transcribe/3` |
   |-------|----------------|-----------------------|
@@ -632,7 +634,9 @@ defmodule ALLM.Providers.FakeTranscription do
       chain into a layered budget.
 
   Returns `:ok` when the script is well-formed; raises `ArgumentError` on the
-  first invalid entry. Validation is opt-in: `transcribe/2` does not call it.
+  first invalid entry. Validation is opt-in: `transcribe/2` does not call it,
+  though a malformed `{:retry_until_call, n}` still raises when a call
+  reaches it.
 
   ## Examples
 
@@ -695,6 +699,11 @@ defmodule ALLM.Providers.FakeTranscription do
     end
   end
 
+  # One definition of a well-formed retry budget: the two resolve arms and
+  # `validate_entry!/1` must agree, or a malformed budget would fall through
+  # to `validate_entry!/1`'s `:ok` clause instead of raising.
+  defguardp valid_budget(n) when is_integer(n) and n >= 1
+
   # Resolve the script entry for this call, moving the cursor. Shared by
   # `transcribe/2` and `stream_transcribe/3`, so a stream call consumes its
   # entry at call time, before the stream is returned.
@@ -715,8 +724,13 @@ defmodule ALLM.Providers.FakeTranscription do
         _ = advance_cursor(script, adapter_opts)
         spent_or_default(script)
 
-      {:retry_until_call, n} ->
+      {:retry_until_call, n} when valid_budget(n) ->
         resolve_retry_until_call(script, cursor, n, adapter_opts)
+
+      # `script/1` validation is opt-in, so a malformed budget can reach
+      # here: `:x` would otherwise retry forever and `0` skip the entry.
+      {:retry_until_call, _} = malformed ->
+        validate_entry!(malformed)
 
       entry ->
         _ = advance_cursor(script, adapter_opts)
@@ -737,9 +751,12 @@ defmodule ALLM.Providers.FakeTranscription do
         nil ->
           spent_or_default(script)
 
-        {:retry_until_call, m} ->
+        {:retry_until_call, m} when valid_budget(m) ->
           # Chained budgets: land ON the next retry entry and open its budget.
           resolve_retry_until_call(script, next_cursor, m, adapter_opts)
+
+        {:retry_until_call, _} = malformed ->
+          validate_entry!(malformed)
 
         next_entry ->
           _ = advance_cursor(script, adapter_opts)
@@ -852,7 +869,7 @@ defmodule ALLM.Providers.FakeTranscription do
   defp validate_entry!({:ok, %TranscriptionResponse{}}), do: :ok
   defp validate_entry!({:error, %TranscriptionAdapterError{}}), do: :ok
   defp validate_entry!({:events, events}) when is_list(events), do: :ok
-  defp validate_entry!({:retry_until_call, n}) when is_integer(n) and n >= 1, do: :ok
+  defp validate_entry!({:retry_until_call, n}) when valid_budget(n), do: :ok
 
   defp validate_entry!(other) do
     raise ArgumentError,

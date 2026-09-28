@@ -1672,6 +1672,21 @@ defmodule ALLM do
   response, and `stream: true` is ignored. To transcribe audio while it is
   still arriving (a microphone, a call), use `stream_transcribe/3`.
 
+  ## Timings and log-probabilities
+
+  `timestamps: true` asks for per-word start and end times and
+  `logprobs: true` for per-word or per-token log-probabilities. Both land
+  on `response.spans`, a list of `ALLM.TranscriptSpan` structs, and
+  `ALLM.TranscriptionResponse.mean_logprob/1` averages the spoken units.
+  With both flags `false`, `response.spans` is `nil`. An attribute that
+  was not asked for is `nil` on every span even when the provider sent
+  it. An adapter that cannot honour a `true` flag refuses with
+  `%ALLM.Error.TranscriptionAdapterError{reason: :unsupported_feature}`
+  before any upload. If the provider's response carries no span data, a
+  blank transcript succeeds with `spans: []`, and any other transcript
+  fails with `:unsupported_feature`, `metadata.cause: :absent_from_response`
+  and the transcript on `metadata.text`.
+
   ## Examples
 
       iex> engine = ALLM.Engine.new(
@@ -1682,6 +1697,17 @@ defmodule ALLM do
       iex> {:ok, %ALLM.TranscriptionResponse{text: text}} = ALLM.transcribe(engine, audio)
       iex> text
       "hello there"
+
+      iex> engine = ALLM.Engine.new(
+      ...> transcription_adapter: ALLM.Providers.FakeTranscription,
+      ...> adapter_opts: [transcription_script: [{:ok, "hello there"}]]
+      ...>)
+      iex> audio = ALLM.Audio.from_binary("ID3…", "audio/mpeg")
+      iex> {:ok, response} = ALLM.transcribe(engine, audio, timestamps: true, logprobs: true)
+      iex> for span <- response.spans, do: {span.text, span.end_seconds, span.logprob}
+      [{"hello", 0.5, -0.1}, {"there", 1.0, -0.1}]
+      iex> ALLM.TranscriptionResponse.mean_logprob(response)
+      -0.1
 
       iex> {:error, %ALLM.Error.EngineError{reason: :no_transcription_adapter}} =
       ...> ALLM.transcribe(ALLM.Engine.new(), ALLM.Audio.from_binary("ID3…", "audio/mpeg"))
@@ -1938,6 +1964,19 @@ defmodule ALLM do
     4. `ALLM.Validate.transcription_stream_request/1`.
     5. Dispatch; the adapter's own gates (an unsupported `:sample_rate`, …)
        may return `{:error, %ALLM.Error.TranscriptionAdapterError{}}`.
+
+  ## Timings and log-probabilities
+
+  `timestamps: true` and `logprobs: true` work as in `transcribe/3`, and
+  the spans are `ALLM.TranscriptSpan` structs. With either flag set, each
+  `:committed_transcript` payload carries a `:spans` key (a list, or `nil`
+  when the adapter has no trustworthy span data for that segment), and
+  `:transcription_completed` carries `:spans`, every committed segment's
+  spans in order (`[]` when nothing was committed), which
+  `ALLM.AudioStream.collect_transcription/1` copies onto the response.
+  With both flags `false`, neither event has a `:spans` key. On a
+  realtime provider a flag can delay each committed segment while the
+  adapter waits for its timing data; see the adapter's docs.
 
   ## Model resolution
 

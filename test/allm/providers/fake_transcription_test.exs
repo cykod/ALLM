@@ -255,6 +255,50 @@ defmodule ALLM.Providers.FakeTranscriptionTest do
       assert {:error, %{reason: :rate_limited}} = FakeTranscription.transcribe(request(), opts2)
       assert {:ok, %{text: "ok"}} = FakeTranscription.transcribe(request(), opts2)
     end
+
+    # `script/1` already rejects these, but validation is opt-in: the calls
+    # below bypass it. Before the runtime guard, `{:retry_until_call, :x}`
+    # returned `:rate_limited` forever (an integer sorts below an atom) and
+    # `0` / `-1` silently skipped the entry.
+    for bad <- [0, -1, :x], position <- [:head, :chained] do
+      test "a malformed {:retry_until_call, #{inspect(bad)}} at the #{position} raises from transcribe/2 and stream_transcribe/3" do
+        bad_entry = {:retry_until_call, unquote(bad)}
+
+        script =
+          case unquote(position) do
+            :head -> [bad_entry, {:ok, "after"}]
+            :chained -> [{:retry_until_call, 1}, bad_entry, {:ok, "after"}]
+          end
+
+        message = ~r/invalid FakeTranscription script entry: #{Regex.escape(inspect(bad_entry))}/
+
+        batch_opts = [
+          adapter_opts: [
+            transcription_script: script,
+            script_cursor: FakeTranscription.start_script_cursor()
+          ]
+        ]
+
+        assert_raise ArgumentError, message, fn ->
+          FakeTranscription.transcribe(request(), batch_opts)
+        end
+
+        stream_opts = [
+          adapter_opts: [
+            transcription_script: script,
+            script_cursor: FakeTranscription.start_script_cursor()
+          ]
+        ]
+
+        assert_raise ArgumentError, message, fn ->
+          FakeTranscription.stream_transcribe(
+            TranscriptionStreamRequest.new(sample_rate: 16_000),
+            [<<0::size(256)-unit(8)>>],
+            stream_opts
+          )
+        end
+      end
+    end
   end
 
   describe "script/1" do
