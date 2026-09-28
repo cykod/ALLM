@@ -3,7 +3,17 @@ defmodule ALLM.AudioStreamTest do
 
   doctest ALLM.AudioStream
 
-  alias ALLM.{Audio, AudioStream, Engine, SpeechEvent, SpeechResponse, TranscriptionEvent, Usage}
+  alias ALLM.{
+    Audio,
+    AudioStream,
+    Engine,
+    SpeechEvent,
+    SpeechResponse,
+    TranscriptionEvent,
+    TranscriptSpan,
+    Usage
+  }
+
   alias ALLM.Error.{SpeechAdapterError, TranscriptionAdapterError}
   alias ALLM.Providers.{Fake, FakeSpeech}
 
@@ -161,6 +171,53 @@ defmodule ALLM.AudioStreamTest do
       assert {:ok, resp} = AudioStream.collect_transcription([completed])
       assert resp.text == "hi"
       assert {resp.model, resp.provider, resp.id} == {nil, nil, nil}
+    end
+  end
+
+  describe "collect_transcription/1 spans" do
+    defp completed_with(extra) do
+      %{text: "hi there", language: nil, duration_seconds: 1.0, request_id: nil}
+      |> Map.merge(%{usage: %Usage{}, metadata: %{}})
+      |> Map.merge(extra)
+      |> TranscriptionEvent.transcription_completed()
+    end
+
+    defp two_spans do
+      [
+        TranscriptSpan.new(text: "hi", kind: :word, start_seconds: 0.0, end_seconds: 0.4),
+        TranscriptSpan.new(text: "there", kind: :word, start_seconds: 0.5, end_seconds: 0.9)
+      ]
+    end
+
+    test "a completed event without :spans collects to spans: nil" do
+      assert {:ok, %{spans: nil}} = AudioStream.collect_transcription([completed_with(%{})])
+    end
+
+    test "a completed event with spans: [] collects to [] (requested, nothing spoken)" do
+      assert {:ok, %{spans: []}} = AudioStream.collect_transcription([completed_with(%{spans: []})])
+    end
+
+    test "a completed event's spans are copied onto the response" do
+      spans = two_spans()
+
+      assert {:ok, %{spans: ^spans}} =
+               AudioStream.collect_transcription([completed_with(%{spans: spans})])
+    end
+
+    test "committed-event spans are not folded: only completed.spans counts" do
+      events = [
+        TranscriptionEvent.committed_transcript("hi there", nil, two_spans()),
+        completed_with(%{})
+      ]
+
+      assert {:ok, %{spans: nil}} = AudioStream.collect_transcription(events)
+
+      events = [
+        TranscriptionEvent.committed_transcript("hi there", nil, two_spans()),
+        completed_with(%{spans: []})
+      ]
+
+      assert {:ok, %{spans: []}} = AudioStream.collect_transcription(events)
     end
   end
 

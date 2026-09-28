@@ -353,6 +353,27 @@ defmodule ALLM.ALLMStreamTranscribeTest do
       assert {:ok, %{request_id: "rid-x"}} = AudioStream.collect_transcription(events)
     end
 
+    test "timestamps: true reaches the adapter on the request and the collected spans are timed" do
+      engine = fake_engine(adapter_opts: FakeAudioFixtures.transcript("quick fox"))
+
+      assert {:ok, events} = ALLM.stream_transcribe(engine, [@pcm], timestamps: true)
+
+      assert [%{request: %TranscriptionStreamRequest{timestamps: true, logprobs: false}}] =
+               captured_calls()
+
+      assert {:ok, %{spans: spans}} = AudioStream.collect_transcription(events)
+
+      assert [
+               %ALLM.TranscriptSpan{
+                 text: "quick",
+                 start_seconds: +0.0,
+                 end_seconds: 0.5,
+                 logprob: nil
+               },
+               %ALLM.TranscriptSpan{text: "fox", start_seconds: 0.5, end_seconds: 1.0, logprob: nil}
+             ] = spans
+    end
+
     test "two content-equal engines with distinct ids read independent cursors" do
       script = [transcription_script: [{:ok, "first"}, {:ok, "second"}]]
       a = Engine.new(transcription_adapter: FakeTranscription, adapter_opts: script, id: 111_111)

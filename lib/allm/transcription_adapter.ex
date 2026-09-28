@@ -88,6 +88,19 @@ defmodule ALLM.TranscriptionAdapter do
     9. `prepare_request/2` (optional) returns an unfired `Req.Request`
        configured exactly as `transcribe/2` would fire it, and is defined
        only for audio that passes invariants 3 and 4.
+   10. **Span flags.** `request.timestamps` and `request.logprobs` count
+       only when exactly `true`. A set flag the adapter cannot honour is
+       refused with `:unsupported_feature` and `metadata.field` (the flag),
+       `:timestamps` checked first, before any I/O and before
+       `ALLM.Keys.fetch!/2`. On success, `response.spans` is `nil` iff
+       neither flag is `true`; otherwise it is a list of
+       `ALLM.TranscriptSpan` (`[]` when nothing was spoken). On every span,
+       `start_seconds` and `end_seconds` are non-`nil` only if
+       `timestamps: true`, and `logprob` only if `logprobs: true`: an
+       attribute the provider sent but the caller did not ask for is
+       dropped. With both flags off the adapter ignores the provider's span
+       data. The one exception is a scripted `%ALLM.TranscriptionResponse{}`
+       that `ALLM.Providers.FakeTranscription` returns verbatim.
 
   **Cleanup invariant: none.** `Req.request/1` owns its connection
   lifecycle.

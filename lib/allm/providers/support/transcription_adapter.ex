@@ -13,6 +13,10 @@ defmodule ALLM.Providers.Support.TranscriptionAdapter do
       adapter's byte cap, both before `ALLM.Keys.fetch!/2`.
     * One HTTP attempt per call, with no retry loop.
     * `Jason.DecodeError` causes are sanitised before they reach an error.
+    * Span flags: `gate_flags/4` refuses a `timestamps: true` or
+      `logprobs: true` the adapter cannot honour with `:unsupported_feature`,
+      `with_span_flags/2` carries the supported list into the Fake hand-off,
+      and `span_from/6` drops every attribute the request did not ask for.
 
   The functions are `@doc false` seams parameterised by the provider atom
   (the `:provider` of every error built here). Where the flow needs the
@@ -25,7 +29,14 @@ defmodule ALLM.Providers.Support.TranscriptionAdapter do
   reports a missing or misnamed callback.
   """
 
-  alias ALLM.{Audio, TranscriptionRequest, TranscriptionResponse}
+  alias ALLM.{
+    Audio,
+    TranscriptionRequest,
+    TranscriptionResponse,
+    TranscriptionStreamRequest,
+    TranscriptSpan
+  }
+
   alias ALLM.Error.TranscriptionAdapterError
   alias ALLM.Providers.Support.HTTPResponse
 
@@ -71,13 +82,95 @@ defmodule ALLM.Providers.Support.TranscriptionAdapter do
   # Opts for the Fake hand-off: the adapter's own byte cap replaces the
   # Fake's small default, so a real clip is not rejected by the Fake.
   @spec with_own_cap(keyword(), pos_integer()) :: keyword()
-  def with_own_cap(opts, max_audio_bytes) do
+  def with_own_cap(opts, max_audio_bytes),
+    do: put_adapter_opt(opts, :max_audio_bytes, max_audio_bytes)
+
+  @doc false
+  # Opts for the Fake hand-off: the adapter's supported span flags, so the
+  # Fake refuses the flags the adapter's provider would refuse.
+  @spec with_span_flags(keyword(), [:timestamps | :logprobs]) :: keyword()
+  def with_span_flags(opts, supported) when is_list(supported),
+    do: put_adapter_opt(opts, :span_flags, supported)
+
+  @doc false
+  # Puts one `key => value` into `opts[:adapter_opts]`, keeping every other
+  # opt and adapter opt: the shared shape of the Fake hand-off helpers.
+  @spec put_adapter_opt(keyword(), atom(), term()) :: keyword()
+  def put_adapter_opt(opts, key, value) do
     adapter_opts =
       opts
       |> Keyword.get(:adapter_opts, [])
-      |> Keyword.put(:max_audio_bytes, max_audio_bytes)
+      |> Keyword.put(key, value)
 
     Keyword.put(opts, :adapter_opts, adapter_opts)
+  end
+
+  @doc false
+  # A span flag counts only when it is exactly `true`; any other value
+  # (`nil`, `"true"`, `1`, ...) is off. The single definition of that rule.
+  @spec flag_on?(
+          TranscriptionRequest.t() | TranscriptionStreamRequest.t(),
+          :timestamps | :logprobs
+        ) :: boolean()
+  def flag_on?(request, flag), do: Map.get(request, flag) == true
+
+  @doc false
+  # Whether the response must carry `spans` (a list, possibly `[]`) rather
+  # than `nil`: either span flag is exactly `true`.
+  @spec spans_requested?(TranscriptionRequest.t() | TranscriptionStreamRequest.t()) ::
+          boolean()
+  def spans_requested?(request),
+    do: flag_on?(request, :timestamps) or flag_on?(request, :logprobs)
+
+  @doc false
+  # The span-flag gate: the first flag set to exactly `true` (in the order
+  # `:timestamps`, `:logprobs`) that is not in `supported` is refused with
+  # `:unsupported_feature` and `metadata.field`. Any other flag value is off.
+  @spec gate_flags(
+          TranscriptionRequest.t() | TranscriptionStreamRequest.t(),
+          [:timestamps | :logprobs],
+          atom() | nil,
+          keyword()
+        ) :: :ok | {:error, TranscriptionAdapterError.t()}
+  def gate_flags(request, supported, provider, opts) do
+    case Enum.find(
+           [:timestamps, :logprobs],
+           &(flag_on?(request, &1) and &1 not in supported)
+         ) do
+      nil ->
+        :ok
+
+      flag ->
+        {:error,
+         TranscriptionAdapterError.new(:unsupported_feature,
+           provider: provider,
+           message: "#{flag}: true is not supported by this transcription adapter",
+           metadata: HTTPResponse.build_metadata(%{field: flag}, opts)
+         )}
+    end
+  end
+
+  @doc false
+  # One span, keeping `start`/`end_` only when `request.timestamps == true`
+  # and `logprob` only when `request.logprobs == true`.
+  @spec span_from(
+          String.t(),
+          TranscriptSpan.kind(),
+          number() | nil,
+          number() | nil,
+          number() | nil,
+          TranscriptionRequest.t() | TranscriptionStreamRequest.t()
+        ) :: TranscriptSpan.t()
+  def span_from(text, kind, start, end_, logprob, request) do
+    timed? = flag_on?(request, :timestamps)
+
+    TranscriptSpan.new(
+      text: text,
+      kind: kind,
+      start_seconds: if(timed?, do: start),
+      end_seconds: if(timed?, do: end_),
+      logprob: if(flag_on?(request, :logprobs), do: logprob)
+    )
   end
 
   @doc false

@@ -97,6 +97,26 @@ defmodule ALLM.TranscriptionStreamAdapter do
        any uncommitted audio and waits up to `:stream_timeout` for the
        final `:committed_transcript`, then emits `:transcription_completed`
        and closes.
+    9. **Span flags, committed segments.** With `request.timestamps` or
+       `request.logprobs` exactly `true`, every `:committed_transcript` is
+       built with `ALLM.TranscriptionEvent.committed_transcript/3`. Its
+       `:spans` is a list of `ALLM.TranscriptSpan`, or `nil` when the
+       adapter has no trustworthy span data for that segment. Attributes
+       are dropped as in `ALLM.TranscriptionAdapter`'s span-flag invariant
+       (times only under `timestamps: true`, the logprob only under
+       `logprobs: true`), and an unsupported set flag is refused the same
+       way, synchronously, before `ALLM.Keys.fetch!/2`.
+   10. **Span flags, completion.** With either flag `true`,
+       `:transcription_completed` carries an extra `:spans` key: the
+       concatenation, in commit order, of every committed segment's
+       non-`nil` `:spans`, or `[]` when there were none.
+       `ALLM.AudioStream.collect_transcription/1` copies it onto the
+       response and does not fold the committed events.
+   11. **Flags off.** With neither flag `true`, committed segments are built
+       with `committed_transcript/2` and no event carries a `:spans` key.
+       (A scripted `%ALLM.TranscriptionResponse{}` with non-`nil` `:spans`,
+       which `ALLM.Providers.FakeTranscription` streams as scripted, is the
+       one exception.)
 
   `:transcription_completed`'s `:text` is the committed segments, each
   trimmed, empties dropped, joined with one space. Its `:duration_seconds`

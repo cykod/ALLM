@@ -8,7 +8,14 @@ defmodule ALLM.Providers.Support.TranscriptionAdapterTest do
 
   use ExUnit.Case, async: true
 
-  alias ALLM.{Audio, TranscriptionRequest, TranscriptionResponse}
+  alias ALLM.{
+    Audio,
+    TranscriptionRequest,
+    TranscriptionResponse,
+    TranscriptionStreamRequest,
+    TranscriptSpan
+  }
+
   alias ALLM.Error.TranscriptionAdapterError
   alias ALLM.Providers.Gemini
   alias ALLM.Providers.OpenAI
@@ -210,6 +217,119 @@ defmodule ALLM.Providers.Support.TranscriptionAdapterTest do
 
     test "option_fields/2 on a non-map is empty" do
       assert Support.option_fields(nil, ["model"]) == {[], []}
+    end
+  end
+
+  describe "span helpers" do
+    test "span_from/6 keeps times only under timestamps: true and logprob only under logprobs: true" do
+      cells = [
+        {false, false, nil, nil, nil},
+        {true, false, 1.0, 1.5, nil},
+        {false, true, nil, nil, -0.25},
+        {true, true, 1.0, 1.5, -0.25}
+      ]
+
+      for {ts, lp, start, stop, logprob} <- cells,
+          request <- [
+            TranscriptionRequest.new(audio: mp3(), timestamps: ts, logprobs: lp),
+            TranscriptionStreamRequest.new(timestamps: ts, logprobs: lp)
+          ] do
+        assert Support.span_from("fox", :word, 1.0, 1.5, -0.25, request) ==
+                 %TranscriptSpan{
+                   text: "fox",
+                   kind: :word,
+                   start_seconds: start,
+                   end_seconds: stop,
+                   logprob: logprob
+                 },
+               "cell timestamps: #{ts}, logprobs: #{lp} on #{inspect(request.__struct__)}"
+      end
+    end
+
+    test "span_from/6 treats a non-true flag value as off" do
+      request = %TranscriptionRequest{audio: mp3(), timestamps: "yes", logprobs: 1}
+
+      assert %TranscriptSpan{start_seconds: nil, end_seconds: nil, logprob: nil} =
+               Support.span_from("fox", :word, 1.0, 1.5, -0.25, request)
+    end
+
+    test "gate_flags/4 refuses :timestamps before :logprobs" do
+      request = TranscriptionRequest.new(audio: mp3(), timestamps: true, logprobs: true)
+
+      assert {:error,
+              %TranscriptionAdapterError{
+                reason: :unsupported_feature,
+                provider: :openai,
+                metadata: %{field: :timestamps}
+              }} = Support.gate_flags(request, [], :openai, [])
+
+      assert {:error, %TranscriptionAdapterError{metadata: %{field: :logprobs}}} =
+               Support.gate_flags(request, [:timestamps], :openai, [])
+    end
+
+    test "gate_flags/4 carries the provider (nil allowed) and the request id" do
+      request = TranscriptionStreamRequest.new(logprobs: true)
+
+      assert {:error, %TranscriptionAdapterError{provider: nil} = err} =
+               Support.gate_flags(request, [:timestamps], nil, request_id: "rid-g")
+
+      assert err.metadata == %{field: :logprobs, request_id: "rid-g"}
+      assert err.message =~ "logprobs"
+    end
+
+    test "gate_flags/4 passes supported flags, unset flags and non-true values" do
+      assert :ok =
+               Support.gate_flags(
+                 TranscriptionRequest.new(audio: mp3(), timestamps: true, logprobs: true),
+                 [:timestamps, :logprobs],
+                 :elevenlabs,
+                 []
+               )
+
+      assert :ok = Support.gate_flags(TranscriptionRequest.new(audio: mp3()), [], :openai, [])
+
+      assert :ok =
+               Support.gate_flags(
+                 %TranscriptionRequest{audio: mp3(), timestamps: "no", logprobs: 1},
+                 [],
+                 :openai,
+                 []
+               )
+    end
+
+    test "with_span_flags/2 stores the list at adapter_opts[:span_flags] and keeps the rest" do
+      opts = [request_id: "r", adapter_opts: [transcription_script: [{:ok, "x"}]]]
+      out = Support.with_span_flags(opts, [:logprobs])
+
+      assert out[:adapter_opts][:span_flags] == [:logprobs]
+      assert out[:adapter_opts][:transcription_script] == [{:ok, "x"}]
+      assert out[:request_id] == "r"
+      assert Support.with_span_flags([], [])[:adapter_opts] == [span_flags: []]
+    end
+
+    test "flag_on?/2 and spans_requested?/1 count a flag only when it is exactly true" do
+      for base <- [TranscriptionRequest.new(audio: mp3()), TranscriptionStreamRequest.new()],
+          off <- [false, nil, "true", 1, :yes] do
+        req = %{base | timestamps: off, logprobs: off}
+        refute Support.flag_on?(req, :timestamps)
+        refute Support.flag_on?(req, :logprobs)
+        refute Support.spans_requested?(req)
+      end
+
+      base = TranscriptionRequest.new(audio: mp3())
+      assert Support.spans_requested?(%{base | timestamps: true})
+      assert Support.spans_requested?(%{base | logprobs: true})
+      assert Support.flag_on?(%{base | logprobs: true}, :logprobs)
+      refute Support.flag_on?(%{base | logprobs: true}, :timestamps)
+    end
+
+    test "put_adapter_opt/3 sets one adapter opt and keeps the rest" do
+      out = Support.put_adapter_opt([api_key: "x", adapter_opts: [cursor_key: 7]], :k, :v)
+
+      assert out[:adapter_opts][:k] == :v
+      assert out[:adapter_opts][:cursor_key] == 7
+      assert out[:api_key] == "x"
+      assert Support.put_adapter_opt([], :k, 1) == [adapter_opts: [k: 1]]
     end
   end
 end

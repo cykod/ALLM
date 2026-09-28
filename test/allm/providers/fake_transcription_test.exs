@@ -8,6 +8,7 @@ defmodule ALLM.Providers.FakeTranscriptionTest do
     TranscriptionRequest,
     TranscriptionResponse,
     TranscriptionStreamRequest,
+    TranscriptSpan,
     Usage
   }
 
@@ -475,6 +476,215 @@ defmodule ALLM.Providers.FakeTranscriptionTest do
                run_stream([], opts)
 
       assert {:transcription_completed, %{text: "done"}} = run_stream([], opts) |> List.last()
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Span flags
+  # ---------------------------------------------------------------------------
+
+  @flag_cells [{false, false}, {true, false}, {false, true}, {true, true}]
+
+  # The exact spans the Fake builds for `words` under one flag cell: word i
+  # at [i * 0.5, (i + 1) * 0.5] with logprob -0.1, unrequested attributes nil.
+  defp expected_spans(_words, false, false), do: nil
+
+  defp expected_spans(words, ts, lp) do
+    for {word, i} <- Enum.with_index(words) do
+      %TranscriptSpan{
+        text: word,
+        kind: :word,
+        start_seconds: if(ts, do: i * 0.5),
+        end_seconds: if(ts, do: (i + 1) * 0.5),
+        logprob: if(lp, do: -0.1)
+      }
+    end
+  end
+
+  defp committed_payloads(events), do: for({:committed_transcript, p} <- events, do: p)
+
+  defp completed_payload(events) do
+    assert {:transcription_completed, payload} = List.last(events)
+    payload
+  end
+
+  describe "span flags — transcribe/2" do
+    for {ts, lp} <- @flag_cells do
+      @ts ts
+      @lp lp
+      test "{:ok, \"the quick fox\"} under timestamps: #{ts}, logprobs: #{lp}" do
+        req = request(timestamps: @ts, logprobs: @lp)
+        opts = [adapter_opts: Fixtures.transcript("the quick fox")]
+
+        assert {:ok, resp} = FakeTranscription.transcribe(req, opts)
+        assert resp.spans == expected_spans(~w(the quick fox), @ts, @lp)
+      end
+
+      test "a scripted %TranscriptionResponse{} is verbatim under timestamps: #{ts}, logprobs: #{lp}" do
+        scripted = [TranscriptSpan.new(text: "x", kind: :token)]
+
+        for spans <- [nil, scripted] do
+          entry = TranscriptionResponse.new(text: "x", spans: spans)
+          opts = [adapter_opts: [transcription_script: [{:ok, entry}]]]
+
+          assert {:ok, ^entry} =
+                   FakeTranscription.transcribe(request(timestamps: @ts, logprobs: @lp), opts)
+        end
+      end
+    end
+
+    test "blank text with a flag gives spans: [], without flags spans: nil" do
+      for text <- ["", "   "] do
+        opts = fn ->
+          [
+            adapter_opts:
+              Fixtures.transcript(text) ++ [script_cursor: FakeTranscription.start_script_cursor()]
+          ]
+        end
+
+        assert {:ok, %{spans: []}} = FakeTranscription.transcribe(request(logprobs: true), opts.())
+        assert {:ok, %{spans: nil}} = FakeTranscription.transcribe(request(), opts.())
+      end
+    end
+
+    test "the no-script default honours the flags too" do
+      assert {:ok, %{spans: []}} = FakeTranscription.transcribe(request(timestamps: true), [])
+      assert {:ok, %{spans: nil}} = FakeTranscription.transcribe(request(), [])
+    end
+
+    test "a flag value that is not exactly true is off" do
+      req = %TranscriptionRequest{request() | timestamps: "yes", logprobs: 1}
+
+      assert {:ok, %{spans: nil}} =
+               FakeTranscription.transcribe(req, adapter_opts: Fixtures.transcript("a b"))
+    end
+  end
+
+  describe "span flags — stream_transcribe/3" do
+    for {ts, lp} <- @flag_cells do
+      @ts ts
+      @lp lp
+      test "{:ok, \"the quick fox\"} under timestamps: #{ts}, logprobs: #{lp}" do
+        req = stream_req(timestamps: @ts, logprobs: @lp)
+
+        events =
+          run_stream(
+            [Fixtures.pcm_silence(2)],
+            [adapter_opts: Fixtures.transcript("the quick fox")],
+            req
+          )
+
+        expected = expected_spans(~w(the quick fox), @ts, @lp)
+
+        assert [committed] = committed_payloads(events)
+        completed = completed_payload(events)
+
+        if expected do
+          assert committed == %{text: "the quick fox", language: nil, spans: expected}
+          assert completed.spans == expected
+        else
+          refute Map.has_key?(committed, :spans)
+          refute Map.has_key?(completed, :spans)
+        end
+      end
+
+      test "a scripted %TranscriptionResponse{} under timestamps: #{ts}, logprobs: #{lp}" do
+        spans = [TranscriptSpan.new(text: "hi", kind: :token, logprob: -1.0)]
+        req = stream_req(timestamps: @ts, logprobs: @lp)
+
+        with_spans = TranscriptionResponse.new(text: "hi", spans: spans)
+        events = run_stream([], [adapter_opts: [transcription_script: [{:ok, with_spans}]]], req)
+        assert [%{spans: ^spans}] = committed_payloads(events)
+        assert completed_payload(events).spans == spans
+
+        without = TranscriptionResponse.new(text: "hi")
+        events = run_stream([], [adapter_opts: [transcription_script: [{:ok, without}]]], req)
+        assert [committed] = committed_payloads(events)
+        refute Map.has_key?(committed, :spans)
+        refute Map.has_key?(completed_payload(events), :spans)
+      end
+    end
+
+    test "blank text with a flag: no committed event, completed spans: []" do
+      for text <- ["", "  "] do
+        req = stream_req(timestamps: true, logprobs: true)
+
+        events =
+          run_stream([Fixtures.pcm_silence(2)], [adapter_opts: Fixtures.transcript(text)], req)
+
+        assert committed_payloads(events) == []
+        assert completed_payload(events).spans == []
+      end
+    end
+
+    test "the no-script default with a flag completes with spans: [], without one with no :spans key" do
+      assert completed_payload(run_stream([], [], stream_req(logprobs: true))).spans == []
+      refute Map.has_key?(completed_payload(run_stream([], [])), :spans)
+    end
+
+    test "an {:events, _} entry stays verbatim under the flags" do
+      events = [TranscriptionEvent.committed_transcript("x")]
+      opts = [adapter_opts: Fixtures.transcription_events(events)]
+      assert run_stream([], opts, stream_req(timestamps: true)) == events
+    end
+  end
+
+  describe "span flags — hand-off gate (adapter_opts[:span_flags])" do
+    test "transcribe/2: an unsupported set flag is refused before the script is consulted" do
+      cursor = FakeTranscription.start_script_cursor()
+      adapter_opts = Fixtures.transcript("a b") ++ [script_cursor: cursor, span_flags: [:logprobs]]
+
+      assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature, metadata: meta}} =
+               FakeTranscription.transcribe(request(timestamps: true, logprobs: true),
+                 adapter_opts: adapter_opts
+               )
+
+      assert meta.field == :timestamps
+      assert FakeTranscription.cursor_index(cursor) == 0
+
+      assert {:ok, %{spans: [_, _]}} =
+               FakeTranscription.transcribe(request(logprobs: true), adapter_opts: adapter_opts)
+
+      assert FakeTranscription.cursor_index(cursor) == 1
+    end
+
+    test "transcribe/2: an empty supported list refuses logprobs too" do
+      assert {:error,
+              %TranscriptionAdapterError{
+                reason: :unsupported_feature,
+                metadata: %{field: :logprobs}
+              }} =
+               FakeTranscription.transcribe(request(logprobs: true), adapter_opts: [span_flags: []])
+    end
+
+    test "transcribe/2: the audio gates still run first" do
+      bad = request(audio: Fixtures.clip(FakeTranscription.max_audio_bytes() + 1), timestamps: true)
+
+      assert {:error, %TranscriptionAdapterError{reason: :invalid_request}} =
+               FakeTranscription.transcribe(bad, adapter_opts: [span_flags: []])
+    end
+
+    test "stream_transcribe/3: an unsupported set flag is a synchronous refusal that keeps the cursor" do
+      cursor = FakeTranscription.start_script_cursor()
+      adapter_opts = Fixtures.transcript("a b") ++ [script_cursor: cursor, span_flags: [:logprobs]]
+
+      assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature, metadata: meta}} =
+               FakeTranscription.stream_transcribe(stream_req(timestamps: true), [],
+                 adapter_opts: adapter_opts
+               )
+
+      assert meta.field == :timestamps
+      assert FakeTranscription.cursor_index(cursor) == 0
+    end
+
+    test "stream_transcribe/3: the sample-rate gate still runs first" do
+      assert {:error,
+              %TranscriptionAdapterError{reason: :invalid_request, metadata: %{field: :sample_rate}}} =
+               FakeTranscription.stream_transcribe(
+                 stream_req(sample_rate: 44_100, timestamps: true),
+                 [],
+                 adapter_opts: [span_flags: []]
+               )
     end
   end
 end

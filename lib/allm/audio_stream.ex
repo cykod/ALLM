@@ -148,6 +148,24 @@ defmodule ALLM.AudioStream do
   `:provider` and `:id` (the realtime session id) from
   `:transcription_started`. `:raw` is `nil`.
 
+  `:spans` is copied from `:transcription_completed`'s optional `:spans`
+  key, which an adapter writes (as the concatenation of its committed
+  segments' spans) only when `timestamps: true` or `logprobs: true` was
+  requested. Committed events are not folded for spans, so a completed
+  event without the key collects to `spans: nil` ("not requested") and a
+  requested stream that committed nothing collects to `spans: []`.
+
+      iex> span = ALLM.TranscriptSpan.new(text: "hello", kind: :word, logprob: -0.5)
+      iex> events = [
+      ...>   ALLM.TranscriptionEvent.committed_transcript("hello", nil, [span]),
+      ...>   ALLM.TranscriptionEvent.transcription_completed(%{text: "hello", language: nil,
+      ...>     duration_seconds: 0.5, request_id: nil, usage: %ALLM.Usage{}, metadata: %{},
+      ...>     spans: [span]})
+      ...> ]
+      iex> {:ok, resp} = ALLM.AudioStream.collect_transcription(events)
+      iex> resp.spans == [span]
+      true
+
   An `{:error, err}` event returns `{:error, err}` with
   `metadata.committed_text` set to the committed segments so far. A stream
   that ends without a terminal event returns
@@ -208,6 +226,7 @@ defmodule ALLM.AudioStream do
       model: Map.get(started, :model),
       provider: Map.get(started, :provider),
       id: Map.get(started, :session_id),
+      spans: Map.get(completed, :spans),
       raw: nil
     }
 

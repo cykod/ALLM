@@ -29,6 +29,13 @@ defmodule ALLM.AudioStreamEquivalencePropertyTest do
   and `stream_transcribe/3` deliberately does not. That divergence is pinned
   in `allm_stream_transcribe_test.exs`.
 
+  `spans` (transcription) is compared with no relaxation, over both
+  `timestamps` and `logprobs` booleans and including empty text (the word
+  list may be empty): the batch Fake's `spans: []` must meet the streaming
+  Fake's completed `spans: []`, and `nil` (no flag) must meet a completed
+  event with no `:spans` key. The describe block below pins the absolute
+  shapes on both paths, so a symmetric regression cannot pass.
+
   `language` is compared but binds nothing today: neither Fake reports a
   language (the non-streaming Fake's response and the streaming Fake's
   `:transcription_completed` both carry `nil`), so a collector that dropped
@@ -150,11 +157,20 @@ defmodule ALLM.AudioStreamEquivalencePropertyTest do
             samples <- StreamData.integer(1..500),
             metadata <- metadata_gen(),
             language <- StreamData.one_of([StreamData.constant(nil), StreamData.constant("en")]),
+            timestamps <- StreamData.boolean(),
+            logprobs <- StreamData.boolean(),
             max_runs: 100
           ) do
       text = Enum.join(words, " ")
       pcm = :binary.copy(<<0, 0>>, samples)
-      opts = [request_id: "rid-eq", metadata: metadata, language: language]
+
+      opts = [
+        request_id: "rid-eq",
+        metadata: metadata,
+        language: language,
+        timestamps: timestamps,
+        logprobs: logprobs
+      ]
 
       assert {:ok, whole} =
                ALLM.transcribe(
@@ -166,10 +182,58 @@ defmodule ALLM.AudioStreamEquivalencePropertyTest do
       assert {:ok, events} = ALLM.stream_transcribe(transcription_engine(text), [pcm], opts)
       assert {:ok, folded} = AudioStream.collect_transcription(events)
 
-      for field <- [:text, :language, :model, :provider, :usage, :request_id, :metadata] do
+      for field <- [:text, :language, :model, :provider, :usage, :request_id, :metadata, :spans] do
         assert Map.fetch!(folded, field) == Map.fetch!(whole, field),
                "#{inspect(field)} differs between the paths"
       end
+    end
+  end
+
+  # Absolute-shape pins beside the property: a symmetric regression (both
+  # paths broken the same way) would keep the property green.
+  describe "transcription spans, absolute shape on both paths" do
+    defp both_paths(text, flags) do
+      pcm = :binary.copy(<<0, 0>>, 8)
+
+      {:ok, whole} =
+        ALLM.transcribe(transcription_engine(text), Audio.from_binary(pcm, "audio/wav"), flags)
+
+      {:ok, events} = ALLM.stream_transcribe(transcription_engine(text), [pcm], flags)
+      {:ok, folded} = AudioStream.collect_transcription(events)
+      {whole, folded}
+    end
+
+    test "flags off: spans nil on both paths" do
+      {whole, folded} = both_paths("a b", [])
+      assert {whole.spans, folded.spans} == {nil, nil}
+    end
+
+    test "a flag over empty text: spans [] on both paths" do
+      {whole, folded} = both_paths("", logprobs: true)
+      assert {whole.spans, folded.spans} == {[], []}
+    end
+
+    test "both flags over two words: the same two timed, scored spans on both paths" do
+      {whole, folded} = both_paths("a b", timestamps: true, logprobs: true)
+
+      expected = [
+        ALLM.TranscriptSpan.new(
+          text: "a",
+          kind: :word,
+          start_seconds: 0.0,
+          end_seconds: 0.5,
+          logprob: -0.1
+        ),
+        ALLM.TranscriptSpan.new(
+          text: "b",
+          kind: :word,
+          start_seconds: 0.5,
+          end_seconds: 1.0,
+          logprob: -0.1
+        )
+      ]
+
+      assert {whole.spans, folded.spans} == {expected, expected}
     end
   end
 end

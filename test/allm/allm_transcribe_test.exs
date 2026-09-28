@@ -309,6 +309,28 @@ defmodule ALLM.ALLMTranscribeTest do
                ALLM.transcribe(engine, clip(), request_id: "rid-fill")
     end
 
+    test "timestamps: true reaches the adapter on the request and returns timed spans" do
+      engine = fake_engine(adapter_opts: FakeAudioFixtures.transcript("quick fox"))
+
+      assert {:ok, %TranscriptionResponse{spans: spans}} =
+               ALLM.transcribe(engine, clip(), timestamps: true)
+
+      assert [%{request: %TranscriptionRequest{timestamps: true, logprobs: false}, opts: opts}] =
+               captured_calls()
+
+      refute Keyword.has_key?(opts, :timestamps)
+
+      assert [
+               %ALLM.TranscriptSpan{
+                 text: "quick",
+                 start_seconds: +0.0,
+                 end_seconds: 0.5,
+                 logprob: nil
+               },
+               %ALLM.TranscriptSpan{text: "fox", start_seconds: 0.5, end_seconds: 1.0, logprob: nil}
+             ] = spans
+    end
+
     test "engine adapter_opts win over call-site adapter_opts on collision" do
       engine = fake_engine(adapter_opts: [tag: :engine])
 

@@ -1,3 +1,25 @@
+## [FEAT] Honour transcript span flags in FakeTranscription (28.2)
+*Monday, September 28th at 11am*
+Phase 28.2 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md makes the Fake 
+and the stream collector carry opt-in transcript spans end to end, so every 
+later adapter sub-phase has a test vehicle (spec §37.11.1).
+
+- Shared helpers in Providers.Support.TranscriptionAdapter: span_from/6 (drops 
+unrequested attributes), gate_flags/4 (:unsupported_feature, :timestamps before 
+:logprobs), with_span_flags/2, flag_on?/2, spans_requested?/1 and 
+put_adapter_opt/3.
+- FakeTranscription builds one word span per word when a flag is set, refuses 
+flags a scripted real adapter's provider would refuse before advancing the 
+cursor, and omits the :spans key entirely when both flags are off.
+- AudioStream.collect_transcription/1 copies completed.spans, so a silent 
+flagged stream collects to [] and an unflagged one to nil.
+- TranscriptionAdapter and TranscriptionStreamAdapter moduledocs state the 
+batch and streaming population invariants.
+- Stream-equivalence property widened to both flags and empty text, with no 
+relaxation on spans.
+
+---
+
 ## [FEAT] Add TranscriptSpan and opt-in transcript span flags (28.1)
 *Monday, September 28th at 11am*
 Phase 28.1 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md lands the Layer 

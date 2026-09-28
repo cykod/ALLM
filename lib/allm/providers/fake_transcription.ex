@@ -59,12 +59,51 @@ defmodule ALLM.Providers.FakeTranscription do
 
   | Entry | `transcribe/2` | `stream_transcribe/3` |
   |-------|----------------|-----------------------|
-  | `{:ok, text}` | `text` as the transcript | after the input is consumed: one partial per cumulative word prefix, one committed segment, `:transcription_completed` |
-  | `{:ok, %TranscriptionResponse{}}` | the struct | the struct's fields as events |
+  | `{:ok, text}` | `text` as the transcript; with a span flag set, one `:word` span per word | after the input is consumed: one partial per cumulative word prefix, one committed segment, `:transcription_completed`; with a span flag set, both carry the word spans |
+  | `{:ok, %TranscriptionResponse{}}` | the struct, verbatim (span flags not applied) | the struct's fields as events; a non-`nil` `:spans` rides the committed and completed events |
   | `{:error, err}` | `{:error, err}` | `:transcription_started`, then `{:error, err}` |
   | `{:events, events}` | `:unknown` with `metadata.cause: :stream_only_script_entry` | `events`, verbatim |
   | `{:retry_until_call, n}` | `:rate_limited` error | a stream whose only event is a `:rate_limited` error |
-  | absent or `[]` script | `text: ""` | `:transcription_completed` with `text: ""` |
+  | absent or `[]` script | `text: ""` (`spans: []` with a span flag set) | `:transcription_completed` with `text: ""` (and `spans: []` with a span flag set) |
+
+  ## Span flags
+
+  With `timestamps: true` or `logprobs: true` on the request, a text entry
+  (and the no-script default) is split on whitespace into one `:word`
+  `ALLM.TranscriptSpan` per word: word *i* spans `i * 0.5` to
+  `(i + 1) * 0.5` seconds with logprob `-0.1`. Times are kept only under
+  `timestamps: true` and the logprob only under `logprobs: true`; a flag
+  counts only when it is exactly `true`. Blank text gives `spans: []`; with
+  both flags off `spans` is `nil` and no stream event carries a `:spans`
+  key.
+
+      iex> req = ALLM.TranscriptionRequest.new(
+      ...>   audio: ALLM.Audio.from_binary(<<0>>, "audio/mpeg"), logprobs: true)
+      iex> opts = [adapter_opts: [transcription_script: [{:ok, "hi there"}]]]
+      iex> {:ok, resp} = ALLM.Providers.FakeTranscription.transcribe(req, opts)
+      iex> for s <- resp.spans, do: {s.text, s.start_seconds, s.logprob}
+      [{"hi", nil, -0.1}, {"there", nil, -0.1}]
+
+  On the stream path the one committed segment carries the same spans and
+  `:transcription_completed` carries them under `:spans` (`[]` when nothing
+  was committed). A scripted `%TranscriptionResponse{}` is the escape
+  hatch: its own `:spans` is returned (or streamed) as scripted, whatever
+  the flags say.
+
+  `adapter_opts[:span_flags]`, when present, is the list of flags the
+  caller's adapter supports. A set flag outside it is refused with
+  `{:error, %ALLM.Error.TranscriptionAdapterError{reason: :unsupported_feature,
+  metadata: %{field: flag}}}` after the audio (or sample-rate) gate and
+  before the script is consulted, so the refusal does not advance the
+  cursor; `:timestamps` is checked before `:logprobs`. The error's
+  `:provider` is `nil`. Without the key both flags are supported.
+
+      iex> req = ALLM.TranscriptionRequest.new(
+      ...>   audio: ALLM.Audio.from_binary(<<0>>, "audio/mpeg"), timestamps: true)
+      iex> opts = [adapter_opts: [transcription_script: [{:ok, "hi"}], span_flags: [:logprobs]]]
+      iex> {:error, err} = ALLM.Providers.FakeTranscription.transcribe(req, opts)
+      iex> {err.reason, err.metadata.field}
+      {:unsupported_feature, :timestamps}
 
   ## Streaming
 
@@ -134,6 +173,7 @@ defmodule ALLM.Providers.FakeTranscription do
 
   alias ALLM.Error.TranscriptionAdapterError
   alias ALLM.Providers.Support.InputPump
+  alias ALLM.Providers.Support.TranscriptionAdapter, as: Support
 
   require InputPump
 
@@ -179,6 +219,10 @@ defmodule ALLM.Providers.FakeTranscription do
        `:invalid_source`, …).
     3. **Size** — more than `adapter_opts[:max_audio_bytes] || max_audio_bytes()`
        bytes → `:invalid_request` with `metadata.count` and `metadata.max`.
+    4. **Span flags** — only when `adapter_opts[:span_flags]` is present: a
+       `timestamps: true` or `logprobs: true` outside that list →
+       `:unsupported_feature` with `metadata.field` (see "Span flags" in
+       the module docs).
 
   Otherwise reads the script from
   `opts[:adapter_opts][:transcription_script]`, advances the process-local
@@ -209,7 +253,8 @@ defmodule ALLM.Providers.FakeTranscription do
     maybe_capture(request, opts)
     adapter_opts = Keyword.get(opts, :adapter_opts, [])
 
-    with :ok <- gate(request, Keyword.get(adapter_opts, :max_audio_bytes) || max_audio_bytes()) do
+    with :ok <- gate(request, Keyword.get(adapter_opts, :max_audio_bytes) || max_audio_bytes()),
+         :ok <- gate_span_flags(request, opts) do
       case resolve_script(opts) do
         :default -> {:ok, build_response("", request, opts)}
         :exhausted -> {:error, exhausted_error()}
@@ -245,6 +290,17 @@ defmodule ALLM.Providers.FakeTranscription do
   defp measure(%Audio{} = audio), do: Audio.size(audio)
   defp measure(_other), do: {:error, :invalid_source}
 
+  # The span-flag gate, after the adapter's own gates and before the script
+  # is consulted, so a refusal never advances the cursor. With no
+  # `adapter_opts[:span_flags]` (the Fake used directly) both flags are
+  # supported; a real adapter's hand-off supplies its own list.
+  defp gate_span_flags(request, opts) do
+    case opts |> Keyword.get(:adapter_opts, []) |> Keyword.get(:span_flags) do
+      nil -> :ok
+      supported -> Support.gate_flags(request, supported, nil, opts)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # ALLM.TranscriptionStreamAdapter
   # ---------------------------------------------------------------------------
@@ -270,7 +326,9 @@ defmodule ALLM.Providers.FakeTranscription do
   Gate, before the script is consulted: `request.sample_rate` must be in
   `adapter_opts[:stream_sample_rates] || stream_sample_rates()`, else a
   synchronous `{:error, %TranscriptionAdapterError{reason: :invalid_request}}`
-  with `metadata.sample_rate`.
+  with `metadata.sample_rate`. Then, when `adapter_opts[:span_flags]` is
+  present, the span-flag gate `transcribe/2` runs (`:unsupported_feature`,
+  also synchronous).
 
   The script entry is resolved and the cursor advanced **at call time**,
   before the stream is returned. The input is reduced lazily, when the
@@ -319,7 +377,8 @@ defmodule ALLM.Providers.FakeTranscription do
     adapter_opts = Keyword.get(opts, :adapter_opts, [])
     rates = Keyword.get(adapter_opts, :stream_sample_rates) || stream_sample_rates()
 
-    with :ok <- gate_sample_rate(request.sample_rate, rates) do
+    with :ok <- gate_sample_rate(request.sample_rate, rates),
+         :ok <- gate_span_flags(request, opts) do
       case resolve_script(opts) do
         :exhausted ->
           {:error, exhausted_error()}
@@ -361,17 +420,19 @@ defmodule ALLM.Providers.FakeTranscription do
         provider: response.provider,
         session_id: response.id
       })
-      | segment_events(response.text, response.language)
+      | segment_events(response.text, response.language, response.spans)
     ] ++
       [
-        TranscriptionEvent.transcription_completed(%{
+        %{
           text: String.trim(response.text),
           language: response.language,
           duration_seconds: response.duration_seconds,
           request_id: request_id,
           usage: response.usage,
           metadata: response.metadata
-        })
+        }
+        |> put_spans(response.spans)
+        |> TranscriptionEvent.transcription_completed()
       ]
   end
 
@@ -390,8 +451,9 @@ defmodule ALLM.Providers.FakeTranscription do
   end
 
   # One partial per cumulative word prefix, then the committed segment. A
-  # text with no words is no segment at all.
-  defp segment_events(text, language) do
+  # text with no words is no segment at all. `nil` spans build the
+  # committed event without a `:spans` key; a list builds it with one.
+  defp segment_events(text, language, spans) do
     case String.split(text) do
       [] ->
         []
@@ -401,7 +463,34 @@ defmodule ALLM.Providers.FakeTranscription do
           for n <- 1..length(words),
               do: TranscriptionEvent.partial_transcript(Enum.join(Enum.take(words, n), " "))
 
-        partials ++ [TranscriptionEvent.committed_transcript(text, language)]
+        partials ++ [committed_event(text, language, spans)]
+    end
+  end
+
+  defp committed_event(text, language, nil),
+    do: TranscriptionEvent.committed_transcript(text, language)
+
+  defp committed_event(text, language, spans),
+    do: TranscriptionEvent.committed_transcript(text, language, spans)
+
+  # `:transcription_completed`'s optional `:spans` key: absent when no flag
+  # was set, so "not requested" and "requested, nothing spoken" (`[]`) stay
+  # distinguishable to `ALLM.AudioStream.collect_transcription/1`.
+  defp put_spans(payload, nil), do: payload
+  defp put_spans(payload, spans), do: Map.put(payload, :spans, spans)
+
+  # The Fake's spans for `text`: `nil` unless a flag is exactly `true`, else
+  # one `:word` span per whitespace-separated word, word i at
+  # `[i * 0.5, (i + 1) * 0.5]` seconds with logprob -0.1, then the
+  # unrequested attributes dropped. Blank text gives `[]`.
+  defp fake_spans(text, request) do
+    if Support.spans_requested?(request) do
+      text
+      |> String.split()
+      |> Enum.with_index()
+      |> Enum.map(fn {word, i} ->
+        Support.span_from(word, :word, i * 0.5, (i + 1) * 0.5, -0.1, request)
+      end)
     end
   end
 
@@ -476,17 +565,21 @@ defmodule ALLM.Providers.FakeTranscription do
     do: [invalid_chunk_error("the input ended mid-sample (odd total length)")]
 
   defp on_input_done(%{request: request, opts: opts, text: text, bytes: bytes}) do
+    spans = fake_spans(text, request)
+
     completed =
-      TranscriptionEvent.transcription_completed(%{
+      %{
         text: String.trim(text),
         language: nil,
         duration_seconds: bytes / (request.sample_rate * 2),
         request_id: Keyword.get(opts, :request_id),
         usage: %Usage{},
         metadata: request.metadata
-      })
+      }
+      |> put_spans(spans)
+      |> TranscriptionEvent.transcription_completed()
 
-    segment_events(text, nil) ++ [completed]
+    segment_events(text, nil, spans) ++ [completed]
   end
 
   defp finish(events, state), do: {events, %{state | done?: true}}
@@ -709,6 +802,7 @@ defmodule ALLM.Providers.FakeTranscription do
       provider: :fake,
       usage: %Usage{},
       raw: nil,
+      spans: fake_spans(text, request),
       metadata: request.metadata
     }
   end
