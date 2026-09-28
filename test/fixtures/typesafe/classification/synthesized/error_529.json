@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized — Phase 24.4. Hand-written 529 Overloaded (a documented TypeSafe status that cannot be provoked on demand).",
+  "status": 529,
+  "headers": {"x-typesafe-request-id": "req_synthesized529"},
+  "body": {"detail": {"error_type": "overloaded_error", "message": "Overloaded"}}
+}

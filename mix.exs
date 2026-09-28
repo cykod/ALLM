@@ -142,6 +142,7 @@ defmodule ALLM.MixProject do
           ALLM.Providers.Voyage.Embeddings,
           ALLM.Providers.ElevenLabs.Speech,
           ALLM.Providers.ElevenLabs.Transcription,
+          ALLM.Providers.TypeSafe.Classification,
           ALLM.Providers.Fake,
           ALLM.Providers.Fake.Script,
           ALLM.Providers.FakeImages,

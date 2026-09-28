@@ -1,0 +1,23 @@
+{
+  "body": {
+    "detail": {
+      "error_type": "max_tokens_exceeded"
+    }
+  },
+  "header_names": [
+    "cf-cache-status",
+    "cf-ray",
+    "connection",
+    "content-type",
+    "date",
+    "server",
+    "set-cookie",
+    "x-envoy-upstream-service-time",
+    "x-typesafe-request-id"
+  ],
+  "headers": {
+    "content-type": "application/json",
+    "x-typesafe-request-id": "req_01a0e5500b1b71cabb6f946865144296"
+  },
+  "status": 400
+}

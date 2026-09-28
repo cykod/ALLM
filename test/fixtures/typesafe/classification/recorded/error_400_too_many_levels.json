@@ -1,0 +1,21 @@
+{
+  "body": {
+    "detail": "Too many score levels. Must have at most 10 levels."
+  },
+  "header_names": [
+    "cf-cache-status",
+    "cf-ray",
+    "connection",
+    "content-type",
+    "date",
+    "server",
+    "set-cookie",
+    "x-envoy-upstream-service-time",
+    "x-typesafe-request-id"
+  ],
+  "headers": {
+    "content-type": "application/json",
+    "x-typesafe-request-id": "req_01a0e550081e775199c9666bf0aded4e"
+  },
+  "status": 400
+}

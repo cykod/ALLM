@@ -58,4 +58,14 @@ defmodule ALLM.Providers.Support.Redact do
   @spec elevenlabs(String.t()) :: String.t()
   def elevenlabs(text) when is_binary(text),
     do: String.replace(text, ~r/\bsk_[A-Za-z0-9]{16,}/, @redacted)
+
+  @doc false
+  # TypeSafe: `apikey_` followed by at least 16 key characters. TypeSafe
+  # does not document its key format; the prefix was observed on a real key
+  # (never printed) when the fixtures were recorded, and TypeSafe's 401 text
+  # did not echo the key. The adapter also removes the literal resolved key,
+  # so this pattern is the second of two passes.
+  @spec typesafe(String.t()) :: String.t()
+  def typesafe(text) when is_binary(text),
+    do: String.replace(text, ~r/\bapikey_[A-Za-z0-9_\-]{16,}/, @redacted)
 end

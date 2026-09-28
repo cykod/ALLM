@@ -1,0 +1,24 @@
+{
+  "body": {
+    "detail": {
+      "error_type": "api_usage_error",
+      "message": "Unknown model: jev-allm-probe-nonexistent"
+    }
+  },
+  "header_names": [
+    "cf-cache-status",
+    "cf-ray",
+    "connection",
+    "content-type",
+    "date",
+    "server",
+    "set-cookie",
+    "x-envoy-upstream-service-time",
+    "x-typesafe-request-id"
+  ],
+  "headers": {
+    "content-type": "application/json",
+    "x-typesafe-request-id": "req_01a0e55009777914a3fb761143673b2b"
+  },
+  "status": 400
+}

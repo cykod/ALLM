@@ -202,6 +202,8 @@ There is deliberately **no Layer D**. A classification carries no conversation s
 14. **A capability-only provider arm in `examples/`, following the Phase 26 ElevenLabs precedent.** The mechanism already exists: marker-less scripts run only on arms where `ExamplesHelpers.chat_provider?/1` is true (`examples/_helpers.exs:399-411`, used by `examples/run_all.exs:143-147`, header comment `:21-31`), and the `"elevenlabs"` row (`examples/_helpers.exs:164-182`) is the model for a row with `adapter: nil`. So the typesafe arm needs **no** `run_all.exs` logic change. What 24.5 adds: a `"typesafe"` row copying the elevenlabs row's shape (every key present, `adapter: nil`, `default_model: nil`, `vision_default_model: nil`, every other capability key nil) plus `classification_adapter: ALLM.Providers.TypeSafe.Classification`, `classification_default_model: "jev-latest"`, `key_env: "TYPESAFE_API_KEY"`; `classification_adapter: nil` and `classification_default_model: nil` on all four existing rows (elevenlabs included); and `classification_engine/1` as a `capability_engine/2` spec map with `adapter_key: :classification_adapter`, `model_key: :classification_default_model`, `engine_model_field: :classification_model`, `key_env_key: nil` and `model_env: "ALLM_CLASSIFICATION_MODEL"` (Decision #5; `examples/_helpers.exs:423-429`: a new capability is a spec map, not a new copy). There is no `classification_opts/0`. The classify script carries `# Provider: typesafe`. The comment-only widening of "an audio-only arm" to "a capability-only arm (audio: elevenlabs; classification: typesafe)" lands at `run_all.exs:27-31`, the `## The audio-only arm` moduledoc section of `_helpers.exs` (`:76-82`) and `examples/README.md:119`. *Docs target: `examples/README.md` + `@moduledoc ExamplesHelpers`.*
 15. **The adapter injects `model: "jev-latest"` when the effective model is nil, and documents that.** This satisfies CLAUDE.md's rule that an adapter MUST document any default it injects for a Layer-A nil the wire requires (the API marks `model` required). The default goes in the public `@doc classify/2` AND in `to_json_body/2`'s `@doc false`. `jev-latest` is an alias that moves; the guide says to pin `jev-1.13.0` when tuning thresholds (Models page, "Aliases"). *Docs target: adapter `@doc classify/2` + `guides/classification.md`.*
 16. **Redaction removes the literal resolved key as well as a pattern.** TypeSafe does not document its key format, so no prefix regex can be written honestly at design time. `redact_key_material/2` receives the resolved key and replaces that exact string — **only when `byte_size(key) >= 8`**, so a short test key cannot rewrite ordinary substrings of the message. A prefix pattern is added **only if** the 24.4 probe (a) confirms a prefix from the maintainer's key without printing it, and (b) records it in RECORDS; it then lives in `ALLM.Providers.Support.Redact.typesafe/1` (that module's one-function-per-provider rule, `lib/allm/providers/support/redact.ex`), and `redact_key_material/2` adds only the literal-key pass on top. Otherwise the literal-key pass is the whole defence. The companion test calls `Support.Redact.openai/1`, `.anthropic/1`, `.gemini/1`, `.voyage/1` and `.elevenlabs/1` **directly** (never copied regexes) and asserts each leaves the planted fixture unchanged (CLAUDE.md: inheriting a sibling's regex is a silent no-op). The planted key in `synthesized/error_401.json` is realistic-length (≥ 32 chars). *Docs target: internal.*
+
+    > CORRECTED 2026-09-28 (24.4 probe): the maintainer's key has the prefix `apikey_` (108 chars, `[A-Za-z0-9_-]`; checked without printing it). `Support.Redact.typesafe/1` (`\bapikey_[A-Za-z0-9_\-]{16,}`) was therefore added, and `redact_key_material/2` runs the literal pass then that pattern. The recorded live 401 does not echo the key. See RECORDS 24.4.
 17. **JSON-encodability is checked twice: by the validator, and again in the adapter as a second line of defence. Neither check may raise.** `Jason.encode/1` does **not** always return an error tuple. Verified in `mix run` on 2026-09-22:
     - `Jason.encode(%{"a" => {1, 2}})` returns `{:error, %Protocol.UndefinedError{}}`.
     - `Jason.encode(%{{1, 2} => "x"})` **raises** `Protocol.UndefinedError` (String.Chars, from `Jason.Encode.key/2`).
@@ -417,6 +419,8 @@ end
 | `:malformed_response` | 200 body not decodable, missing `answers`, an answer id not requested, a requested id missing, or an answer `type` ≠ question type | `decode_response/4` |
 | `:unknown` | any other status | fallback |
 
+> CORRECTED 2026-09-28 (24.4 probe): the oversized-state arm gets **400** with `{"detail": {"error_type": "max_tokens_exceeded"}}` (no message) — a distinguishable signal, so `:context_length_exceeded` is **kept**, keyed on that `error_type`. TypeSafe also answers **400**, not 422, for an unknown question type, an unknown model and a limit breach; **422** is only FastAPI schema validation (e.g. `questions: {}`). The `ClassificationAdapterError` moduledoc's status cell for `:context_length_exceeded` was corrected from 422 to 400. See RECORDS 24.4.
+
 The structure copies the moderation sibling exactly: moduledoc reason table, `@type reason`, a duplicate runtime `@legal_reasons ~w(…)a`, `legal_reasons/0` with a doctest asserting its length, `defexception [:reason, :message, :provider, :status, :retry_after_ms, :cause, metadata: %{}]`, `new/2` raising `ArgumentError` on an off-enum reason, three-clause `message/1`, `__from_tagged__/1`, and a trailing `defimpl Jason.Encoder` (not `@derive`). See `lib/allm/error/moderation_adapter_error.ex`.
 
 ### Layer A: closed-enum extensions and registration
@@ -603,6 +607,17 @@ Every row is **confirmed** (quoted from TypeSafe docs fetched 2026-09-22) or **i
 | Unknown-field handling | undocumented | **inferred**: arm 11 (negative control) |
 | Question-count cap | undocumented | **inferred**: arm 10 (ladder) |
 | Pricing | *"$0.042 / Mtok … Charged per input token. Output tokens are free."* | **confirmed** (Models page) |
+
+> CORRECTED 2026-09-28 (24.4 probe, all arms recorded under `test/fixtures/typesafe/classification/recorded/`): the inferred rows resolve as follows.
+> - **`state` list elements:** the API accepts a list with a non-text element (`["a", 1]` → 200, arm 12). `gate_state/1` is kept: it enforces the *documented* contract ("array of text values"), and the finding is stated in RECORDS.
+> - **Score `legend` for object criteria:** the object is echoed back (arm 2), so `legend` entries are strings or objects.
+> - **400/403/404:** an unknown model is **400** `{"detail": {"error_type": "api_usage_error", "message": "Unknown model: …"}}` (arm 7). 403/404 were not observed.
+> - **Error body envelope:** always `{"detail": …}` in three shapes — a string (limit breaches, arms 4/5), an object with `error_type` and usually `message` (arms 3, 7, 8, 9), or a FastAPI list of `{"loc", "msg", "type", "input", …}` on 422 (arm 13). `extract_error_message/1` handles exactly these three and never reads `input` (it echoes caller data). Neither sibling extractor covers all three and both are private to released adapters, so a TypeSafe-private one was written.
+> - **Context-length signal:** 400 with `detail.error_type == "max_tokens_exceeded"` (arm 9).
+> - **Correlation header:** `x-typesafe-request-id` (`req_…`) is present on **every** arm, success and error. `ClassificationResponse.id` is populated from it; error metadata carries it as `typesafe_request_id`.
+> - **`Retry-After` / `retry-after-ms`:** neither was observed on any arm (no 429 was provoked). Only `Retry-After` is parsed, via the shared helper.
+> - **Unknown-field handling:** **ignored** — an invented question field → 200 (arm 11), as is an invented top-level field (exploratory call). Acceptance is therefore not evidence of schema membership on this endpoint.
+> - **Question-count cap:** none observed; 1, 32, 128 and 512 trivial questions were all 200 (arm 10).
 
 ### Layer B: `ALLM.Providers.TypeSafe.Classification`
 
@@ -1052,6 +1067,8 @@ These are CLAUDE.md's four parts, with `scripts/record_voyage_embeddings_fixture
 
 (There is no arm 6. Numbering is kept stable against the wire map's cross-references.)
 
+> CORRECTED 2026-09-28 (24.4 probe): observed statuses differ from this table's first guesses, and the recorder asserts the observed ones. Arm 3 → **400**, recorded as `error_400_bad_type.json`; arm 4 → **400**, `error_400_too_many_options.json`; arm 5 → **400**, `error_400_too_many_levels.json`; arm 7 → **400**; arm 9 → **400** (`max_tokens_exceeded`); arm 11 (negative control) → **200**, a legitimate finding: TypeSafe ignores unknown fields. Two arms were added: **12** (list state with a non-text element → 200, `probe_state_list_any.json`) and **13** (`questions: {}` → 422, `error_422_empty_questions.json`, the only genuine FastAPI-list envelope). Every recorded file except the ladder is an envelope `{"status", "headers", "header_names", "body"}` (the ElevenLabs recorder's shape), so tests read the status and the request-id header from the recording. Actual cost: see RECORDS 24.4.
+
 **Cost:** arms 1–8 and 11 are about 300 input tokens each, except 4/4b, which are about 3k each. Arm 9 is about 40k tokens. Arm 10 is about 15k tokens. That totals under 60k tokens, which is **< $0.003 per clean run** at $0.042/Mtok. First implementation is budgeted at 4× that, **< $0.02**. The implementer's report cites actuals (rule 19).
 
 #### 24.4.3 Implementation Checklist
@@ -1069,6 +1086,8 @@ These are CLAUDE.md's four parts, with `scripts/record_voyage_embeddings_fixture
 The recorder invocation (a discrete step). Then `mix test test/allm/providers/typesafe/`, then **[G]**.
 
 **Success criterion:** the probe exits 0 with every recorded fixture free of `_comment`. A second recorder run makes zero HTTP calls, because every arm, including 10 and 11, now writes a guarded file. The adapter passes 9/9 conformance. `grep -rn '"noul"' lib/ | grep -v providers/typesafe` is empty.
+
+> CORRECTED 2026-09-28 (24.4): that grep is not empty and cannot be: Decision #2's docs target puts the alias note in `@moduledoc ALLM.ClassificationQuestion`, which reads `TypeSafe calls it "noul"` (`lib/allm/classification_question.ex:21`, from 24.1). The predicate measured a *mention*, not a wire use. The binding predicate is `grep -rnE '(=>|:) *"noul"|"noul" *=>|:noul\b' lib/ | grep -v providers/typesafe` → empty (exit 1), with the positive control `… | grep -c providers/typesafe` → 3.
 
 ### Phase 24.5: Spec §41, guide, examples, wiring
 

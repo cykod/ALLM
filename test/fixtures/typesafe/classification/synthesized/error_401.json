@@ -1,0 +1,11 @@
+{
+  "_comment": "Synthesized — Phase 24.4. Hand-written 401 with planted key material: the literal PLANTED key (removed only by the adapter's literal-key pass) and an apikey_-shaped token (removed by Support.Redact.typesafe/1), one of each in the message and one in detail.error_type. TypeSafe's real 401 (recorded/error_401_live.json) does not echo the key.",
+  "status": 401,
+  "headers": {"x-typesafe-request-id": "req_synthesized401"},
+  "body": {
+    "detail": {
+      "error_type": "authentication_error apikey_PLANTEDmetadatatoken0123456789",
+      "message": "Cannot authenticate with key PLANTEDLITERALKEY0123456789abcdefXYZ (also seen: apikey_PLANTEDpatterntoken0123456789)."
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "body": {
+    "answers": {
+      "severity": {
+        "confidence": 0.98,
+        "legend": {
+          "0": {
+            "label": "Minor",
+            "meaning": "cosmetic"
+          },
+          "1": {
+            "label": "Major",
+            "meaning": "a feature is broken"
+          },
+          "2": {
+            "label": "Critical",
+            "meaning": "data loss or outage"
+          }
+        },
+        "probabilities": {
+          "0": 0.0,
+          "1": 0.99,
+          "2": 0.01
+        },
+        "score": 1.01,
+        "type": "score"
+      }
+    },
+    "model": "jev-1.13.0",
+    "usage": {
+      "input_tokens": 385,
+      "output_tokens": 17
+    }
+  },
+  "header_names": [
+    "cf-cache-status",
+    "cf-ray",
+    "connection",
+    "content-type",
+    "date",
+    "server",
+    "set-cookie",
+    "transfer-encoding",
+    "x-envoy-upstream-service-time",
+    "x-typesafe-request-id"
+  ],
+  "headers": {
+    "content-type": "application/json",
+    "x-typesafe-request-id": "req_01a0e550059572a8bd0650db0c1a8b8f"
+  },
+  "status": 200
+}

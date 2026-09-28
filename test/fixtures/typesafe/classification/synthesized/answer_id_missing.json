@@ -1,0 +1,13 @@
+{
+  "_comment": "Synthesized — Phase 24.4. recorded/mixed_questions.json with the refund answer removed: a requested id with no answer is :malformed_response.",
+  "status": 200,
+  "headers": {"x-typesafe-request-id": "req_synthesizedmissing"},
+  "body": {
+    "answers": {
+      "department": {"choice": "billing", "confidence": 1.0, "probabilities": {"billing": 1.0, "sales": 0.0, "technical": 0.0}, "type": "choice"},
+      "frustration": {"confidence": 0.97, "legend": {"0": "Calm", "1": "Frustrated", "2": "Very angry"}, "probabilities": {"0": 0.0, "1": 0.02, "2": 0.98}, "score": 1.98, "type": "score"}
+    },
+    "model": "jev-1.13.0",
+    "usage": {"input_tokens": 382, "output_tokens": 70}
+  }
+}

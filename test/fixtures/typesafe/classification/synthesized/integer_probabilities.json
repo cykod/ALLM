@@ -1,0 +1,14 @@
+{
+  "_comment": "Synthesized — Phase 24.4. The mixed_questions answers with every number written as a JSON integer (1 / 0), which decodes to an Elixir integer; the adapter must coerce each to a float.",
+  "status": 200,
+  "headers": {"x-typesafe-request-id": "req_synthesizedints"},
+  "body": {
+    "answers": {
+      "department": {"choice": "billing", "confidence": 1, "probabilities": {"billing": 1, "sales": 0, "technical": 0}, "type": "choice"},
+      "frustration": {"confidence": 1, "legend": {"0": "Calm", "1": "Frustrated", "2": "Very angry"}, "probabilities": {"0": 0, "1": 0, "2": 1}, "score": 2, "type": "score"},
+      "refund": {"noul": 1, "type": "noul"}
+    },
+    "model": "jev-1.13.0",
+    "usage": {"input_tokens": 382, "output_tokens": 70}
+  }
+}

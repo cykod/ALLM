@@ -1,0 +1,22 @@
+{
+  "first_failure": null,
+  "max_ok": 512,
+  "steps": [
+    {
+      "size": 1,
+      "status": 200
+    },
+    {
+      "size": 32,
+      "status": 200
+    },
+    {
+      "size": 128,
+      "status": 200
+    },
+    {
+      "size": 512,
+      "status": 200
+    }
+  ]
+}

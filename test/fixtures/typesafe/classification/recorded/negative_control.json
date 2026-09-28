@@ -1,0 +1,32 @@
+{
+  "body": {
+    "answers": {
+      "q": {
+        "noul": 0.99,
+        "type": "noul"
+      }
+    },
+    "model": "jev-1.13.0",
+    "usage": {
+      "input_tokens": 272,
+      "output_tokens": 20
+    }
+  },
+  "header_names": [
+    "cf-cache-status",
+    "cf-ray",
+    "connection",
+    "content-type",
+    "date",
+    "server",
+    "set-cookie",
+    "transfer-encoding",
+    "x-envoy-upstream-service-time",
+    "x-typesafe-request-id"
+  ],
+  "headers": {
+    "content-type": "application/json",
+    "x-typesafe-request-id": "req_01a0e5500bdf70de9e0485cdcbadcfba"
+  },
+  "status": 200
+}

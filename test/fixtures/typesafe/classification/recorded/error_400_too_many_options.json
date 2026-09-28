@@ -1,0 +1,21 @@
+{
+  "body": {
+    "detail": "Too many choices. Must have at most 255 choices."
+  },
+  "header_names": [
+    "cf-cache-status",
+    "cf-ray",
+    "connection",
+    "content-type",
+    "date",
+    "server",
+    "set-cookie",
+    "x-envoy-upstream-service-time",
+    "x-typesafe-request-id"
+  ],
+  "headers": {
+    "content-type": "application/json",
+    "x-typesafe-request-id": "req_01a0e55006e57ea69812316bc5ac51d1"
+  },
+  "status": 400
+}

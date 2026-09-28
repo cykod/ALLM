@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthesized — Phase 24.4. Hand-written 429 with a Retry-After header; provoking a real one would need sustained abuse of the endpoint.",
+  "status": 429,
+  "headers": {"retry-after": "7", "x-typesafe-request-id": "req_synthesized429"},
+  "body": {"detail": {"error_type": "rate_limit_error", "message": "Rate limit exceeded."}}
+}

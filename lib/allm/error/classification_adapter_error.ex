@@ -15,7 +15,7 @@ defmodule ALLM.Error.ClassificationAdapterError do
   | `:authentication_failed` | 401/403 | API key missing or invalid. Surface to the user; no retry. |
   | `:rate_limited` | 429 | Provider quota exceeded; `:retry_after_ms` populated when a `Retry-After` header is present. Retried automatically. |
   | `:invalid_request` | 400/404/422 | The provider rejected the body (for example an unknown model); an empty `:questions` map reaching a direct adapter call; a body that cannot be JSON-encoded; or a question over a provider limit, with `:metadata` naming the question and the limit. Fix the request; no retry. |
-  | `:context_length_exceeded` | 422 | The state plus the longest question exceeds the model's token budget. Shrink the state; no retry. |
+  | `:context_length_exceeded` | 400 | The state plus the longest question exceeds the model's token budget. Shrink the state; no retry. |
   | `:provider_unavailable` | 500/502/503/504/529 | Provider server-side failure or overload. Retried automatically. |
   | `:timeout` | — | Adapter `request_timeout` exceeded. Retried automatically. |
   | `:network_error` | — | TCP/TLS/DNS failure. Retried automatically. |

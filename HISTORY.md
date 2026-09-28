@@ -1,3 +1,27 @@
+## [FEAT] Add TypeSafe Jev classification adapter with live-probed fixtures
+*Monday, September 28th at 12am*
+Phase 24.4 of steering/2026-09-22_JEV_SUPPORT.md (spec §41): 
+ALLM.Providers.TypeSafe.Classification, the first real ClassificationAdapter, 
+against POST https://api.typesafe.ai/v1/systemone.
+
+- Pre-flight gates (empty questions, 255-option and 10-level caps, text-only 
+list state, JSON encodability) run before key resolution; the body maps :yes_no 
+to wire noul and injects the documented jev-latest default; one HTTP attempt 
+with Req retry off.
+- The decoder enforces adapter invariants 2-5, turns score maps into 
+index=level lists, and returns :malformed_response rather than raising on 
+hostile bodies (review fix). Status mapping covers 529 as retryable and the 
+observed 400 max_tokens_exceeded as :context_length_exceeded.
+- Redaction removes the literal resolved key plus a new 
+Support.Redact.typesafe/1 apikey_ pattern; x-typesafe-request-id fills 
+ClassificationResponse.id.
+- scripts/record_typesafe_classification_fixtures.exs is a four-part live probe 
+(13 arms incl. a negative control, which showed TypeSafe ignores unknown 
+fields). It recorded 14 fixtures for about $0.001; five design guesses the 
+probe falsified are corrected in the design doc.
+
+---
+
 ## [FEAT] Add ALLM.classify/3 façade and :classify telemetry span
 *Sunday, September 27th at 11pm*
 Phase 24.3 of steering/2026-09-22_JEV_SUPPORT.md (spec §41): ALLM.classify/3 

@@ -1,0 +1,57 @@
+{
+  "body": {
+    "answers": {
+      "department": {
+        "choice": "billing",
+        "confidence": 1.0,
+        "probabilities": {
+          "billing": 1.0,
+          "sales": 0.0,
+          "technical": 0.0
+        },
+        "type": "choice"
+      },
+      "frustration": {
+        "confidence": 0.94,
+        "legend": {
+          "0": "Calm",
+          "1": "Frustrated",
+          "2": "Very angry"
+        },
+        "probabilities": {
+          "0": 0.0,
+          "1": 0.04,
+          "2": 0.96
+        },
+        "score": 1.96,
+        "type": "score"
+      },
+      "refund": {
+        "noul": 0.99,
+        "type": "noul"
+      }
+    },
+    "model": "jev-1.13.0",
+    "usage": {
+      "input_tokens": 381,
+      "output_tokens": 70
+    }
+  },
+  "header_names": [
+    "cf-cache-status",
+    "cf-ray",
+    "connection",
+    "content-type",
+    "date",
+    "server",
+    "set-cookie",
+    "transfer-encoding",
+    "x-envoy-upstream-service-time",
+    "x-typesafe-request-id"
+  ],
+  "headers": {
+    "content-type": "application/json",
+    "x-typesafe-request-id": "req_01a0e5500445752394a59211af6381c7"
+  },
+  "status": 200
+}
