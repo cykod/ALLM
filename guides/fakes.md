@@ -250,11 +250,13 @@ for exercising retries:
 | `ALLM.Providers.FakeImages` | `:image_adapter` | `:image_script` | `image_generation.md` |
 | `ALLM.Providers.FakeEmbeddings` | `:embed_adapter` | `:embedding_script` | `embeddings.md` |
 | `ALLM.Providers.FakeModeration` | `:moderation_adapter` | `:moderation_script` | `moderation.md` |
+| `ALLM.Providers.FakeClassification` | `:classification_adapter` | `:classification_script` | `classification.md` |
 | `ALLM.Providers.FakeSpeech` | `:speech_adapter` | `:speech_script` | `audio.md` |
 | `ALLM.Providers.FakeTranscription` | `:transcription_adapter` | `:transcription_script` | `audio.md` |
 
 The script key lives in the engine's `adapter_opts`. Some Fakes answer
 with no script at all — FakeModeration returns a clean verdict,
+FakeClassification answers every question with a deterministic default,
 FakeSpeech returns `"FAKE-AUDIO:" <> input`, FakeTranscription returns
 an empty transcript — but a non-empty script that runs out is an error,
 never a silent fallback, so an off-by-one in your call count surfaces.
@@ -306,7 +308,8 @@ registering ancestor's engine — same idiom as `Mox.allow/3` and
 * `streaming.md` — the event-shape vocabulary the scripts emit.
 * `tools.md` — tool-loop tests against scripted tool calls.
 * `sessions.md` — multi-turn persistence tests.
-* `image_generation.md`, `embeddings.md`, `moderation.md`, `audio.md` —
+* `image_generation.md`, `embeddings.md`, `moderation.md`,
+  `classification.md`, `audio.md` —
   the capability Fakes in context.
 * `ALLM.Providers.Fake` and `ALLM.Providers.Fake.Script` moduledocs —
   reference-level documentation of every entry tag.

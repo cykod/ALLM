@@ -25,10 +25,11 @@
 # names; otherwise the script is SKIPPED with a `[SKIP]` marker and does
 # NOT count toward `failed`.
 #
-# An audio-only arm (a provider row with `adapter: nil`, e.g.
-# `ALLM_PROVIDER=elevenlabs`) has no chat adapter, so a marker-less script
-# runs only when `ExamplesHelpers.chat_provider?/1` is true. On such an arm
-# only the scripts whose marker names it run.
+# A capability-only arm (a provider row with `adapter: nil` — audio:
+# `ALLM_PROVIDER=elevenlabs`; classification: `ALLM_PROVIDER=typesafe`) has
+# no chat adapter, so a marker-less script runs only when
+# `ExamplesHelpers.chat_provider?/1` is true. On such an arm only the
+# scripts whose marker names it run.
 #
 # A script can also skip itself at run time, for a reason a marker cannot
 # express (e.g. script 27 without `OPENAI_API_KEY`): it calls

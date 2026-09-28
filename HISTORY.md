@@ -1,3 +1,23 @@
+## [DOC] Add spec §41, classification guide and TypeSafe examples arm
+*Monday, September 28th at 12am*
+Phases 24.5 and 24.6 of steering/2026-09-22_JEV_SUPPORT.md: documentation, 
+examples and the closing sweep for typed classification. No lib/ changes.
+
+- Spec §41 (Typed classification) plus Phase 24 amendments to §27, §29 and 
+§35.7; the §35.7 fourth carve-out admits TypeSafe into the classification 
+family only. TypeSafe wire claims are marked documented, observed or inferred 
+against the live probe.
+- guides/classification.md (runnable iex> examples over FakeClassification) 
+registered in all three guide lists, with classification rows in 
+guides/fakes.md and guides/errors_and_retries.md.
+- A typesafe capability-only examples arm following the ElevenLabs precedent, 
+examples/22_classify_ticket.exs, and RUN_OUTPUT_TYPESAFE.md from the live run 
+(the typesafe arm exits 0 running only script 22; the openai arm skips it).
+- CHANGELOG folded into the unreleased v0.6.0 entry from git diff v0.5.0..HEAD 
+lib/, a conformance doc wording fix, and the 24.6 ticket re-measurements.
+
+---
+
 ## [DOC] Add TypeSafe classification to README provider and capability tables
 *Monday, September 28th at 12am*
 README's Real providers section now lists TypeSafe as a third capability-only 

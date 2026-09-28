@@ -122,16 +122,17 @@ defmodule ALLM.ExamplesHelpersTest do
   end
 
   describe "provider rows and chat_provider?/1" do
-    test "chat_provider?/1 is false for elevenlabs and true for every other row" do
+    test "chat_provider?/1 is false for the capability-only rows and true for every other row" do
       rows = ExamplesHelpers.provider_rows()
 
       # The rows are iterated, so a new chat row needs no edit here.
       for {name, _row} <- rows do
-        assert ExamplesHelpers.chat_provider?(name) == (name != "elevenlabs"),
+        assert ExamplesHelpers.chat_provider?(name) == name not in ~w(elevenlabs typesafe),
                "chat_provider?(#{inspect(name)})"
       end
 
       assert Map.has_key?(rows, "elevenlabs")
+      assert Map.has_key?(rows, "typesafe")
     end
 
     test "chat_provider?/1 raises ArgumentError for an unknown provider" do
@@ -148,6 +149,29 @@ defmodule ALLM.ExamplesHelpersTest do
       assert row.speech_adapter == ALLM.Providers.ElevenLabs.Speech
       assert row.transcription_adapter == ALLM.Providers.ElevenLabs.Transcription
       assert is_binary(row.speech_voice) and row.speech_voice != ""
+    end
+
+    test "the typesafe row is classification-only, keyed on TYPESAFE_API_KEY" do
+      row = Map.fetch!(ExamplesHelpers.provider_rows(), "typesafe")
+
+      assert row.key_env == "TYPESAFE_API_KEY"
+      assert row.adapter == nil
+      assert row.classification_adapter == ALLM.Providers.TypeSafe.Classification
+      assert row.classification_default_model == "jev-latest"
+    end
+
+    test "every row carries the classification keys, nil except on typesafe" do
+      for {name, row} <- ExamplesHelpers.provider_rows() do
+        assert Map.has_key?(row, :classification_adapter), "#{name} lacks :classification_adapter"
+
+        assert Map.has_key?(row, :classification_default_model),
+               "#{name} lacks :classification_default_model"
+
+        if name != "typesafe" do
+          assert row.classification_adapter == nil, name
+          assert row.classification_default_model == nil, name
+        end
+      end
     end
 
     test "the openai row carries speech_voice \"alloy\"" do

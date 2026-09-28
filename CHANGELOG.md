@@ -1,4 +1,4 @@
-## [REL] v0.6.0 — Content moderation, compact tools, audio and prompt caching
+## [REL] v0.6.0 — Content moderation, compact tools, audio, prompt caching and typed classification
 
 Breaking changes:
 - An `%ALLM.Image{source: {:base64, _}}` whose data will not decode is now
@@ -7,9 +7,10 @@ Breaking changes:
   to answer 400. Code matching on the provider's `%AdapterError{}` for this
   case now sees a `%ValidationError{}` from pre-flight
 - `ALLM.Error.EngineError` gains `:no_moderation_adapter`,
-  `:no_speech_adapter` and `:no_transcription_adapter`, and
-  `ALLM.Error.ValidationError` gains `:invalid_moderation_request`,
-  `:invalid_speech_request` and `:invalid_transcription_request`. Both are
+  `:no_speech_adapter`, `:no_transcription_adapter` and
+  `:no_classification_adapter`, and `ALLM.Error.ValidationError` gains
+  `:invalid_moderation_request`, `:invalid_speech_request`,
+  `:invalid_transcription_request` and `:invalid_classification_request`. Both are
   closed enums, so an exhaustive `case` over either reason union needs new
   clauses
 - `ALLM.Providers.OpenAI.Images` and `ALLM.Providers.Gemini.Images` no
@@ -265,6 +266,37 @@ Other changes:
   writes. Every provider wire field it relies on was confirmed against the
   live APIs by the prompt-cache recorder script; cache hits and the
   unknown-field controls are recorded as test fixtures
+- Add typed classification: `ALLM.classify(engine, ticket_text, questions: %{"team" => ALLM.ClassificationQuestion.choice("Which team?", ["billing", "technical"])})`
+  returns `{:ok, %ALLM.ClassificationResponse{}}` with one typed
+  `%ALLM.ClassificationAnswer{}` per question, via the engine's new
+  `:classification_adapter` slot. Three question types —
+  `ClassificationQuestion.choice/2`, `score/2` and `yes_no/2` — mix freely
+  in one call; answers carry the provider's probabilities and confidence,
+  and the library sets no threshold. `ALLM.classification_request/2` builds
+  the request; `ClassificationResponse.answer/2` and
+  `ClassificationAnswer.value/1` read it back
+- Add `ALLM.Providers.TypeSafe.Classification` against TypeSafe's Jev model
+  (`POST https://api.typesafe.ai/v1/systemone`, key `TYPESAFE_API_KEY`,
+  default model `"jev-latest"`). TypeSafe's yes/no type `noul` is
+  `:yes_no` in ALLM. The adapter gates empty questions, more than 255
+  options and more than 10 score levels before any request, makes one HTTP
+  attempt per call, puts the `x-typesafe-request-id` header on
+  `ClassificationResponse.id` (and on an error's
+  `metadata.typesafe_request_id`), maps a 400 `max_tokens_exceeded` to
+  `:context_length_exceeded` and 529 to `:provider_unavailable`, and never
+  stores an exception in an error's `:cause`
+- Add a per-slot classification model on the engine,
+  `:classification_model`; `ALLM.classify/3` never reads the chat
+  `engine.model`
+- Add `ALLM.Validate.classification_request/1`,
+  `ALLM.Error.ClassificationAdapterError` (nine reasons), the
+  `ALLM.ClassificationAdapter` behaviour with nine numbered invariants,
+  `ALLM.Providers.FakeClassification` for tests, and
+  `ALLM.Test.ClassificationAdapterConformance` in `allm_conformance`
+- Add the `[:allm, :classify, :*]` telemetry span with `question_count`
+  metadata and an `answer_count` measurement
+- Add `guides/classification.md` and `examples/22_classify_ticket.exs`,
+  which runs on a new TypeSafe-only examples arm (`ALLM_PROVIDER=typesafe`)
 - A streamed chat request that the provider answers with a 4xx/5xx
   (OpenAI on both endpoints, Anthropic, Gemini) now reads the error body
   before ending the stream, so its terminal `%AdapterError{}` carries the

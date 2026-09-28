@@ -2,8 +2,9 @@
 
 Self-asserting smoke tests that exercise the public ALLM API against a real
 LLM provider — OpenAI by default, Anthropic via `ALLM_PROVIDER=anthropic`,
-or Gemini via `ALLM_PROVIDER=gemini`. `ALLM_PROVIDER=elevenlabs` is an
-audio-only arm: it runs just the audio scripts that name it. Each script ends with
+or Gemini via `ALLM_PROVIDER=gemini`. `ALLM_PROVIDER=elevenlabs` and
+`ALLM_PROVIDER=typesafe` are capability-only arms (audio; classification):
+each runs just the scripts that name it. Each script ends with
 `unless <assertion>, do: System.halt(1)`, so a script that prints `OK: …`
 and exits `0` is the green signal; any non-zero exit is a real failure.
 
@@ -13,7 +14,7 @@ These scripts ship under `examples/` and are **not** part of the published
 The scripts are organized as a learning path: start with the quickest
 round-trip, then branch into streaming/tools, multi-turn chat, sessions,
 vision, per-tool manual control, embeddings, moderation, compact tools,
-and audio (batch, streaming, and the voice loop). Each script is independently
+typed classification, and audio (batch, streaming, and the voice loop). Each script is independently
 runnable; the order below is for reading, not for execution dependencies.
 
 ## How provider switching works
@@ -83,13 +84,24 @@ provider table:
     speech_voice: "JBFqnCBsd6RMkjVDRZzb",  # ElevenLabs voices are ids
     transcription_adapter: ALLM.Providers.ElevenLabs.Transcription,
     transcription_model: "scribe_v2"
+  },
+  "typesafe" => %{
+    adapter: nil,                          # classification-only: no chat adapter
+    key_env: "TYPESAFE_API_KEY",
+    # ...every other capability key is nil...
+    classification_adapter: ALLM.Providers.TypeSafe.Classification,
+    classification_default_model: "jev-latest"
   }
 }
 ```
 
+Every row also carries `classification_adapter:` and
+`classification_default_model:`; both are `nil` except on `typesafe`.
+
 The map shape lets the capability fields (`:image_adapter`,
 `:embed_adapter`, `:moderation_adapter`, `:speech_adapter`,
-`:transcription_adapter`, `:vision_default_model`, …) grow without
+`:transcription_adapter`, `:classification_adapter`,
+`:vision_default_model`, …) grow without
 churning the destructure pattern in the helper.
 
 `ExamplesHelpers.embedding_engine/1` reads `:embed_adapter` /
@@ -114,10 +126,18 @@ override them. `ExamplesHelpers.speech_voice/0` returns the row's
 `:speech_voice`, because a voice is a provider string (OpenAI's are names,
 ElevenLabs' are ids).
 
+`ExamplesHelpers.classification_engine/1` reads `:classification_adapter` /
+`:classification_default_model` and, like the audio engines, puts the model
+on the engine's `:classification_model` field, because `ALLM.classify/3`
+never reads the chat model. `ALLM_CLASSIFICATION_MODEL` overrides it (for
+example to pin `jev-1.13.0` instead of the moving `jev-latest` alias). It
+raises `ArgumentError` for every row except `typesafe`.
+
 `ExamplesHelpers.chat_provider?/1` is `false` for a row whose `:adapter` is
-`nil` — today only `elevenlabs`. `run_all.exs` runs a script with no
-`# Provider:` marker only on a chat arm, so the ElevenLabs arm runs only the
-audio scripts whose marker names it (23–27).
+`nil` — a capability-only arm (audio: `elevenlabs`; classification:
+`typesafe`). `run_all.exs` runs a script with no `# Provider:` marker only on
+a chat arm, so the ElevenLabs arm runs only the audio scripts whose marker
+names it (23–27), and the TypeSafe arm runs only script 22.
 
 Every script's first lines are:
 
@@ -151,7 +171,7 @@ So either:
 1. Drop a `.env` file at the repository root with whichever keys you want
    to exercise (`OPENAI_API_KEY=sk-...`, `ANTHROPIC_API_KEY=sk-ant-...`,
    `GEMINI_API_KEY=...`, `VOYAGE_API_KEY=pa-...`,
-   `ELEVENLABS_API_KEY=sk_...`) and run
+   `ELEVENLABS_API_KEY=sk_...`, `TYPESAFE_API_KEY=apikey_...`) and run
    `mix run examples/run_all.exs` (with `ALLM_PROVIDER=…` to pick a
    non-default provider) — no further setup.
 2. Or export the vars directly:
@@ -159,12 +179,13 @@ So either:
 
 ### Which keys each provider arm needs
 
-| `ALLM_PROVIDER` | Chat / vision / image scripts | Embedding scripts (16–18) | Moderation scripts (19–20) | Speech (23, 25) | Transcription (24) | Realtime transcription (26) | Voice loop (27) |
-|---|---|---|---|---|---|---|---|
-| `openai` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | *skipped* | *skipped* |
-| `gemini` | `GEMINI_API_KEY` | `GEMINI_API_KEY` | *skipped* | *skipped* | `GEMINI_API_KEY` | *skipped* | *skipped* |
-| `anthropic` | `ANTHROPIC_API_KEY` | **`VOYAGE_API_KEY`** | *skipped* | *skipped* | *skipped* | *skipped* | *skipped* |
-| `elevenlabs` | *skipped* | *skipped* | *skipped* | `ELEVENLABS_API_KEY` | `ELEVENLABS_API_KEY` | `ELEVENLABS_API_KEY` | `ELEVENLABS_API_KEY` + **`OPENAI_API_KEY`** (chat hop; self-skips as `[SKIP]` without it) |
+| `ALLM_PROVIDER` | Chat / vision / image scripts | Embedding scripts (16–18) | Moderation scripts (19–20) | Classification (22) | Speech (23, 25) | Transcription (24) | Realtime transcription (26) | Voice loop (27) |
+|---|---|---|---|---|---|---|---|---|
+| `openai` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | `OPENAI_API_KEY` | *skipped* | `OPENAI_API_KEY` | `OPENAI_API_KEY` | *skipped* | *skipped* |
+| `gemini` | `GEMINI_API_KEY` | `GEMINI_API_KEY` | *skipped* | *skipped* | *skipped* | `GEMINI_API_KEY` | *skipped* | *skipped* |
+| `anthropic` | `ANTHROPIC_API_KEY` | **`VOYAGE_API_KEY`** | *skipped* | *skipped* | *skipped* | *skipped* | *skipped* | *skipped* |
+| `elevenlabs` | *skipped* | *skipped* | *skipped* | *skipped* | `ELEVENLABS_API_KEY` | `ELEVENLABS_API_KEY` | `ELEVENLABS_API_KEY` | `ELEVENLABS_API_KEY` + **`OPENAI_API_KEY`** (chat hop; self-skips as `[SKIP]` without it) |
+| `typesafe` | *skipped* | *skipped* | *skipped* | `TYPESAFE_API_KEY` | *skipped* | *skipped* | *skipped* | *skipped* |
 
 #### Embedding scripts and `VOYAGE_API_KEY`
 
@@ -334,6 +355,23 @@ Neither script costs anything: `/v1/moderations` is free.
 
 No `# Provider:` marker: it runs on every arm.
 
+## Typed classification (22)
+
+- `22_classify_ticket.exs` — `ALLM.classify/3` asks three typed questions
+  about one support ticket in a single call: a `choice/2` (which team), a
+  `score/2` (how frustrated, on three levels) and a `yes_no/2` (is a refund
+  requested). Asserts a typed answer per question type — every field's type
+  and range, per `ALLM.ClassificationAnswer`'s field-population table —
+  plus the provider request id on `response.id`, a `jev-` model id, and
+  `usage.input_tokens > 0`. Two verdicts are asserted: the double-charge
+  ticket routes to `"billing"` and scores a refund probability above 0.5.
+  Prints each answer with its confidence. `# Provider: typesafe`.
+
+TypeSafe has no chat adapter, so `ALLM_PROVIDER=typesafe` is a
+classification-only arm that runs this one script. It costs well under
+$0.0001 per run (about 400 input tokens at $0.042 per million; output
+tokens are free).
+
 ## Audio (23–24)
 
 - `23_synthesize_speech.exs` — `ALLM.synthesize/3` turns one sentence into
@@ -352,8 +390,7 @@ No `# Provider:` marker: it runs on every arm.
   content assertion is a case-insensitive "fox" rather than the whole
   sentence.
 
-Both cost well under $0.001 per run. The script numbers skip 22, which
-another planned example reserves.
+Both cost well under $0.001 per run.
 
 ## Streaming audio (25–27)
 
@@ -416,6 +453,7 @@ OPENAI_API_KEY=sk-...        ALLM_PROVIDER=openai    mix run examples/run_all.ex
 ANTHROPIC_API_KEY=sk-ant-... ALLM_PROVIDER=anthropic mix run examples/run_all.exs
 GEMINI_API_KEY=...           ALLM_PROVIDER=gemini    mix run examples/run_all.exs
 ELEVENLABS_API_KEY=sk_...    ALLM_PROVIDER=elevenlabs mix run examples/run_all.exs
+TYPESAFE_API_KEY=apikey_...  ALLM_PROVIDER=typesafe  mix run examples/run_all.exs
 ```
 
 `run_all.exs` runs each script in its own `mix run` process, so one
@@ -426,8 +464,8 @@ non-skipped script exited `0`; a script that skips itself
 (self-skipped)` and does not fail the run; a script exceeding 180 s
 (`ALLM_EXAMPLE_TIMEOUT_MS`) is killed and reported as timed out. The
 most-recent captured stdouts are committed as `RUN_OUTPUT_OPENAI.md`,
-`RUN_OUTPUT_ANTHROPIC.md`, `RUN_OUTPUT_GEMINI.md` and
-`RUN_OUTPUT_ELEVENLABS.md` next to this README.
+`RUN_OUTPUT_ANTHROPIC.md`, `RUN_OUTPUT_GEMINI.md`,
+`RUN_OUTPUT_ELEVENLABS.md` and `RUN_OUTPUT_TYPESAFE.md` next to this README.
 
 ## Scripts
 
@@ -460,6 +498,7 @@ facade (`generate/3`, `stream/3`, `chat/3`, `step/3`, `generate_image/3`,
 | `19_moderate_text.exs` | tight | C | openai | `ALLM.moderate/3` over an all-strings input; asserts batch cardinality, index order, and that a plain threat is flagged while a benign string is not |
 | `20_moderate_image.exs` | tight | C | openai | multimodal `ALLM.moderate/3` — `ModerationRequest.multimodal?/1` derives the result count before the call, and the script asserts it against the count that came back (two elements in, one result out) |
 | `21_compact_tools.exs` | tight | C | all | `compact: true` tools: the model completes a task through stubs + `tool_help`; asserts step-1 input tokens drop versus the same run with full tools |
+| `22_classify_ticket.exs` | tight | C | typesafe | `ALLM.classify/3` — one choice, one score and one yes/no question about a ticket in one call; asserts every answer's typed fields, the provider request id and usage, and that the ticket routes to billing |
 | `23_synthesize_speech.exs` | tight | C | openai, elevenlabs | `ALLM.synthesize/3` — text to MP3 with the row's voice; asserts non-empty bytes, `format: :mp3`, `audio/mpeg`, and an MP3 signature |
 | `24_transcribe_audio.exs` | loose | C | openai, gemini, elevenlabs | `ALLM.transcribe/3` over a checked-in MP3; asserts the transcript mentions "fox" and `usage` is an `%ALLM.Usage{}` |
 | `25_stream_speech.exs` | tight | C | openai, elevenlabs | `ALLM.stream_synthesize/3` as PCM; asserts ≥ 2 deltas and the event grammar, prints first-chunk latency |
@@ -552,6 +591,7 @@ provider pricing page for any tight budget.
 | Gemini (`gemini-3-flash-preview` + image preview + `gemini-embedding-001` + `gemini-flash-latest` (transcription)) | **~$0.03 USD** | |
 | **All three chat arms combined** | **~$0.24 USD** | per clean dual+gemini pass |
 | ElevenLabs (`eleven_flash_v2_5` + `scribe_v2` / `scribe_v2_realtime`) | not measured | audio scripts only (23–27), each a sentence or two of text or audio, billed against ElevenLabs' character and audio-minute quotas; `27_voice_loop.exs` also makes one short OpenAI chat call and needs `OPENAI_API_KEY` |
+| TypeSafe (`jev-latest`) | **< $0.0001 USD** | one script (22), one call of ~400 input tokens at $0.042 per million; output tokens are free |
 
 The embedding scripts add well under $0.001 per arm — a few thousand
 tokens total, and Voyage's free tier covers its share outright.
@@ -618,6 +658,11 @@ transcription scripts (24, 27) read `ALLM_TRANSCRIPTION_MODEL` (default
 on ElevenLabs). The realtime scripts (26, 27) do not read it for
 `stream_transcribe/3`: realtime and batch model names differ, so the
 adapter's realtime default (`scribe_v2_realtime`) applies.
+
+Script 22 reads `ALLM_CLASSIFICATION_MODEL` (default `jev-latest` on the
+TypeSafe arm, the only one it runs on). `jev-latest` is an alias that moves
+when TypeSafe ships a new version; the run prints the versioned id that
+answered.
 
 The variables are deliberately separate: a chat model id sent to an
 embeddings or moderations endpoint is a guaranteed 400, so the documented

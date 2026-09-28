@@ -1773,6 +1773,21 @@ lib/
 >
 > Existing modules extended: `ALLM` (`stream_synthesize/3`, `stream_synthesize_input/3`, `stream_transcribe/3`), `ALLM.SpeechRequest` / `ALLM.SpeechResponse` (`:sample_rate`), `ALLM.Validate` (`speech_request/2`, `transcription_stream_request/1`), `ALLM.Serializer` (one registry entry, `TranscriptionStreamRequest`; the event unions are not registered), `ALLM.Telemetry` (two span names and the `[:allm, :audio, :first_chunk]` event), `ALLM.Error.SpeechAdapterError` / `ALLM.Error.TranscriptionAdapterError` (`:unsupported_feature`), `ALLM.Adapter` (`hoist_transport_opts/2`, shared by the chat runner and the audio stream façades), `ALLM.Providers.Support.Transport` (`cancel_and_drain/3`), `ALLM.Providers.FakeSpeech` / `ALLM.Providers.FakeTranscription` (both streaming behaviours) and `ALLM.Providers.OpenAI.Speech` (`stream_synthesize/2`). `ALLM.Engine` is **not** extended. New dependency: `:mint_web_socket` (`~> 1.0`). The published conformance suites gain `ALLM.Test.SpeechStreamAdapterConformance`, `ALLM.Test.SpeechInputStreamAdapterConformance` and `ALLM.Test.TranscriptionStreamAdapterConformance`.
 
+> **Phase 24 amendment (commits `7de1c1c..0c9c8b5`; docs land in the 24.5 commit).** Typed classification (§41) adds the following modules, under the shipped `lib/allm/` prefix.
+>
+> ```text
+> lib/allm/classification_question.ex              # Layer A — one typed question (:choice | :score | :yes_no)
+> lib/allm/classification_request.ex               # Layer A
+> lib/allm/classification_answer.ex                # Layer A — one typed answer (tagged union in one struct)
+> lib/allm/classification_response.ex              # Layer A
+> lib/allm/classification_adapter.ex               # Layer B — behaviour
+> lib/allm/error/classification_adapter_error.ex
+> lib/allm/providers/fake_classification.ex
+> lib/allm/providers/typesafe/classification.ex    # TypeSafe Jev, admitted under the §35.7 classification carve-out
+> ```
+>
+> Existing modules extended: `ALLM` (`classify/3`, `classification_request/2`), `ALLM.Engine` (`:classification_adapter`, `:classification_model`), `ALLM.Validate` (`classification_request/1`), `ALLM.Telemetry` (`:classify` span), `ALLM.Serializer` (five registry entries), `ALLM.Error.EngineError` (`:no_classification_adapter`), `ALLM.Error.ValidationError` (`:invalid_classification_request`), `ALLM.Providers.Support.Redact` (`typesafe/1`). `ALLM.Capability` and `ALLM.Keys` are **not** extended (§41.5, §41.7). The published conformance suite lives in the `conformance/` project: `ALLM.Test.ClassificationAdapterConformance`.
+
 ---
 
 ## 28. Implementation guidance
@@ -1879,6 +1894,18 @@ Additional per-span metadata:
 > - `[:allm, :audio, :first_chunk]` — emitted once per stream, at its first `:audio_delta` (speech) or `:partial_transcript` (transcription); never for a stream that fails first. Measurements `%{latency: integer()}` in native units from the façade call; metadata `:request_id`, `:capability` (`:speech | :transcription`), `:provider_model` (the model the start event reports when it is a binary, else the dispatched `request.model`). Because the spans stop before any audio, this is the event that measures time to first audio.
 >
 > None of the three carries audio bytes or transcript text.
+
+> **Phase 24 amendment (commits `7de1c1c..0c9c8b5`; docs land in the 24.5 commit).** Typed classification (§41) adds one span:
+>
+> ```elixir
+> [:allm, :classify, :start | :stop | :exception]
+> ```
+>
+> - `:start` — measurements `%{system_time: integer()}`; metadata `:request_id`, `:engine`, `:model`, `:question_count`.
+> - `:stop` — measurements `%{duration: integer(), answer_count: non_neg_integer()}`; metadata as `:start` plus `:usage`, `:response`, `:error` (`nil` on success).
+> - `:exception` — measurements `%{duration: integer()}`; metadata `:kind`, `:reason`, `:stacktrace`. Emitted instead of `:stop`, then re-raised.
+>
+> Stable keys as for `:embed`, `:moderate` and the audio spans: `answer_count` is `0` and `:usage` is `nil` on the error path. `:model` is the classification slot's model (`request.model || engine.classification_model`), never the chat `engine.model`, and is `nil` when neither is set (the adapter's default applies after the span starts). `:question_count` is `0` for a non-map `:questions`, because `:start` is emitted before validation. The namespace note above applies: these events use `[:allm, …]`.
 
 ### Relationship to `middleware`
 
@@ -2450,6 +2477,18 @@ Third-party image providers (Stability, Replicate, Google Imagen `:predict`, fal
 > Its one beneficiary is ElevenLabs: `ALLM.Providers.ElevenLabs.Speech` (the first `stream_synthesize_input/3`) and `ALLM.Providers.ElevenLabs.Transcription` (the first `stream_transcribe/3`), each also implementing the non-streaming behaviour of its direction. See §37.7.4.
 >
 > **This is a carve-out, not a widening.** Both input-streaming callbacks now have a bundled implementation, so the criterion admits no second specialist: Deepgram, Cartesia, AssemblyAI and other audio providers stay out of core and ship as separate packages implementing the same behaviours. It admits nothing outside §37 — ElevenLabs gets no chat, image, embedding or moderation adapter by this route.
+
+> **Phase 24 amendment (commits `7de1c1c..0c9c8b5`; docs land in the 24.5 commit).** The rule takes a **fourth scoped carve-out**, for the typed-classification family (§41), on the owner's decision to bundle TypeSafe in core rather than as a separate package.
+>
+> TypeSafe fails every criterion above: (a) it has no bundled chat adapter — its Jev model is not a chat model and generates no text; (b) no bundled provider names it as a partner; the Phase 22 family-shape rule requires the sole provider to be bundled for chat; and the Phase 26 carve-out admits nothing outside §37. Yet no bundled provider offers typed classification through a dedicated endpoint, so without an admission the §41 family would ship with no real provider behind its behaviour.
+>
+> The addition:
+>
+> > An adapter from a provider with no bundled chat adapter may be bundled into the classification family (§41), as its **sole** member, when (i) no bundled provider offers typed classification through a dedicated endpoint, (ii) the provider's API for it is a single, documented HTTP surface, and (iii) the capability's absence on every bundled chat provider is documented rather than backfilled with a proxy.
+>
+> Its one beneficiary is `ALLM.Providers.TypeSafe.Classification` (§41.7). It sits **alongside** the Phase 26 carve-out and does not generalise it: it covers both admission and family shape for §41 only, exempting the classification family from the Phase 22 carve-out's *"already bundled for chat"* condition and from nothing else.
+>
+> **This is a carve-out, not a widening.** Condition (i) closes it behind its beneficiary: once one provider is bundled, a second TypeSafe-shaped provider for the same capability is not admitted by this route, and third-party classification providers ship as separate packages implementing `ALLM.ClassificationAdapter`. It admits nothing outside §41 — TypeSafe gets no chat, image, embedding, moderation or audio adapter by this route. Condition (iii) forbids satisfying the family's shape with an LLM-backed classification adapter over a bundled chat provider, whose probabilities would be invented rather than calibrated.
 
 ### 35.8 Testing
 
@@ -3686,3 +3725,329 @@ All three providers accept the stub schema `{"type":"object"}`, and all three fi
 - engine-level or call-level compaction switches
 - full JSON Schema argument validation; only the required-key check ships
 - compaction of a caller-built `%Request{}` passed to `generate/3` / `stream_generate/3`
+
+---
+
+## 41. v0.6 — Typed classification
+
+> **Phase 24 amendment (commits `7de1c1c..0c9c8b5`; docs land in the 24.5 commit).** This section is new. It amends §27 (module tree), §29 (telemetry) and §35.7 (bundled-adapter rule — a fourth scoped carve-out, family-scoped to this section). §35.10 is reconciled in the paragraph below rather than amended. §32.5 and §33 are untouched: neither list named classification. The design is `steering/2026-09-22_JEV_SUPPORT.md`; the wire facts below are the ones its 24.4 live probe observed, not its first guesses.
+
+v0.6 extends ALLM with a non-streaming primitive for asking a calibrated model **closed-form questions** about a piece of state — pick one option, place on an ordered scale, yes/no — and getting **typed answers with probabilities** back, without generating any text. Structurally it is the moderation family again (§39): a Layer A request/response pair, a dedicated behaviour with its own closed error enum, one `Engine` adapter field, one façade function, one telemetry span, one `Fake*` adapter and one published conformance suite. It takes the audio family's (§37) slot model, adapter HTTP shape and absence of capability pre-flight.
+
+It differs from both in three places, and those are where a reviewer should look hardest: the **request carries typed questions**, not an input list, so validation is per question type (§41.2.2); the **answer is a tagged union carried in one struct**, with a normative per-type field-population table (§41.2.3); and the **only provider is capability-only** — it has no chat adapter — which is what the §35.7 carve-out of §41.7 is for.
+
+**Why a classification primitive is admitted where object detection is not.** §35.10 places *"image classification / object detection as distinct primitives — users build these on top of chat + vision"* out of scope, and §39 admitted moderation as a narrow exception. Typed classification is admitted on the same two grounds, neither of which generalizes to the excluded cases: it has a **dedicated, single-call endpoint** returning **calibrated per-option probabilities**, which chat composition cannot reproduce (composition costs a generation call, returns prose that has to be parsed back, and its "probabilities" would be self-reports, not calibration); and it answers every question about one state in one call, which is the cost shape an application routing tickets or screening content needs. The §35.10 line stands unamended for object detection, OCR and upscaling, and it still stands for *image* classification: classification state is text only (§41.2.2).
+
+**Departures from §39.1 goal 5.** §39.1 goal 5 says model resolution and capability pre-flight *"apply identically"* to moderation. Two of that goal's parts do not carry over, deliberately: classification resolves its model from its own engine slot and never reads `engine.model` (§41.4, following §37.4), and there is no capability pre-flight (§41.5).
+
+### 41.1 Design goals
+
+1. **Parallel to the chat pipeline, not entangled with it.** Classification requests, responses and adapters are separate types. A classification provider is never wired as a chat adapter: Jev generates no text, holds no conversation and has no stream, so every `ALLM.Adapter` invariant would be false for it. There is no automatic classification inside `chat/3`.
+2. **Non-streaming.** No `ALLM.ClassificationStreamAdapter` and no `stream_classify/3`, following §35.1 item 2, §36.1 item 2 and §39.1 item 2. A `stream: true` opt is silently ignored.
+3. **Opt-in per engine.** An engine without a `:classification_adapter` returns `{:error, %ALLM.Error.EngineError{reason: :no_classification_adapter}}`, ahead of every other gate. No fallback to any other adapter slot.
+4. **The library does not decide thresholds.** ALLM returns the probabilities, score position and confidence the provider reports. There is no default confidence floor, no `yes?/2` and no routing DSL; the provider's own guidance is that *"the thresholds live in your code"* (TypeSafe, Noul page). Same stance as §39.1 item 4.
+5. **One call, many questions.** A request is one state plus N named questions, answered independently against that state in one call. The façade does not chunk questions and enforces no question count (§41.6).
+6. **Reuse engine plumbing** — keys (§6.4), retries, telemetry (§29) and deterministic fakes (§31) — with the two departures stated above.
+
+### 41.2 Data model
+
+All five types are Layer A: plain structs that round-trip through `:erlang.term_to_binary/1` and JSON, registered in `ALLM.Serializer`'s `@known_modules`.
+
+#### 41.2.1 `ALLM.ClassificationQuestion`
+
+```elixir
+defmodule ALLM.ClassificationQuestion do
+  @type question_type :: :choice | :score | :yes_no
+  @type structured :: String.t() | map() | list()
+
+  @type t :: %__MODULE__{
+          type: question_type() | nil,
+          instructions: structured() | nil,
+          criteria: %{String.t() => structured() | nil} | [structured()] | map() | nil
+        }
+
+  defstruct [:type, :instructions, :criteria]
+
+  @spec new(keyword()) :: t()
+  @spec choice(structured(), [String.t() | atom()] | %{(String.t() | atom()) => structured() | nil}) :: t()
+  @spec score(structured(), [structured()]) :: t()
+  @spec yes_no(structured(), keyword()) :: t()
+end
+```
+
+| Type | `criteria` | Built by |
+|------|-----------|----------|
+| `:choice` | `%{String.t() => structured() \| nil}`, one key per option | `choice/2`; a list of names becomes a map with `nil` descriptions, atom names are stringified |
+| `:score` | `[structured()]`, index = level, low to high | `score/2`, verbatim |
+| `:yes_no` | `nil`, or a map whose keys ⊆ `["true", "false"]` | `yes_no/2`; keys only for the `true:` / `false:` opts given |
+
+`:yes_no` is the only Layer A spelling. TypeSafe calls the type `noul`; the translation lives in the TypeSafe adapter and nowhere else. `new/1` is a bare `struct!/2` pass-through. The builders raise on a wrongly typed argument (`FunctionClauseError`; `ArgumentError` for an unknown `yes_no/2` opt); counts, emptiness and provider caps are the validator's and the adapter's, so a builder-made and a hand-built question are judged by the same rules.
+
+#### 41.2.2 `ALLM.ClassificationRequest`
+
+```elixir
+defmodule ALLM.ClassificationRequest do
+  @type state :: String.t() | map() | list()
+
+  @type t :: %__MODULE__{
+          state: state() | nil,
+          questions: %{String.t() => ALLM.ClassificationQuestion.t()},
+          model: String.t() | nil,
+          options: map(),
+          metadata: map()
+        }
+
+  defstruct [:state, :model, questions: %{}, options: %{}, metadata: %{}]
+end
+```
+
+- **State is text only**: a string, a JSON object or a JSON array. No image, audio or video (TypeSafe, Models page: *"Text only. String, JSON object, or array of text values."*). A map state with atom keys is sent with string keys and comes back from a JSON round trip with string keys.
+- **Question ids are non-empty binaries.** `ALLM.classification_request/2` stringifies atom ids for ergonomics; the struct does not, and the validator rejects a non-binary key on a hand-built struct, because an atom key does not survive JSON.
+- `:options` is the home for provider-specific knobs; the bundled adapter forwards nothing from it. `:metadata` round-trips onto the response.
+
+Validation lives in `ALLM.Validate.classification_request/1`, returning `%ALLM.Error.ValidationError{reason: :invalid_classification_request, errors: [...]}` with the exhaustive `{path, atom}` list. The vocabulary is closed: `:questions` (`:invalid_shape` — a hard reject — or `:empty`); `:state` (`:empty`, `:invalid_shape` — including a struct or a keyword list — or `:not_json_encodable`, at most one, in that order); `:model` (`:invalid_shape`); and per question `[:questions, id]` (`:invalid_id`, `:invalid_question`), `[:questions, id, :type]` (`:invalid_type`), `[:questions, id, :instructions]` (`:empty`, `:invalid_shape`, `:not_json_encodable`), `[:questions, id, :criteria]` (`:invalid_shape`, `:empty`, `:too_few_levels` for a one-level score, `:not_json_encodable`) and `[:questions, id, :criteria, option]` (`:invalid_option`). Criteria rules run only for a known type, so errors do not cascade. Provider caps (option and level counts) are deliberately **not** validator rules: they are one provider's wire facts and live in its adapter (§41.7).
+
+#### 41.2.3 `ALLM.ClassificationAnswer`
+
+```elixir
+defmodule ALLM.ClassificationAnswer do
+  @type t :: %__MODULE__{
+          type: ALLM.ClassificationQuestion.question_type(),
+          choice: String.t() | nil,
+          score: float() | nil,
+          yes_probability: float() | nil,
+          probabilities: %{String.t() => float()} | [float()] | nil,
+          legend: [term()] | nil,
+          confidence: float() | nil,
+          metadata: map()
+        }
+
+  @enforce_keys [:type]
+  @spec value(t()) :: String.t() | float()   # choice → option, score → position, yes_no → P(yes)
+end
+```
+
+**Field population by type (normative; conformance cases 2–5 bind it):**
+
+| Field | `:choice` | `:score` (n levels) | `:yes_no` |
+|-------|-----------|---------------------|-----------|
+| `choice` | option name, a key of the question's criteria | `nil` | `nil` |
+| `score` | `nil` | float, `0.0 ≤ x ≤ n − 1` | `nil` |
+| `yes_probability` | `nil` | `nil` | float, `0.0 ≤ x ≤ 1.0` |
+| `probabilities` | `%{option => float}`, keys = criteria keys | `[float]`, length n | `nil` |
+| `legend` | `nil` | `[term]`, length n | `nil` |
+| `confidence` | float, `0.0 ≤ x ≤ 1.0` | float, `0.0 ≤ x ≤ 1.0` | `nil` |
+
+Score lists are index = level, because an integer-keyed map does not survive a JSON round trip; choice probabilities stay a string-keyed map, because options are caller names with no order. **Confidence is reported, never computed**: a `:yes_no` answer carries `confidence: nil` because TypeSafe reports none (*"Noul has no separate `confidence`"*, Primitives page). An adapter coerces every float with `* 1.0` when decoding (JSON `1` decodes as an integer); decoding a persisted answer does not coerce.
+
+#### 41.2.4 `ALLM.ClassificationResponse`
+
+```elixir
+defmodule ALLM.ClassificationResponse do
+  @type t :: %__MODULE__{
+          id: String.t() | nil,
+          request_id: String.t() | nil,
+          model: String.t() | nil,
+          provider: atom() | nil,
+          answers: %{String.t() => ALLM.ClassificationAnswer.t()},
+          usage: ALLM.Usage.t(),
+          raw: term(),
+          metadata: map()
+        }
+
+  @spec answer(t(), String.t() | atom()) :: ALLM.ClassificationAnswer.t() | nil
+end
+```
+
+- `:answers` is keyed by the request's question ids.
+- `:id` is the **provider's** request id — the value its support team asks for; `:request_id` is ALLM's own correlation id. They are never mixed, and the provider id never goes in caller-owned `:metadata`. This matches every sibling response struct.
+- `:model` is the versioned id the provider reports as having answered (`"jev-1.13.0"`), not the alias that was sent.
+- `:usage` is never `nil`: `input_tokens` and `output_tokens` from the provider, `total_tokens` their sum; every cost field and both prompt-cache counters stay `nil`. Pricing is per input token and needs no catalog, but no catalog carries it, so cost population is out of scope (§41.10).
+
+#### 41.2.5 `ALLM.Error.ClassificationAdapterError`
+
+A closed enum of **nine** reasons: the moderation enum minus `:unsupported_feature` and `:batch_too_large`, neither of which has a use site (a classification request has no optional field a provider could fail to express, and questions are never chunked).
+
+```elixir
+@type reason ::
+        :authentication_failed | :rate_limited | :invalid_request
+        | :context_length_exceeded | :provider_unavailable | :timeout
+        | :network_error | :malformed_response | :unknown
+```
+
+`:malformed_response` covers a 200 whose body does not match the questions asked: an unparseable body, a missing `answers` object, an answer for an id not asked, a requested id with no answer, or an answer whose type differs from its question's. The struct implements `Jason.Encoder`; an adapter must never store a raw exception in `:cause`, because an exception can carry the caller's data or a pid and make the error itself unencodable. The condition is reported as data instead (`metadata: %{cause: :unencodable_body}`, `metadata.transport_reason`).
+
+The closed-enum extensions elsewhere: `ALLM.Error.EngineError` gains `:no_classification_adapter`, `ALLM.Error.ValidationError` gains `:invalid_classification_request`, and `ALLM.Telemetry` gains the `:classify` span name — each in both its `@type` union and its runtime list. Adding a reason is breaking for an exhaustive `case`.
+
+### 41.3 `ALLM.ClassificationAdapter` behaviour
+
+```elixir
+defmodule ALLM.ClassificationAdapter do
+  @callback classify(ALLM.ClassificationRequest.t(), keyword()) ::
+              {:ok, ALLM.ClassificationResponse.t()}
+              | {:error, ALLM.Error.ClassificationAdapterError.t()}
+
+  @callback prepare_request(ALLM.ClassificationRequest.t(), keyword()) ::
+              {:ok, Req.Request.t()} | {:error, ALLM.Error.ClassificationAdapterError.t()}
+
+  @optional_callbacks prepare_request: 2
+end
+```
+
+There is no `max_batch_size/0` (§41.6). **Contract invariants** — the numbering matches `@moduledoc ALLM.ClassificationAdapter` and is cited by number:
+
+1. `classify/2` returns exactly `{:ok, %ClassificationResponse{}}` or `{:error, %ClassificationAdapterError{}}`. The one sanctioned exception is `ALLM.Keys.fetch!/2`'s `%EngineError{reason: :missing_key}` raise (§6.4). **Enforced:** `ALLM.classify/3` raises `ArgumentError` naming the adapter and this invariant on any other shape. No conformance run can observe it.
+2. On `{:ok, _}`, `Map.keys(response.answers)` equals `Map.keys(request.questions)` as sets.
+3. Each answer's `:type` equals its question's `:type`, and its fields follow §41.2.3's table.
+4. A `:choice` answer's `choice` is a key of that question's criteria, and its `probabilities` keys equal the criteria keys.
+5. A `:score` answer's `probabilities` and `legend` each have length `length(criteria)`.
+6. `questions: %{}` is rejected with `:invalid_request` before any I/O and before `ALLM.Keys.fetch!/2`, so a keyless environment observes the rejection rather than a missing-key raise.
+7. `request.metadata` round-trips onto `response.metadata` unchanged, and `opts[:request_id]` is reflected onto `response.request_id` unchanged.
+8. `opts[:request_timeout]` is honoured; exceeding it yields `:timeout`.
+9. `prepare_request/2` (optional) returns an unfired `Req.Request` configured exactly as `classify/2` would fire it.
+
+**Cleanup invariant: none.** `Req.request/1` owns its connection lifecycle; there is no `Stream.resource/3` and no Finch reference.
+
+### 41.4 Engine integration
+
+`ALLM.Engine.t()` gains two fields:
+
+```elixir
+classification_adapter: module() | nil
+classification_model: String.t() | nil
+```
+
+`:classification_adapter` is a peer to every other adapter slot, never a fallback. `:classification_model` is the slot's own model, following §37.4: **the classification façade never reads `engine.model`**, because a chat model name sent to a classification endpoint is a guaranteed rejection. Resolution, normative: `request.model || engine.classification_model`, then the adapter's documented default when still `nil`. On the state call shape `opts[:model]` reaches `request.model`; a pre-built request is authoritative and `opts[:model]` is not merged onto it. The per-slot field keeps the classification model persisted with its adapter, so an engine pairing a chat provider with a classification provider round-trips intact:
+
+```elixir
+engine =
+  ALLM.Engine.new(
+    adapter: ALLM.Providers.Anthropic,
+    model: "claude-sonnet-4-6",
+    classification_adapter: ALLM.Providers.TypeSafe.Classification,
+    classification_model: "jev-1.13.0"
+  )
+```
+
+Both fields join `@engine_field_keys` (the `resolve_params/2` deny-list); `:classification_adapter` joins `@module_fields`. Key resolution (§6.4) uses the adapter's own provider namespace; engines stay free of key material.
+
+### 41.5 Public API
+
+```elixir
+defmodule ALLM do
+  @spec classification_request(ALLM.ClassificationRequest.state(), keyword()) ::
+          ALLM.ClassificationRequest.t()
+
+  @spec classify(
+          ALLM.Engine.t(),
+          ALLM.ClassificationRequest.state() | ALLM.ClassificationRequest.t(),
+          keyword()
+        ) ::
+          {:ok, ALLM.ClassificationResponse.t()}
+          | {:error,
+             ALLM.Error.EngineError.t()
+             | ALLM.Error.ValidationError.t()
+             | ALLM.Error.ClassificationAdapterError.t()}
+end
+```
+
+`classify/3` accepts a state (dispatched through `classification_request/2`, whose opt allow-list is exactly the request's field set minus `:state`: `:questions`, `:model`, `:options`, `:metadata`) or a pre-built `%ClassificationRequest{}` (dispatched verbatim). Any other struct, and a keyword list, enter as state and are rejected by the validator's `{:state, :invalid_shape}` row rather than raising or reaching the provider. Other non-state terms raise `FunctionClauseError`.
+
+Example:
+
+```elixir
+questions = %{
+  "department" => ALLM.ClassificationQuestion.choice("Which team?", ["billing", "technical", "sales"]),
+  "refund" => ALLM.ClassificationQuestion.yes_no("Is a refund requested?")
+}
+
+{:ok, response} = ALLM.classify(engine, ticket_text, questions: questions)
+%{choice: team, confidence: c} = ALLM.ClassificationResponse.answer(response, "department")
+```
+
+Gate order, inside the span, is fixed:
+
+1. adapter presence (`:no_classification_adapter`);
+2. `ALLM.Validate.classification_request/1` (`:invalid_classification_request`);
+3. slot-model stamping (§41.4);
+4. dispatch under `ALLM.Retry.run/3`, retrying `:rate_limited`, `:provider_unavailable`, `:timeout` and `:network_error` under `engine.retry`.
+
+**There is no capability pre-flight** (`ALLM.Capability` is not extended), following §37.1 item 5. Its only possible input is an `llm_db` catalog entry; `llm_db` is not a dependency and no catalog carries a classification model. Dispatch opts go through the shared capability builder, which drops `:stream` and injects the engine's cursor key, so façade-driven Fake scripts on content-equal engines never share a cursor. A missing key is **raised**, not returned. There is deliberately **no Layer D**: a classification carries no conversation state.
+
+### 41.6 One call, many questions
+
+**The façade does not chunk, and there is no question-count callback.** Unlike moderation (§39.6), splitting questions across calls would be well-defined — answers are independent per question — but every extra call re-sends and re-bills the whole state, and the provider's own guidance is that *"batching every question into one TypeSafe call is 12.2x cheaper and 10.0x faster"* (TypeSafe, Parallel questions cookbook). The limit that matters is a per-request token budget, not a count (§41.7). A caller with more questions than one budget holds splits them itself.
+
+### 41.7 Provider adapters in v0.6, and the §35.7 carve-out
+
+v0.6 bundles **one** classification adapter, `ALLM.Providers.TypeSafe.Classification`, against TypeSafe's Jev model. Each row is marked **documented** (TypeSafe's published docs, fetched 2026-09-22), **observed** (the live probe in `scripts/record_typesafe_classification_fixtures.exs`, run 2026-09-27; bodies under `test/fixtures/typesafe/classification/recorded/`) or **inferred**.
+
+| | TypeSafe | Status |
+|---|---|---|
+| Endpoint | `POST https://api.typesafe.ai/v1/systemone` (not overridable) | documented |
+| Auth | `authorization: Bearer <key>` | documented; observed |
+| Key atom / env var | `:typesafe` / `TYPESAFE_API_KEY` (through `ALLM.Keys`' `<PROVIDER>_API_KEY` fallback; no `ALLM.Keys` change) | — |
+| Request | `{"state", "model", "questions": {"<id>": {"type", "instructions", "criteria"}}}` | documented |
+| Question type | `:choice` → `"choice"`, `:score` → `"score"`, `:yes_no` → `"noul"` | documented |
+| Default model | `"jev-latest"`, injected when the effective model is `nil` (the wire requires `model`); an alias that moves — pin `"jev-1.13.0"` when tuning thresholds | documented |
+| Response | `{"model", "answers": {…}, "usage": {"input_tokens", "output_tokens"}}` | documented; observed |
+| Score answer | `probabilities` and `legend` keyed `"0".."n-1"`, decoded to lists; object levels come back as objects in `legend` | documented; object echo observed |
+| Provider request id | `x-typesafe-request-id` header on **every** response, success and error → `ClassificationResponse.id`, or error `metadata.typesafe_request_id` | observed |
+| Limits | at most 255 choice options and 10 score levels, gated in the adapter before I/O and key resolution (`:invalid_request`, `metadata: %{question:, limit:}`); 255 and 10 accepted, 256 and 11 → 400 | documented; observed |
+| Question count | none documented; 1, 32, 128 and 512 questions all accepted | observed |
+| Token budget | 64k tokens per request; 32k for the state plus the longest question | documented |
+| Unknown fields | **ignored** — an invented question field returns 200 (observed); an invented top-level field returned 200 in one exploratory call that is not in the recorder and has no fixture (RECORDS §24.4) | observed (question field); observed once, not recorded (top-level field) |
+| Unknown type / unknown model / over a limit | **400** (not 422) | observed |
+| Schema validation failure (e.g. `questions: {}`) | **422**, FastAPI `detail` list | observed |
+| Context length | **400** with `{"detail": {"error_type": "max_tokens_exceeded"}}`, no message → `:context_length_exceeded` | observed |
+| Bad key | 401 `{"detail": {"error_type": "authentication_error", "message": …}}`; the body does not echo the key | observed |
+| Error envelope | always `{"detail": …}`: a string (limit breaches), an object with `error_type` and usually `message`, or a list of `{"loc", "msg", …}` (422) | observed |
+| 429 / 529 | `:rate_limited` / `:provider_unavailable` (529 is "Overloaded") | documented; not provoked |
+| 500 / 502 / 503 / 504 | `:provider_unavailable` | inferred |
+| `Retry-After` / `retry-after-ms` | neither observed; `Retry-After` is parsed when present | inferred |
+| Usage / cost | `input_tokens` populated; *"$0.042 / Mtok … Charged per input token. Output tokens are free."*; ALLM leaves cost `nil` | documented |
+
+Four provider behaviours are stated here because each falsified an assumption and each is invisible from the types:
+
+1. **TypeSafe ignores unknown fields** (recorded for a question-level field; a top-level field was seen only in one unrecorded exploratory call). "The API accepted it" is therefore not evidence of schema membership at this endpoint; only facts with a distinguishing *response* (the limit, model, type, context-length and empty-questions arms) are settled request-side facts.
+2. **Most rejections are 400, and 422 means only schema validation.** Unknown question type, unknown model and a limit breach all return 400; `:invalid_request` covers 400, 404 and 422 alike.
+3. **Context length has a signal of its own**, a 400 whose `detail.error_type` is `"max_tokens_exceeded"`; it is the only way `:context_length_exceeded` fires.
+4. **The request-id header is always present**, so `ClassificationResponse.id` is populated on every success, and every error carries it as `metadata.typesafe_request_id` next to `status` and `typesafe_error_type` (the body's `detail.error_type`, when present); a transport failure adds `transport_reason`.
+
+The adapter makes **one HTTP attempt per call** with no inner retry loop (the audio precedent, `ALLM.Providers.Support.TranscriptionAdapter`); `ALLM.classify/3`'s `Retry.run/3` is the only loop, so `:timeout` costs 3 attempts, not the 9 an adapter-plus-façade nesting produces. A list state holding a non-string element is rejected before I/O (`metadata: %{field: :state}`) because TypeSafe documents list state as *"array of text values"*, although the live API accepted `["a", 1]` (observed). A body that cannot be JSON-encoded is `:invalid_request` with `metadata: %{cause: :unencodable_body}`. Every error has `cause: nil`. Provider-authored strings pass a redactor that removes the resolved key literally (keys of 8 bytes or more) and any `apikey_…`-shaped token by pattern (`ALLM.Providers.Support.Redact.typesafe/1`); the 401 body does not echo the key, so this is defence in depth. `opts[:adapter_opts][:classification_script]` (any non-nil value) short-circuits to `ALLM.Providers.FakeClassification`, which is how the conformance suite drives it without HTTP.
+
+#### The §35.7 amendment
+
+TypeSafe fails every §35.7 criterion as amended through v0.6: it has no bundled chat adapter (a), no bundled provider names it as a partner (b), a one-adapter family's only provider is not bundled for chat (the Phase 22 carve-out), and the Phase 26 carve-out admits nothing outside §37. The owner decided (2026-09-22) to bundle it in core rather than as a separate package, so §35.7 takes a fourth scoped carve-out, stated there and repeated here:
+
+> An adapter from a provider with no bundled chat adapter may be bundled into the classification family (§41), as its **sole** member, when (i) no bundled provider offers typed classification through a dedicated endpoint, (ii) the provider's API for it is a single, documented HTTP surface, and (iii) the capability's absence on every bundled chat provider is documented rather than backfilled with a proxy.
+
+There is deliberately **no OpenAI, Anthropic, Gemini or Voyage classification adapter**: none offers typed classification through a dedicated endpoint, and producing choice/score/yes-no answers from a chat model's structured output would be the proxy the carve-out forbids — its "probabilities" would be invented from logprobs or self-reports rather than calibrated. The behaviour does not foreclose such an adapter as a separate package. Third-party classification providers ship as separate packages implementing `ALLM.ClassificationAdapter`.
+
+### 41.8 Testing
+
+`ALLM.Providers.FakeClassification` implements `ALLM.ClassificationAdapter` with scripted answers, in `lib/` so downstream applications can use it. Following the moderation split (§39.8), **no script yields default answers** — a choice picks the lexicographically first option at probability `1.0`, a score answers level `0`, a yes/no answers `0.0` — and **a non-empty script that runs off the end is an error** (`reason: :unknown`, `metadata.cause: :classification_script_exhausted`). Script entries: `{:answers, %{id => value}}` (a string is a choice's option; a number is a score position or a yes probability; an `%ALLM.ClassificationAnswer{}` is verbatim; unlisted ids get their default; a value that does not fit its question raises `ArgumentError`), `{:error, %ClassificationAdapterError{}}`, and `{:retry_until_call, n}` (a synthetic `:rate_limited` for the first `n - 1` calls; consecutive entries chain). The cursor keys on engine identity through the façade. **The Fake's confidence convention is its own and is not TypeSafe's formula.**
+
+`ALLM.Test.ClassificationAdapterConformance` ships in the `allm_conformance` package with **nine cases**: answer keys equal question keys; answer types equal question types; choice, score and yes_no field population; empty questions rejected with `:invalid_request`; `metadata` round-trip; `request_id` preservation; `usage` is an `%ALLM.Usage{}`. Every case but the empty-questions one passes `classification_script: [{:answers, %{}}]`, so an adapter under test either answers the scripted call itself or short-circuits it to a Fake. The §36.8 limitation therefore applies verbatim: for a short-circuiting adapter the suite exercises the Fake, not the adapter's decoder, and the bundled adapter carries its own decoder tests over the recorded fixtures. The suite does not bind invariant 1 (enforced at the façade) or invariant 8.
+
+### 41.9 Telemetry
+
+One span:
+
+- `[:allm, :classify, :start]` — measurements `system_time`; metadata `request_id`, `engine`, `model` (`request.model || engine.classification_model`, `nil` when the adapter's default will apply), `question_count` (`0` for a non-map `:questions`, since `:start` precedes validation).
+- `[:allm, :classify, :stop]` — measurements `duration`, `answer_count` (`0` on error); metadata as `:start` plus `usage` (`nil` on error), `response`, `error` (`nil` on success).
+- `[:allm, :classify, :exception]` — measurements `duration`; metadata `kind`, `reason`, `stacktrace`. Emitted instead of `:stop` for a missing key or an invariant-1 `ArgumentError`, then re-raised.
+
+The measurement key set is stable across both `:stop` paths, as for `:embed`, `:moderate` and the audio spans. `response:` carries the typed answers and the provider's `raw` body, which are judgements about the caller's text; exporting whole metadata maps is an operator decision.
+
+### 41.10 Out of scope for v0.6
+
+- **streaming** — there is no `stream_classify/3`; `stream: true` is ignored
+- **a default threshold, `yes?/2`, or a routing DSL** — §41.1 item 4
+- **client-side chunking of questions** — §41.6
+- **image, audio or video state** — the provider is text-only
+- **an LLM-backed generic classification adapter** — its probabilities would not be calibrated (§41.7)
+- **capability pre-flight** — no catalog carries a classification model (§41.5)
+- **cost population** — needs `llm_db` (§6.3)
+- **model listing and version-pin helpers** — a model string is a model string; `response.model` reports the version that answered
+- **`ALLM.Session` integration, or automatic classification inside `chat/3`** — no conversation state; a hidden second call per turn

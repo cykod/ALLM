@@ -74,6 +74,7 @@ defmodule ALLM.MixProject do
     guides/image_generation.md
     guides/embeddings.md
     guides/moderation.md
+    guides/classification.md
     guides/audio.md
     guides/errors_and_retries.md
     guides/multi_tenant_keys.md

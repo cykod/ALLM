@@ -50,10 +50,11 @@ defmodule ALLM.Test.ClassificationAdapterConformance do
 
   ## What this suite does NOT bind
 
-    * **Invariant 1** (exactly two return shapes) is checked where the
-      adapter is dispatched, outside every adapter, so no conformance run can
-      observe it. Convert every failure shape; the suite will not tell you if
-      you did not.
+    * **Invariant 1** (exactly two return shapes) is enforced by
+      `ALLM.classify/3`, which raises `ArgumentError` naming the adapter on
+      any other shape. That check lives outside every adapter, so no
+      conformance run can observe it. Convert every failure shape; the suite
+      will not tell you if you did not.
     * **Invariant 8** (`opts[:request_timeout]`).
     * For an adapter that short-circuits to a script —
       `ALLM.Providers.FakeClassification` itself, and any provider adapter

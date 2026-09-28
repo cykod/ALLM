@@ -5,7 +5,7 @@ defmodule ExamplesHelpers do
   adapter + default model + key env var name from the `@providers` table, and
   returns a configured `%ALLM.Engine{}` for use in any script.
 
-  Six constructors are exposed:
+  Seven constructors are exposed:
 
     * `engine/1` — chat-adapter engine; reads `:adapter` / `:default_model`
       / `:key_env` from the provider row. Pass `vision: true` to route to
@@ -30,6 +30,10 @@ defmodule ExamplesHelpers do
       `:transcription_adapter` / `:transcription_model` and sets the
       engine's `:transcription_model` field. Raises `ArgumentError` for
       Anthropic, which has no transcription adapter.
+    * `classification_engine/1` — typed-classification engine; reads
+      `:classification_adapter` / `:classification_default_model` and sets
+      the engine's `:classification_model` field, not `:model`. Raises
+      `ArgumentError` for every provider except TypeSafe.
 
   ## Why the Anthropic row's embedding adapter is `Voyage`
 
@@ -73,17 +77,28 @@ defmodule ExamplesHelpers do
   `speech_voice/0`, because voices are provider strings: OpenAI's are names
   (`"alloy"`), ElevenLabs' are ids.
 
-  ## The audio-only arm
+  ## The capability-only arms
 
-  The ElevenLabs row has `adapter: nil`: ElevenLabs has no chat adapter.
-  `chat_provider?/1` is `false` for it, and `run_all.exs` runs a script
+  Two rows have `adapter: nil`, because the provider has no chat adapter: a
+  capability-only arm (audio: `elevenlabs`; classification: `typesafe`).
+  `chat_provider?/1` is `false` for both, and `run_all.exs` runs a script
   without a `# Provider:` marker (the chat, vision, embedding and tool
-  scripts) only on a chat arm, so that arm runs only the audio scripts that
-  name it.
+  scripts) only on a chat arm, so each of these arms runs only the scripts
+  whose marker names it — the audio scripts on `elevenlabs`, the classify
+  script on `typesafe`.
 
-  The audio engines set the slot's own model field (`:speech_model`,
-  `:transcription_model`) rather than `:model`, because `ALLM.synthesize/3`
-  and `ALLM.transcribe/3` never read the chat model.
+  The audio and classification engines set the slot's own model field
+  (`:speech_model`, `:transcription_model`, `:classification_model`) rather
+  than `:model`, because `ALLM.synthesize/3`, `ALLM.transcribe/3` and
+  `ALLM.classify/3` never read the chat model.
+
+  ## Why only the TypeSafe row has a classification adapter
+
+  Typed classification is a single-provider capability: no chat provider
+  offers it through a dedicated endpoint, and faking it with a chat model's
+  structured output would invent probabilities rather than report calibrated
+  ones. So every other row carries `classification_adapter: nil`, and the
+  classify script carries `# Provider: typesafe`.
 
   Auto-loads a project-root `.env` via `:env_loader` (dev-only dep) so reviewers
   who keep both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` in `.env` don't have to
@@ -111,7 +126,10 @@ defmodule ExamplesHelpers do
       speech_model: "gpt-4o-mini-tts",
       speech_voice: "alloy",
       transcription_adapter: ALLM.Providers.OpenAI.Transcription,
-      transcription_model: "gpt-transcribe"
+      transcription_model: "gpt-transcribe",
+      # Typed classification is TypeSafe-only — see the moduledoc.
+      classification_adapter: nil,
+      classification_default_model: nil
     },
     "anthropic" => %{
       adapter: ALLM.Providers.Anthropic,
@@ -134,7 +152,9 @@ defmodule ExamplesHelpers do
       speech_adapter: nil,
       speech_model: nil,
       transcription_adapter: nil,
-      transcription_model: nil
+      transcription_model: nil,
+      classification_adapter: nil,
+      classification_default_model: nil
     },
     "gemini" => %{
       adapter: ALLM.Providers.Gemini,
@@ -155,7 +175,9 @@ defmodule ExamplesHelpers do
       speech_adapter: nil,
       speech_model: nil,
       transcription_adapter: ALLM.Providers.Gemini.Transcription,
-      transcription_model: "gemini-flash-latest"
+      transcription_model: "gemini-flash-latest",
+      classification_adapter: nil,
+      classification_default_model: nil
     },
     # ElevenLabs is an audio-only arm: there is no chat, image, embedding or
     # moderation adapter, so `adapter: nil` and `chat_provider?/1` is false.
@@ -178,7 +200,32 @@ defmodule ExamplesHelpers do
       # default voice, confirmed live.
       speech_voice: "JBFqnCBsd6RMkjVDRZzb",
       transcription_adapter: ALLM.Providers.ElevenLabs.Transcription,
-      transcription_model: "scribe_v2"
+      transcription_model: "scribe_v2",
+      classification_adapter: nil,
+      classification_default_model: nil
+    },
+    # TypeSafe is a classification-only arm: Jev is a classification model,
+    # not a chat model, so `adapter: nil` and `chat_provider?/1` is false.
+    # `run_all.exs` runs only the scripts whose `# Provider:` marker names
+    # typesafe. `key_env` is still required: `capability_engine/2` reads it.
+    "typesafe" => %{
+      adapter: nil,
+      default_model: nil,
+      vision_default_model: nil,
+      key_env: "TYPESAFE_API_KEY",
+      image_adapter: nil,
+      image_default_model: nil,
+      embed_adapter: nil,
+      embedding_default_model: nil,
+      moderation_adapter: nil,
+      moderation_default_model: nil,
+      speech_adapter: nil,
+      speech_model: nil,
+      transcription_adapter: nil,
+      transcription_model: nil,
+      classification_adapter: ALLM.Providers.TypeSafe.Classification,
+      # An alias that moves; set ALLM_CLASSIFICATION_MODEL to pin a version.
+      classification_default_model: "jev-latest"
     }
   }
 
@@ -392,6 +439,37 @@ defmodule ExamplesHelpers do
   end
 
   @doc """
+  Build a `%ALLM.Engine{}` for the active provider's typed-classification
+  adapter.
+
+  Reads `:classification_adapter` / `:classification_default_model` from the
+  provider row and puts the model on the engine's `:classification_model`
+  field, never on `:model` — `ALLM.classify/3` does not read the chat model.
+  The key comes from the row's `:key_env`.
+
+  Raises `ArgumentError` naming the provider when the active row has no
+  classification adapter, which today is every provider except TypeSafe. The
+  classify script carries `# Provider: typesafe`, so `run_all.exs` skips it on
+  the other arms rather than reaching this raise.
+
+  `extra_opts` is merged on top of the helper defaults;
+  `ALLM_CLASSIFICATION_MODEL` overrides the default model when set.
+  """
+  def classification_engine(extra_opts \\ []) do
+    capability_engine(
+      %{
+        adapter_key: :classification_adapter,
+        model_key: :classification_default_model,
+        engine_model_field: :classification_model,
+        key_env_key: nil,
+        model_env: "ALLM_CLASSIFICATION_MODEL",
+        unavailable: "does not have a classification_adapter; this script is TypeSafe-only"
+      },
+      extra_opts
+    )
+  end
+
+  @doc """
   Whether `provider` (default: the active `ALLM_PROVIDER`) has a chat
   adapter. `run_all.exs` runs a script without a `# Provider:` marker only
   when this is `true`. Raises `ArgumentError` for an unknown provider.
@@ -421,7 +499,8 @@ defmodule ExamplesHelpers do
   def provider_rows, do: @providers
 
   # `image_engine/1`, `embedding_engine/1`, `moderation_engine/1`,
-  # `speech_engine/1` and `transcription_engine/1` are one constructor
+  # `speech_engine/1`, `transcription_engine/1` and `classification_engine/1`
+  # are one constructor
   # differing only in a handful of values, so they share one body
   # (`agent-spec/IMPLEMENTATION.md:68` — the second-caller trigger is two
   # implementations and is semantic, not byte-level; `:235` requires every
@@ -433,9 +512,10 @@ defmodule ExamplesHelpers do
   #   * `:model_key`    — provider-row key for the capability's default model.
   #   * `:engine_model_field` — the `%ALLM.Engine{}` field the model lands on.
   #     Images, embeddings and moderation pass the shared `:model`, which is
-  #     what their façades read. The audio capabilities pass
-  #     `:speech_model` / `:transcription_model`, because their façades never
-  #     read `:model` (a chat model name is never an audio model name).
+  #     what their façades read. The audio and classification capabilities
+  #     pass `:speech_model` / `:transcription_model` / `:classification_model`,
+  #     because their façades never read `:model` (a chat model name is never
+  #     an audio or classification model name).
   #   * `:key_env_key`  — provider-row key naming a capability-specific
   #     key env var, falling back to the row's chat `:key_env`. Only embeddings
   #     uses it (the Anthropic row's `VOYAGE_API_KEY`); `nil` for the others.

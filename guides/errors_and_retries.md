@@ -11,14 +11,15 @@ retry, the retry-policy slot, and how to observe both via telemetry.
 | Module | When it fires | Recovery |
 |---|---|---|
 | `ALLM.Error.AdapterError` | Chat provider HTTP / wire-protocol failure | Pattern-match on `:reason`; see the table below |
-| `ALLM.Error.EngineError` | Engine misconfiguration: `:missing_adapter`, `:missing_stream_adapter`, `:missing_model`, `:missing_key`, `:unknown_tool`, `:invalid_engine`, `:unsupported_response_format`, or an empty capability slot (`:no_image_adapter`, `:no_embed_adapter`, `:no_moderation_adapter`, `:no_speech_adapter`, `:no_transcription_adapter`) | Fix engine construction or key setup; not retryable |
+| `ALLM.Error.EngineError` | Engine misconfiguration: `:missing_adapter`, `:missing_stream_adapter`, `:missing_model`, `:missing_key`, `:unknown_tool`, `:invalid_engine`, `:unsupported_response_format`, or an empty capability slot (`:no_image_adapter`, `:no_embed_adapter`, `:no_moderation_adapter`, `:no_classification_adapter`, `:no_speech_adapter`, `:no_transcription_adapter`) | Fix engine construction or key setup; not retryable |
 | `ALLM.Error.SessionError` | Session-state violation (`:session_in_error_state`, `:invalid_status_for_operation`, `:no_pending_tool_call`, `:unknown_tool_call_id`) | Pattern-match on `:reason` |
 | `ALLM.Error.StreamError` | Stream-protocol failure (`:adapter_error`, `:cancelled`, `:timeout`, `:malformed_event`, `:unknown`) | Inspect `:cause` for `:adapter_error` |
 | `ALLM.Error.ToolError` | Tool execution failed | See the `:on_tool_error` policy |
-| `ALLM.Error.ValidationError` | Request validation failed pre-flight, e.g. `:invalid_request`, `:invalid_message`, `:invalid_tool`, `:unsupported_capability`, or a capability-specific reason (`:invalid_image_request`, `:invalid_embedding_request`, `:invalid_moderation_request`, `:invalid_speech_request`, `:invalid_transcription_request`) | Fix the request; not retryable. `:errors` lists the failing fields |
+| `ALLM.Error.ValidationError` | Request validation failed pre-flight, e.g. `:invalid_request`, `:invalid_message`, `:invalid_tool`, `:unsupported_capability`, or a capability-specific reason (`:invalid_image_request`, `:invalid_embedding_request`, `:invalid_moderation_request`, `:invalid_classification_request`, `:invalid_speech_request`, `:invalid_transcription_request`) | Fix the request; not retryable. `:errors` lists the failing fields |
 | `ALLM.Error.ImageAdapterError` | Image provider failure | Pattern-match on `:reason` |
 | `ALLM.Error.EmbeddingAdapterError` | Embedding provider failure | Pattern-match on `:reason` |
 | `ALLM.Error.ModerationAdapterError` | Moderation provider failure | Pattern-match on `:reason` |
+| `ALLM.Error.ClassificationAdapterError` | Classification provider failure | Pattern-match on `:reason`; TypeSafe's request id is in `metadata.typesafe_request_id` |
 | `ALLM.Error.SpeechAdapterError` | Text-to-speech provider failure | Pattern-match on `:reason` |
 | `ALLM.Error.TranscriptionAdapterError` | Speech-to-text provider failure | Pattern-match on `:reason` |
 
@@ -56,13 +57,16 @@ most. Its closed `:reason` set:
 | `:unknown` | Catch-all; the original term is kept in `:cause` |
 
 The capability errors (`ImageAdapterError`, `EmbeddingAdapterError`,
-`ModerationAdapterError`, `SpeechAdapterError`,
-`TranscriptionAdapterError`) share most of this vocabulary —
+`ModerationAdapterError`, `ClassificationAdapterError`,
+`SpeechAdapterError`, `TranscriptionAdapterError`) share most of this vocabulary —
 `:rate_limited`, `:authentication_failed`, `:invalid_request`,
 `:context_length_exceeded`, `:provider_unavailable`, `:timeout`,
 `:network_error`, `:malformed_response`, `:unsupported_feature`,
 `:unknown` — plus a few of their own, such as `:batch_too_large`
-(embeddings, moderation) and `:unsupported_operation` (images). Each
+(embeddings, moderation) and `:unsupported_operation` (images).
+`ClassificationAdapterError` has neither `:unsupported_feature` nor
+`:batch_too_large`: a classification request has no optional field a
+provider could fail to express, and questions are never chunked. Each
 module's docs list its full set.
 
 ## Which calls retry
@@ -72,7 +76,7 @@ retried:
 
 * **Retried:** the capability façades — `ALLM.generate_image/3`,
   `ALLM.edit_image/4`, `ALLM.embed/3`, `ALLM.moderate/3`,
-  `ALLM.synthesize/3` and `ALLM.transcribe/3`. They retry
+  `ALLM.classify/3`, `ALLM.synthesize/3` and `ALLM.transcribe/3`. They retry
   `:rate_limited`, `:provider_unavailable`, `:timeout` and
   `:network_error`; every other reason comes back immediately.
   `ALLM.embed/3` retries each batch chunk under its own budget.
@@ -279,7 +283,7 @@ here:
 | `[:allm, :generate \| :stream \| :step \| :chat, :stop]` | `duration`, `monotonic_time` | `request_id`, `engine`, `model` + the result (`response: nil` on `:stream`, which closes before the stream drains) |
 | `[:allm, :<span>, :exception]` | `duration`, `monotonic_time` | start metadata + `kind`, `reason`, `stacktrace` |
 | `[:allm, :tool, :start \| :stop \| :exception]` | `duration` on `:stop` | `tool`, `tool_call`, `engine`, `model`, `request_id`, + `result` on `:stop` |
-| `[:allm, :image \| :embed \| :moderate \| :synthesize \| :transcribe, :stop]` | `duration` + per-capability counts | `request_id`, `engine`, `model`, `usage`, `response`, `error` |
+| `[:allm, :image \| :embed \| :moderate \| :classify \| :synthesize \| :transcribe, :stop]` | `duration` + per-capability counts | `request_id`, `engine`, `model`, `usage`, `response`, `error` |
 
 `[:allm, :adapter, :retry]` fires once per retry, before the sleep —
 so from the capability façades, never from a chat call. Attach a
@@ -339,5 +343,7 @@ runs once the retry policy's attempts are used up.)
 * `audio.md` — speech and transcription errors, and how a failed audio
   stream ends.
 * `moderation.md` — moderation errors and batch limits.
+* `classification.md` — classification errors, and the statuses TypeSafe
+  sends for each.
 * `embeddings.md` — embedding errors and per-chunk retries.
 * `ALLM.Retry` and `ALLM.Telemetry` module docs for the full reference.

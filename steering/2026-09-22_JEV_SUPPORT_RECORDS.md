@@ -10,8 +10,8 @@ Companion to `steering/2026-09-22_JEV_SUPPORT.md`. Bookkeeping lives here; the d
 | 24.2 | Completed | `ALLM.ClassificationAdapter`, 12 Engine sites, `FakeClassification`, conformance harness (`@case_count 9`) + stub + self-test |
 | 24.3 | Completed | `ALLM.classify/3`, `ALLM.classification_request/2`, classification internals block, `:classify` span, `@public_facade` +2 |
 | 24.4 | Completed | `ALLM.Providers.TypeSafe.Classification`, recorder + 14-arm live probe, 14 recorded + 5 synthesized fixtures, `Support.Redact.typesafe/1` |
-| 24.5 | Not Started | |
-| 24.6 | Not Started | |
+| 24.5 | Completed (README gate resolved by `df59de0`; see §24.5 Blocker and Fix pass) | Spec §41 + §27/§29/§35.7 amendments, `guides/classification.md` (registered ×3), fakes/errors guide rows, typesafe examples arm + script 22, live gate green, CHANGELOG |
+| 24.6 | Completed | `[CHORE]` sweep: every Phase 24 ticket re-measured; the README ticket CLOSED by `a1d03c3` (predicate → 1), the rest re-filed |
 
 ## 24.1 — Layer A classification data
 
@@ -240,3 +240,82 @@ Mutants (each run then restored from a scratch copy; `cmp` clean afterwards): `K
 - Decoder sweep: a scratch fuzz over `recorded/mixed_questions.json` (every answer field, every score-map level, `answers`, `usage`, `model` × 12 hostile JSON values, 360 bodies) → 0 raises after the fix, 27 (all `to_float!/1`) against the checkpoint file. No other raising conversion on provider data.
 - Deferred to the phase-end polish pass (Low): code review F2 / functional KI-2 (probability and `confidence` range checks), code review F3 (`"0".."0"` text when the level count is unknown — error text in code, not a governed document, so outside the false-sentence carve-out).
 - Gates: `mix test` → exit 0, `664 doctests, 33 properties, 5487 tests, 0 failures, 14 excluded, 1 skipped`; `--seed 0` same; `mix test test/allm/providers/typesafe/` → `3 doctests, 79 tests, 0 failures`; format, credo `--strict`, dialyzer → 0; docs audit `comm -13` → only `Files scanned:    140`. Fixtures byte-identical to the checkpoint (`cmp` loop over all 19).
+
+## 24.5 — Spec §41, guide, examples, wiring
+
+### Start Green (2026-09-28, HEAD `0c9c8b5`)
+
+- `mix test` → exit 0: `664 doctests, 33 properties, 5487 tests, 0 failures, 14 excluded, 1 skipped`, zero `warning` lines. Tree clean; `README.md` clean, no stash needed.
+
+### Checklist
+
+- [x] Spec: `## 41. v0.6 — Typed classification` after §40 (41.1 goals … 41.10 out of scope, mirroring §39; intro carries the §35.10 reconciliation and the two departures from §39.1 goal 5). Amendment blocks: §27 (after the Phase 26 module block), §29 (after the Phase 26 telemetry block), §35.7 fourth carve-out (after the Phase 26 amendment block, Decision #10 text verbatim). Every block opens `> **Phase 24 amendment (commits `7de1c1c..0c9c8b5`; docs land in the 24.5 commit).**` (the Phase 25/26 wording). §41.7's wire table marks every provider row documented / observed / inferred, and states the 24.4 OBSERVED facts (400 not 422; 422 only for schema validation; `max_tokens_exceeded`; unknown fields ignored; `x-typesafe-request-id` on every response; no question cap to 512; error metadata keys).
+- [x] `guides/classification.md` (20.0 KB, 12 `iex>` examples all under FakeClassification, 4 fences), registered in `mix.exs` `@guides`, `test/guides_test.exs` `@guides`, `test/guides_doctest_test.exs` (`doctest_file("guides/classification.md")`). Sections: engine slot; first call; the three question types (when to use each); routing on confidence; pinning the model; one call, many questions; validation and errors (incl. "What TypeSafe sends back", observed/documented/inferred per row); telemetry; serializable; testing.
+- [x] `guides/fakes.md` (table row, no-script default sentence, where-to-next), `guides/errors_and_retries.md` (EngineError/ValidationError atoms, error-module row, capability-vocabulary paragraph, retried façade list, stop-span row, where-to-next).
+- [x] Examples per Decision #14: `"typesafe"` row (elevenlabs shape, `classification_adapter: ALLM.Providers.TypeSafe.Classification`, `classification_default_model: "jev-latest"`, `key_env: "TYPESAFE_API_KEY"`); both keys `nil` on the four other rows; `classification_engine/1` as a `capability_engine/2` spec map (`engine_model_field: :classification_model`, `model_env: "ALLM_CLASSIFICATION_MODEL"`); moduledoc `## The capability-only arms` + `## Why only the TypeSafe row has a classification adapter`; `run_all.exs` comment only (no logic change); `examples/README.md` intro, provider-table snippet, helper paragraph (the old :119 wording), key table (new Classification column + `typesafe` row), prerequisites key list, `## Typed classification (22)`, scripts table row, run command, RUN_OUTPUT list, cost row, models note; the "skip 22" reservation sentence struck.
+- [x] `examples/22_classify_ticket.exs` (`# Provider: typesafe`).
+- [x] `test/allm/examples_helpers_test.exs`: predicate → `name not in ~w(elevenlabs typesafe)` (semantic change, MODIFY), + "the typesafe row is classification-only…", + "every row carries the classification keys, nil except on typesafe". 13 → 15 tests. No env-driven builder test.
+- [x] README `[DOC]` ticket filed in `.work/ASKS.md` (mon 9/28 12am) with predicate `grep -c classification README.md` (≥ 1 when done); measured 0, exit 1.
+- [x] `examples/RUN_OUTPUT_TYPESAFE.md` = the live run's stdout verbatim (stderr was empty).
+- [x] CHANGELOG folded into the untagged top `## [REL] v0.6.0` (`git describe --tags --abbrev=0` → `v0.5.0`), derived from `git diff v0.5.0..HEAD lib/`: the EngineError/ValidationError breaking bullet gains the two classification atoms; six "Other changes" bullets; section title gains "typed classification".
+- [x] HANDOFF: conformance "NOT bind" row and the 24.4 wire-facts row discharged.
+
+### Live gate transcript (2026-09-28; keys from `.env` via the helper's EnvLoader; no key printed)
+
+- `ALLM_PROVIDER=typesafe mix run examples/run_all.exs` → **exit 0**. `01–21 SKIP (provider gate), 22 OK, 23–28 SKIP (provider gate)` — only script 22 ran. `OK: classify ticket — department=billing (confidence 1.0) frustration=0.99 ~annoyed (confidence 0.98) refund P(yes)=0.99 model="jev-1.13.0" id="req_01a0e568…" input_tokens=407`. Plus one standalone run of script 22 before it (same result, 407 tokens). Cost: 2 × 407 = 814 input tokens × $0.042/Mtok ≈ **$0.00003**.
+- Key-leak check: `( set -a; . ./.env; set +a; grep -lF "$TYPESAFE_API_KEY" examples/RUN_OUTPUT_*.md )` → exit 1.
+- `ALLM_PROVIDER=openai mix run examples/run_all.exs` → **exit 0**, full per-script line: `01–12 OK, 14–21 OK, 22 SKIP (provider gate), 23–25 OK, 26–27 SKIP (provider gate), 28 OK`. The `--- NN_` list diffs empty (exit 0) against HEAD's script set computed from HEAD's markers (`git show HEAD:examples/NN_*.exs`) and against the committed `RUN_OUTPUT_OPENAI.md`'s `--- ` lines. No blocked arm, so the blocked-arm rule did not apply. `RUN_OUTPUT_OPENAI.md` **not** regenerated (batch instruction). Cost ≈ the README's ~$0.13 OpenAI-arm estimate (not separately metered).
+
+### Gates [G]
+
+- `mix test` → **exit 2**: `676 doctests, 33 properties, 5493 tests, 1 failure, 14 excluded, 1 skipped` (+12 doctests = the guide's examples, +6 tests vs Start Green); zero `warning` lines. `mix test --seed 0` → exit 2, same counts, same single failure.
+- The failure: `test/readme_getting_started_test.exs:102` "README Worked examples section cross-links every guide" — `expected README's Worked examples section to link to guides/classification.md`. See Blocker below.
+- `mix format --check-formatted` → 0; `mix credo --strict` → 0 (4683 mods/funs, no issues); `mix dialyzer` → `Total errors: 0`.
+- Docs audit `comm -13` → only `Files scanned:    141` (was 140; the new guide). No new hit line. `mix run scripts/audit_user_docs.exs guides/classification.md` → `Total hits: 0`.
+- `mix run scripts/check_guide_fences.exs` → `71 fences compiled, 14 skipped.` (was 67; +4 from the new guide, none skipped).
+- `mix docs` → exit 0, 2 warning lines, both the pre-existing `ALLM.SpeechAdapter.synthesize/2` reference; none from this batch.
+- Process-global grep: the same ten files as 24.4, all `async: false`; no new file. `examples_helpers_test.exs` (async: true) has no `System.put_env`.
+- `conformance/`: `mix test` → exit 0 (`206 tests, 0 failures, 1 skipped`); `mix credo --strict` → 0; `mix format --check-formatted` → 0.
+
+### Blocker — README gate vs "README is not in the tree"
+
+`test/readme_getting_started_test.exs:102` discovers guides from `mix.exs` `docs[:extras]` and requires README's `## Worked examples` section to link each one. Registering `guides/classification.md` in `mix.exs` (required by the design and by `test/guides_test.exs`'s parity meta-tests) therefore requires a README edit, while the design's Module Tree, CLAUDE.md and the batch instruction all forbid touching README in this phase. The design missed this fail-closed gate (its audit-gate table does not list it). Not resolved by the implementer: README is untouched. The one-line fix, for whoever decides (a `[DOC]` commit before/with the phase commit, or an owner-approved deviation), goes after the `guides/moderation.md` line (README.md:227):
+
+```
+- [`guides/classification.md`](guides/classification.md) — `classify/3`, choice / score / yes-no questions, confidence routing, TypeSafe Jev.
+```
+
+With it applied, the README `[DOC]` ticket's predicate goes to ≥ 1 for the guide list; the capability rows would remain.
+
+**RESOLVED by `df59de0`** (stand-alone `[DOC]` commit, `README.md:228`). The fix-pass `mix test` run exits 0: `676 doctests, 33 properties, 5493 tests, 0 failures, 14 excluded, 1 skipped`. The capability-table half is still open (§24.6 ledger, corrected).
+
+### Fix pass (2026-09-28; reviews under `.work/*/2026-09-27-phase-24-5*`)
+
+- Code review F1 (Medium): the README ticket's predicate was a proxy that `df59de0` had already turned green. The §24.6 ledger row is corrected, and a corrected `[DISPOSITION]` line is appended to `.work/ASKS.md` with the capability-row predicate. `grep -cE '^\| *Classification *\| *`:classification_adapter`' README.md` → 0 (exit 1) at `df59de0`; the same command on a scratch copy with the proposed row → 1 (exit 0).
+- F2: `guides/classification.md` "Pinning the model" now says a per-call `model:` opt is ignored for a pre-built request. Checked with FakeClassification: per-call on a state string gives `"per-call"`; a built request with `model: "built"` plus a per-call `model: "per-call"` gives `"built"`.
+- F3: `examples/22_classify_ticket.exs` header now says ~400 input tokens (live: 407). Comment-only change; the live run was not repeated.
+- F4: the "invented top-level field → 200" claim is now labelled observed once, in an unrecorded exploratory call (§24.4 arm 11 note), in spec §41.7 (table row and point 1) and in the guide. No recorder arm was added.
+- Gates: `mix test` exit 0 and `mix test --seed 0` exit 0 (both 5493 tests, 0 failures); format 0; credo 0; dialyzer `Total errors: 0`; `check_guide_fences` → `71 fences compiled, 14 skipped.`; docs audit `comm -13` against the baseline → only `Files scanned:    141`.
+
+### Deviations / notes
+
+- `[tactical]` The live gate also ran script 22 standalone once before `run_all.exs` (first live check of the script).
+- `[tactical]` Script 22 asserts two verdicts beyond shape (billing routing; refund P(yes) > 0.5) as the moderation script asserts a threat is flagged; everything else is shape and range.
+- `[tactical]` `examples/README.md` gained a cost row and a models note for the TypeSafe arm beyond the Module Tree's listed items (same file, same row).
+- `[tactical]` The CHANGELOG section title gained "typed classification".
+- No `lib/` change. The conformance moduledoc edit (HANDOFF row) is docs-only.
+
+## 24.6 — `[CHORE]` sweep
+
+Module Tree: Phase 24's filed deferrals. Each re-run on 2026-09-28 from the repo root; none is closed, because every one targets released code outside every Phase 24 Module Tree or README.
+
+| Ticket | Predicate | Result | Disposition |
+|---|---|---|---|
+| thu 9/24 3am `[DEFERRED-DRY]` hydrate_usage/1 | `grep -l 'defp hydrate_usage' lib/allm/*.ex \| wc -l` | 6 (exit 0) | re-filed (owner: stand-alone `[REFACTOR]`); `[DISPOSITION]` line appended mon 9/28 12am |
+| same, Fake cursor copies | `grep -l 'defp cursor_key_id' lib/allm/providers/*.ex \| wc -l` | 6 (exit 0) | same line |
+| mon 9/28 `[DOC]` README (24.5) | `grep -cE '^\| *Classification *\| *`:classification_adapter`' README.md` (capability-table row). CORRECTED by the 24.5/24.6 fix pass: the ticket's original predicate `grep -c classification README.md` was a proxy — it measured 0 (exit 1) before `df59de0`, and 1 (exit 0) after it, because `df59de0` added only the guide-list line (`README.md:228`) | 0 (exit 1), re-run mon 9/28 at HEAD `df59de0`; old proxy predicate → 1 (exit 0) | half done: guide list landed in `df59de0`; capability-table row still missing. Re-filed with the tightened predicate; corrected `[DISPOSITION]` line (fix pass) |
+| sun 9/27 11pm `[DEFERRED-DRY]` dispatch clones | `grep -cE '^  @retryable_[a-z]+_reasons \[' lib/allm.ex`; `grep -cE '^  defp dispatch_(moderate\|synthesize\|transcribe\|classify)_attempt\(' lib/allm.ex` | 6 (exit 0); 4 (exit 0) | re-filed, owner stand-alone `[REFACTOR]` |
+| mon 9/28 `[CARRY]` exception in `:cause` (siblings) | `grep -rn 'cause: HTTPResponse.sanitize_cause' lib/allm/providers/ \| wc -l` | 21 (exit 0) | re-filed |
+| 24.2 HANDOFF row, malformed `{:retry_until_call, n}` | `grep -nE '\{:retry_until_call, [nm]\} ->' lib/allm/providers/fake_*.ex \| wc -l` | 9 (exit 0) | re-filed, owner stand-alone `[CHORE]` |
+
+The last three share one `[DISPOSITION]` line in `.work/ASKS.md` (mon 9/28 12am). HANDOFF: the 24.1-fix `hydrate_usage` row discharged. [G] for 24.6 is the 24.5 run above (no files changed beyond `.work/`).
