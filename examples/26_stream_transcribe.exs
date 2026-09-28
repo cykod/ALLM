@@ -18,6 +18,12 @@
 #               `ALLM.AudioStream.collect_transcription/1` and asserts the
 #               text mentions "fox".
 #
+#               The stream opts in to word spans with `timestamps: true`, so
+#               each committed segment carries `:spans` (the adapter waits up
+#               to 1 s per segment for the provider's timestamped frame) and
+#               the collected response's `spans` is asserted to be a
+#               non-empty list whose `:word` entries carry start/end times.
+#
 #               The WAV fixture is a *streaming* WAV: its RIFF size and its
 #               `data` chunk size are both `0xFFFFFFFF` ("unknown length"),
 #               so a reader must take the data chunk to the end of the file.
@@ -49,27 +55,45 @@ chunks = ExamplesHelpers.pcm_chunks(pcm, rate, 100)
 # `engine.transcription_model` ("scribe_v2", the batch model) is deliberately
 # NOT used here: the realtime endpoint takes its own model, and the adapter
 # fills in its realtime default.
-case ALLM.stream_transcribe(engine, chunks, sample_rate: rate) do
+case ALLM.stream_transcribe(engine, chunks, sample_rate: rate, timestamps: true) do
   {:ok, stream} ->
     events =
       stream
       |> Stream.each(fn
-        {:partial_transcript, %{text: text}} -> IO.puts("  partial:   #{inspect(text)}")
-        {:committed_transcript, %{text: text}} -> IO.puts("  committed: #{inspect(text)}")
-        _ -> :ok
+        {:partial_transcript, %{text: text}} ->
+          IO.puts("  partial:   #{inspect(text)}")
+
+        {:committed_transcript, %{text: text} = c} ->
+          IO.puts("  committed: #{inspect(text)} spans=#{length(c[:spans] || [])}")
+
+        _ ->
+          :ok
       end)
       |> Enum.to_list()
 
     case ALLM.AudioStream.collect_transcription(events) do
       {:ok, %ALLM.TranscriptionResponse{text: text} = resp} ->
-        if String.contains?(String.downcase(text), "fox") do
-          IO.puts(
-            "OK: stream transcribe — text=#{inspect(text)} model=#{inspect(resp.model)} " <>
-              "chunks=#{length(chunks)} sample_rate=#{rate} " <>
-              "duration_seconds=#{inspect(resp.duration_seconds)}"
-          )
-        else
-          ExamplesHelpers.fail!("expected the transcript to mention \"fox\", got #{inspect(text)}")
+        words = Enum.filter(resp.spans || [], &(&1.kind == :word))
+
+        cond do
+          not String.contains?(String.downcase(text), "fox") ->
+            ExamplesHelpers.fail!(
+              "expected the transcript to mention \"fox\", got #{inspect(text)}"
+            )
+
+          words == [] or
+              not Enum.all?(words, &(is_number(&1.start_seconds) and is_number(&1.end_seconds))) ->
+            ExamplesHelpers.fail!(
+              "expected timed :word spans on the collected response, got #{inspect(resp.spans)}"
+            )
+
+          true ->
+            IO.puts(
+              "OK: stream transcribe — text=#{inspect(text)} model=#{inspect(resp.model)} " <>
+                "chunks=#{length(chunks)} sample_rate=#{rate} " <>
+                "duration_seconds=#{inspect(resp.duration_seconds)} " <>
+                "words=#{length(words)} first_word=#{inspect(hd(words).text)}@#{hd(words).start_seconds}s"
+            )
         end
 
       {:error, error} ->

@@ -51,6 +51,14 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   # overrides them.
   @structural_fields ["file", "model_id", "language_code"]
 
+  # Both span flags are honoured, batch and realtime; neither is refused.
+  @span_flags [:timestamps, :logprobs]
+
+  # ElevenLabs `words[].type` values that map to a `TranscriptSpan` kind of
+  # the same name; any other string is `:other`. A literal table, so no
+  # provider string ever becomes an atom.
+  @span_kinds %{"word" => :word, "spacing" => :spacing, "audio_event" => :audio_event}
+
   # A non-file upload is named `audio.<ext>` from `ALLM.Audio.extension_for_mime/1`,
   # and `audio.bin` when the mime has no known extension. ElevenLabs reads the
   # content, not the name: the 2026-09-26 probe sent a valid mp3 as
@@ -89,8 +97,9 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   | `model_id` | `:model`, or `#{@default_model}` when `nil` |
   | `language_code` | `:language`, sent when set |
   | `prompt` | ElevenLabs has no such field; refused (see gates) |
+  | `timestamps_granularity` | `"word"`, sent when `:timestamps` or `:logprobs` is `true` (confirmed accepted 2026-09-28) |
   | Options | each `ALLM.TranscriptionRequest.options` entry becomes one form field (a list becomes one field per element); never overrides the fields above |
-  | Response | `{"text", "language_code", "language_probability", "audio_duration_secs", "transcription_id", "words"}` |
+  | Response | `{"text", "language_code", "language_probability", "audio_duration_secs", "transcription_id", "words"}`; each `words` entry is `{text, type, start, end, logprob}` |
   | Language | `language_code` → `:language`, as ElevenLabs reports it: an ISO 639-3 code such as `"eng"` |
   | Duration | `audio_duration_secs` → `:duration_seconds` |
   | Correlation | `transcription_id` → `:id`. The response carries no `request-id` header |
@@ -124,6 +133,23 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   `words` list. `:model` is the model that was sent. `opts[:request_id]` is
   reflected onto `response.request_id`, and `request.metadata` round-trips
   onto `response.metadata`.
+
+  ## Word timings and log-probabilities
+
+  Both span flags are supported and never refused. With `timestamps: true`
+  or `logprobs: true` (exactly `true`), `:spans` holds one
+  `ALLM.TranscriptSpan` per `words` entry, in order: `type` `"word"`,
+  `"spacing"` and `"audio_event"` map to the kind of the same name, and any
+  other type to `:other`. `start`/`end` are kept only with `timestamps: true`
+  and `logprob` only with `logprobs: true`, although ElevenLabs sends all
+  three. With both flags off `:spans` is `nil` and `words` is not read.
+
+  A 200 body with no `words` list is `{:ok, _}` with `spans: []` when the
+  transcript is blank (ElevenLabs returned `words: []` for a silent clip on
+  2026-09-28). When the transcript is not blank it is `:unsupported_feature`
+  with `metadata.cause: :absent_from_response`, `metadata.field` naming the
+  first flag set, and the transcript on `metadata.text`. A `words` that is
+  not a list of objects with a string `text` is `:malformed_response`.
 
   ## No retries
 
@@ -207,6 +233,10 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   **Refused before any I/O** with `:unsupported_feature`: a non-`nil`
   `:prompt` (ElevenLabs has no prompt field).
 
+  **Spans:** `timestamps: true` and `logprobs: true` are both honoured; see
+  "Word timings and log-probabilities" in the module doc. Under the
+  `transcription_script` hand-off the Fake is told both flags are supported.
+
   **No retries:** one HTTP attempt per call, whatever the error.
 
   ## Examples
@@ -217,6 +247,13 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
       iex> {:ok, resp} = ALLM.Providers.ElevenLabs.Transcription.transcribe(req, opts)
       iex> resp.text
       "hello"
+
+      iex> audio = ALLM.Audio.from_binary("ID3", "audio/mpeg")
+      iex> req = ALLM.TranscriptionRequest.new(audio: audio, logprobs: true)
+      iex> opts = [adapter_opts: [transcription_script: [{:ok, "hello"}]]]
+      iex> {:ok, resp} = ALLM.Providers.ElevenLabs.Transcription.transcribe(req, opts)
+      iex> for s <- resp.spans, do: {s.text, s.start_seconds, s.logprob}
+      [{"hello", nil, -0.1}]
 
       iex> audio = ALLM.Audio.from_binary("ID3", "audio/mpeg")
       iex> req = ALLM.TranscriptionRequest.new(audio: audio, prompt: "names: Ada")
@@ -235,7 +272,9 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
       _script ->
         FakeTranscription.transcribe(
           request,
-          TranscriptionSupport.with_own_cap(opts, @max_audio_bytes)
+          opts
+          |> TranscriptionSupport.with_own_cap(@max_audio_bytes)
+          |> TranscriptionSupport.with_span_flags(@span_flags)
         )
     end
   end
@@ -320,7 +359,9 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   `request.language` is set), plus every `request.options` entry as a
   further query parameter (for example `%{"include_timestamps" => true}`);
   an option named `model_id`, `audio_format` or `commit_strategy` is
-  dropped. Audio goes out as
+  dropped. With `timestamps: true` or `logprobs: true`,
+  `include_timestamps=true` is set by the adapter and overrides the option.
+  Audio goes out as
   `{"message_type": "input_audio_chunk", "audio_base_64": …, "commit": false, "sample_rate": rate}`,
   one frame per input chunk and at most #{@max_chunk_ms} ms of audio per
   frame (a longer chunk is split). **Chunk boundaries are the caller's:** a
@@ -340,27 +381,44 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   **Events.** `:partial_transcript` for each server partial (a partial
   replaces the previous one), `:committed_transcript` for each server
   `committed_transcript` frame, in commit order. A
-  `committed_transcript_with_timestamps` frame (sent only when `options`
-  sets `"include_timestamps" => true`, and carrying a language only with
-  `"include_language_detection" => true`, observed 2026-09-27) never emits
-  an event of its own: its `language_code` becomes the `:language` of the
-  segment it belongs to. The two frames of a segment are paired by commit
-  order (the n-th timestamped frame belongs to the n-th committed segment),
-  never by comparing texts, so two segments with the same text each keep
-  their own language. A `warning` frame is logged with `Logger.warning/1`
-  and emits nothing.
+  `committed_transcript_with_timestamps` frame (sent only when
+  `include_timestamps` is on, through a span flag or `options`, and carrying
+  a language only with `"include_language_detection" => true`, observed
+  2026-09-27) never emits an event of its own: its `language_code` becomes
+  the `:language` of the segment it belongs to, and with a span flag set its
+  `words` become the segment's `:spans`. The two frames of a segment are
+  paired by commit order (the n-th timestamped frame belongs to the n-th
+  committed segment), never by comparing texts, so two segments with the
+  same text each keep their own language. A `warning` frame is logged with
+  `Logger.warning/1` and emits nothing.
+
+  **Spans.** With `timestamps: true` or `logprobs: true` every
+  `:committed_transcript` carries a `:spans` key, built as on the batch
+  path, with word times relative to the start of the session's audio (the
+  2026-09-28 two-segment recording shows the second segment's words
+  starting after the first's end). A segment's `:spans` is `nil` when its
+  words cannot be trusted: its timestamped frame never arrived before the
+  segment was released, that frame's trimmed text differs from the
+  segment's (the commit-order pairing went wrong), or its `words` is
+  malformed or missing on a non-blank text. A blank segment whose frame has
+  no words has `spans: []`. `:transcription_completed` then carries
+  `:spans`, the committed segments' non-`nil` spans concatenated in commit
+  order (`[]` when there are none). With both flags off neither event has a
+  `:spans` key, even when `options` turns `include_timestamps` on.
 
   ElevenLabs sends the two frames of a segment in either order, most often
   the plain one first (3 of the 4 segments logged on 2026-09-27, the
   recorded `rt_fox` session among them), so:
 
-    * **When `options` sets `"include_timestamps"` or
-      `"include_language_detection"`** (to `true` or `"true"`), each
+    * **When a span flag is `true`, or `options` sets `"include_timestamps"`
+      or `"include_language_detection"`** (to `true` or `"true"`), each
       `:committed_transcript` is **held** until its timestamped frame
-      arrives and is then emitted with that frame's language. The hold is
-      bounded: the segment is released, with `language: nil`, when the next
-      segment's `committed_transcript` arrives, when the stream ends with an
-      error, when `:stream_timeout` passes, or after #{@language_hold_ms} ms
+      arrives and is then emitted with that frame's language (and spans),
+      so every segment may wait up to #{@language_hold_ms} ms. The hold is
+      bounded: the segment is released, with `language: nil` (and
+      `spans: nil`), when the next segment's `committed_transcript`
+      arrives, when the stream ends with an error, when `:stream_timeout`
+      passes, or after #{@language_hold_ms} ms
       (`adapter_opts[:language_hold_ms]`), whichever comes first. A session
       that is complete but for a held segment completes when the segment is
       released, even if `:stream_timeout` is the deadline that released it. A
@@ -414,6 +472,13 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
       iex> for {:committed_transcript, %{text: t}} <- events, do: t
       ["the quick fox"]
 
+      iex> req = ALLM.TranscriptionStreamRequest.new(sample_rate: 24_000, timestamps: true)
+      iex> opts = [adapter_opts: [transcription_script: [{:ok, "hi"}]]]
+      iex> {:ok, events} = ALLM.Providers.ElevenLabs.Transcription.stream_transcribe(req, [<<0, 0>>], opts)
+      iex> {:transcription_completed, completed} = List.last(Enum.to_list(events))
+      iex> for s <- completed.spans, do: {s.text, s.end_seconds}
+      [{"hi", 0.5}]
+
       iex> req = ALLM.TranscriptionStreamRequest.new(sample_rate: 11_025)
       iex> {:error, err} = ALLM.Providers.ElevenLabs.Transcription.stream_transcribe(req, [], [])
       iex> {err.reason, err.metadata.sample_rate}
@@ -426,7 +491,7 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
       when is_list(opts) do
     case TranscriptionSupport.fetch_transcription_script(opts) do
       nil -> do_stream_transcribe(request, input, opts)
-      _script -> FakeTranscription.stream_transcribe(request, input, with_own_rates(opts))
+      _script -> FakeTranscription.stream_transcribe(request, input, fake_stream_opts(opts))
     end
   end
 
@@ -462,8 +527,12 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   # `request.options` become extra fields UNDER the structural ones.
   @spec to_multipart_body(TranscriptionRequest.t(), keyword()) ::
           {:ok, [{String.t(), term()}]} | {:error, TranscriptionAdapterError.t()}
+  # With either span flag exactly `true`, `timestamps_granularity=word` is
+  # structural too, so an option can never switch the words list off.
   def to_multipart_body(%TranscriptionRequest{audio: %Audio{} = audio} = request, opts) do
     with {:ok, bytes} <- TranscriptionSupport.resolve_bytes(audio, :elevenlabs, opts) do
+      {span_fields, span_structural} = span_fields(request)
+
       structural =
         [
           {"file",
@@ -471,9 +540,9 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
             filename: upload_filename(audio),
             content_type: audio.mime_type || "application/octet-stream"}},
           {"model_id", request.model || @default_model}
-        ] ++ TranscriptionSupport.optional_field("language_code", request.language)
+        ] ++ TranscriptionSupport.optional_field("language_code", request.language) ++ span_fields
 
-      {:ok, structural ++ option_fields(request.options)}
+      {:ok, structural ++ option_fields(request.options, @structural_fields ++ span_structural)}
     end
   end
 
@@ -486,21 +555,26 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
           {:ok, TranscriptionResponse.t()} | {:error, TranscriptionAdapterError.t()}
   def decode_response(body, headers, request, opts)
 
+  # `words` is read only when a span flag is exactly `true`; otherwise
+  # `spans` is `nil` and `words` is ignored, whatever its shape.
   def decode_response(%{"text" => text} = body, _headers, %TranscriptionRequest{} = request, opts)
       when is_binary(text) do
-    {:ok,
-     %TranscriptionResponse{
-       text: text,
-       language: string_or_nil(Map.get(body, "language_code")),
-       duration_seconds: number_or_nil(Map.get(body, "audio_duration_secs")),
-       id: string_or_nil(Map.get(body, "transcription_id")),
-       request_id: Keyword.get(opts, :request_id),
-       model: request.model || @default_model,
-       provider: :elevenlabs,
-       usage: %Usage{},
-       raw: body,
-       metadata: request.metadata
-     }}
+    with {:ok, spans} <- batch_spans(body, text, request, opts) do
+      {:ok,
+       %TranscriptionResponse{
+         text: text,
+         language: string_or_nil(Map.get(body, "language_code")),
+         duration_seconds: number_or_nil(Map.get(body, "audio_duration_secs")),
+         id: string_or_nil(Map.get(body, "transcription_id")),
+         request_id: Keyword.get(opts, :request_id),
+         model: request.model || @default_model,
+         provider: :elevenlabs,
+         usage: %Usage{},
+         raw: body,
+         spans: spans,
+         metadata: request.metadata
+       }}
+    end
   end
 
   def decode_response(_body, _headers, _request, opts),
@@ -578,6 +652,7 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
         "commit_strategy" => Atom.to_string(request.commit_strategy)
       }
       |> put_present("language_code", request.language)
+      |> put_timestamps(request)
 
     query = request.options |> stream_query_options() |> Map.merge(structural)
     Support.ws_base_url(opts) <> @stream_endpoint <> "?" <> URI.encode_query(query)
@@ -620,8 +695,73 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
     end
   end
 
-  defp option_fields(options) do
-    {fields, dropped} = TranscriptionSupport.option_fields(options, @structural_fields)
+  defp span_fields(request) do
+    if TranscriptionSupport.spans_requested?(request),
+      do: {[{"timestamps_granularity", "word"}], ["timestamps_granularity"]},
+      else: {[], []}
+  end
+
+  defp batch_spans(body, text, request, opts) do
+    if TranscriptionSupport.spans_requested?(request),
+      do: decode_batch_words(Map.get(body, "words"), text, request, opts),
+      else: {:ok, nil}
+  end
+
+  # An absent (or `null`) `words` follows the shared absent-span rule: `[]`
+  # on a blank transcript, else `:unsupported_feature` with the transcript
+  # kept on the error's `metadata.text`.
+  defp decode_batch_words(nil, text, request, opts),
+    do:
+      TranscriptionSupport.absent_spans(
+        text,
+        request,
+        :elevenlabs,
+        ~s(ElevenLabs returned no "words" list),
+        opts
+      )
+
+  defp decode_batch_words(words, _text, request, opts) do
+    case decode_words(words, request) do
+      {:ok, spans} ->
+        {:ok, spans}
+
+      :error ->
+        {:error, malformed_error(~s("words" is not a list of objects with a string "text"), opts)}
+    end
+  end
+
+  # `words` (batch body or realtime twin) as spans, each attribute kept only
+  # when its flag is set; `:error` when `words` is not a list of maps each
+  # carrying a binary `"text"`. Shared by the batch and realtime decoders.
+  defp decode_words(words, request) when is_list(words) do
+    Enum.reduce_while(words, {:ok, []}, fn
+      %{"text" => text} = word, {:ok, acc} when is_binary(text) ->
+        {:cont, {:ok, [word_span(word, text, request) | acc]}}
+
+      _other, _acc ->
+        {:halt, :error}
+    end)
+    |> case do
+      {:ok, spans} -> {:ok, Enum.reverse(spans)}
+      :error -> :error
+    end
+  end
+
+  defp decode_words(_words, _request), do: :error
+
+  defp word_span(word, text, request) do
+    TranscriptionSupport.span_from(
+      text,
+      Map.get(@span_kinds, Map.get(word, "type"), :other),
+      number_or_nil(Map.get(word, "start")),
+      number_or_nil(Map.get(word, "end")),
+      number_or_nil(Map.get(word, "logprob")),
+      request
+    )
+  end
+
+  defp option_fields(options, structural) do
+    {fields, dropped} = TranscriptionSupport.option_fields(options, structural)
 
     if dropped != [] do
       Logger.debug(fn ->
@@ -652,13 +792,10 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   # messages and stops the pump.
   # ---------------------------------------------------------------------------
 
-  defp with_own_rates(opts) do
-    adapter_opts =
-      opts
-      |> Keyword.get(:adapter_opts, [])
-      |> Keyword.put(:stream_sample_rates, @stream_sample_rates)
-
-    Keyword.put(opts, :adapter_opts, adapter_opts)
+  defp fake_stream_opts(opts) do
+    opts
+    |> TranscriptionSupport.put_adapter_opt(:stream_sample_rates, @stream_sample_rates)
+    |> TranscriptionSupport.with_span_flags(@span_flags)
   end
 
   defp do_stream_transcribe(request, input, opts) do
@@ -746,6 +883,8 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
         segments: [],
         language: nil,
         hold_language?: hold_language?(request),
+        spans?: TranscriptionSupport.spans_requested?(request),
+        spans: [],
         hold_ms: language_hold_ms(opts),
         commits_seen: 0,
         stamps_seen: 0,
@@ -986,11 +1125,11 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   end
 
   # A timestamped commit never emits an event of its own; it is paired with
-  # its segment by commit order, never by text.
+  # its segment by commit order, never by text. Its words are decoded only
+  # when a span flag is set.
   defp on_message("committed_transcript_with_timestamps", payload, state) do
     index = state.stamps_seen
-    language = string_or_nil(Map.get(payload, "language_code"))
-    on_stamp(index, language, %{state | stamps_seen: index + 1})
+    on_stamp(index, twin(payload, state), %{state | stamps_seen: index + 1})
   end
 
   defp on_message("warning", payload, state) do
@@ -1009,8 +1148,8 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   defp on_message(_type, _payload, state), do: {[], state}
 
   # The segment's timestamped frame came first: emit with its language.
-  defp on_committed({:ok, language}, index, text, state),
-    do: segment(%{state | stamps: Map.delete(state.stamps, index)}, text, language)
+  defp on_committed({:ok, twin}, index, text, state),
+    do: paired(%{state | stamps: Map.delete(state.stamps, index)}, text, twin)
 
   # Opted in: hold the segment for its timestamped frame, bounded by `wake_at`.
   defp on_committed(:error, index, text, %{hold_language?: true} = state) do
@@ -1018,35 +1157,85 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
     {[], %{state | held: %{index: index, text: text}, wake_at: deadline}}
   end
 
-  defp on_committed(:error, _index, text, state), do: segment(state, text, nil)
+  defp on_committed(:error, _index, text, state), do: segment(state, text, nil, nil)
 
   # The held segment's own frame: release it with the language.
-  defp on_stamp(index, language, %{held: %{index: index, text: text}} = state) do
-    {events, state} = segment(%{state | held: nil, wake_at: nil}, text, language)
+  defp on_stamp(index, twin, %{held: %{index: index, text: text}} = state) do
+    {events, state} = paired(%{state | held: nil, wake_at: nil}, text, twin)
     {done, state} = maybe_complete(state)
     {events ++ done, state}
   end
 
   # Ahead of its segment: keep it for `on_committed/4`.
-  defp on_stamp(index, language, %{commits_seen: seen} = state) when index >= seen,
-    do: {[], %{state | stamps: Map.put(state.stamps, index, language)}}
+  defp on_stamp(index, twin, %{commits_seen: seen} = state) when index >= seen,
+    do: {[], %{state | stamps: Map.put(state.stamps, index, twin)}}
 
-  # Its segment already went out: dropped, language included.
-  defp on_stamp(_index, _language, state), do: {[], state}
+  # Its segment already went out: dropped, language and words included.
+  defp on_stamp(_index, _twin, state), do: {[], state}
 
   defp release_held(%{held: nil} = state), do: {[], state}
 
   defp release_held(%{held: %{text: text}} = state),
-    do: segment(%{state | held: nil, wake_at: nil}, text, nil)
+    do: segment(%{state | held: nil, wake_at: nil}, text, nil, nil)
 
-  defp segment(state, text, language) do
+  # A segment and its twin. The pairing is by commit order; a twin whose
+  # trimmed text differs from the segment's is a pairing the adapter cannot
+  # trust, so the segment keeps the language but gets `spans: nil`.
+  defp paired(state, text, %{language: language, text: twin_text, spans: spans}) do
+    spans = if String.trim(twin_text) == String.trim(text), do: spans
+
+    segment(state, text, language, spans)
+  end
+
+  # `%{language, text, spans}` from a timestamped frame. `spans` is `nil`
+  # unless a span flag is set, and then `nil` again for words the adapter
+  # cannot trust: a malformed `words`, or none on a non-blank twin. A blank
+  # twin with no words is a segment where nothing was spoken: `[]`.
+  defp twin(payload, state) do
+    text = string_or_nil(Map.get(payload, "text")) || ""
+
+    %{
+      language: string_or_nil(Map.get(payload, "language_code")),
+      text: text,
+      spans: if(state.spans?, do: twin_spans(Map.get(payload, "words"), text, state.request))
+    }
+  end
+
+  defp twin_spans(nil, text, _request), do: if(TranscriptionSupport.blank_text?(text), do: [])
+
+  defp twin_spans(words, _text, request) do
+    case decode_words(words, request) do
+      {:ok, spans} -> spans
+      :error -> nil
+    end
+  end
+
+  # With a span flag set every segment is built with `committed_transcript/3`
+  # and its non-`nil` spans join the completed event's list; otherwise `/2`,
+  # with no `:spans` key.
+  defp segment(%{spans?: true} = state, text, language, spans) do
+    state = %{
+      state
+      | segments: [text | state.segments],
+        language: language || state.language,
+        spans: if(spans, do: [spans | state.spans], else: state.spans)
+    }
+
+    {[TranscriptionEvent.committed_transcript(text, language, spans)], state}
+  end
+
+  defp segment(state, text, language, _spans) do
     state = %{state | segments: [text | state.segments], language: language || state.language}
     {[TranscriptionEvent.committed_transcript(text, language)], state}
   end
 
-  defp hold_language?(%TranscriptionStreamRequest{options: options}) do
+  # A segment waits for its timestamped frame when a span flag is set or an
+  # option asks ElevenLabs to send that frame.
+  defp hold_language?(%TranscriptionStreamRequest{options: options} = request) do
     params = Support.query_params(options, [])
-    Enum.any?(@hold_options, &(Map.get(params, &1) in [true, "true"]))
+
+    TranscriptionSupport.spans_requested?(request) or
+      Enum.any?(@hold_options, &(Map.get(params, &1) in [true, "true"]))
   end
 
   defp language_hold_ms(opts) do
@@ -1054,7 +1243,19 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   end
 
   defp completed_event(state) do
-    TranscriptionEvent.transcription_completed(%{
+    state
+    |> completed_payload()
+    |> put_completed_spans(state)
+    |> TranscriptionEvent.transcription_completed()
+  end
+
+  defp put_completed_spans(payload, %{spans?: true, spans: spans}),
+    do: Map.put(payload, :spans, spans |> Enum.reverse() |> Enum.concat())
+
+  defp put_completed_spans(payload, _state), do: payload
+
+  defp completed_payload(state) do
+    %{
       text:
         state.segments
         |> Enum.reverse()
@@ -1066,7 +1267,7 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
       request_id: Keyword.get(state.opts, :request_id),
       usage: %Usage{},
       metadata: state.request.metadata
-    })
+    }
   end
 
   defp send_json(state, message) do
@@ -1099,6 +1300,13 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
     end
 
     params
+  end
+
+  # Either span flag exactly `true` makes `include_timestamps` structural.
+  defp put_timestamps(map, request) do
+    if TranscriptionSupport.spans_requested?(request),
+      do: Map.put(map, "include_timestamps", "true"),
+      else: map
   end
 
   defp put_present(map, _key, nil), do: map

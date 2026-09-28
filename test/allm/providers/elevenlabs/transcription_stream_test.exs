@@ -577,6 +577,174 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionStreamTest do
     end
   end
 
+  # Span flags: the twin's words become the segment's spans (streaming
+  # population invariants 1-4). `commits/1` and `run/4` are the hold
+  # describe's helpers.
+  describe "span flags (WebSocketStub)" do
+    defp word(text, type, start, end_, logprob) do
+      %{"text" => text, "type" => type, "start" => start, "end" => end_, "logprob" => logprob}
+    end
+
+    defp twin(text, words, language \\ nil) do
+      {:json,
+       %{
+         "message_type" => "committed_transcript_with_timestamps",
+         "text" => text,
+         "language_code" => language,
+         "words" => words
+       }}
+    end
+
+    defp one_words,
+      do: [word("one", "word", 0.1, 0.4, -0.25)]
+
+    defp committed_payloads(events), do: for({:committed_transcript, p} <- events, do: p)
+
+    test "stream_url carries include_timestamps=true iff a span flag is exactly true" do
+      for {request_opts, want} <- [
+            {[], nil},
+            {[timestamps: true], "true"},
+            {[logprobs: true], "true"},
+            {[logprobs: true, options: %{"include_timestamps" => false}], "true"},
+            {[timestamps: "no", logprobs: 1], nil},
+            {[options: %{"include_timestamps" => false}], "false"}
+          ] do
+        query =
+          request_opts
+          |> req()
+          |> Transcription.stream_url([])
+          |> URI.parse()
+          |> Map.fetch!(:query)
+          |> URI.decode_query()
+
+        assert query["include_timestamps"] == want, inspect(request_opts)
+      end
+    end
+
+    test "plain then twin: the segment carries the twin's spans; completed concatenates" do
+      {stub, input} = commits([[committed("one"), twin("one", one_words())]])
+      {events, _ms} = run(stub, input, timestamps: true, logprobs: true)
+
+      span = %ALLM.TranscriptSpan{
+        text: "one",
+        kind: :word,
+        start_seconds: 0.1,
+        end_seconds: 0.4,
+        logprob: -0.25
+      }
+
+      assert [%{text: "one", spans: [^span]}] = committed_payloads(events)
+      assert {:transcription_completed, %{spans: [^span]}} = terminal(events)
+    end
+
+    test "twin first: the segment is emitted at once with the twin's spans" do
+      {stub, input} = commits([[twin("one", one_words()), committed("one")]])
+      {events, _ms} = run(stub, input, logprobs: true)
+
+      assert [%{spans: [%{logprob: -0.25, start_seconds: nil, end_seconds: nil}]}] =
+               committed_payloads(events)
+    end
+
+    # The late twin arrives after the next segment's commit released "one".
+    test "twin late: the released segment has spans nil and completed skips it" do
+      {stub, input} =
+        commits([
+          [committed("one")],
+          [committed("two"), twin("one", one_words()), twin("two", [word("two", "word", 1, 2, -1)])]
+        ])
+
+      {events, _ms} = run(stub, input, [timestamps: true], adapter_opts: [language_hold_ms: 5_000])
+
+      assert [%{text: "one", spans: nil}, %{text: "two", spans: [%{text: "two"}]}] =
+               committed_payloads(events)
+
+      assert {:transcription_completed, %{spans: [%{text: "two", start_seconds: 1}]}} =
+               terminal(events)
+    end
+
+    test "twin never: released after the hold with spans nil; completed spans is []" do
+      {stub, input} = commits([[committed("one")]])
+      {events, _ms} = run(stub, input, [timestamps: true], adapter_opts: [language_hold_ms: 100])
+
+      assert [%{text: "one", spans: nil}] = committed_payloads(events)
+      assert {:transcription_completed, %{text: "one", spans: []}} = terminal(events)
+    end
+
+    test "a twin whose text differs from its segment's: spans nil, language kept" do
+      {stub, input} = commits([[committed("one"), twin("uno", one_words(), "en")]])
+      {events, _ms} = run(stub, input, timestamps: true)
+
+      assert [%{text: "one", language: "en", spans: nil}] = committed_payloads(events)
+      assert {:transcription_completed, %{spans: []}} = terminal(events)
+    end
+
+    test "trimmed texts that match pair (surrounding whitespace ignored)" do
+      {stub, input} = commits([[committed(" one"), twin("one ", one_words())]])
+      {events, _ms} = run(stub, input, timestamps: true)
+
+      assert [%{spans: [%{text: "one"}]}] = committed_payloads(events)
+    end
+
+    test "malformed twin words: spans nil for that segment, the stream continues" do
+      for words <- ["x", [%{"type" => "word"}], [1]] do
+        {stub, input} =
+          commits([
+            [committed("one"), twin("one", words)],
+            [committed("two"), twin("two", [word("two", "word", 1, 2, -1)])]
+          ])
+
+        {events, _ms} = run(stub, input, logprobs: true)
+
+        refute Enum.any?(events, &match?({:error, _}, &1)), inspect(events)
+
+        assert [%{text: "one", spans: nil}, %{text: "two", spans: [_]}] =
+                 committed_payloads(events),
+               inspect(words)
+      end
+    end
+
+    test "absent words on a non-blank twin: spans nil; on a blank twin: []" do
+      {stub, input} =
+        commits([[committed("one"), twin("one", nil)], [committed(""), twin("", nil)]])
+
+      {events, _ms} = run(stub, input, timestamps: true)
+
+      assert [%{text: "one", spans: nil}, %{text: "", spans: []}] = committed_payloads(events)
+    end
+
+    test "an unknown word type is :other" do
+      {stub, input} =
+        commits([[committed("(laughs)"), twin("(laughs)", [word("(laughs)", "x_event", 0, 1, -1)])]])
+
+      {events, _ms} = run(stub, input, timestamps: true)
+      assert [%{spans: [%{kind: :other}]}] = committed_payloads(events)
+    end
+
+    test "a flagged stream with zero commits completes with spans: []" do
+      stub = WebSocketStub.install([], greeting: [started()])
+
+      {:ok, events} =
+        Transcription.stream_transcribe(req(logprobs: true), [], ws_opts(stub))
+
+      events = Enum.to_list(events)
+      assert committed_payloads(events) == []
+      assert {:transcription_completed, %{text: "", spans: []}} = terminal(events)
+    end
+
+    # Decision 5's falsifier: flags off, even with the provider option that
+    # makes ElevenLabs send the twin, no payload carries a :spans key.
+    test "flags off with include_timestamps set: no committed or completed payload has :spans" do
+      {stub, input} = commits([[committed("one"), twin("one", one_words(), "en")]])
+      {events, _ms} = run(stub, input, options: %{"include_timestamps" => true})
+
+      assert [payload] = committed_payloads(events)
+      assert payload.language == "en"
+      refute Map.has_key?(payload, :spans)
+      assert {:transcription_completed, completed} = terminal(events)
+      refute Map.has_key?(completed, :spans)
+    end
+  end
+
   describe "server errors (WebSocketStub)" do
     for {type, reason} <- [
           {"auth_error", :authentication_failed},
@@ -1086,6 +1254,86 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionStreamTest do
       assert {:transcription_completed, %{language: "en"}} = terminal(events)
     end
 
+    test "rt_fox with logprobs: spans with logprobs and nil times; completed carries the same list" do
+      {events, env} = replay_rt_fox(logprobs: true)
+      twin_words = rt_fox_twin_words(env)
+
+      assert [%{spans: spans}] = for({:committed_transcript, p} <- events, do: p)
+      assert length(spans) == length(twin_words)
+      assert Enum.map(spans, & &1.text) == Enum.map(twin_words, & &1["text"])
+      assert Enum.all?(spans, &(is_number(&1.logprob) and is_nil(&1.start_seconds)))
+      assert Enum.all?(spans, &is_nil(&1.end_seconds))
+      assert {:transcription_completed, %{spans: ^spans}} = terminal(events)
+    end
+
+    test "rt_fox with timestamps: times are passed through (session time base); logprobs nil" do
+      {events, env} = replay_rt_fox(timestamps: true)
+      twin_words = rt_fox_twin_words(env)
+
+      assert [%{spans: spans}] = for({:committed_transcript, p} <- events, do: p)
+
+      assert Enum.map(spans, &{&1.start_seconds, &1.end_seconds}) ==
+               Enum.map(twin_words, &{&1["start"], &1["end"]})
+
+      assert Enum.all?(spans, &is_nil(&1.logprob))
+    end
+
+    test "rt_fox flags off, as recorded (twin sent): no payload carries :spans" do
+      {events, _env} = replay_rt_fox(options: %{"include_timestamps" => true})
+
+      for {:committed_transcript, p} <- events, do: refute(Map.has_key?(p, :spans))
+      assert {:transcription_completed, completed} = terminal(events)
+      refute Map.has_key?(completed, :spans)
+    end
+
+    # Live frame order C1 T1 | T2 C2 | C3 T3: the empty middle segment's twin
+    # (`"words": null`, text "") arrives BEFORE its commit.
+    test "rt_two_segments: twin-first empty segment gets spans []; times never decrease" do
+      env = Fixtures.realtime_recorded(:rt_two_segments)
+      assert env["summary"]["time_base"] == "session"
+      [greeting | rest] = Fixtures.ws_server_frames(env)
+      [g1, g2, g3] = split_after_commit_frames(rest, [2, 4])
+
+      assert Enum.map(g2, &message_type/1) ==
+               ["committed_transcript_with_timestamps", "committed_transcript"],
+             "premise: the empty segment's twin precedes its commit"
+
+      stub =
+        WebSocketStub.install(
+          [
+            {:after_client, &commit?/1, g1},
+            {:after_client, &commit?/1, g2},
+            {:after_client, &commit?/1, g3}
+          ],
+          greeting: [greeting]
+        )
+
+      chunk = <<0::size(9_600)-unit(8)>>
+
+      {:ok, events} =
+        Transcription.stream_transcribe(
+          req(sample_rate: 24_000, commit_strategy: :manual, timestamps: true, logprobs: true),
+          [chunk, :commit, chunk, :commit, chunk],
+          ws_opts(stub)
+        )
+
+      events = Enum.to_list(events)
+      refute Enum.any?(events, &match?({:error, _}, &1)), inspect(events)
+
+      assert [%{text: t1, spans: s1}, %{text: "", spans: []}, %{text: t3, spans: s3}] =
+               for({:committed_transcript, p} <- events, do: p)
+
+      assert t1 =~ "fox" and t3 =~ "fox"
+      assert s1 != [] and s3 != []
+
+      starts = Enum.map(s1 ++ s3, & &1.start_seconds)
+      assert starts == Enum.sort(starts)
+      assert hd(s3).start_seconds >= List.last(s1).end_seconds
+
+      assert {:transcription_completed, %{spans: completed_spans}} = terminal(events)
+      assert completed_spans == s1 ++ s3
+    end
+
     test "rt_manual_commit: two commits, two committed segments" do
       env = Fixtures.realtime_recorded(:rt_manual_commit)
       [greeting | rest] = Fixtures.ws_server_frames(env)
@@ -1188,6 +1436,50 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionStreamTest do
       end
     end
   end
+
+  defp replay_rt_fox(request_opts) do
+    env = Fixtures.realtime_recorded(:rt_fox)
+    [greeting | rest] = Fixtures.ws_server_frames(env)
+    stub = WebSocketStub.install([{:after_client, &commit?/1, rest}], greeting: [greeting])
+    {24_000, chunks} = PCM.wav_pcm_chunks(@fox_wav, 100)
+    request = req([sample_rate: 24_000] ++ request_opts)
+    {:ok, events} = Transcription.stream_transcribe(request, chunks, ws_opts(stub))
+    {Enum.to_list(events), env}
+  end
+
+  defp rt_fox_twin_words(env) do
+    [words] =
+      for {:text, json} <- Fixtures.ws_server_frames(env),
+          %{"message_type" => "committed_transcript_with_timestamps", "words" => w} <-
+            [Jason.decode!(json)],
+          do: w
+
+    words
+  end
+
+  defp message_type({:text, json}), do: Jason.decode!(json)["message_type"]
+  defp message_type(_frame), do: nil
+
+  # Splits server frames into groups, each ending right after the n-th
+  # committed/twin frame (n from `cuts`); the last group is the remainder.
+  defp split_after_commit_frames(frames, cuts) do
+    {groups, current, _count} =
+      Enum.reduce(frames, {[], [], 0}, &split_step(&1, &2, cuts))
+
+    Enum.reverse([Enum.reverse(current) | groups])
+  end
+
+  defp split_step(frame, {groups, current, count}, cuts) do
+    current = [frame | current]
+    count = if commit_frame?(frame), do: count + 1, else: count
+
+    if commit_frame?(frame) and count in cuts,
+      do: {[Enum.reverse(current) | groups], [], count},
+      else: {groups, current, count}
+  end
+
+  defp commit_frame?(frame),
+    do: message_type(frame) in ["committed_transcript", "committed_transcript_with_timestamps"]
 
   defp wait_until(fun, budget) do
     cond do

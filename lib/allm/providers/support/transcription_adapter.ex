@@ -16,7 +16,9 @@ defmodule ALLM.Providers.Support.TranscriptionAdapter do
     * Span flags: `gate_flags/4` refuses a `timestamps: true` or
       `logprobs: true` the adapter cannot honour with `:unsupported_feature`,
       `with_span_flags/2` carries the supported list into the Fake hand-off,
-      and `span_from/6` drops every attribute the request did not ask for.
+      `span_from/6` drops every attribute the request did not ask for, and
+      `absent_spans/5` applies the one rule for a response that carries no
+      span data (`[]` on a blank transcript, else `:unsupported_feature`).
 
   The functions are `@doc false` seams parameterised by the provider atom
   (the `:provider` of every error built here). Where the flow needs the
@@ -147,6 +149,49 @@ defmodule ALLM.Providers.Support.TranscriptionAdapter do
            message: "#{flag}: true is not supported by this transcription adapter",
            metadata: HTTPResponse.build_metadata(%{field: flag}, opts)
          )}
+    end
+  end
+
+  @doc false
+  # Whether a transcript counts as blank for the span rules: empty once
+  # surrounding whitespace is trimmed. A blank transcript is "nothing was
+  # spoken", so its spans are `[]` even when the span source is absent.
+  @spec blank_text?(String.t()) :: boolean()
+  def blank_text?(text) when is_binary(text), do: String.trim(text) == ""
+
+  @doc false
+  # The rule for a 2xx batch body whose span source key is absent (or
+  # `null`) while a span flag is set: a blank `text` is `{:ok, []}`; any
+  # other `text` is `:unsupported_feature` with `metadata.cause:
+  # :absent_from_response`, `metadata.field` naming the first flag set to
+  # exactly `true` (`:timestamps` before `:logprobs`, the `gate_flags/4`
+  # order), and the transcript on `metadata.text`. `source` opens the
+  # message (for example `~s(ElevenLabs returned no "words" list)`), which
+  # continues `" for <field>: true"`. Call it only when
+  # `spans_requested?/1` holds.
+  @spec absent_spans(
+          String.t(),
+          TranscriptionRequest.t() | TranscriptionStreamRequest.t(),
+          atom() | nil,
+          String.t(),
+          keyword()
+        ) :: {:ok, []} | {:error, TranscriptionAdapterError.t()}
+  def absent_spans(text, request, provider, source, opts) do
+    if blank_text?(text) do
+      {:ok, []}
+    else
+      field = Enum.find([:timestamps, :logprobs], &flag_on?(request, &1))
+
+      {:error,
+       TranscriptionAdapterError.new(:unsupported_feature,
+         provider: provider,
+         message: "#{source} for #{field}: true",
+         metadata:
+           HTTPResponse.build_metadata(
+             %{field: field, cause: :absent_from_response, text: text},
+             opts
+           )
+       )}
     end
   end
 

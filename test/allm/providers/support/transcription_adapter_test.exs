@@ -323,6 +323,47 @@ defmodule ALLM.Providers.Support.TranscriptionAdapterTest do
       refute Support.flag_on?(%{base | logprobs: true}, :timestamps)
     end
 
+    test "blank_text?/1 is true only for empty-after-trim text" do
+      for blank <- ["", " ", "\n\t  "], do: assert(Support.blank_text?(blank))
+      for text <- ["a", " a ", "."], do: refute(Support.blank_text?(text))
+    end
+
+    test "absent_spans/5 on a blank transcript is {:ok, []}" do
+      for request <- [
+            TranscriptionRequest.new(audio: mp3(), timestamps: true),
+            TranscriptionStreamRequest.new(logprobs: true)
+          ] do
+        assert Support.absent_spans("  ", request, :openai, "src", []) == {:ok, []}
+      end
+    end
+
+    test "absent_spans/5 on a non-blank transcript is :unsupported_feature naming the first flag" do
+      for {provider, ts, lp, field} <- [
+            {:elevenlabs, true, false, :timestamps},
+            {:openai, false, true, :logprobs},
+            {:gemini, true, true, :timestamps},
+            {nil, true, true, :timestamps}
+          ] do
+        request = TranscriptionRequest.new(audio: mp3(), timestamps: ts, logprobs: lp)
+
+        assert {:error,
+                %TranscriptionAdapterError{reason: :unsupported_feature, provider: ^provider} =
+                  err} =
+                 Support.absent_spans("hi there", request, provider, "X returned no spans",
+                   request_id: "rid-a"
+                 )
+
+        assert err.metadata == %{
+                 field: field,
+                 cause: :absent_from_response,
+                 text: "hi there",
+                 request_id: "rid-a"
+               }
+
+        assert err.message == "X returned no spans for #{field}: true"
+      end
+    end
+
     test "put_adapter_opt/3 sets one adapter opt and keeps the rest" do
       out = Support.put_adapter_opt([api_key: "x", adapter_opts: [cursor_key: 7]], :k, :v)
 

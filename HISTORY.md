@@ -1,3 +1,29 @@
+## [FEAT] Surface ElevenLabs word timings and logprobs as spans (28.4)
+*Monday, September 28th at 11am*
+Phase 28.4 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md wires opt-in 
+transcript spans through the ElevenLabs batch and realtime paths (spec 
+§37.2.3, §37.2.5, §37.11.1).
+
+- Batch: a set flag sends timestamps_granularity=word structurally and decodes 
+words[] into TranscriptSpans via a literal type-to-kind table, dropping 
+unrequested attributes; absent words with non-blank text is 
+:unsupported_feature (cause :absent_from_response, transcript on 
+metadata.text), blank text yields [].
+- Realtime: a set flag forces include_timestamps=true and holds each segment 
+for its timestamped twin; paired twins attach session-relative spans to 
+committed_transcript/3, blank twins with null words give [], 
+missing/mismatched/malformed twins give nil, and transcription_completed 
+carries the in-order concatenation.
+- Shared absent_spans/5 and blank_text?/1 helpers in 
+Support.TranscriptionAdapter for 28.5 to reuse; with_own_rates migrated onto 
+put_adapter_opt/3.
+- TranscriptionAdapterError :unsupported_feature doc widened to the post-I/O 
+case.
+- Examples 24 and 26 gain flagged ElevenLabs calls; live gate 23-26 OK, 27 
+blocked by ElevenLabs account TTS quota (external).
+
+---
+
 ## [TST] Record live span wire probes for three STT providers (28.3)
 *Monday, September 28th at 11am*
 Phase 28.3 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md adds live probe 

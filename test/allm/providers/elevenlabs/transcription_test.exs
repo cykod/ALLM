@@ -89,6 +89,62 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionTest do
     end
   end
 
+  describe "to_multipart_body/2 with span flags" do
+    defp granularity(fields), do: for({"timestamps_granularity", v} <- fields, do: v)
+
+    test "timestamps_granularity=word is sent iff a span flag is exactly true" do
+      for {flags, want} <- [
+            {[], []},
+            {[timestamps: true], ["word"]},
+            {[logprobs: true], ["word"]},
+            {[timestamps: true, logprobs: true], ["word"]},
+            # A direct adapter call skips Validate: only `true` counts.
+            {[timestamps: "no", logprobs: 1], []}
+          ] do
+        assert {:ok, fields} = Transcription.to_multipart_body(req(flags), [])
+        assert granularity(fields) == want, "flags #{inspect(flags)}"
+      end
+    end
+
+    test "a flag overrides a caller's timestamps_granularity option; flags off pass it through" do
+      options = %{"timestamps_granularity" => "none"}
+
+      capture_log([level: :debug], fn ->
+        assert {:ok, fields} =
+                 Transcription.to_multipart_body(req(logprobs: true, options: options), [])
+
+        assert granularity(fields) == ["word"]
+      end)
+
+      assert {:ok, fields} = Transcription.to_multipart_body(req(options: options), [])
+      assert granularity(fields) == ["none"]
+    end
+  end
+
+  describe "span flags under the Fake hand-off" do
+    test "a scripted call with both flags returns the Fake's timed, scored spans" do
+      opts = [adapter_opts: [transcription_script: [{:ok, "the quick fox"}]]]
+
+      assert {:ok, resp} =
+               Transcription.transcribe(req(timestamps: true, logprobs: true), opts)
+
+      assert [
+               %{text: "the", kind: :word, start_seconds: s0, logprob: -0.1},
+               %{text: "quick", start_seconds: 0.5},
+               %{text: "fox", end_seconds: 1.5}
+             ] = resp.spans
+
+      assert s0 == 0.0
+    end
+
+    test "the hand-off carries both flags as supported (neither is refused)" do
+      opts = [adapter_opts: [transcription_script: [{:ok, "hi"}], span_flags: []]]
+
+      # The adapter's own supported list replaces a caller's empty one.
+      assert {:ok, %{spans: [_]}} = Transcription.transcribe(req(timestamps: true), opts)
+    end
+  end
+
   describe "pre-flight gates (keyless, before Keys.fetch!/2)" do
     test "prompt -> :unsupported_feature" do
       assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = err} =
@@ -179,6 +235,11 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionTest do
     test "absent optional fields decode to nil" do
       assert {:ok, %TranscriptionResponse{language: nil, duration_seconds: nil, id: nil}} =
                Transcription.decode_response(%{"text" => ""}, %{}, req(), [])
+    end
+
+    test "flags off: spans is nil and a malformed words is ignored" do
+      assert {:ok, %TranscriptionResponse{spans: nil}} =
+               Transcription.decode_response(%{"text" => "hi", "words" => "x"}, %{}, req(), [])
     end
 
     test "missing text is :malformed_response" do

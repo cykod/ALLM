@@ -127,6 +127,133 @@ defmodule ALLM.Providers.ElevenLabs.TranscriptionWireTest do
     end
   end
 
+  describe "span flags over recorded and synthetic bodies" do
+    @cells [
+      {false, false},
+      {true, false},
+      {false, true},
+      {true, true}
+    ]
+
+    defp flagged(t, l), do: req(timestamps: t, logprobs: l)
+
+    defp stub_body(stub, body) do
+      Req.Test.stub(stub, fn conn -> Req.Test.json(conn, body) end)
+    end
+
+    test "the flagged request sends timestamps_granularity=word on the wire", %{stub: stub} do
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn, length: 1_000_000)
+        send(parent, {:raw, raw})
+        Fixtures.replay(conn, Fixtures.transcription_recorded(:words_explicit))
+      end)
+
+      assert {:ok, _} = call(stub, flagged(true, false))
+      assert_received {:raw, raw}
+      assert raw =~ ~s(name="timestamps_granularity") <> "\r\n\r\nword"
+    end
+
+    for name <- [:scribe_v2, :words_explicit] do
+      test "recorded #{name}.json decodes one span per words entry", %{stub: stub} do
+        env = Fixtures.transcription_recorded(unquote(name))
+        words = env["body"]["words"]
+        assert words != [], "premise: the fixture carries a words list"
+        stub_env(stub, env)
+
+        assert {:ok, resp} = call(stub, flagged(true, true))
+        assert length(resp.spans) == length(words)
+        assert Enum.map(resp.spans, & &1.text) == Enum.map(words, & &1["text"])
+        assert [:word, :spacing, :word | _] = Enum.map(resp.spans, & &1.kind)
+        # Every recorded word carries all three attributes.
+        assert Enum.all?(resp.spans, &(is_number(&1.start_seconds) and is_number(&1.logprob)))
+      end
+    end
+
+    test "the flag matrix over scribe_v2.json keeps exactly the requested attributes",
+         %{stub: stub} do
+      env = Fixtures.transcription_recorded(:scribe_v2)
+
+      for {t, l} <- @cells do
+        stub_env(stub, env)
+        assert {:ok, resp} = call(stub, flagged(t, l))
+
+        if t or l do
+          assert length(resp.spans) == length(env["body"]["words"])
+
+          for span <- resp.spans do
+            assert is_nil(span.start_seconds) == not t, "cell #{inspect({t, l})}"
+            assert is_nil(span.end_seconds) == not t, "cell #{inspect({t, l})}"
+            assert is_nil(span.logprob) == not l, "cell #{inspect({t, l})}"
+          end
+        else
+          assert resp.spans == nil
+        end
+      end
+    end
+
+    test "an unknown words type is :other", %{stub: stub} do
+      stub_body(stub, %{
+        "text" => "(laughs)",
+        "words" => [%{"text" => "(laughs)", "type" => "laughter_event", "start" => 0.1}]
+      })
+
+      assert {:ok, %{spans: [%{kind: :other, text: "(laughs)"}]}} = call(stub, flagged(true, false))
+    end
+
+    test "no words list on a non-blank transcript -> :unsupported_feature, transcript kept",
+         %{stub: stub} do
+      stub_body(stub, %{"text" => "hello there"})
+
+      assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = err} =
+               call(stub, flagged(false, true), request_id: "r9")
+
+      assert err.provider == :elevenlabs
+      assert err.metadata.field == :logprobs
+      assert err.metadata.cause == :absent_from_response
+      assert err.metadata.text == "hello there"
+      assert err.metadata.request_id == "r9"
+    end
+
+    test "the absent-words error names :timestamps first when both flags are set",
+         %{stub: stub} do
+      stub_body(stub, %{"text" => "hello", "words" => nil})
+
+      assert {:error, %{reason: :unsupported_feature, metadata: %{field: :timestamps}}} =
+               call(stub, flagged(true, true))
+    end
+
+    test "no words list on a blank transcript -> {:ok, spans: []}", %{stub: stub} do
+      stub_body(stub, %{"text" => "  "})
+      assert {:ok, %TranscriptionResponse{spans: []}} = call(stub, flagged(true, false))
+    end
+
+    test "a non-list words, or an entry without a string text, is :malformed_response",
+         %{stub: stub} do
+      for words <- ["x", [%{"type" => "word"}], [%{"text" => 1}], ["fox"]] do
+        stub_body(stub, %{"text" => "fox", "words" => words})
+
+        assert {:error, %TranscriptionAdapterError{reason: :malformed_response}} =
+                 call(stub, flagged(true, true)),
+               "words #{inspect(words)}"
+      end
+    end
+
+    test "flags off: a malformed words is ignored and spans is nil", %{stub: stub} do
+      stub_body(stub, %{"text" => "fox", "words" => "x"})
+      assert {:ok, %TranscriptionResponse{spans: nil}} = call(stub, flagged(false, false))
+    end
+
+    test "recorded silence.json (words: [], text blank) decodes to spans: []", %{stub: stub} do
+      env = Fixtures.transcription_recorded(:silence)
+      assert env["body"]["words"] == [] and String.trim(env["body"]["text"]) == ""
+      stub_env(stub, env)
+
+      assert {:ok, %TranscriptionResponse{spans: []}} = call(stub, flagged(true, true))
+    end
+  end
+
   describe "redaction" do
     @planted "sk_FAKEKEY0123456789abcdef0123456789abcdef"
 

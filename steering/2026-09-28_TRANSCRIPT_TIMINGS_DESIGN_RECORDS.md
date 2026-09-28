@@ -9,7 +9,7 @@ Companion bookkeeping for `steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md`. Th
 | 28.1 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-1 |
 | 28.2 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-2 |
 | 28.3 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-3; no fix pass needed (two Lows: one carried to polish, one recorded in Notes for 28.4 / 28.5) |
-| 28.4 | Not Started |
+| 28.4 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-4; live gate: 01–21 SKIP, 23–26 OK, 27 FAIL on ElevenLabs account TTS quota (external, not a code defect — see §28.4) |
 | 28.5 | Not Started |
 | 28.6 | Not Started |
 | 28.7 | Not Started |
@@ -171,3 +171,75 @@ Live calls: 2 (Gemini) + 4 (OpenAI, over two passes) + 3 (ElevenLabs) = 9, about
 - `mix test > "$SP/28_3.log" 2>&1` → `exit=0`; `685 doctests, 33 properties, 5586 tests, 0 failures, 14 excluded, 1 skipped` (+9 over 28.2's 5577: one provenance test per new fixture). `grep -c 'warning:' "$SP/28_3.log"` → 0.
 - `mix test --seed 0` → exit 0, same counts. `mix credo --strict` → "found no issues". `mix format --check-formatted` → exit 0.
 
+## 28.4 ElevenLabs batch + realtime
+
+Built against `a961670` (28.3 commit). Cited sites located by content: `to_multipart_body/2`, `decode_response/4`, `stream_url/2`, `on_message("committed_transcript_with_timestamps", …)`, `on_committed/4`, `on_stamp/3`, `release_held/1`, `segment/3`, `hold_language?/1`, `completed_event/1` in `lib/allm/providers/elevenlabs/transcription.ex`; the `:unsupported_feature` row in `lib/allm/error/transcription_adapter_error.ex`.
+
+### Checklist
+
+- [x] Batch hand-off (`with_own_cap/2 |> with_span_flags(@span_flags)`), form (`timestamps_granularity=word` structural iff `spans_requested?/1`; the key joins the call-time drop list, `@structural_fields` unchanged), decode (`words` read only when asked; absent/`null` + blank text → `[]`; absent + non-blank → `:unsupported_feature` with `%{field, cause: :absent_from_response, text}`; non-list or an entry without binary `text` → `:malformed_response`). Tests `test/allm/providers/elevenlabs/transcription_test.exs:92`, `:124`, `:240`; `test/allm/providers/elevenlabs/transcription_wire_test.exs:130` (11 tests).
+- [x] Realtime URL (`include_timestamps=true` structural iff `spans_requested?/1`), hold predicate (span flag **or** `@hold_options`), stamps widened to `index => %{language, text, spans}` (a map, not the design's tuple — `[tactical]`), pairing sanity check (`paired/3`, trimmed-text compare), `segment/4`, completed `:spans` (`Enum.concat` of the reversed per-segment lists). Tests `test/allm/providers/elevenlabs/transcription_stream_test.exs:583` (13 tests) and `:1257`–`:1291` (4 recorded replays).
+- [x] Moduledoc: wire-field-map rows (`timestamps_granularity`, `words` shape), new "Word timings and log-probabilities" section, `stream_transcribe/3` wire/events/spans/hold paragraphs; `transcribe/2` gains a flagged doctest and `stream_transcribe/3` a flagged completed-spans doctest (+2 doctests).
+- [x] `TranscriptionAdapterError` `:unsupported_feature` row widened to the post-I/O `cause: :absent_from_response` case (first post-I/O use ships here, pinned by `transcription_wire_test.exs:205`).
+- [x] Examples: `examples/24_transcribe_audio.exs` (ElevenLabs arm only: a second, flagged call asserting timed and scored `:word` spans; OpenAI/Gemini flagged calls are 28.5's), `examples/26_stream_transcribe.exs` (`timestamps: true`, asserts timed `:word` spans on the collected response).
+
+### Carried items acted on
+
+1. **Empty realtime twin → `[]`** (orchestrator settlement after 28.3). `twin_spans(nil, text, _)` returns `[]` for a blank twin text and `nil` otherwise; `paired/3` then applies the trimmed-text check. Pinned by the `rt_two_segments.json` replay (`transcription_stream_test.exs:1291`, middle segment `spans: []`) and the synthetic "absent words on a non-blank twin: spans nil; on a blank twin: []" test.
+2. **Twin-first mid-session.** The same replay splits the recorded server frames at commit boundaries (`C1 T1 | T2 C2 | C3 T3`) and asserts as a premise that group 2 is twin-then-commit; the stored twin pairs by `stamps_seen` index as before.
+3. **Time base `:session`.** Word times pass through unchanged; the replay asserts `summary.time_base == "session"`, non-decreasing `start_seconds` across both fox segments, and segment 3's first start ≥ segment 1's last end.
+4. **Shared predicates.** Every flag test goes through `TranscriptionSupport.spans_requested?/1` / `flag_on?/2`; `span_from/6` builds every span, and `with_span_flags/2` sits on both hand-offs. `timestamps: "no", logprobs: 1` switches nothing on (form and URL tests).
+5. **[structural, documented] `with_own_rates/1` migrated** onto `TranscriptionSupport.put_adapter_opt/3` (now `fake_stream_opts/1`, which also applies `with_span_flags/2`) per IMPLEMENTATION.md "Migration on extraction". Private, behaviour-preserving (same `adapter_opts[:stream_sample_rates]`), no public name changed; pinned by the existing scripted stream doctests and `transcription_conformance_test.exs`. `grep -rn with_own_rates lib/ test/` → no output, exit 1.
+6. **Error doc widened** (above).
+7. **No literal `0.0` patterns.** The one zero start in the new tests is compared with `==` (`transcription_test.exs`, "a scripted call with both flags"); `grep -c 'warning:' "$SP/28_4.log"` → 0.
+
+### Deviations
+
+1. **[tactical] Stamps entry is a map** `%{language, text, spans}` rather than the design's `{language, twin_text, spans}` tuple. Same fields, read by name in `paired/3`.
+2. **[tactical] `"words": null` on a batch body is treated as absent** (same branch as a missing key). The design names only "absent"; JSON `null` carries no words either.
+3. **[tactical] Batch absent-words error names the first set flag** (`:timestamps` before `:logprobs`) in `metadata.field`, since one ElevenLabs source key serves both flags. Pinned by "the absent-words error names :timestamps first when both flags are set".
+4. **[tactical] `decode_words/2` is shared** by the batch decoder and the realtime twin decoder (one definition of "a list of maps with a binary `text`"); batch maps its `:error` to `:malformed_response`, realtime to `spans: nil`.
+5. **[tactical] Examples:** 24's flagged call runs on the ElevenLabs arm only in this sub-phase; 28.5 adds the OpenAI/Gemini rows.
+
+### Verification (2026-09-28)
+
+- `mix test test/allm/providers/elevenlabs/` → `16 doctests, 379 tests, 0 failures, 1 skipped` (before 28.4: 14 doctests, 347 tests).
+- `mix test > "$SP/28_4.log" 2>&1` → `exit=0`; `687 doctests, 33 properties, 5618 tests, 0 failures, 14 excluded, 1 skipped` (28.3: 685 doctests, 5586 tests). `grep -c 'warning:' "$SP/28_4.log"` → 0.
+- `mix test --seed 0` → exit 0, same counts.
+- `mix credo --strict` → "found no issues" (first pass flagged a string-quote sigil in `decode_batch_words/4` and nesting in the test's frame splitter; both fixed, re-run clean). `mix dialyzer` → "Total errors: 0". `mix format --check-formatted` → exit 0. `mix compile --warnings-as-errors` → exit 0.
+- `(cd conformance && mix test)` → `206 tests, 0 failures, 1 skipped`.
+- `mix run scripts/audit_user_docs.exs lib/allm/providers/elevenlabs/transcription.ex lib/allm/error/transcription_adapter_error.ex` → "No banned-token matches".
+- Mutation table (`mix test test/allm/providers/elevenlabs/ --max-failures 1 --timeout 8000`; file restored and `cmp`-verified after):
+
+| Mutant | Result |
+|---|---|
+| empty blank twin → `nil` instead of `[]` | red (1) |
+| pairing sanity check removed | red (1) |
+| hold predicate not widened to span flags | red (1) |
+| batch absent `words` always `[]` (non-blank too) | red (1) |
+| batch decodes `words` with flags off | red (1) |
+| completed `:spans` omitted | red (1) |
+| caller's `timestamps_granularity` option not dropped under a flag | red (1) |
+| released (twin-never / twin-late) segment gets `[]` instead of `nil` | red (1) |
+| no-twin, no-hold clause gets `[]` | green: **equivalent mutant**. With a span flag set the hold is always on, so that clause only runs with flags off, where `segment/4` ignores spans |
+
+- **Live gate** `set -a; . ./.env; set +a; ALLM_PROVIDER=elevenlabs mix run examples/run_all.exs` → `exit=1`. Per-script: `01–21 SKIP (provider gate), 23 OK, 24 OK, 25 OK, 26 OK, 27 FAIL`. 24's flagged call: `spans=17 words=9`, words timed from 0.14 s, `mean_logprob≈-6.4e-5`. 26's flagged stream: committed segment `spans=17`, collected `words=9`, first word at 0.1 s. **27 failure is an account-quota block, not a code failure:** `SpeechAdapterError{reason: :invalid_request, metadata: %{code: "quota_exceeded", close_code: 1008}}`, "You have 1 credits remaining". Re-run alone it fails the same way ("2 credits are required"). 27 is the last script, so no script was left unobserved. The failure is in 27's TTS leg (not touched by this phase) and resolves to no prior phase's commit, so it is recorded here as an environment blocker (top up the ElevenLabs credits, then re-run the arm), not a `[BUG]`. `examples/RUN_OUTPUT_ELEVENLABS.md` is **not** regenerated (snapshot rule: the full run was not green).
+
+### Fix pass (2026-09-28)
+
+Sources: `.work/reviews/2026-09-28-transcript-timings-28-4/overview.md`, `.work/code-reviews/2026-09-28-transcript-timings-28-4.md`, `.work/security-reviews/2026-09-28-transcript-timings-28-4.md` (clean), `.work/design-reviews/2026-09-28-transcript-timings-28-4.md` (N/A).
+
+1. **[structural, documented] Code-review F1 (Medium): decision 4's absent-span rule extracted now, not deferred.** `ALLM.Providers.Support.TranscriptionAdapter` gains `blank_text?/1` and `absent_spans/5` (`@doc false` + `@spec`): blank `text` → `{:ok, []}`, else `:unsupported_feature` with `%{field, cause: :absent_from_response, text}` + request id, `field` = first of `[:timestamps, :logprobs]` that is `flag_on?/2`. Arity 5, not the review's `/4`: a `source` string opens the message so ElevenLabs keeps its exact message (`ElevenLabs returned no "words" list for <field>: true`). ElevenLabs' private `absent_words_error/3` is deleted; `decode_batch_words(nil, …)` and the realtime `twin_spans(nil, …)` call the shared helpers. Behaviour-preserving: `mix test test/allm/providers/elevenlabs/` green unchanged. Tests: `test/allm/providers/support/transcription_adapter_test.exs` "blank_text?/1 …", "absent_spans/5 on a blank transcript …", "absent_spans/5 on a non-blank transcript …" (mutant: field order reversed → `67 tests, 2 failures`, restored and `cmp`-verified). **28.5 obligation:** OpenAI `decode_response/4` and Gemini `build_response` call `absent_spans/5`; DONE WHEN `grep -rn 'absent_from_response,' lib/allm/providers/` lists only `support/transcription_adapter.ex` (today: exit 0, that one line).
+2. **Code-review F2 (Low, governed-doc carve-out):** `lib/allm/error/transcription_adapter_error.ex` `:unsupported_feature` row now reads "finds no span data (word timings or log-probabilities)" instead of "no timing data".
+3. Code-review F3 (`hold_language?` naming) and F4 (`twin/3` vs `stamped/2` test helper): Low, left for the phase polish pass.
+4. Functional-review Low 2 (batch vs stream non-boolean flag validation asymmetry): informational, pre-existing, no false doc sentence; no action.
+
+Verification: `mix test > "$SP/fix_full.log"` → `exit=0`, `687 doctests, 33 properties, 5621 tests, 0 failures, 14 excluded, 1 skipped`; `grep -c 'warning:'` → 0. `mix test --seed 0` → exit 0, same counts. `mix credo --strict` → no issues; `mix dialyzer` → `Total errors: 0`; `mix format --check-formatted` → exit 0; `(cd conformance && mix test)` → `206 tests, 0 failures, 1 skipped`; `mix run scripts/audit_user_docs.exs` on the three touched `lib/` files → no matches.
+
+### Notes for later sub-phases
+
+- **28.5 family test** can drive ElevenLabs batch cells through `prepare_request/2` (gates + build, no send): all four flag cells pass; the realtime column needs no refusal cell (both flags supported).
+- **Release gate** (HANDOFF item from 28.1) is still live for OpenAI/Gemini: neither calls `with_span_flags/2` or `gate_flags/4` yet (`grep -rn 'with_span_flags\|gate_flags' lib/allm/providers/openai lib/allm/providers/gemini` → no output).
+- **ElevenLabs credits** were exhausted by this run (1 credit left). 28.5's live gates are OpenAI and Gemini only, but any later ElevenLabs arm needs a top-up first.
+- **Present-but-empty `words` (28.6 docs):** a `words: []` list on a NON-blank transcript is taken at face value → `spans: []` (batch and realtime twin alike); decision 4 defines only the absent key. The 28.6 doc pass states this in one sentence. Source: functional review 28.4 Known Issues #1.
+- **Absent-span rule is shared (28.5):** OpenAI and Gemini call `TranscriptionAdapter.absent_spans/5` (and `blank_text?/1`) rather than re-deriving decision 4; see Fix pass item 1 for the DONE WHEN grep.

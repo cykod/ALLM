@@ -22,7 +22,7 @@ defmodule ALLM.Error.TranscriptionAdapterError do
   | `:timeout` | — | Adapter `request_timeout` exceeded. Retried automatically. |
   | `:network_error` | — | TCP/TLS/DNS failure. Retried automatically. |
   | `:malformed_response` | — | 200 without the expected transcript text. No retry; file a bug. |
-  | `:unsupported_feature` | — | The request sets a field the adapter's provider cannot express (for example a `:prompt` the provider has no field for). Refused locally, before the API key is resolved. Drop the field; no retry. |
+  | `:unsupported_feature` | — | The request sets a field the adapter's provider cannot express (for example a `:prompt` the provider has no field for). Refused locally, before the API key is resolved. Drop the field; no retry. Also returned after a successful call when a requested `timestamps: true` / `logprobs: true` finds no span data (word timings or log-probabilities) in the provider's response and the transcript is not blank: `metadata.cause` is `:absent_from_response`, `metadata.field` names the flag, and `metadata.text` carries the transcript. |
   | `:unknown` | any | Catch-all for shapes the adapter cannot classify; non-retryable. |
   """
 
