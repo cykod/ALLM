@@ -1,3 +1,14 @@
+## [DOC] Add TypeSafe classification to README provider and capability tables
+*Monday, September 28th at 12am*
+README's Real providers section now lists TypeSafe as a third capability-only 
+provider, and the capability table gains a Classification row 
+(:classification_adapter, TypeSafe.Classification). Stand-alone [DOC] commit 
+per the CLAUDE.md README rule; closes the Phase 24 README ticket, whose 
+predicate grep -cE '^\| *Classification *\| *`:classification_adapter`' 
+README.md now prints 1.
+
+---
+
 ## [DOC] Link the classification guide from README
 *Monday, September 28th at 12am*
 README's worked-examples list gains guides/classification.md, which 

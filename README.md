@@ -233,7 +233,7 @@ For narrative walkthroughs, jump to a guide:
 
 ## Real providers
 
-ALLM ships three chat adapters and two capability-only providers:
+ALLM ships three chat adapters and three capability-only providers:
 
 - **`ALLM.Providers.OpenAI`** — Chat Completions and Responses
   endpoints; auto-routes by model.
@@ -242,6 +242,8 @@ ALLM ships three chat adapters and two capability-only providers:
   (`generateContent` / `streamGenerateContent`); chat and vision input.
 - **Voyage** — embeddings only (Anthropic's recommended partner).
 - **ElevenLabs** — speech and transcription only, batch and streaming.
+- **TypeSafe** — typed classification only (the Jev model: choice, score and
+  yes/no answers with calibrated probabilities).
 
 Beyond chat, each capability has its own engine slot, so one engine can
 pair providers — say, Anthropic for chat, Voyage for embeddings, and
@@ -254,6 +256,7 @@ ElevenLabs for speech:
 | Moderation | `:moderation_adapter` | `OpenAI.Moderation` |
 | Text-to-speech | `:speech_adapter` | `OpenAI.Speech`, `ElevenLabs.Speech` |
 | Speech-to-text | `:transcription_adapter` | `OpenAI.Transcription`, `Gemini.Transcription`, `ElevenLabs.Transcription` |
+| Classification | `:classification_adapter` | `TypeSafe.Classification` |
 
 Streaming speech (`stream_synthesize/3`) works on `OpenAI.Speech` and
 `ElevenLabs.Speech`; speaking a streamed text input
