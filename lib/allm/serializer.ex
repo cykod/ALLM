@@ -105,6 +105,7 @@ defmodule ALLM.Serializer do
     ALLM.TranscriptionRequest,
     ALLM.TranscriptionResponse,
     ALLM.TranscriptionStreamRequest,
+    ALLM.TranscriptSpan,
     ALLM.ClassificationQuestion,
     ALLM.ClassificationRequest,
     ALLM.ClassificationAnswer,

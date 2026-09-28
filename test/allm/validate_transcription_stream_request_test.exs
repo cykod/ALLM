@@ -62,6 +62,31 @@ defmodule ALLM.ValidateTranscriptionStreamRequestTest do
     end
   end
 
+  describe "transcription_stream_request/1 — span flags" do
+    test "true and false are both :ok for each flag" do
+      for ts <- [true, false], lp <- [true, false] do
+        cfg = TranscriptionStreamRequest.new(timestamps: ts, logprobs: lp)
+        assert Validate.transcription_stream_request(cfg) == :ok
+      end
+    end
+
+    test ~s(timestamps: "yes" yields {:timestamps, :invalid_shape}) do
+      assert errors_for(timestamps: "yes") == [{:timestamps, :invalid_shape}]
+    end
+
+    test "logprobs: nil yields {:logprobs, :invalid_shape}" do
+      assert errors_for(logprobs: nil) == [{:logprobs, :invalid_shape}]
+    end
+
+    test "both flag errors accumulate with an existing field error" do
+      assert errors_for(language: 1, timestamps: "yes", logprobs: nil) == [
+               {:language, :invalid_shape},
+               {:timestamps, :invalid_shape},
+               {:logprobs, :invalid_shape}
+             ]
+    end
+  end
+
   describe "transcription_stream_request/1 — accumulation" do
     test "every rule accumulates into one error list, in field order" do
       assert errors_for(
@@ -69,6 +94,8 @@ defmodule ALLM.ValidateTranscriptionStreamRequestTest do
                commit_strategy: :never,
                model: 1,
                language: 2,
+               timestamps: 3,
+               logprobs: 4,
                options: nil,
                metadata: nil
              ) == [
@@ -76,6 +103,8 @@ defmodule ALLM.ValidateTranscriptionStreamRequestTest do
                {:commit_strategy, :unknown},
                {:model, :invalid_shape},
                {:language, :invalid_shape},
+               {:timestamps, :invalid_shape},
+               {:logprobs, :invalid_shape},
                {:options, :invalid_shape},
                {:metadata, :invalid_shape}
              ]

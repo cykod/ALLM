@@ -11,6 +11,8 @@ defmodule ALLM.TranscriptionRequestTest do
                model: nil,
                language: nil,
                prompt: nil,
+               timestamps: false,
+               logprobs: false,
                options: %{},
                metadata: %{}
              } = TranscriptionRequest.new()
@@ -32,6 +34,8 @@ defmodule ALLM.TranscriptionRequestTest do
         model: "gpt-4o-mini-transcribe",
         language: "en",
         prompt: "A fox and a dog.",
+        timestamps: true,
+        logprobs: true,
         options: %{"temperature" => 0},
         metadata: %{"trace" => "abc"}
       )
@@ -47,6 +51,19 @@ defmodule ALLM.TranscriptionRequestTest do
       assert {:ok, decoded} = req |> Serializer.to_json!() |> Serializer.from_json()
       assert %Audio{} = decoded.audio
       assert decoded == req
+    end
+
+    test "timestamps: true and logprobs: true survive a JSON round-trip (non-default pin)" do
+      req = full_request()
+      assert {:ok, decoded} = req |> Serializer.to_json!() |> Serializer.from_json()
+      assert {decoded.timestamps, decoded.logprobs} == {true, true}
+    end
+
+    test ~s(a JSON payload lacking "timestamps" and "logprobs" decodes both to false) do
+      json = Jason.encode!(%{"__type__" => "ALLM.TranscriptionRequest", "data" => %{}})
+
+      assert {:ok, %TranscriptionRequest{timestamps: false, logprobs: false}} =
+               Serializer.from_json(json)
     end
 
     test "a default request (audio: nil) round-trips through JSON" do

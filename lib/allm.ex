@@ -1562,6 +1562,8 @@ defmodule ALLM do
     :model,
     :language,
     :prompt,
+    :timestamps,
+    :logprobs,
     :options,
     :metadata
   ]
@@ -1572,7 +1574,8 @@ defmodule ALLM do
   ## Options
 
   Only `ALLM.TranscriptionRequest` field names are read: `:model`,
-  `:language`, `:prompt`, `:options`, `:metadata`. Every other key is
+  `:language`, `:prompt`, `:timestamps`, `:logprobs`, `:options`,
+  `:metadata`. Every other key is
   ignored, so `transcribe/3` can forward its call-control opts through this
   function.
 
@@ -1880,6 +1883,8 @@ defmodule ALLM do
     :language,
     :sample_rate,
     :commit_strategy,
+    :timestamps,
+    :logprobs,
     :options,
     :metadata
   ]
@@ -1907,7 +1912,7 @@ defmodule ALLM do
 
   The request is built from the `ALLM.TranscriptionStreamRequest` field
   opts (`:model`, `:language`, `:sample_rate`, `:commit_strategy`,
-  `:options`, `:metadata`), or taken from `opts[:request]`, a pre-built
+  `:timestamps`, `:logprobs`, `:options`, `:metadata`), or taken from `opts[:request]`, a pre-built
   `%ALLM.TranscriptionStreamRequest{}` that is authoritative. Any other
   `opts[:request]` value (a batch `%ALLM.TranscriptionRequest{}`, say)
   raises `ArgumentError` before the span opens.

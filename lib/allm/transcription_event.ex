@@ -12,10 +12,17 @@ defmodule ALLM.TranscriptionEvent do
     segment being spoken. It **replaces** the previous partial of the same
     segment; it is not appended.
   - `{:committed_transcript, %{text: text, language: language}}`: a final
-    segment. Committed segments are appended.
+    segment. Committed segments are appended. When the request set
+    `timestamps: true` or `logprobs: true`, the payload also carries a
+    `:spans` key: the segment's `t:ALLM.TranscriptSpan.t/0` list, or `nil`
+    when the adapter has no trustworthy span data for that segment. With
+    both flags off the key is absent, not `nil`.
   - `{:transcription_completed, completed}`: the stream finished. The
     payload carries `:text`, `:language`, `:duration_seconds`,
-    `:request_id`, `:usage` (an `t:ALLM.Usage.t/0`) and `:metadata`.
+    `:request_id`, `:usage` (an `t:ALLM.Usage.t/0`) and `:metadata`. When
+    a flag was set it also carries an optional `:spans` key: the
+    committed segments' spans concatenated in order, `[]` when none were
+    committed.
   - `{:error, %ALLM.Error.TranscriptionAdapterError{}}`: the stream failed.
 
   ## Stream grammar
@@ -32,6 +39,10 @@ defmodule ALLM.TranscriptionEvent do
   trimmed, empty segments are dropped, and the rest are joined with one
   space. The adapter computes it, so a consumer does not need to fold the
   segments itself.
+
+  `:spans`, when present, is likewise the adapter's concatenation of the
+  committed segments' spans. It is optional, so
+  `transcription_completed/1` does not require it.
 
   `:duration_seconds` is **computed**, not reported by the provider: the
   audio bytes sent divided by `sample_rate * 2` (16-bit mono PCM).
@@ -56,6 +67,7 @@ defmodule ALLM.TranscriptionEvent do
   """
 
   alias ALLM.Error.TranscriptionAdapterError
+  alias ALLM.TranscriptSpan
 
   @typedoc "Payload of `:transcription_started`."
   @type started :: %{
@@ -65,20 +77,28 @@ defmodule ALLM.TranscriptionEvent do
           session_id: String.t() | nil
         }
 
-  @typedoc "Payload of `:transcription_completed`."
+  @typedoc "Payload of `:committed_transcript`. `:spans` is present only when a span flag was set."
+  @type committed :: %{
+          required(:text) => String.t(),
+          required(:language) => String.t() | nil,
+          optional(:spans) => [TranscriptSpan.t()] | nil
+        }
+
+  @typedoc "Payload of `:transcription_completed`. `:spans` is present only when a span flag was set."
   @type completed :: %{
-          text: String.t(),
-          language: String.t() | nil,
-          duration_seconds: number() | nil,
-          request_id: String.t() | nil,
-          usage: ALLM.Usage.t(),
-          metadata: map()
+          required(:text) => String.t(),
+          required(:language) => String.t() | nil,
+          required(:duration_seconds) => number() | nil,
+          required(:request_id) => String.t() | nil,
+          required(:usage) => ALLM.Usage.t(),
+          required(:metadata) => map(),
+          optional(:spans) => [TranscriptSpan.t()]
         }
 
   @type t ::
           {:transcription_started, started()}
           | {:partial_transcript, %{text: String.t()}}
-          | {:committed_transcript, %{text: String.t(), language: String.t() | nil}}
+          | {:committed_transcript, committed()}
           | {:transcription_completed, completed()}
           | {:error, TranscriptionAdapterError.t()}
 
@@ -117,6 +137,9 @@ defmodule ALLM.TranscriptionEvent do
   @doc """
   Build a `:committed_transcript` event.
 
+  The payload has exactly `:text` and `:language`, and no `:spans` key.
+  `committed_transcript/3` is the form that carries spans.
+
   ## Examples
 
       iex> ALLM.TranscriptionEvent.committed_transcript("hello", "en")
@@ -128,10 +151,33 @@ defmodule ALLM.TranscriptionEvent do
       do: {:committed_transcript, %{text: text, language: language}}
 
   @doc """
+  Build a `:committed_transcript` event carrying the segment's spans.
+
+  Always writes the `:spans` key, even when it is `nil` (the adapter has no
+  trustworthy span data for this segment). An adapter uses this form for
+  every committed segment when the request set `timestamps: true` or
+  `logprobs: true`, and `committed_transcript/2` otherwise. Raises
+  `FunctionClauseError` when `spans` is neither a list nor `nil`.
+
+  ## Examples
+
+      iex> span = ALLM.TranscriptSpan.new(text: "hello", kind: :word, start_seconds: 0.0, end_seconds: 0.4)
+      iex> {:committed_transcript, payload} = ALLM.TranscriptionEvent.committed_transcript("hello", "en", [span])
+      iex> payload.spans == [span]
+      true
+  """
+  @spec committed_transcript(String.t(), String.t() | nil, [TranscriptSpan.t()] | nil) :: t()
+  def committed_transcript(text, language, spans)
+      when is_binary(text) and (is_binary(language) or is_nil(language)) and
+             (is_list(spans) or is_nil(spans)),
+      do: {:committed_transcript, %{text: text, language: language, spans: spans}}
+
+  @doc """
   Build a `:transcription_completed` event.
 
   Raises `ArgumentError` when `payload` lacks any of `:text`, `:language`,
-  `:duration_seconds`, `:request_id`, `:usage` or `:metadata`.
+  `:duration_seconds`, `:request_id`, `:usage` or `:metadata`. `:spans` is
+  optional and passes through when present.
 
   ## Examples
 

@@ -19,6 +19,16 @@ defmodule ALLM.TranscriptionRequest do
     (for example `"en"`).
   - `:prompt`: optional context to guide the transcript, such as spellings
     of names or the previous sentence.
+  - `:timestamps`: `true` asks for per-word start and end times on the
+    response's `:spans` (see `ALLM.TranscriptSpan`). Defaults to `false`.
+  - `:logprobs`: `true` asks for per-word or per-token log-probabilities
+    on the response's `:spans`. Defaults to `false`.
+
+    The two flags are separate because providers support them separately:
+    some return both, some only log-probabilities. An adapter that cannot
+    honour a flag that is `true` refuses the request with
+    `:unsupported_feature` before sending anything. With both flags
+    `false`, the response's `:spans` is `nil`.
   - `:options`: a raw provider-body passthrough for fields ALLM does not
     model. An adapter merges it *under* the fields it sets itself, so an
     option can never override a structural field, and fields that would
@@ -39,11 +49,22 @@ defmodule ALLM.TranscriptionRequest do
           model: String.t() | nil,
           language: String.t() | nil,
           prompt: String.t() | nil,
+          timestamps: boolean(),
+          logprobs: boolean(),
           options: map(),
           metadata: map()
         }
 
-  defstruct [:audio, :model, :language, :prompt, options: %{}, metadata: %{}]
+  defstruct [
+    :audio,
+    :model,
+    :language,
+    :prompt,
+    timestamps: false,
+    logprobs: false,
+    options: %{},
+    metadata: %{}
+  ]
 
   @doc """
   Build a `%TranscriptionRequest{}` from keyword opts.
@@ -68,6 +89,8 @@ defmodule ALLM.TranscriptionRequest do
       model: data["model"],
       language: data["language"],
       prompt: data["prompt"],
+      timestamps: data["timestamps"] || false,
+      logprobs: data["logprobs"] || false,
       options: data["options"] || %{},
       metadata: data["metadata"] || %{}
     }

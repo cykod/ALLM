@@ -2,7 +2,7 @@ defmodule ALLM.TranscriptionResponseTest do
   use ExUnit.Case, async: true
   doctest ALLM.TranscriptionResponse
 
-  alias ALLM.{Serializer, TranscriptionResponse, Usage}
+  alias ALLM.{Serializer, TranscriptionResponse, TranscriptSpan, Usage}
 
   describe "new/1" do
     test "defaults: text \"\", usage %ALLM.Usage{} (never nil)" do
@@ -12,6 +12,7 @@ defmodule ALLM.TranscriptionResponseTest do
       assert resp.metadata == %{}
       assert resp.duration_seconds == nil
       assert resp.language == nil
+      assert resp.spans == nil
     end
 
     test "an unknown key raises KeyError" do
@@ -83,11 +84,79 @@ defmodule ALLM.TranscriptionResponseTest do
                Serializer.from_json(json)
     end
 
+    test "round-trips through JSON with spans: nil" do
+      resp = %{full_response() | spans: nil}
+      assert {:ok, ^resp} = resp |> Serializer.to_json!() |> Serializer.from_json()
+    end
+
+    test "round-trips through JSON with a two-span list, hydrated to %TranscriptSpan{}" do
+      spans = [
+        TranscriptSpan.new(text: "The", kind: :word, start_seconds: 0.0, end_seconds: 0.25),
+        TranscriptSpan.new(text: " ", kind: :spacing, logprob: -0.5)
+      ]
+
+      resp = %{full_response() | spans: spans}
+      assert {:ok, decoded} = resp |> Serializer.to_json!() |> Serializer.from_json()
+      assert [%TranscriptSpan{kind: :word}, %TranscriptSpan{kind: :spacing}] = decoded.spans
+      assert decoded == resp
+    end
+
     test ~s(a JSON payload without "text" decodes to "") do
       json =
         Jason.encode!(%{"__type__" => "ALLM.TranscriptionResponse", "data" => %{}})
 
       assert {:ok, %TranscriptionResponse{text: ""}} = Serializer.from_json(json)
+    end
+
+    test ~s(a malformed persisted "spans" passes through instead of raising out of from_json/1) do
+      for bad <- [%{}, "oops", %{"a" => 1}] do
+        json =
+          Jason.encode!(%{
+            "__type__" => "ALLM.TranscriptionResponse",
+            "data" => %{"text" => "a", "spans" => bad}
+          })
+
+        assert {:ok, %TranscriptionResponse{spans: ^bad} = resp} = Serializer.from_json(json)
+        assert TranscriptionResponse.mean_logprob(resp) == nil
+      end
+    end
+  end
+
+  describe "mean_logprob/1" do
+    defp span(kind, logprob), do: TranscriptSpan.new(text: "x", kind: kind, logprob: logprob)
+
+    defp mean(spans),
+      do: TranscriptionResponse.mean_logprob(TranscriptionResponse.new(spans: spans))
+
+    test "nil spans -> nil" do
+      assert TranscriptionResponse.mean_logprob(TranscriptionResponse.new()) == nil
+    end
+
+    test "[] -> nil" do
+      assert mean([]) == nil
+    end
+
+    test "only :spacing and :audio_event spans -> nil" do
+      assert mean([span(:spacing, -0.5), span(:audio_event, -0.25)]) == nil
+    end
+
+    test "spacing is excluded: [word -0.2, spacing -0.2, word -0.4] -> -0.3, not -0.2667" do
+      assert_in_delta mean([span(:word, -0.2), span(:spacing, -0.2), span(:word, -0.4)]),
+                      -0.3,
+                      1.0e-9
+    end
+
+    test ":token spans are counted" do
+      assert mean([span(:token, -1.0), span(:token, -0.5)]) == -0.75
+    end
+
+    test "a span with logprob: nil is skipped, not counted as zero" do
+      assert mean([span(:word, -1.0), span(:word, nil)]) == -1.0
+      assert mean([span(:word, nil)]) == nil
+    end
+
+    test ":other spans are excluded" do
+      assert mean([span(:word, -1.0), span(:other, -3.0)]) == -1.0
     end
   end
 end

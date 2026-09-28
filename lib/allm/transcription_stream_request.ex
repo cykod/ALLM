@@ -26,6 +26,12 @@ defmodule ALLM.TranscriptionStreamRequest do
   - `:commit_strategy`: `:vad` (the default) lets the provider decide when
     a segment ends; `:manual` ends one only when the input yields `:commit`.
     One of `commit_strategies/0`.
+  - `:timestamps`: `true` asks for per-word start and end times on each
+    committed segment's `:spans` (see `ALLM.TranscriptSpan` and
+    `ALLM.TranscriptionEvent`). Defaults to `false`.
+  - `:logprobs`: `true` asks for per-word or per-token log-probabilities
+    on each committed segment's `:spans`. Defaults to `false`. With both
+    flags `false`, no event carries a `:spans` key.
   - `:options`: a raw provider passthrough for parameters ALLM does not
     model. An adapter merges it under the fields it sets itself.
   - `:metadata`: caller-owned. Use string keys when it will round-trip
@@ -48,6 +54,8 @@ defmodule ALLM.TranscriptionStreamRequest do
           language: String.t() | nil,
           sample_rate: pos_integer(),
           commit_strategy: commit_strategy(),
+          timestamps: boolean(),
+          logprobs: boolean(),
           options: map(),
           metadata: map()
         }
@@ -60,6 +68,8 @@ defmodule ALLM.TranscriptionStreamRequest do
     :language,
     sample_rate: @default_sample_rate,
     commit_strategy: @default_commit_strategy,
+    timestamps: false,
+    logprobs: false,
     options: %{},
     metadata: %{}
   ]
@@ -105,6 +115,8 @@ defmodule ALLM.TranscriptionStreamRequest do
       language: data["language"],
       sample_rate: decode_sample_rate(data["sample_rate"]),
       commit_strategy: decode_commit_strategy(data["commit_strategy"]),
+      timestamps: data["timestamps"] || false,
+      logprobs: data["logprobs"] || false,
       options: data["options"] || %{},
       metadata: data["metadata"] || %{}
     }

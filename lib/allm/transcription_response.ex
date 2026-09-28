@@ -8,9 +8,14 @@ defmodule ALLM.TranscriptionResponse do
 
   ## Fields
 
-  - `:text`: the transcript. Plain text only. Timestamps, speaker labels
-    and subtitle formats are not modelled, and the provider's full body
-    stays on `:raw` for callers who need them.
+  - `:text`: the transcript, as plain text.
+  - `:spans`: the transcript's words or tokens as `t:ALLM.TranscriptSpan.t/0`
+    values, in order, carrying start and end times when the request set
+    `timestamps: true` and log-probabilities when it set `logprobs: true`.
+    `nil` means neither flag was set; `[]` means a flag was set and nothing
+    was spoken. Segment-level timestamps, speaker labels and subtitle
+    formats are not modelled, and the provider's full body stays on `:raw`
+    for callers who need them. `mean_logprob/1` summarizes the spans.
   - `:language`: the spoken language as the provider reports it, not
     normalized, or `nil`.
   - `:duration_seconds`: billed audio seconds, when the provider bills
@@ -30,7 +35,7 @@ defmodule ALLM.TranscriptionResponse do
   verbatim.
   """
 
-  alias ALLM.{Serializer, Usage}
+  alias ALLM.{Serializer, TranscriptSpan, Usage}
 
   @type t :: %__MODULE__{
           text: String.t(),
@@ -41,6 +46,7 @@ defmodule ALLM.TranscriptionResponse do
           model: String.t() | nil,
           provider: atom() | nil,
           usage: Usage.t(),
+          spans: [TranscriptSpan.t()] | nil,
           raw: term(),
           metadata: map()
         }
@@ -53,6 +59,7 @@ defmodule ALLM.TranscriptionResponse do
     :model,
     :provider,
     :raw,
+    :spans,
     text: "",
     usage: %Usage{},
     metadata: %{}
@@ -72,6 +79,47 @@ defmodule ALLM.TranscriptionResponse do
   @spec new(keyword()) :: t()
   def new(opts \\ []) when is_list(opts), do: struct!(__MODULE__, opts)
 
+  @doc """
+  The mean log-probability of the response's spoken units, or `nil`.
+
+  Averages `:logprob` over the spans whose `:kind` is `:word` or `:token`
+  and whose `:logprob` is a number. `:spacing` and `:audio_event` spans are
+  left out because they are not spoken units, and some providers copy the
+  next word's log-probability onto the spacing before it, which would
+  count that word twice. Returns `nil` when `:spans` is `nil` or no span
+  qualifies.
+
+  ## Examples
+
+      iex> spans = [
+      ...>   ALLM.TranscriptSpan.new(text: "quick", kind: :word, logprob: -0.25),
+      ...>   ALLM.TranscriptSpan.new(text: " ", kind: :spacing, logprob: -0.25),
+      ...>   ALLM.TranscriptSpan.new(text: "fox", kind: :word, logprob: -0.5)
+      ...> ]
+      iex> ALLM.TranscriptionResponse.mean_logprob(ALLM.TranscriptionResponse.new(spans: spans))
+      -0.375
+
+      iex> ALLM.TranscriptionResponse.mean_logprob(ALLM.TranscriptionResponse.new())
+      nil
+  """
+  @spec mean_logprob(t()) :: float() | nil
+  def mean_logprob(%__MODULE__{spans: spans}) when is_list(spans) do
+    spans
+    |> Enum.filter(&spoken_logprob?/1)
+    |> Enum.map(& &1.logprob)
+    |> mean()
+  end
+
+  def mean_logprob(%__MODULE__{}), do: nil
+
+  defp spoken_logprob?(%TranscriptSpan{kind: kind, logprob: lp}),
+    do: kind in [:word, :token] and is_number(lp)
+
+  defp spoken_logprob?(_), do: false
+
+  defp mean([]), do: nil
+  defp mean(values), do: Enum.sum(values) / length(values)
+
   @doc false
   @spec __from_tagged__(map()) :: t()
   def __from_tagged__(data) when is_map(data) do
@@ -84,6 +132,7 @@ defmodule ALLM.TranscriptionResponse do
       model: data["model"],
       provider: Serializer.to_atom_field(data["provider"]),
       usage: hydrate_usage(data["usage"]),
+      spans: Serializer.hydrate(data["spans"]),
       raw: data["raw"],
       metadata: data["metadata"] || %{}
     }

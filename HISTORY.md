@@ -1,3 +1,25 @@
+## [FEAT] Add TranscriptSpan and opt-in transcript span flags (28.1)
+*Monday, September 28th at 11am*
+Phase 28.1 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md lands the Layer 
+A surface for opt-in word/token timings and logprobs on transcription (spec 
+§37.2.3, §37.11.1); no adapter reads the flags yet (28.2-28.5).
+
+- New ALLM.TranscriptSpan struct (text, kind, start/end seconds, logprob) with 
+a literal kind table so persisted input never mints atoms; registered in 
+Serializer, @layer_a and mix.exs groups.
+- timestamps/logprobs boolean flags on TranscriptionRequest and 
+TranscriptionStreamRequest, validated as :invalid_shape and allowed through the 
+façade option lists.
+- TranscriptionResponse.spans (nil = not requested) and mean_logprob/1 over 
+word/token spans; malformed persisted spans pass through instead of raising.
+- TranscriptionEvent.committed_transcript/3 always writes :spans while /2 omits 
+it; completed payload gains an optional :spans key outside the required set.
+- validate_embedding_truncate migrated onto the new validate_boolean_field/3 
+helper.
+- Adds the Phase 28 design doc and its RECORDS companion.
+
+---
+
 ## [DOC] Apply Phase 24 retro learnings to agent docs
 *Monday, September 28th at 1am*
 Folds .work/retro/2026-09-28-phase-24-jev-support_applied.md into the 

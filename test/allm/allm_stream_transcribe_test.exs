@@ -141,6 +141,8 @@ defmodule ALLM.ALLMStreamTranscribeTest do
     language: "en",
     sample_rate: 8_000,
     commit_strategy: :manual,
+    timestamps: true,
+    logprobs: true,
     options: %{"k" => 1},
     metadata: %{"t" => 1}
   }

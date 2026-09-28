@@ -11,6 +11,8 @@ defmodule ALLM.TranscriptionStreamRequestTest do
                language: nil,
                sample_rate: 16_000,
                commit_strategy: :vad,
+               timestamps: false,
+               logprobs: false,
                options: %{},
                metadata: %{}
              } = TranscriptionStreamRequest.new()
@@ -40,6 +42,8 @@ defmodule ALLM.TranscriptionStreamRequestTest do
         language: "en",
         sample_rate: 8_000,
         commit_strategy: :manual,
+        timestamps: true,
+        logprobs: true,
         options: %{"vad_threshold" => 0.4},
         metadata: %{"trace" => "abc"}
       )
@@ -58,12 +62,23 @@ defmodule ALLM.TranscriptionStreamRequestTest do
       assert decoded == cfg
     end
 
+    test "timestamps: true and logprobs: true survive a JSON round-trip (non-default pin)" do
+      cfg = non_default()
+      assert {:ok, decoded} = cfg |> Serializer.to_json!() |> Serializer.from_json()
+      assert {decoded.timestamps, decoded.logprobs} == {true, true}
+    end
+
     test "a JSON payload lacking both keys decodes to the defaults" do
       json =
         Jason.encode!(%{"__type__" => "ALLM.TranscriptionStreamRequest", "data" => %{}})
 
-      assert {:ok, %TranscriptionStreamRequest{sample_rate: 16_000, commit_strategy: :vad}} =
-               Serializer.from_json(json)
+      assert {:ok,
+              %TranscriptionStreamRequest{
+                sample_rate: 16_000,
+                commit_strategy: :vad,
+                timestamps: false,
+                logprobs: false
+              }} = Serializer.from_json(json)
     end
   end
 end

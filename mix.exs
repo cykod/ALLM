@@ -201,6 +201,7 @@ defmodule ALLM.MixProject do
           ALLM.SpeechResponse,
           ALLM.TranscriptionRequest,
           ALLM.TranscriptionResponse,
+          ALLM.TranscriptSpan,
           ALLM.TranscriptionStreamRequest,
           ALLM.SpeechEvent,
           ALLM.TranscriptionEvent,

@@ -61,6 +61,32 @@ defmodule ALLM.ValidateTranscriptionRequestTest do
     end
   end
 
+  describe "transcription_request/1 — span flags" do
+    test "true and false are both :ok for each flag" do
+      for ts <- [true, false], lp <- [true, false] do
+        req = TranscriptionRequest.new(audio: @audio, timestamps: ts, logprobs: lp)
+        assert Validate.transcription_request(req) == :ok
+      end
+    end
+
+    test ~s(timestamps: "yes" yields {:timestamps, :invalid_shape}) do
+      assert errors_for(audio: @audio, timestamps: "yes") == [{:timestamps, :invalid_shape}]
+    end
+
+    test "logprobs: nil yields {:logprobs, :invalid_shape}" do
+      assert errors_for(audio: @audio, logprobs: nil) == [{:logprobs, :invalid_shape}]
+    end
+
+    test "both flag errors accumulate with an existing field error (valid audio, bad language)" do
+      # Valid audio on purpose: a non-%Audio{} :audio hard-rejects alone.
+      assert errors_for(audio: @audio, language: 1, timestamps: "yes", logprobs: nil) == [
+               {:language, :invalid_shape},
+               {:timestamps, :invalid_shape},
+               {:logprobs, :invalid_shape}
+             ]
+    end
+  end
+
   describe "transcription_request/1 — accumulation" do
     test "every non-hard rule accumulates into one error list" do
       errors =

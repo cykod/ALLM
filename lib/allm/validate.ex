@@ -357,7 +357,7 @@ defmodule ALLM.Validate do
       |> validate_embedding_input_elements(req.input)
       |> validate_embedding_dimensions(req.dimensions)
       |> validate_embedding_task_type(req.task_type)
-      |> validate_embedding_truncate(req.truncate)
+      |> validate_boolean_field(:truncate, req.truncate)
       |> validate_model_field(req.model)
       |> Enum.reverse()
 
@@ -486,6 +486,7 @@ defmodule ALLM.Validate do
   Field rules: `:audio`'s `:source` one of the three `t:ALLM.Audio.source/0`
   shapes with a binary payload (`{[:audio, :source], :invalid_shape}`);
   `:model`, `:language` and `:prompt` each `nil` or a binary
+  (`:invalid_shape`); `:timestamps` and `:logprobs` each a boolean
   (`:invalid_shape`).
 
   Whether a file exists, the audio's byte size, and its MIME type are
@@ -514,6 +515,8 @@ defmodule ALLM.Validate do
       |> validate_model_field(req.model)
       |> validate_nil_or_binary(:language, req.language)
       |> validate_nil_or_binary(:prompt, req.prompt)
+      |> validate_boolean_field(:timestamps, req.timestamps)
+      |> validate_boolean_field(:logprobs, req.logprobs)
       |> Enum.reverse()
 
     finalize(:invalid_transcription_request, errors)
@@ -530,7 +533,8 @@ defmodule ALLM.Validate do
   (`{:sample_rate, :out_of_range}`); `:commit_strategy` a member of
   `ALLM.TranscriptionStreamRequest.commit_strategies/0`
   (`{:commit_strategy, :unknown}`); `:model` and `:language` each `nil` or
-  a binary (`:invalid_shape`); `:options` and `:metadata` each a map
+  a binary (`:invalid_shape`); `:timestamps` and `:logprobs` each a
+  boolean (`:invalid_shape`); `:options` and `:metadata` each a map
   (`:invalid_shape`).
 
   Which sample rates a provider accepts is deliberately NOT checked here;
@@ -555,6 +559,8 @@ defmodule ALLM.Validate do
       |> validate_commit_strategy(req.commit_strategy)
       |> validate_model_field(req.model)
       |> validate_nil_or_binary(:language, req.language)
+      |> validate_boolean_field(:timestamps, req.timestamps)
+      |> validate_boolean_field(:logprobs, req.logprobs)
       |> validate_map_field(:options, req.options)
       |> validate_map_field(:metadata, req.metadata)
       |> Enum.reverse()
@@ -971,6 +977,9 @@ defmodule ALLM.Validate do
   defp validate_nil_or_binary(errs, _field, v) when is_binary(v), do: errs
   defp validate_nil_or_binary(errs, field, _), do: [{field, :invalid_shape} | errs]
 
+  defp validate_boolean_field(errs, _field, v) when is_boolean(v), do: errs
+  defp validate_boolean_field(errs, field, _), do: [{field, :invalid_shape} | errs]
+
   # A sample rate in Hz: a positive integer, optional where `nil` means the
   # adapter's default.
   defp validate_nil_or_pos_integer(errs, _field, nil), do: errs
@@ -1015,9 +1024,6 @@ defmodule ALLM.Validate do
   defp validate_embedding_task_type(errs, nil), do: errs
   defp validate_embedding_task_type(errs, t) when t in @embedding_task_types, do: errs
   defp validate_embedding_task_type(errs, _), do: [{:task_type, :unknown} | errs]
-
-  defp validate_embedding_truncate(errs, t) when is_boolean(t), do: errs
-  defp validate_embedding_truncate(errs, _), do: [{:truncate, :invalid_shape} | errs]
 
   # ---------------------------------------------------------------------------
   # Internal: moderation_request rules

@@ -42,6 +42,7 @@ defmodule LayerADocsTest do
     ALLM.TranscriptionRequest,
     ALLM.TranscriptionResponse,
     ALLM.TranscriptionStreamRequest,
+    ALLM.TranscriptSpan,
     ALLM.SpeechEvent,
     ALLM.TranscriptionEvent,
     ALLM.ClassificationQuestion,

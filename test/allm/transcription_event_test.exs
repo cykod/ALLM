@@ -3,7 +3,7 @@ defmodule ALLM.TranscriptionEventTest do
   doctest ALLM.TranscriptionEvent
 
   alias ALLM.Error.{SpeechAdapterError, TranscriptionAdapterError}
-  alias ALLM.{TranscriptionEvent, Usage}
+  alias ALLM.{TranscriptionEvent, TranscriptSpan, Usage}
 
   @started %{request_id: nil, model: "scribe", provider: :fake, session_id: "s-1"}
 
@@ -48,6 +48,36 @@ defmodule ALLM.TranscriptionEventTest do
       assert TranscriptionEvent.event?(event)
     end
 
+    test "committed_transcript/2 writes no :spans key (a map pattern would not bind this)" do
+      {:committed_transcript, payload} = TranscriptionEvent.committed_transcript("hi", "en")
+      refute Map.has_key?(payload, :spans)
+
+      {:committed_transcript, payload} = TranscriptionEvent.committed_transcript("hi")
+      refute Map.has_key?(payload, :spans)
+    end
+
+    test "committed_transcript/3 always writes :spans, for [] and for nil" do
+      assert {:committed_transcript, %{text: "hi", language: nil, spans: []} = p1} =
+               TranscriptionEvent.committed_transcript("hi", nil, [])
+
+      assert {:committed_transcript, p2} = TranscriptionEvent.committed_transcript("hi", nil, nil)
+      assert Map.has_key?(p2, :spans) and p2.spans == nil
+      assert map_size(p1) == 3 and map_size(p2) == 3
+    end
+
+    test "committed_transcript/3 carries the span list and event?/1 accepts it" do
+      span = TranscriptSpan.new(text: "hi", kind: :word, start_seconds: 0.0, end_seconds: 0.5)
+      event = TranscriptionEvent.committed_transcript("hi", "en", [span])
+      assert event == {:committed_transcript, %{text: "hi", language: "en", spans: [span]}}
+      assert TranscriptionEvent.event?(event)
+    end
+
+    test "committed_transcript/3 with non-list, non-nil spans raises FunctionClauseError" do
+      assert_raise FunctionClauseError, fn ->
+        TranscriptionEvent.committed_transcript("hi", nil, :nope)
+      end
+    end
+
     test "language defaults to nil" do
       assert TranscriptionEvent.committed_transcript("hi") ==
                {:committed_transcript, %{text: "hi", language: nil}}
@@ -64,6 +94,20 @@ defmodule ALLM.TranscriptionEventTest do
     test "a missing required key raises ArgumentError" do
       assert_raise ArgumentError, fn ->
         TranscriptionEvent.transcription_completed(Map.delete(@completed, :duration_seconds))
+      end
+    end
+
+    test "an optional :spans key is accepted and passed through; required keys still bind" do
+      with_spans = Map.put(@completed, :spans, [TranscriptSpan.new(text: "hi", kind: :token)])
+
+      assert {:transcription_completed, ^with_spans} =
+               TranscriptionEvent.transcription_completed(with_spans)
+
+      assert {:transcription_completed, %{spans: []}} =
+               TranscriptionEvent.transcription_completed(Map.put(@completed, :spans, []))
+
+      assert_raise ArgumentError, ~r/:usage/, fn ->
+        TranscriptionEvent.transcription_completed(Map.delete(with_spans, :usage))
       end
     end
 
