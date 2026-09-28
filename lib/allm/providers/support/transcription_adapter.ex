@@ -16,7 +16,8 @@ defmodule ALLM.Providers.Support.TranscriptionAdapter do
     * Span flags: `gate_flags/4` refuses a `timestamps: true` or
       `logprobs: true` the adapter cannot honour with `:unsupported_feature`,
       `with_span_flags/2` carries the supported list into the Fake hand-off,
-      `span_from/6` drops every attribute the request did not ask for, and
+      `span_from/6` drops every attribute the request did not ask for,
+      `decode_span_list/3` walks a provider's span list, and
       `absent_spans/5` applies the one rule for a response that carries no
       span data (`[]` on a blank transcript, else `:unsupported_feature`).
 
@@ -217,6 +218,38 @@ defmodule ALLM.Providers.Support.TranscriptionAdapter do
       logprob: if(flag_on?(request, :logprobs), do: logprob)
     )
   end
+
+  @doc false
+  # A provider's span list as spans, in order. `entries` must be a list of
+  # maps each carrying a binary value under `text_key`; `build` turns one
+  # such map and its text into a span (normally via `span_from/6`). Returns
+  # `:error` for a non-list or any entry off that shape, so each adapter
+  # builds its own `:malformed_response` message.
+  @spec decode_span_list(term(), String.t(), (map(), String.t() -> TranscriptSpan.t())) ::
+          {:ok, [TranscriptSpan.t()]} | :error
+  def decode_span_list(entries, text_key, build) when is_list(entries) do
+    Enum.reduce_while(entries, {:ok, []}, fn
+      %{^text_key => text} = entry, {:ok, acc} when is_binary(text) ->
+        {:cont, {:ok, [build.(entry, text) | acc]}}
+
+      _other, _acc ->
+        {:halt, :error}
+    end)
+    |> case do
+      {:ok, spans} -> {:ok, Enum.reverse(spans)}
+      :error -> :error
+    end
+  end
+
+  def decode_span_list(_entries, _text_key, _build), do: :error
+
+  @doc false
+  # A provider number kept as-is; anything else (a string, `null`) is `nil`.
+  # Span attributes and durations tolerate a non-numeric value this way
+  # rather than failing the decode.
+  @spec number_or_nil(term()) :: number() | nil
+  def number_or_nil(value) when is_number(value), do: value
+  def number_or_nil(_value), do: nil
 
   @doc false
   # The resolvable gate: the audio's byte count, or `:invalid_request` when

@@ -24,6 +24,16 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   # because anything but `json` changes the body shape the decoder reads.
   @structural_fields ["file", "model", "response_format", "language", "prompt"]
 
+  # Span flags this adapter honours. `timestamps: true` is refused before the
+  # key resolves: the `json` response carries no timings. The include field
+  # spelling was settled live on 2026-09-28 by
+  # `scripts/record_openai_audio_fixtures.exs`: `include[]=logprobs` returns a
+  # top-level `logprobs` list (`recorded/logprobs_include_brackets.json`,
+  # `recorded/logprobs_mini.json`), the bare `include` key is ignored
+  # (`recorded/probe_logprobs_include_bare.json`).
+  @span_flags [:logprobs]
+  @logprobs_field "include[]"
+
   # A non-file upload is named `audio.<ext>` from `ALLM.Audio.extension_for_mime/1`
   # (parameters and case ignored). OpenAI trusts the filename extension (a
   # valid mp3 named `audio.bin` got 400 "Unsupported file format bin" on
@@ -58,7 +68,9 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   | `response_format` | always `json` |
   | `language`, `prompt` | sent when set |
   | Options | each `ALLM.TranscriptionRequest.options` entry becomes one form field (a list becomes one field per element, each under the bare key; OpenAI names array parameters with a `[]` suffix, so pass `"timestamp_granularities[]"` as the key where the endpoint expects it); never overrides the fields above; `response_format` is dropped |
-  | Response | `{"text", "usage", "languages"?}` |
+  | `include[]` | `logprobs`, sent when `logprobs: true`; never overridden by an option of the same name |
+  | Response | `{"text", "usage", "languages"?, "logprobs"?}` |
+  | Log-probabilities | `logprobs[]` = `{token, logprob, bytes}`, present only when `include[]=logprobs` was sent (confirmed on gpt-transcribe and gpt-4o-mini-transcribe, 2026-09-28) |
   | Usage | `{"type": "duration", "seconds"}` (whisper-1, gpt-transcribe) → `:duration_seconds`; `{"type": "tokens", …}` (gpt-4o-mini-transcribe) → `:usage` |
   | Language | `languages[0].code` → `:language` (gpt-transcribe only) |
   | Correlation | `x-request-id` response header |
@@ -93,6 +105,32 @@ defmodule ALLM.Providers.OpenAI.Transcription do
        sent as `audio.webm`.
        OpenAI picks the decoder from the upload's filename extension, so such
        a clip would be sent under a name it rejects.
+    4. **Span flags.** `timestamps: true` → `:unsupported_feature` with
+       `metadata.field: :timestamps`. `logprobs: true` passes.
+
+  ## Token log-probabilities
+
+  With `logprobs: true` the request carries `include[]=logprobs` and
+  `response.spans` is one `%ALLM.TranscriptSpan{kind: :token}` per entry of
+  the response's `logprobs` list, in order: `token` → `:text`, `logprob` →
+  `:logprob`, and `nil` times. With both flags off `spans` is `nil` and any
+  `logprobs` in the body is left on `:raw` only.
+
+  Which models return log-probabilities is OpenAI's decision; this adapter
+  keeps no model list. A 200 whose body has no `logprobs` list is:
+
+    * `{:ok, response}` with `spans: []` when the transcript is blank
+      (silence: observed 2026-09-28 on gpt-transcribe, which omits the key
+      and returns `text: ""`);
+    * otherwise `:unsupported_feature` with `metadata.cause:
+      :absent_from_response`, `metadata.field: :logprobs` and the transcript
+      on `metadata.text`, so the paid transcript is not lost. A model that
+      does not support log-probabilities (for example `whisper-1`) lands
+      here.
+
+  A `logprobs` value that is not a list of objects with a string `token` is
+  `:malformed_response`. Flags are compared with `== true`, so
+  `logprobs: "yes"` is off.
 
   ## Response
 
@@ -141,8 +179,9 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   `ALLM.Providers.FakeTranscription.transcribe/2` BEFORE any of this
   adapter's gates run, with `adapter_opts[:max_audio_bytes]` set to this
   adapter's own `max_audio_bytes/0` so a real clip is not rejected by the
-  Fake's small default cap. `prepare_request/2` returns a stub error under
-  the same key.
+  Fake's small default cap, and `adapter_opts[:span_flags]` set to
+  `[:logprobs]` so the Fake refuses `timestamps: true` exactly as this
+  adapter does. `prepare_request/2` returns a stub error under the same key.
   """
 
   @behaviour ALLM.TranscriptionAdapter
@@ -207,6 +246,15 @@ defmodule ALLM.Providers.OpenAI.Transcription do
       iex> {:error, err} = ALLM.Providers.OpenAI.Transcription.transcribe(req, [])
       iex> {err.reason, err.metadata.cause}
       {:invalid_request, :enoent}
+
+  Word timings are refused before any key is needed; token log-probabilities
+  (`logprobs: true`) are supported (see the module documentation):
+
+      iex> audio = ALLM.Audio.from_binary("ID3", "audio/mpeg")
+      iex> req = ALLM.TranscriptionRequest.new(audio: audio, timestamps: true)
+      iex> {:error, err} = ALLM.Providers.OpenAI.Transcription.transcribe(req, [])
+      iex> {err.reason, err.metadata.field}
+      {:unsupported_feature, :timestamps}
   """
   @impl ALLM.TranscriptionAdapter
   @spec transcribe(TranscriptionRequest.t(), keyword()) ::
@@ -219,7 +267,9 @@ defmodule ALLM.Providers.OpenAI.Transcription do
       _script ->
         FakeTranscription.transcribe(
           request,
-          TranscriptionSupport.with_own_cap(opts, @max_audio_bytes)
+          opts
+          |> TranscriptionSupport.with_own_cap(@max_audio_bytes)
+          |> TranscriptionSupport.with_span_flags(@span_flags)
         )
     end
   end
@@ -271,15 +321,16 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   # ---------------------------------------------------------------------------
 
   @doc false
-  # The three pre-flight gates, in their fixed order: resolvable -> size ->
-  # filename. All run before `Keys.fetch!/2`.
+  # The four pre-flight gates, in their fixed order: resolvable -> size ->
+  # filename -> span flags. All run before `Keys.fetch!/2`.
   @impl ALLM.Providers.Support.TranscriptionAdapter
   @spec gate_audio(TranscriptionRequest.t(), keyword()) ::
           :ok | {:error, TranscriptionAdapterError.t()}
-  def gate_audio(%TranscriptionRequest{audio: audio}, opts) do
+  def gate_audio(%TranscriptionRequest{audio: audio} = request, opts) do
     with {:ok, count} <- TranscriptionSupport.measure(audio, :openai, opts),
-         :ok <- TranscriptionSupport.gate_size(count, @max_audio_bytes, :openai, opts) do
-      gate_filename(audio, opts)
+         :ok <- TranscriptionSupport.gate_size(count, @max_audio_bytes, :openai, opts),
+         :ok <- gate_filename(audio, opts) do
+      TranscriptionSupport.gate_flags(request, @span_flags, :openai, opts)
     end
   end
 
@@ -288,12 +339,16 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   # `transcribe/2` doc states it). `response_format` is always "json".
   # `request.options` become extra fields UNDER the structural ones. A
   # non-file source whose mime has no extension returns the filename gate's
-  # error: the body builder never names a part `audio.bin`.
+  # error: the body builder never names a part `audio.bin`. With
+  # `logprobs == true`, `include[]=logprobs` is structural too, so an option
+  # of the same name can never switch it off.
   @spec to_multipart_body(TranscriptionRequest.t(), keyword()) ::
           {:ok, [{String.t(), term()}]} | {:error, TranscriptionAdapterError.t()}
   def to_multipart_body(%TranscriptionRequest{audio: %Audio{} = audio} = request, opts) do
     with {:ok, bytes} <- TranscriptionSupport.resolve_bytes(audio, :openai, opts),
          {:ok, name} <- upload_filename(audio, opts) do
+      {span_fields, span_structural} = span_fields(request)
+
       structural =
         [
           {"file",
@@ -302,9 +357,9 @@ defmodule ALLM.Providers.OpenAI.Transcription do
           {"response_format", "json"}
         ] ++
           TranscriptionSupport.optional_field("language", request.language) ++
-          TranscriptionSupport.optional_field("prompt", request.prompt)
+          TranscriptionSupport.optional_field("prompt", request.prompt) ++ span_fields
 
-      {:ok, structural ++ option_fields(request.options)}
+      {:ok, structural ++ option_fields(request.options, span_structural)}
     end
   end
 
@@ -317,23 +372,28 @@ defmodule ALLM.Providers.OpenAI.Transcription do
           {:ok, TranscriptionResponse.t()} | {:error, TranscriptionAdapterError.t()}
   def decode_response(body, headers, request, opts)
 
+  # `logprobs` is read only when a span flag is exactly `true`; otherwise
+  # `spans` is `nil` and `logprobs` is ignored, whatever its shape.
   def decode_response(%{"text" => text} = body, headers, %TranscriptionRequest{} = request, opts)
       when is_binary(text) do
     {usage, duration} = decode_usage(Map.get(body, "usage"))
 
-    {:ok,
-     %TranscriptionResponse{
-       text: text,
-       language: decode_language(Map.get(body, "languages")),
-       duration_seconds: duration,
-       request_id:
-         Keyword.get(opts, :request_id) || HTTPResponse.header_value(headers, "x-request-id"),
-       model: request.model || @default_model,
-       provider: :openai,
-       usage: usage,
-       raw: body,
-       metadata: request.metadata
-     }}
+    with {:ok, spans} <- token_spans(body, text, request, opts) do
+      {:ok,
+       %TranscriptionResponse{
+         text: text,
+         language: decode_language(Map.get(body, "languages")),
+         duration_seconds: duration,
+         request_id:
+           Keyword.get(opts, :request_id) || HTTPResponse.header_value(headers, "x-request-id"),
+         model: request.model || @default_model,
+         provider: :openai,
+         usage: usage,
+         raw: body,
+         spans: spans,
+         metadata: request.metadata
+       }}
+    end
   end
 
   def decode_response(_body, _headers, _request, opts),
@@ -442,9 +502,11 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   # The option-to-field mapping is shared with the other transcription
   # adapters (`ALLM.Providers.Support.TranscriptionAdapter.option_fields/2`).
   # Only a dropped `response_format` is logged: the other structural fields
-  # are dropped silently.
-  defp option_fields(options) do
-    {fields, dropped} = TranscriptionSupport.option_fields(options, @structural_fields)
+  # are dropped silently. `span_structural` is the call-time addition
+  # (`include[]` under `logprobs: true`); `@structural_fields` is unchanged.
+  defp option_fields(options, span_structural) do
+    {fields, dropped} =
+      TranscriptionSupport.option_fields(options, @structural_fields ++ span_structural)
 
     if "response_format" in dropped do
       Logger.debug(fn ->
@@ -459,6 +521,52 @@ defmodule ALLM.Providers.OpenAI.Transcription do
   # ---------------------------------------------------------------------------
   # Internals — decoding and errors
   # ---------------------------------------------------------------------------
+
+  defp span_fields(request) do
+    if TranscriptionSupport.flag_on?(request, :logprobs),
+      do: {[{@logprobs_field, "logprobs"}], [@logprobs_field]},
+      else: {[], []}
+  end
+
+  defp token_spans(body, text, request, opts) do
+    if TranscriptionSupport.spans_requested?(request),
+      do: decode_logprobs(Map.get(body, "logprobs"), text, request, opts),
+      else: {:ok, nil}
+  end
+
+  # An absent (or `null`) `logprobs` follows the shared absent-span rule:
+  # `[]` on a blank transcript, else `:unsupported_feature` with the
+  # transcript kept on the error's `metadata.text`.
+  defp decode_logprobs(nil, text, request, opts),
+    do:
+      TranscriptionSupport.absent_spans(
+        text,
+        request,
+        :openai,
+        ~s(OpenAI returned no "logprobs" list),
+        opts
+      )
+
+  defp decode_logprobs(entries, _text, request, opts) do
+    case TranscriptionSupport.decode_span_list(entries, "token", &token_span(&1, &2, request)) do
+      {:ok, spans} -> {:ok, spans}
+      :error -> {:error, malformed_logprobs(opts)}
+    end
+  end
+
+  defp malformed_logprobs(opts),
+    do: malformed_error(~s("logprobs" is not a list of objects with a string "token"), opts)
+
+  defp token_span(entry, token, request) do
+    TranscriptionSupport.span_from(
+      token,
+      :token,
+      nil,
+      nil,
+      TranscriptionSupport.number_or_nil(Map.get(entry, "logprob")),
+      request
+    )
+  end
 
   defp decode_usage(%{"type" => "duration", "seconds" => seconds}) when is_number(seconds),
     do: {%Usage{}, seconds}

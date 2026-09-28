@@ -1,3 +1,26 @@
+## [FEAT] Add OpenAI logprob spans and Gemini span refusals (28.5)
+*Monday, September 28th at 12pm*
+Phase 28.5 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md closes the 
+three-adapter family for opt-in transcript spans (spec §37.2.3, §37.2.5).
+
+- OpenAI: logprobs sends include[]=logprobs structurally and decodes body 
+logprobs into :token spans; absent key uses the shared blank-text rule (silence 
+gives [], non-blank gives :unsupported_feature with the transcript kept); 
+timestamps is refused before key resolution.
+- Gemini: both flags refused before key resolution, per the 28.3 probe 
+(responseLogprobs rejected on gemini-flash-latest).
+- Scripted hand-offs pass the supported list so FakeTranscription refuses 
+identically.
+- Shared decode_span_list/3 and number_or_nil/1 in Support.TranscriptionAdapter 
+now back both the ElevenLabs and OpenAI decoders.
+- Family-consistency table test over three adapters x four flag cells, with 
+gate_audio/2 assertions so an ambient API key cannot mask a gate placed after 
+key resolution.
+- Example 24 gains the OpenAI logprobs call and Gemini refusal; 
+RUN_OUTPUT_OPENAI.md and RUN_OUTPUT_GEMINI.md regenerated from green live runs.
+
+---
+
 ## [FEAT] Surface ElevenLabs word timings and logprobs as spans (28.4)
 *Monday, September 28th at 11am*
 Phase 28.4 of steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md wires opt-in 

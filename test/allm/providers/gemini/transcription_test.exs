@@ -3,8 +3,10 @@ defmodule ALLM.Providers.Gemini.TranscriptionTest do
   Seam tests for `ALLM.Providers.Gemini.Transcription`: gates, JSON body
   builder, response decoder, error classifier, and the no-retry contract.
 
-  Keyless gate tests install a plug that flunks if a request is ever built,
-  so a gate placed after key resolution fails even with a key exported.
+  Keyless gate tests install a plug that flunks if a request is ever sent,
+  which pins gate-before-HTTP. It does not pin gate-before-key when the shell
+  exports a provider key; tests that pin that call `gate_audio/2` directly,
+  since `transcribe/2` runs it before `build_request/2` resolves the key.
   """
 
   use ExUnit.Case, async: true
@@ -512,6 +514,72 @@ defmodule ALLM.Providers.Gemini.TranscriptionTest do
 
       assert_received {ALLM.Providers.FakeTranscription, :call, %{opts: opts}}
       assert opts[:adapter_opts][:max_audio_bytes] == Transcription.max_audio_bytes()
+    end
+  end
+
+  describe "span flags (both refused)" do
+    @cells [
+      {[timestamps: true], :timestamps},
+      {[logprobs: true], :logprobs},
+      {[timestamps: true, logprobs: true], :timestamps}
+    ]
+
+    test "each set flag is :unsupported_feature naming it, keyless (before Keys.fetch!)" do
+      for {flags, field} <- @cells do
+        assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = err} =
+                 Transcription.transcribe(req(mp3(), flags), @flunk_plug)
+
+        assert err.provider == :gemini
+        assert err.metadata.field == field
+
+        # gate_audio/2 runs before build_request/2 resolves the key, so this
+        # pins gate-before-key even with GEMINI_API_KEY exported.
+        assert {:error, %TranscriptionAdapterError{metadata: %{field: ^field}}} =
+                 Transcription.gate_audio(req(mp3(), flags), [])
+      end
+    end
+
+    test "prepare_request/2 refuses a set flag keyless" do
+      assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature}} =
+               Transcription.prepare_request(req(mp3(), logprobs: true), @flunk_plug)
+    end
+
+    test "the span gate runs after the audio gates" do
+      assert {:error, %TranscriptionAdapterError{reason: :invalid_request} = err} =
+               Transcription.transcribe(
+                 req(Audio.from_binary("webm", "audio/webm"), logprobs: true),
+                 @flunk_plug
+               )
+
+      assert err.metadata.mime_type == "audio/webm"
+    end
+
+    test "a non-true flag value switches nothing on, and the body is unchanged" do
+      assert :ok = Transcription.gate_audio(req(mp3(), timestamps: "yes", logprobs: 1), [])
+      assert {:ok, body} = Transcription.to_json_body(req(mp3(), logprobs: 1), [])
+      refute Map.has_key?(body, "generationConfig")
+    end
+
+    test "a scripted call refuses each set flag as the provider would (decision 7)" do
+      for {flags, field} <- @cells do
+        assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = err} =
+                 Transcription.transcribe(req(mp3(), flags),
+                   adapter_opts: [transcription_script: [{:ok, "the quick fox"}]]
+                 )
+
+        # Fake-originated: `provider` is nil, so only reason and field are pinned.
+        assert err.metadata.field == field
+      end
+    end
+
+    test "the hand-off passes [] as adapter_opts[:span_flags]" do
+      assert {:ok, %TranscriptionResponse{spans: nil}} =
+               Transcription.transcribe(req(mp3()),
+                 adapter_opts: [transcription_script: [{:ok, "x"}], capture_pid: self()]
+               )
+
+      assert_received {ALLM.Providers.FakeTranscription, :call, %{opts: opts}}
+      assert opts[:adapter_opts][:span_flags] == []
     end
   end
 end

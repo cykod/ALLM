@@ -10,7 +10,7 @@ Companion bookkeeping for `steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md`. Th
 | 28.2 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-2 |
 | 28.3 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-3; no fix pass needed (two Lows: one carried to polish, one recorded in Notes for 28.4 / 28.5) |
 | 28.4 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-4; live gate: 01–21 SKIP, 23–26 OK, 27 FAIL on ElevenLabs account TTS quota (external, not a code defect — see §28.4) |
-| 28.5 | Not Started |
+| 28.5 | Completed (2026-09-28) — reviews: .work/{reviews,code-reviews,security-reviews}/2026-09-28-transcript-timings-28-5; live gates: openai `exit=0` (second run; first run's 25 timed out, see §28.5), gemini `exit=0`; snapshots regenerated before the behaviour-preserving fix-pass decoder extraction |
 | 28.6 | Not Started |
 | 28.7 | Not Started |
 
@@ -243,3 +243,71 @@ Verification: `mix test > "$SP/fix_full.log"` → `exit=0`, `687 doctests, 33 pr
 - **ElevenLabs credits** were exhausted by this run (1 credit left). 28.5's live gates are OpenAI and Gemini only, but any later ElevenLabs arm needs a top-up first.
 - **Present-but-empty `words` (28.6 docs):** a `words: []` list on a NON-blank transcript is taken at face value → `spans: []` (batch and realtime twin alike); decision 4 defines only the absent key. The 28.6 doc pass states this in one sentence. Source: functional review 28.4 Known Issues #1.
 - **Absent-span rule is shared (28.5):** OpenAI and Gemini call `TranscriptionAdapter.absent_spans/5` (and `blank_text?/1`) rather than re-deriving decision 4; see Fix pass item 1 for the DONE WHEN grep.
+
+## 28.5 OpenAI + Gemini
+
+Built against `ae35cb2` (28.4 commit). Cited sites located by content: `gate_audio/2`, `to_multipart_body/2`, `decode_response/4`, `transcribe/2` hand-off in `lib/allm/providers/openai/transcription.ex`; `gate_audio/2`, `transcribe/2` hand-off in `lib/allm/providers/gemini/transcription.ex`.
+
+### Checklist
+
+- [x] **OpenAI** (`@span_flags [:logprobs]`): hand-off `with_own_cap/2 |> with_span_flags/2`; `gate_flags/4` is the last step of `gate_audio/2` (after resolvable/size/filename, before `Keys.fetch!`); `to_multipart_body/2` adds `{"include[]", "logprobs"}` iff `flag_on?(request, :logprobs)` and drops a caller's `include[]` option for that call only (`@structural_fields` unchanged); `decode_response/4` reads `logprobs` only when `spans_requested?/1`: list → `:token` spans via `span_from/6` (`token` → `text`, `logprob` kept if numeric, times `nil`, `bytes` ignored), absent/`null` → `absent_spans/5` with source `OpenAI returned no "logprobs" list`, anything else → `:malformed_response`. Moduledoc: wire-field rows (`include[]`, response `logprobs`), gate 4, "Token log-probabilities" section, escape-hatch paragraph names `adapter_opts[:span_flags]`; `transcribe/2` gains a keyless refusal doctest.
+- [x] **Gemini** (refuse branch, `@span_flags []`): hand-off `with_span_flags/2`; `gate_flags/4` last in `gate_audio/2`. No body or decoder change (no `responseLogprobs`, no span decoder, no G2 fixture). Moduledoc: gate 4 and a "Word timings and log-probabilities are refused" section stating the refusal rests on one probe on `gemini-flash-latest` (`probe_logprobs.json`), not a claim that Gemini lacks logprobs; `transcribe/2` gains a keyless refusal doctest.
+- [x] Tests:
+  - `test/allm/providers/openai/transcription_test.exs` `describe "span flags"` (9 tests): keyless `timestamps` refusal (`{t,f}`, `{t,t}`), `prepare_request/2` refuse/pass, span gate after audio gates, non-`true` values off, scripted `timestamps` refusal (reason + field only), scripted `logprobs` → Fake spans with logprob and nil times, hand-off `span_flags == [:logprobs]`, form has `include[]` iff `logprobs == true`, caller `include[]` overridden/passed through.
+  - `test/allm/providers/openai/transcription_wire_test.exs` `describe "logprobs"` (8 tests): `include[]=logprobs` on the wire, O1 and O3 decode to one `:token` span per entry (count from the fixture), flags off over O1 → `spans: nil`, `mini_tokens.json` + `logprobs: true` → `:unsupported_feature` `:absent_from_response` with `metadata.text`, `logprobs_silence.json` → `{:ok, spans: []}`, malformed shapes → `:malformed_response` (flags on) / `spans: nil` (flags off), non-numeric `logprob` → `nil`.
+  - `test/allm/providers/gemini/transcription_test.exs` `describe "span flags (both refused)"` (6 tests): keyless refusal per cell with field, `prepare_request/2` keyless refusal, gate after MIME gate, non-`true` values off and no `generationConfig`, scripted refusal per cell, hand-off `span_flags == []`.
+  - `test/allm/providers/gemini/transcription_wire_test.exs` (2 tests): G0/G1 recorded outcomes pin the refuse branch and every flagged cell is refused with a flunking stub; flags off over `mp3.json` → `spans: nil`.
+  - `test/allm/providers/support/transcription_adapter_test.exs` `describe "span-flag family consistency (no I/O)"` (17 tests): a literal 12-row expectation table (`[ElevenLabs, OpenAI, Gemini]` × four cells) plus a size check; pass cells `prepare_request(req, api_key: "test-key")` → `{:ok, %Req.Request{}}`; refusal cells also keyless through `transcribe/2` behind a flunking plug; ElevenLabs realtime column (four cells) `stream_transcribe/3` with `ws_module: ALLM.Test.RaisingWebSocket` → `{:ok, _}`.
+- [x] `examples/24_transcribe_audio.exs`: OpenAI arm makes a `logprobs: true` call asserting non-empty `:token` spans with numeric logprob and nil times; Gemini arm asserts the local `:unsupported_feature` `field: :logprobs` refusal.
+
+### Carried items acted on
+
+1. `absent_spans/5` reused (not re-derived): DONE WHEN `grep -rn 'absent_from_response,' lib/allm/providers/` → one line, `lib/allm/providers/support/transcription_adapter.ex:191` (exit 0). Gemini does not call it: on the refuse branch no flagged request reaches the decoder.
+2. Shared predicates only: every flag check is `flag_on?/2` / `spans_requested?/1` / `gate_flags/4`; `timestamps: "yes"`, `logprobs: 1` switch nothing on (tests above).
+3. `mini_tokens.json` exists (`test/fixtures/openai/transcriptions/recorded/mini_tokens.json`, no `logprobs` key, non-blank text) — used as named, no substitution.
+4. No literal `0.0` patterns; `grep -c 'warning:' "$SP/28_5.log"` → 0.
+5. Release gate: `grep -rn 'with_span_flags\|gate_flags' lib/allm/providers/openai lib/allm/providers/gemini` → 4 lines (hand-off + gate in each adapter), so every bundled adapter now meets the `TranscriptionRequest` moduledoc's pre-I/O refusal promise.
+
+### Deviations
+
+1. **[tactical] The caller-option drop under `logprobs: true` covers the `include[]` key only**, not bare `include` (which OpenAI ignores, per `probe_logprobs_include_bare.json`), so a caller's bare `include` still passes through untouched.
+2. **[tactical] A non-numeric `logprob` on an entry with a string `token` decodes to `logprob: nil`**, not `:malformed_response` — the design's malformed rule names only a non-list source or a missing binary text, and the population invariant is "only if". Pinned by the wire test.
+3. **[tactical] `examples/RUN_OUTPUT_OPENAI.md` and `RUN_OUTPUT_GEMINI.md` regenerated** from this change's fully green runs (snapshot rule), not left stale.
+
+### Observations
+
+- Recorded OpenAI logprobs include small **positive** values (`1.52587890625e-5` for " brown" in `logprobs_include_brackets.json`); nothing guards `logprob <= 0`, as the span contract says. The 28.6 docs should not claim logprobs are always `<= 0`.
+
+### Verification (2026-09-28)
+
+- Targeted `mix test test/allm/providers/openai/ test/allm/providers/gemini/ test/allm/providers/support/` → `61 doctests, 1220 tests, 0 failures, 2 excluded`.
+- `mix test > "$SP/28_5.log" 2>&1` → `exit=0`; `689 doctests, 33 properties, 5663 tests, 0 failures, 14 excluded, 1 skipped` (28.4 fix: 687 doctests, 5621 tests). `grep -c 'warning:' "$SP/28_5.log"` → 0.
+- `mix test --seed 0` → exit 0, same counts.
+- `mix credo --strict` → "found no issues". `mix dialyzer` → "Total errors: 0". `mix format --check-formatted` → exit 0. `mix compile --warnings-as-errors --force` → exit 0.
+- `(cd conformance && mix test)` → `206 tests, 0 failures, 1 skipped`.
+- `mix run scripts/audit_user_docs.exs lib/allm/providers/openai/transcription.ex lib/allm/providers/gemini/transcription.ex` → "No banned-token matches".
+- Mutation table (`mix test test/allm/providers/{openai,gemini,support}/`; files restored and `cmp`-verified):
+
+| Mutant | Result |
+|---|---|
+| Gemini `@span_flags [:logprobs]` | red (7) |
+| OpenAI hand-off without `with_span_flags/2` | red (2) |
+| OpenAI caller `include[]` not dropped under `logprobs: true` | red (1) |
+| OpenAI absent `logprobs` always `[]` (non-blank too) | red (1) |
+| OpenAI span gate moved after `Keys.fetch!` into `build_request/2` | red (5) |
+
+- **Live gates** (`set -a; . ./.env; set +a; ALLM_PROVIDER=<p> mix run examples/run_all.exs`):
+  - **openai, run 1** → `exit=1`: `01–21 OK, 22 SKIP, 23 OK, 24 OK, 25 FAIL, 26 SKIP, 27 SKIP, 28 OK`. 25 (`25_stream_speech.exs`, streaming TTS, not touched by this phase) failed with `SpeechAdapterError{reason: :timeout, message: "no transport message within stream_timeout (60000 ms)"}`. Re-run alone → `exit=0` (`deltas=16 bytes=283200 first_chunk_ms=764`). A one-off provider-side stall, not a reproducible defect; no `[BUG]` filed.
+  - **openai, run 2** → `exit=0`: `01–21 OK, 22 SKIP, 23–25 OK, 26–27 SKIP, 28 OK`. 24's logprobs call: `tokens=10`, first `["The", " quick", " brown", " fox"]`, `mean_logprob≈-3.8e-5`. `examples/RUN_OUTPUT_OPENAI.md` regenerated from this run.
+  - **gemini** → `exit=0`: `01–18 OK, 19–20 SKIP, 21 OK, 22–23 SKIP, 24 OK, 25–27 SKIP, 28 OK`. 24 prints `refused locally on Gemini, as documented`. `examples/RUN_OUTPUT_GEMINI.md` regenerated from this run.
+  - Neither snapshot contains key material (`grep -cE 'AIza[0-9A-Za-z_-]{20}|sk-(proj-)?[A-Za-z0-9]{20}'` → 0 on each log).
+
+### Fix pass (2026-09-28)
+
+1. **Functional M1 (Medium, gate carve-out): gate-before-key now pinned independent of ambient env.** The flunk plug binds gate-before-HTTP only; with `OPENAI_API_KEY` exported, a span gate moved after `Keys.fetch!/2` (but before the send) passed every test. Each refusal cell of the family table (`test/allm/providers/support/transcription_adapter_test.exs` "span-flag family consistency") and the per-adapter span-flag refusal tests (`test/allm/providers/openai/transcription_test.exs` "span flags", `test/allm/providers/gemini/transcription_test.exs` "span flags (both refused)") now also assert the refusal from `gate_audio(request, [])`, which `Support.TranscriptionAdapter.do_transcribe/4` runs before `build_request/2`. The family-table comment and both test moduledocs (the moduledoc claim dated from Phase 25.4/25.5, `git log -S 'fails even with a key exported' -- test/` → `f17a90b`, `e91cdb0`) no longer claim the plug binds key ordering. Mutants (files restored, `git diff --stat` back to pre-mutant counts): OpenAI `gate_flags/4` moved from `gate_audio/2` into `build_request/2` after `Keys.fetch!` with `OPENAI_API_KEY=junk` → `110 tests, 3 failures`; the same for Gemini with `GEMINI_API_KEY=junk GOOGLE_API_KEY=junk` → `105 tests, 4 failures`.
+2. **[structural, documented] Code-review F1 (Medium): span-list walk and number coercion extracted.** `ALLM.Providers.Support.TranscriptionAdapter` gains `decode_span_list/3` (`{:ok, spans} | :error`; non-list or any entry lacking a binary `text_key` value → `:error`) and `number_or_nil/1` (`@doc false` + `@spec`). ElevenLabs `decode_words/2` and OpenAI `decode_logprobs/4` call it, each keeping its own malformed message; ElevenLabs' private `number_or_nil/1` is deleted and OpenAI's inline `case` replaced. Private, behaviour-preserving, no public name changed (IMPLEMENTATION.md "Migration on extraction"); existing ElevenLabs/OpenAI tests unmodified and green. DONE: `grep -n 'reduce_while' lib/allm/providers/{openai,elevenlabs}/transcription.ex` → no output, exit 1. New unit tests: "decode_span_list/3 …" (2) and "number_or_nil/1 …" in the "span helpers" describe.
+3. Left for the phase polish pass (Low): code-review F2 (OpenAI silent `include[]` drop), F3 (`option_fields/2` second-argument divergence), F4 (cross-adapter decode table), functional L1 (`token_spans/4` gates on either flag), L2 (scripted OpenAI spans are `:word`; no doc claims kind parity — the escape-hatch paragraph promises refusal parity only).
+
+### Notes for later sub-phases
+
+- **28.6 docs:** per-provider table rows now confirmed — OpenAI `logprobs` supported (`include[]=logprobs`, gpt-transcribe + gpt-4o-mini-transcribe), `timestamps` refused; Gemini refuses both (logprobs on the basis of one `gemini-flash-latest` probe); ElevenLabs both. OpenAI's absent-key case lands `whisper-1` on `:unsupported_feature` `:absent_from_response` (inferred from decision 8, not probed live).

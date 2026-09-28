@@ -3,8 +3,10 @@ defmodule ALLM.Providers.OpenAI.TranscriptionTest do
   Seam tests for `ALLM.Providers.OpenAI.Transcription`: gates, multipart body
   builder, response decoder, error classifier, and the no-retry contract.
 
-  Keyless gate tests install a plug that flunks if a request is ever built,
-  so a gate placed after key resolution fails even with a key exported.
+  Keyless gate tests install a plug that flunks if a request is ever sent,
+  which pins gate-before-HTTP. It does not pin gate-before-key when the shell
+  exports a provider key; tests that pin that call `gate_audio/2` directly,
+  since `transcribe/2` runs it before `build_request/2` resolves the key.
   """
 
   use ExUnit.Case, async: true
@@ -495,6 +497,95 @@ defmodule ALLM.Providers.OpenAI.TranscriptionTest do
     test "to_multipart_body/2 on a non-Audio :audio returns :invalid_source" do
       assert {:error, %TranscriptionAdapterError{metadata: %{cause: :invalid_source}}} =
                Transcription.to_multipart_body(req(nil), [])
+    end
+  end
+
+  describe "span flags" do
+    test "timestamps: true is :unsupported_feature field :timestamps, keyless (before Keys.fetch!)" do
+      for flags <- [[timestamps: true], [timestamps: true, logprobs: true]] do
+        assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = err} =
+                 Transcription.transcribe(req(mp3(), flags), @flunk_plug)
+
+        assert err.provider == :openai
+        assert err.metadata.field == :timestamps
+
+        # gate_audio/2 runs before build_request/2 resolves the key, so this
+        # pins gate-before-key even with OPENAI_API_KEY exported.
+        assert {:error, %TranscriptionAdapterError{metadata: %{field: :timestamps}}} =
+                 Transcription.gate_audio(req(mp3(), flags), [])
+      end
+    end
+
+    test "prepare_request/2 refuses timestamps: true keyless, and passes logprobs: true" do
+      assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature}} =
+               Transcription.prepare_request(req(mp3(), timestamps: true), @flunk_plug)
+
+      assert {:ok, %Req.Request{}} =
+               Transcription.prepare_request(req(mp3(), logprobs: true), api_key: "sk-x")
+    end
+
+    test "the span gate runs after the audio gates" do
+      assert {:error, %TranscriptionAdapterError{reason: :invalid_request}} =
+               Transcription.transcribe(
+                 req(Audio.from_file("/nonexistent.mp3"), timestamps: true),
+                 @flunk_plug
+               )
+    end
+
+    test "a non-true flag value switches nothing on" do
+      assert :ok = Transcription.gate_audio(req(mp3(), timestamps: "yes"), [])
+      assert {:ok, form} = Transcription.to_multipart_body(req(mp3(), logprobs: 1), [])
+      assert field(form, "include[]") == []
+    end
+
+    test "a scripted call with timestamps: true is refused as the provider would (decision 7)" do
+      assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = err} =
+               Transcription.transcribe(req(mp3(), timestamps: true),
+                 adapter_opts: [transcription_script: [{:ok, "the quick fox"}]]
+               )
+
+      # Fake-originated: `provider` is nil, so only reason and field are pinned.
+      assert err.metadata.field == :timestamps
+    end
+
+    test "a scripted call with logprobs: true returns the Fake's spans, logprobs only" do
+      assert {:ok, %TranscriptionResponse{spans: [_, _, _] = spans}} =
+               Transcription.transcribe(req(mp3(), logprobs: true),
+                 adapter_opts: [transcription_script: [{:ok, "the quick fox"}]]
+               )
+
+      assert Enum.map(spans, & &1.text) == ~w(the quick fox)
+      assert Enum.all?(spans, &(is_nil(&1.start_seconds) and is_number(&1.logprob)))
+    end
+
+    test "the hand-off passes [:logprobs] as adapter_opts[:span_flags]" do
+      assert {:ok, _} =
+               Transcription.transcribe(req(mp3()),
+                 adapter_opts: [transcription_script: [{:ok, "x"}], capture_pid: self()]
+               )
+
+      assert_received {ALLM.Providers.FakeTranscription, :call, %{opts: opts}}
+      assert opts[:adapter_opts][:span_flags] == [:logprobs]
+    end
+
+    test "the form carries include[]=logprobs iff logprobs == true" do
+      assert {:ok, on} = Transcription.to_multipart_body(req(mp3(), logprobs: true), [])
+      assert field(on, "include[]") == ["logprobs"]
+
+      assert {:ok, off} = Transcription.to_multipart_body(req(mp3()), [])
+      assert field(off, "include[]") == []
+    end
+
+    test "a caller's include[] option is overridden under logprobs: true, passed through otherwise" do
+      options = %{"include[]" => "nope"}
+
+      assert {:ok, on} =
+               Transcription.to_multipart_body(req(mp3(), logprobs: true, options: options), [])
+
+      assert field(on, "include[]") == ["logprobs"]
+
+      assert {:ok, off} = Transcription.to_multipart_body(req(mp3(), options: options), [])
+      assert field(off, "include[]") == ["nope"]
     end
   end
 end

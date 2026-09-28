@@ -253,6 +253,37 @@ defmodule ALLM.Providers.Support.TranscriptionAdapterTest do
                Support.span_from("fox", :word, 1.0, 1.5, -0.25, request)
     end
 
+    test "decode_span_list/3 builds spans in order from maps with a binary text key" do
+      build = fn entry, text -> {text, entry["n"]} end
+
+      assert Support.decode_span_list([%{"t" => "a", "n" => 1}, %{"t" => "b"}], "t", build) ==
+               {:ok, [{"a", 1}, {"b", nil}]}
+
+      assert Support.decode_span_list([], "t", build) == {:ok, []}
+    end
+
+    test "decode_span_list/3 is :error for a non-list or any off-shape entry" do
+      build = fn _entry, text -> text end
+
+      for entries <- [
+            nil,
+            %{"t" => "a"},
+            "a",
+            [%{"t" => "a"}, %{"other" => "b"}],
+            [%{"t" => 1}],
+            [%{"t" => "a"}, "b"]
+          ] do
+        assert Support.decode_span_list(entries, "t", build) == :error, inspect(entries)
+      end
+    end
+
+    test "number_or_nil/1 keeps numbers and nils everything else" do
+      assert Support.number_or_nil(1) == 1
+      assert Support.number_or_nil(-0.5) == -0.5
+      assert Support.number_or_nil("1.0") == nil
+      assert Support.number_or_nil(nil) == nil
+    end
+
     test "gate_flags/4 refuses :timestamps before :logprobs" do
       request = TranscriptionRequest.new(audio: mp3(), timestamps: true, logprobs: true)
 
@@ -371,6 +402,98 @@ defmodule ALLM.Providers.Support.TranscriptionAdapterTest do
       assert out[:adapter_opts][:cursor_key] == 7
       assert out[:api_key] == "x"
       assert Support.put_adapter_opt([], :k, 1) == [adapter_opts: [k: 1]]
+    end
+  end
+
+  # The sub-phase closing the bundled transcription family (28.5) owns its
+  # internal consistency: every adapter refuses or passes each span-flag cell
+  # exactly as the design's wire-field map says, with no I/O. Pass cells
+  # drive `prepare_request/2` (gates + build, never sent) with an explicit
+  # key. Refusal cells assert the refusal three ways: from `gate_audio/2`
+  # itself, which `do_transcribe/4` runs before `build_request/2` (where
+  # `Keys.fetch!/2` lives) — this is what pins gate-before-key regardless of
+  # any `*_API_KEY` the shell exports; from `prepare_request/2`; and keyless
+  # through `transcribe/2` behind a plug that flunks, which pins
+  # gate-before-HTTP only (with a key exported, a gate moved after
+  # `Keys.fetch!/2` but before the send would still pass that assertion).
+  # The ElevenLabs realtime column
+  # uses `ALLM.Test.RaisingWebSocket`, which raises if a socket is opened.
+  describe "span-flag family consistency (no I/O)" do
+    @cells [
+      {false, false},
+      {true, false},
+      {false, true},
+      {true, true}
+    ]
+
+    # {adapter, {timestamps, logprobs}} => :pass | {:refuse, field}
+    @expected %{
+      {ALLM.Providers.ElevenLabs.Transcription, {false, false}} => :pass,
+      {ALLM.Providers.ElevenLabs.Transcription, {true, false}} => :pass,
+      {ALLM.Providers.ElevenLabs.Transcription, {false, true}} => :pass,
+      {ALLM.Providers.ElevenLabs.Transcription, {true, true}} => :pass,
+      {OpenAI.Transcription, {false, false}} => :pass,
+      {OpenAI.Transcription, {true, false}} => {:refuse, :timestamps},
+      {OpenAI.Transcription, {false, true}} => :pass,
+      {OpenAI.Transcription, {true, true}} => {:refuse, :timestamps},
+      {Gemini.Transcription, {false, false}} => :pass,
+      {Gemini.Transcription, {true, false}} => {:refuse, :timestamps},
+      {Gemini.Transcription, {false, true}} => {:refuse, :logprobs},
+      {Gemini.Transcription, {true, true}} => {:refuse, :timestamps}
+    }
+
+    @flunk_plug [adapter_opts: [plug: &__MODULE__.flunk_plug/1]]
+    def flunk_plug(_conn), do: flunk("a refused span flag reached HTTP")
+
+    test "the expectation table covers every adapter x flag cell" do
+      assert map_size(@expected) == 3 * length(@cells)
+    end
+
+    for {{adapter, {ts, lp}}, outcome} <- @expected do
+      @adapter adapter
+      @ts ts
+      @lp lp
+      @outcome outcome
+
+      test "#{inspect(adapter)} batch timestamps: #{ts}, logprobs: #{lp} -> #{inspect(outcome)}" do
+        request = TranscriptionRequest.new(audio: mp3(), timestamps: @ts, logprobs: @lp)
+
+        case @outcome do
+          :pass ->
+            assert {:ok, %Req.Request{}} = @adapter.prepare_request(request, api_key: "test-key")
+
+          {:refuse, field} ->
+            assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = gated} =
+                     @adapter.gate_audio(request, [])
+
+            assert gated.metadata.field == field
+
+            assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = err} =
+                     @adapter.prepare_request(request, api_key: "test-key")
+
+            assert err.metadata.field == field
+
+            assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = keyless} =
+                     @adapter.transcribe(request, @flunk_plug)
+
+            assert keyless.metadata.field == field
+        end
+      end
+    end
+
+    for {ts, lp} <- @cells do
+      @ts ts
+      @lp lp
+
+      test "ElevenLabs realtime timestamps: #{ts}, logprobs: #{lp} -> :pass (no socket opened)" do
+        request = TranscriptionStreamRequest.new(timestamps: @ts, logprobs: @lp)
+
+        assert {:ok, _events} =
+                 ALLM.Providers.ElevenLabs.Transcription.stream_transcribe(request, [],
+                   api_key: "test-key",
+                   ws_module: ALLM.Test.RaisingWebSocket
+                 )
+      end
     end
   end
 end

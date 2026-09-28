@@ -212,6 +212,39 @@ defmodule ALLM.Providers.Gemini.TranscriptionWireTest do
       assert Fixtures.transcription_recorded(:probe_boundary_at_cap)["status"] == 200
       assert Fixtures.transcription_recorded(:probe_boundary_over_cap)["status"] == 200
     end
+
+    # 28.3 decision 2 (refuse branch): the control proves an unknown
+    # generationConfig field is rejected, so G1's 400 is the model refusing a
+    # schema field, not the field being unknown.
+    test "responseLogprobs is in the schema but gemini-flash-latest refused it; logprobs is refused locally",
+         %{stub: stub} do
+      control = Fixtures.transcription_recorded(:probe_generation_config_control)
+      assert control["status"] == 400
+      assert control["body"]["error"]["message"] =~ "notARealField"
+
+      probe = Fixtures.transcription_recorded(:probe_logprobs)
+      assert probe["status"] == 400
+      assert probe["body"]["error"]["message"] == "Logprobs is not enabled for this model"
+
+      Req.Test.stub(stub, fn _conn -> flunk("logprobs: true reached the wire") end)
+
+      for {flags, field} <- [
+            {[logprobs: true], :logprobs},
+            {[timestamps: true], :timestamps},
+            {[timestamps: true, logprobs: true], :timestamps}
+          ] do
+        assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = err} =
+                 call(stub, req(flags))
+
+        assert err.provider == :gemini
+        assert err.metadata.field == field
+      end
+    end
+
+    test "flags off over the recorded mp3 body: spans nil", %{stub: stub} do
+      stub_env(stub, Fixtures.transcription_recorded(:mp3))
+      assert {:ok, %TranscriptionResponse{spans: nil}} = call(stub, req())
+    end
   end
 
   # ---------------------------------------------------------------------------

@@ -288,4 +288,111 @@ defmodule ALLM.Providers.OpenAI.TranscriptionWireTest do
       assert {:error, %TranscriptionAdapterError{reason: :malformed_response}} = call(stub, req())
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Token log-probabilities (28.3 decisions 1 and 4)
+  # ---------------------------------------------------------------------------
+
+  describe "logprobs" do
+    test "logprobs: true sends include[]=logprobs on the wire", %{stub: stub} do
+      parent = self()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn, length: 1_000_000)
+        send(parent, {:raw, raw})
+        replay(conn, Fixtures.transcription_recorded(:logprobs_include_brackets))
+      end)
+
+      assert {:ok, _} = call(stub, req(logprobs: true))
+      assert_received {:raw, raw}
+      assert raw =~ ~r/name="include\[\]"\r\n\r\nlogprobs\r\n/
+    end
+
+    for {name, model} <- [
+          logprobs_include_brackets: "gpt-transcribe",
+          logprobs_mini: "gpt-4o-mini-transcribe"
+        ] do
+      test "#{name}.json decodes to one :token span per logprobs entry, times nil", %{
+        stub: stub
+      } do
+        env = Fixtures.transcription_recorded(unquote(name))
+        entries = env["body"]["logprobs"]
+        stub_env(stub, env)
+
+        assert {:ok, %TranscriptionResponse{spans: spans} = resp} =
+                 call(stub, req(model: unquote(model), logprobs: true))
+
+        assert length(spans) == length(entries)
+        assert entries != []
+        assert Enum.all?(spans, &(&1.kind == :token))
+        assert Enum.all?(spans, &(is_nil(&1.start_seconds) and is_nil(&1.end_seconds)))
+        assert Enum.map(spans, & &1.text) == Enum.map(entries, & &1["token"])
+        assert Enum.map(spans, & &1.logprob) == Enum.map(entries, & &1["logprob"])
+        assert Enum.map_join(spans, & &1.text) == resp.text
+        assert is_float(ALLM.TranscriptionResponse.mean_logprob(resp))
+      end
+    end
+
+    test "flags off over logprobs_include_brackets.json: spans nil, logprobs stay on :raw", %{
+      stub: stub
+    } do
+      env = Fixtures.transcription_recorded(:logprobs_include_brackets)
+      stub_env(stub, env)
+
+      assert {:ok, %TranscriptionResponse{spans: nil} = resp} = call(stub, req())
+      assert resp.raw["logprobs"] == env["body"]["logprobs"]
+    end
+
+    test "mini_tokens.json (no logprobs key, non-blank text) + logprobs: true is " <>
+           ":unsupported_feature :absent_from_response, keeping the transcript",
+         %{stub: stub} do
+      env = Fixtures.transcription_recorded(:mini_tokens)
+      refute Map.has_key?(env["body"], "logprobs")
+      stub_env(stub, env)
+
+      assert {:error, %TranscriptionAdapterError{reason: :unsupported_feature} = err} =
+               call(stub, req(model: "gpt-4o-mini-transcribe", logprobs: true))
+
+      assert err.provider == :openai
+      assert err.metadata.field == :logprobs
+      assert err.metadata.cause == :absent_from_response
+      assert err.metadata.text == env["body"]["text"]
+      assert err.message =~ ~s(OpenAI returned no "logprobs" list)
+    end
+
+    test "logprobs_silence.json (no logprobs key, blank text) + logprobs: true is {:ok, spans: []}",
+         %{stub: stub} do
+      env = Fixtures.transcription_recorded(:logprobs_silence)
+      refute Map.has_key?(env["body"], "logprobs")
+      assert env["body"]["text"] == ""
+      stub_env(stub, env)
+
+      assert {:ok, %TranscriptionResponse{spans: [], text: ""}} = call(stub, req(logprobs: true))
+    end
+
+    test "a malformed logprobs value is :malformed_response under logprobs: true only", %{
+      stub: stub
+    } do
+      for bad <- ["x", [%{"logprob" => -0.1}], [%{"token" => 1}], [7]] do
+        body = %{"text" => "hi", "logprobs" => bad}
+        Req.Test.stub(stub, &Req.Test.json(&1, body))
+
+        assert {:error, %TranscriptionAdapterError{reason: :malformed_response}} =
+                 call(stub, req(logprobs: true)),
+               "logprobs: #{inspect(bad)}"
+
+        assert {:ok, %TranscriptionResponse{spans: nil}} = call(stub, req())
+      end
+    end
+
+    test "an entry whose logprob is not a number decodes to a span with logprob nil", %{
+      stub: stub
+    } do
+      body = %{"text" => "hi", "logprobs" => [%{"token" => "hi", "logprob" => "x"}]}
+      Req.Test.stub(stub, &Req.Test.json(&1, body))
+
+      assert {:ok, %TranscriptionResponse{spans: [%{text: "hi", kind: :token, logprob: nil}]}} =
+               call(stub, req(logprobs: true))
+    end
+  end
 end

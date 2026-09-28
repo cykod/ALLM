@@ -28,6 +28,16 @@ defmodule ALLM.Providers.Gemini.Transcription do
   # Google's docs and was not probed (no source clip).
   @accepted_mimes ~w(audio/wav audio/mpeg audio/aiff audio/aac audio/ogg audio/opus audio/flac)
 
+  # Span flags this adapter honours: none. `timestamps: true` has no source
+  # in a `generateContent` answer. `logprobs: true` is refused on the basis
+  # of one live probe on 2026-09-28 (`scripts/record_gemini_audio_fixtures.exs`):
+  # Gemini rejects an unknown `generationConfig` field
+  # (`recorded/probe_generation_config_control.json`), so `responseLogprobs`
+  # is in the schema, but `gemini-flash-latest` answered 400 "Logprobs is not
+  # enabled for this model" (`recorded/probe_logprobs.json`). The refusal is
+  # per model on the provider side; no other model was probed.
+  @span_flags []
+
   @moduledoc """
   Google Gemini speech-to-text adapter. Implements `ALLM.TranscriptionAdapter`
   against `generateContent`.
@@ -104,6 +114,22 @@ defmodule ALLM.Providers.Gemini.Transcription do
     3. **MIME.** A `:mime_type` that is `nil` or not an accepted type →
        `:invalid_request` with `metadata.mime_type`. Parameters and case are
        ignored (`"audio/ogg; codecs=vorbis"` is sent as `audio/ogg`).
+    4. **Span flags.** `timestamps: true` or `logprobs: true` →
+       `:unsupported_feature` with `metadata.field` naming the flag
+       (`:timestamps` first when both are set).
+
+  ## Word timings and log-probabilities are refused
+
+  This adapter honours neither span flag, so `response.spans` is always
+  `nil`. `timestamps: true` is refused because a `generateContent` answer
+  carries no timings. `logprobs: true` is refused for **every** Gemini
+  model on the basis of one live probe on 2026-09-28: `gemini-flash-latest`
+  answered `generationConfig.responseLogprobs: true` with 400 "Logprobs is
+  not enabled for this model". That is a statement about the one model
+  probed, not about Gemini as a provider; other models were not tried. Use
+  `ALLM.Providers.OpenAI.Transcription` for token log-probabilities, or
+  `ALLM.Providers.ElevenLabs.Transcription` for word timings and
+  log-probabilities.
 
   ## Response
 
@@ -178,8 +204,9 @@ defmodule ALLM.Providers.Gemini.Transcription do
   `ALLM.Providers.FakeTranscription.transcribe/2` BEFORE any of this
   adapter's gates run, with `adapter_opts[:max_audio_bytes]` set to this
   adapter's own `max_audio_bytes/0` so a real clip is not rejected by the
-  Fake's small default cap. `prepare_request/2` returns a stub error under
-  the same key.
+  Fake's small default cap, and `adapter_opts[:span_flags]` set to `[]` so
+  the Fake refuses both span flags exactly as this adapter does.
+  `prepare_request/2` returns a stub error under the same key.
   """
 
   @behaviour ALLM.TranscriptionAdapter
@@ -245,6 +272,15 @@ defmodule ALLM.Providers.Gemini.Transcription do
       iex> {:error, err} = ALLM.Providers.Gemini.Transcription.transcribe(req, [])
       iex> {err.reason, err.metadata.mime_type}
       {:invalid_request, "audio/webm"}
+
+  Both span flags are refused before any key is needed (see the module
+  documentation):
+
+      iex> audio = ALLM.Audio.from_binary("ID3", "audio/mpeg")
+      iex> req = ALLM.TranscriptionRequest.new(audio: audio, logprobs: true)
+      iex> {:error, err} = ALLM.Providers.Gemini.Transcription.transcribe(req, [])
+      iex> {err.reason, err.metadata.field}
+      {:unsupported_feature, :logprobs}
   """
   @impl ALLM.TranscriptionAdapter
   @spec transcribe(TranscriptionRequest.t(), keyword()) ::
@@ -257,7 +293,9 @@ defmodule ALLM.Providers.Gemini.Transcription do
       _script ->
         FakeTranscription.transcribe(
           request,
-          TranscriptionSupport.with_own_cap(opts, @max_audio_bytes)
+          opts
+          |> TranscriptionSupport.with_own_cap(@max_audio_bytes)
+          |> TranscriptionSupport.with_span_flags(@span_flags)
         )
     end
   end
@@ -302,16 +340,16 @@ defmodule ALLM.Providers.Gemini.Transcription do
   # ---------------------------------------------------------------------------
 
   @doc false
-  # The three pre-flight gates, in their fixed order: resolvable -> size ->
-  # mime. All run before `Keys.fetch!/2`.
+  # The four pre-flight gates, in their fixed order: resolvable -> size ->
+  # mime -> span flags. All run before `Keys.fetch!/2`.
   @impl ALLM.Providers.Support.TranscriptionAdapter
   @spec gate_audio(TranscriptionRequest.t(), keyword()) ::
           :ok | {:error, TranscriptionAdapterError.t()}
-  def gate_audio(%TranscriptionRequest{audio: audio}, opts) do
+  def gate_audio(%TranscriptionRequest{audio: audio} = request, opts) do
     with {:ok, count} <- TranscriptionSupport.measure(audio, :gemini, opts),
          :ok <- TranscriptionSupport.gate_size(count, @max_audio_bytes, :gemini, opts),
          {:ok, _mime} <- wire_mime(audio, opts) do
-      :ok
+      TranscriptionSupport.gate_flags(request, @span_flags, :gemini, opts)
     end
   end
 

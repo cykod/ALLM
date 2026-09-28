@@ -564,7 +564,7 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
        %TranscriptionResponse{
          text: text,
          language: string_or_nil(Map.get(body, "language_code")),
-         duration_seconds: number_or_nil(Map.get(body, "audio_duration_secs")),
+         duration_seconds: TranscriptionSupport.number_or_nil(Map.get(body, "audio_duration_secs")),
          id: string_or_nil(Map.get(body, "transcription_id")),
          request_id: Keyword.get(opts, :request_id),
          model: request.model || @default_model,
@@ -733,29 +733,16 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
   # `words` (batch body or realtime twin) as spans, each attribute kept only
   # when its flag is set; `:error` when `words` is not a list of maps each
   # carrying a binary `"text"`. Shared by the batch and realtime decoders.
-  defp decode_words(words, request) when is_list(words) do
-    Enum.reduce_while(words, {:ok, []}, fn
-      %{"text" => text} = word, {:ok, acc} when is_binary(text) ->
-        {:cont, {:ok, [word_span(word, text, request) | acc]}}
-
-      _other, _acc ->
-        {:halt, :error}
-    end)
-    |> case do
-      {:ok, spans} -> {:ok, Enum.reverse(spans)}
-      :error -> :error
-    end
-  end
-
-  defp decode_words(_words, _request), do: :error
+  defp decode_words(words, request),
+    do: TranscriptionSupport.decode_span_list(words, "text", &word_span(&1, &2, request))
 
   defp word_span(word, text, request) do
     TranscriptionSupport.span_from(
       text,
       Map.get(@span_kinds, Map.get(word, "type"), :other),
-      number_or_nil(Map.get(word, "start")),
-      number_or_nil(Map.get(word, "end")),
-      number_or_nil(Map.get(word, "logprob")),
+      TranscriptionSupport.number_or_nil(Map.get(word, "start")),
+      TranscriptionSupport.number_or_nil(Map.get(word, "end")),
+      TranscriptionSupport.number_or_nil(Map.get(word, "logprob")),
       request
     )
   end
@@ -775,9 +762,6 @@ defmodule ALLM.Providers.ElevenLabs.Transcription do
 
   defp string_or_nil(value) when is_binary(value), do: value
   defp string_or_nil(_value), do: nil
-
-  defp number_or_nil(value) when is_number(value), do: value
-  defp number_or_nil(_value), do: nil
 
   # ---------------------------------------------------------------------------
   # Internals — realtime streaming
