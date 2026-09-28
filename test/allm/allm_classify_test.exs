@@ -537,6 +537,20 @@ defmodule ALLM.ALLMClassifyTest do
       assert start_md.question_count == 0
     end
 
+    test "question_count is 0 for a struct :questions, as stringify_question_ids/1 treats it" do
+      request = %ClassificationRequest{
+        ClassificationRequest.new(state: "x")
+        | questions: URI.parse("https://example.com")
+      }
+
+      assert {:error, %ValidationError{}} = ALLM.classify(fake_engine(), request)
+
+      assert [{[:allm, :classify, :start], _, start_md}, {[:allm, :classify, :stop], _, _}] =
+               TelemetryCapture.events()
+
+      assert start_md.question_count == 0
+    end
+
     test ":exception fires when the adapter raises" do
       engine = Engine.new(classification_adapter: RaisingAdapter)
 

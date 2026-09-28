@@ -111,7 +111,8 @@ defmodule ALLM.Providers.TypeSafe.Classification do
   `:network_error`. A 200 whose body does not match the questions asked
   (an answer missing, an extra answer, a type that differs from the
   question's, a choice outside the options, a score with the wrong number
-  of levels) is `:malformed_response`.
+  of levels or outside its levels, a probability or confidence outside
+  0..1) is `:malformed_response`.
 
   Error `:metadata` carries `status`, `typesafe_error_type` (the body's
   `detail.error_type`, when present) and `typesafe_request_id` (the
@@ -722,7 +723,7 @@ defmodule ALLM.Providers.TypeSafe.Classification do
 
     with {:ok, choice} <- fetch_binary(answer, "choice"),
          {:ok, probs} <- fetch_float_map(answer, "probabilities"),
-         {:ok, confidence} <- fetch_float(answer, "confidence"),
+         {:ok, confidence} <- fetch_unit(answer, "confidence"),
          :ok <- check_options(choice, probs, options) do
       {:ok,
        ClassificationAnswer.new(
@@ -738,7 +739,7 @@ defmodule ALLM.Providers.TypeSafe.Classification do
     levels = if is_list(criteria), do: length(criteria), else: nil
 
     with {:ok, score} <- fetch_float(answer, "score"),
-         {:ok, confidence} <- fetch_float(answer, "confidence"),
+         {:ok, confidence} <- fetch_unit(answer, "confidence"),
          {:ok, level_probs} <- fetch_level_list(answer, "probabilities", levels),
          {:ok, probs} <- float_list(level_probs, "probabilities"),
          {:ok, legend} <- fetch_level_list(answer, "legend", length(probs)),
@@ -755,10 +756,17 @@ defmodule ALLM.Providers.TypeSafe.Classification do
   end
 
   defp decode_typed(:yes_no, answer, _criteria) do
-    with {:ok, p} <- fetch_float(answer, "noul"),
-         :ok <- check_unit(p, "noul") do
+    with {:ok, p} <- fetch_unit(answer, "noul") do
       {:ok, ClassificationAnswer.new(type: :yes_no, yes_probability: p)}
     end
+  end
+
+  # Every probability and confidence the decoder returns is range-checked:
+  # a value outside 0..1 is `:malformed_response`, like a non-number.
+  defp fetch_unit(answer, key) do
+    with {:ok, p} <- fetch_float(answer, key),
+         :ok <- check_unit(p, key),
+         do: {:ok, p}
   end
 
   defp fetch_binary(answer, key) do
@@ -783,18 +791,20 @@ defmodule ALLM.Providers.TypeSafe.Classification do
   end
 
   defp float_map(m, key) do
-    if Enum.all?(m, fn {_k, v} -> is_number(v) end),
+    if Enum.all?(m, fn {_k, v} -> unit?(v) end),
       do: {:ok, Map.new(m, fn {k, v} -> {k, v * 1.0} end)},
-      else: {:error, "#{inspect(key)} holds a non-number"}
+      else: {:error, "#{inspect(key)} holds a value that is not a number in 0..1"}
   end
 
   # The score-path sibling of `float_map/2`: a level value that is not a
-  # number is `:malformed_response`, never a raise (adapter invariant 1).
+  # number in 0..1 is `:malformed_response`, never a raise (adapter invariant 1).
   defp float_list(list, key) do
-    if Enum.all?(list, &is_number/1),
+    if Enum.all?(list, &unit?/1),
       do: {:ok, Enum.map(list, &(&1 * 1.0))},
-      else: {:error, "#{inspect(key)} holds a non-number"}
+      else: {:error, "#{inspect(key)} holds a value that is not a number in 0..1"}
   end
+
+  defp unit?(v), do: is_number(v) and v >= 0 and v <= 1
 
   # A score's `probabilities` / `legend`, keyed "0".."n-1", as a list where
   # index = level. `n` is the question's level count when known; a key gap,
@@ -806,9 +816,15 @@ defmodule ALLM.Providers.TypeSafe.Classification do
          {:ok, list} <- ordered_levels(m, count) do
       {:ok, list}
     else
-      _ -> {:error, "#{inspect(key)} is not keyed by level \"0\"..\"#{(n || 1) - 1}\""}
+      _ -> {:error, level_list_error(key, n)}
     end
   end
+
+  defp level_list_error(key, n) when is_integer(n) and n > 0,
+    do: "#{inspect(key)} is not keyed by level \"0\"..\"#{n - 1}\""
+
+  defp level_list_error(key, _n),
+    do: "#{inspect(key)} is not an object keyed by level \"0\", \"1\", …"
 
   defp ordered_levels(_m, 0), do: :error
 

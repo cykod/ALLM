@@ -260,9 +260,10 @@ defmodule ALLM.Providers.FakeClassificationTest do
 
   describe "{:retry_until_call, n}" do
     test "returns :rate_limited until the budget is spent, then succeeds from the next entry" do
-      # The leading entry starts the retry entry at a nonzero cursor, so this
-      # test covers the retry budget keyed on `cursor > 0` (an unwritten
-      # cursor slot already reads as 0, so no leading entry is required).
+      # The leading entry is load-bearing: it forces `advance` to WRITE the
+      # slot `peek` later READS. Without it an unwritten slot reads 0 on both
+      # sides, so a `peek_cursor/2` keyed on a different slot than `advance`
+      # stays green (mutation-checked in the Phase 24 retro, F3).
       opts = opts([{:answers, %{}}, {:retry_until_call, 3}, {:answers, %{"y" => 0.7}}])
 
       assert {:ok, first} = FakeClassification.classify(Fixtures.request(), opts)

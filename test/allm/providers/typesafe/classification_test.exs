@@ -436,7 +436,12 @@ defmodule ALLM.Providers.TypeSafe.ClassificationTest do
         # The score sibling of the choice "x" row above: it raised
         # FunctionClauseError before float_list/2 (adapter invariant 1).
         {"frustration", &put_in(&1, ["probabilities", "0"], "x")},
-        {"frustration", &put_in(&1, ["probabilities", "2"], nil)}
+        {"frustration", &put_in(&1, ["probabilities", "2"], nil)},
+        # Every probability and confidence is range-checked, as `noul` is.
+        {"department", &put_in(&1, ["probabilities", "billing"], 7.0)},
+        {"department", &Map.put(&1, "confidence", -3.0)},
+        {"frustration", &put_in(&1, ["probabilities", "0"], -0.5)},
+        {"frustration", &Map.put(&1, "confidence", 1.5)}
       ]
 
       for {id, mutate} <- rows do
@@ -448,6 +453,24 @@ defmodule ALLM.Providers.TypeSafe.ClassificationTest do
 
         assert err.metadata.question == id
       end
+    end
+
+    test "a level-map error names the range only when the level count is known" do
+      env = Fixtures.recorded(:mixed_questions)
+      body = put_in(env["body"], ["answers", "frustration", "legend"], %{})
+
+      assert {:error, err} = decode(%{env | "body" => body}, mixed_request())
+      assert err.message =~ ~s("legend" is not keyed by level "0".."2")
+
+      # A hand-built score question whose criteria is not a list: the level
+      # count comes from the body, so an empty map cannot name a range.
+      q = %{mixed_request().questions["frustration"] | criteria: nil}
+      request = put_in(mixed_request().questions["frustration"], q)
+      body = put_in(env["body"], ["answers", "frustration", "probabilities"], %{})
+
+      assert {:error, err} = decode(%{env | "body" => body}, request)
+      assert err.message =~ ~s("probabilities" is not an object keyed by level)
+      refute err.message =~ ~s("0".."0")
     end
 
     test "a body without model or usable usage falls back to the request model and nil counts" do

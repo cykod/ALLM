@@ -43,7 +43,7 @@ defmodule ALLM.ClassificationQuestion do
   `new/1` is a bare `struct!/2` pass-through: unknown keys raise `KeyError`
   and nothing else is checked. The builders raise on a wrongly-typed
   argument (`FunctionClauseError`, or `ArgumentError` for an unknown
-  `yes_no/2` option), but counts, emptiness and provider limits are left to
+  `yes_no/2` option or colliding `choice/2` option names), but counts, emptiness and provider limits are left to
   `ALLM.Validate.classification_request/1`, so a hand-built struct and a
   builder-made one are judged by the same rules.
   """
@@ -86,7 +86,10 @@ defmodule ALLM.ClassificationQuestion do
   neither a list nor a map raises `FunctionClauseError`. A keyword list is
   still a list, so `choice(q, billing: "Payments")` treats each
   `{name, description}` pair as a name and raises `Protocol.UndefinedError` —
-  pass a map for named descriptions.
+  pass a map for named descriptions. Two distinct names that become the same
+  string (`:billing` and `"billing"`) raise `ArgumentError` rather than
+  silently merging into one option; repeating the identical name in a list
+  is harmless.
 
   ## Examples
 
@@ -101,10 +104,15 @@ defmodule ALLM.ClassificationQuestion do
   @spec choice(structured(), [String.t() | atom()] | %{(String.t() | atom()) => structured() | nil}) ::
           t()
   def choice(instructions, options) when is_list(options) or is_map(options) do
-    criteria =
+    {criteria, given} =
       if is_list(options),
-        do: Map.new(options, &{to_string(&1), nil}),
-        else: Map.new(options, fn {name, desc} -> {to_string(name), desc} end)
+        do: {Map.new(options, &{to_string(&1), nil}), options |> Enum.uniq() |> length()},
+        else: {Map.new(options, fn {name, desc} -> {to_string(name), desc} end), map_size(options)}
+
+    if map_size(criteria) != given do
+      raise ArgumentError,
+            "choice/2 option names collide once atom names are stringified: #{inspect(options)}"
+    end
 
     %__MODULE__{type: :choice, instructions: instructions, criteria: criteria}
   end

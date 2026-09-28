@@ -3781,7 +3781,7 @@ end
 | `:score` | `[structured()]`, index = level, low to high | `score/2`, verbatim |
 | `:yes_no` | `nil`, or a map whose keys ⊆ `["true", "false"]` | `yes_no/2`; keys only for the `true:` / `false:` opts given |
 
-`:yes_no` is the only Layer A spelling. TypeSafe calls the type `noul`; the translation lives in the TypeSafe adapter and nowhere else. `new/1` is a bare `struct!/2` pass-through. The builders raise on a wrongly typed argument (`FunctionClauseError`; `ArgumentError` for an unknown `yes_no/2` opt); counts, emptiness and provider caps are the validator's and the adapter's, so a builder-made and a hand-built question are judged by the same rules.
+`:yes_no` is the only Layer A spelling. TypeSafe calls the type `noul`; the translation lives in the TypeSafe adapter and nowhere else. `new/1` is a bare `struct!/2` pass-through. The builders raise on a wrongly typed argument (`FunctionClauseError`; `ArgumentError` for an unknown `yes_no/2` opt, and for `choice/2` option names that collide once stringified, such as `:billing` and `"billing"`); counts, emptiness and provider caps are the validator's and the adapter's, so a builder-made and a hand-built question are judged by the same rules.
 
 #### 41.2.2 `ALLM.ClassificationRequest`
 

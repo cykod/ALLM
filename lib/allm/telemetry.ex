@@ -61,7 +61,7 @@ defmodule ALLM.Telemetry do
   `[:allm, :classify, :stop]` follows the same stable-key rule:
   `answer_count` is `0` and `usage` is `nil` on the error path.
   `question_count` is the number of questions on the request (`0` when
-  `:questions` is not a map), and `model` is the classification slot's
+  `:questions` is not a plain map — a struct counts as `0`), and `model` is the classification slot's
   model (`request.model || engine.classification_model`), never the chat
   `engine.model` — `nil` when neither is set.
 

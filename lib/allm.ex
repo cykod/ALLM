@@ -2942,7 +2942,9 @@ defmodule ALLM do
 
   # `:start` metadata is built before validation, so a hand-built request
   # with a non-map `:questions` (rejected a moment later) must not raise here.
-  defp question_count(questions) when is_map(questions), do: map_size(questions)
+  defp question_count(questions) when is_map(questions) and not is_struct(questions),
+    do: map_size(questions)
+
   defp question_count(_questions), do: 0
 
   defp do_classify_body(%Engine{classification_adapter: nil}, _request, _opts, _request_id),

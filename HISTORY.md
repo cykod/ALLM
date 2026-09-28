@@ -1,3 +1,21 @@
+## [TWK] Polish Phase 24 classification after gate review
+*Monday, September 28th at 12am*
+Post-gate polish for Phase 24 (steering/2026-09-22_JEV_SUPPORT.md, spec §41), 
+which passed its gate review.
+
+- ClassificationQuestion.choice/2 now raises ArgumentError when two option 
+names collide once stringified (for example :billing and "billing") instead of 
+silently merging them; spec §41.2 says so.
+- The :classify span's question_count is 0 for a struct passed as :questions.
+- The TypeSafe decoder range-checks every probability and confidence to 0..1 
+(previously only noul and score), and its level-range error no longer prints a 
+bogus "0".."0" range.
+- The retro's mutation check showed the leading script entry in a 
+FakeClassification retry test is load-bearing, so the test comment says so 
+again.
+
+---
+
 ## [DOC] Add spec §41, classification guide and TypeSafe examples arm
 *Monday, September 28th at 12am*
 Phases 24.5 and 24.6 of steering/2026-09-22_JEV_SUPPORT.md: documentation, 

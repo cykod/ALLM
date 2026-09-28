@@ -32,6 +32,21 @@ defmodule ALLM.ClassificationQuestionTest do
       assert q.criteria == %{"billing" => "Payments", "sales" => nil}
     end
 
+    test "names that collide once stringified raise ArgumentError instead of merging" do
+      assert_raise ArgumentError, ~r/collide/, fn ->
+        ClassificationQuestion.choice("q", [:billing, "billing"])
+      end
+
+      assert_raise ArgumentError, ~r/collide/, fn ->
+        ClassificationQuestion.choice("q", %{"billing" => "b", billing: "a"})
+      end
+    end
+
+    test "repeating the identical name in a list is harmless" do
+      assert ClassificationQuestion.choice("q", ["billing", "billing"]).criteria ==
+               %{"billing" => nil}
+    end
+
     test "a binary options argument raises FunctionClauseError" do
       assert_raise FunctionClauseError, fn ->
         ClassificationQuestion.choice("Which team?", "billing")
