@@ -1,3 +1,14 @@
+## [DOC] Apply Phase 28 retro learnings to agent docs
+*Monday, September 28th at 3pm*
+From .work/retro/2026-09-28-transcript-timings_applied.md: CLAUDE.md treats 
+shell-inherited API keys as ambient state for gate-before-key tests; 
+IMPLEMENTATION.md gates on mix test --warnings-as-errors and requires a 
+responsibility-based sibling-helper list before quality gates (replacing the 
+name-grep sentences); SKILL_NOTES gains a claims-table proposal for /implement 
+and new evidence on the /devil forward-DRY note.
+
+---
+
 ## [TWK] Polish Phase 28 transcript spans after gate review
 *Monday, September 28th at 12pm*
 Post-gate polish for steering/2026-09-28_TRANSCRIPT_TIMINGS_DESIGN.md (gate 

@@ -47,6 +47,7 @@ Proposed changes to the pipeline skills in `~/.claude/skills/`. This project can
 **Evidence:** the pre-build devil review found 28 issues, including backward DRY. It found none of the 5 cross-batch clones that code review later caught in 26.3–26.7.
 **Proposed wording:** "For each pair of sub-phases that build the same capability or transport, name the loop or helper the later one will need from the earlier one. If no Module Tree row owns it, flag it (auto-fixable: add the shared-module row to the earlier sub-phase)."
 **Argument against:** some clones only become visible once code exists, and a speculative seam can fit badly and need rework anyway.
+**Recurred 2026-09-28 (Phase 28 `/auto-build`, `.work/retro/2026-09-28-transcript-timings.md` F1):** the pre-build `/quick-devil` read `support/transcription_adapter.ex` and did not flag that decision 4's absent-key rule was assigned to both 28.4 and 28.5; code review then caught shared-helper clones in 5 of 6 batches. Sharpened wording: "When a design assigns one family rule or helper set (an error shape, a decode rule, a gate) to two or more sub-phases, require its shared seam (module, name/arity, return type) as a row in the FIRST sub-phase's Module Tree; flag its absence as Medium."
 
 ### 7. `/devil`: run the design's Verification predicates and re-derive its gate lists
 *Raised 2026-09-28, Phase 24 `/auto-build` run (`.work/retro/2026-09-28-phase-24-jev-support_applied.md` F1, "Pipeline notes").*
@@ -54,6 +55,13 @@ Proposed changes to the pipeline skills in `~/.claude/skills/`. This project can
 **Evidence:** two `[G]` literals were wrong as written (24.1's `comm -13 … # must be empty`; 24.4's `noul` grep), and the audit-gate table missed the fail-closed `test/readme_getting_started_test.exs`, which one grep discovers and which halted 24.5. The pre-build quick-devil applied 24 findings without running any of them.
 **Proposed wording:** "For every predicate in the design's Verification/`[G]` blocks, run it against HEAD and state the post-phase value it must reach; a predicate whose post-phase value cannot be derived is rewritten. Re-derive any gate *list* the design tabulates from a discovery command, not from the spec's table."
 **Argument against:** many `[G]` predicates only make sense after the code exists; the devil can check their shape, not their result.
+
+### 8. `/implement`: end the report with a claims table
+*Raised 2026-09-28, Phase 28 `/auto-build` run (`.work/retro/2026-09-28-transcript-timings.md` F2).*
+**Target:** `~/.claude/skills/implement/SKILL.md`, the implementation report.
+**Evidence:** prose that was false about shipped behaviour reached review in 5 of 6 Phase 28 batches (and 3 of 6 in Phase 25), despite `agent-spec/IMPLEMENTATION.md` §4 step 7's cite-or-execute rule. Only the reviewer who ran each new sentence (28.6 functional, about 20 claims) caught them all; sentences about what a *test binds* were never caught without a mutation.
+**Proposed wording:** "The implementation report ends with a claims table: every new or changed behavioural sentence (moduledoc/doc, guide, spec amendment, test comment, RECORDS note), one per row, with its evidence: an `iex>` block, the `file:line` of the pinning test, or a mutation result for any 'this test fails if X' claim."
+**Argument against:** it lengthens every report, and a self-produced table can be waved through the same way the prose rule is.
 
 ## Discharged
 
