@@ -225,6 +225,7 @@ For narrative walkthroughs, jump to a guide:
 - [`guides/image_generation.md`](guides/image_generation.md) — `generate_image/3`, `edit_image/4`.
 - [`guides/embeddings.md`](guides/embeddings.md) — `embed/3`, transparent batch chunking, OpenAI / Gemini / Voyage.
 - [`guides/moderation.md`](guides/moderation.md) — `moderate/3`, `flagged?/1` versus per-category thresholds, image input.
+- [`guides/classification.md`](guides/classification.md) — `classify/3`, choice / score / yes-no questions, confidence routing in caller code, TypeSafe Jev.
 - [`guides/audio.md`](guides/audio.md) — `synthesize/3`, `transcribe/3`, streaming speech and realtime transcription, the voice loop.
 - [`guides/errors_and_retries.md`](guides/errors_and_retries.md) — every error struct, retry policy, telemetry observability.
 - [`guides/multi_tenant_keys.md`](guides/multi_tenant_keys.md) — per-call BYOK and the `ALLM.Keys` resolution chain.

@@ -1,3 +1,13 @@
+## [DOC] Link the classification guide from README
+*Monday, September 28th at 12am*
+README's worked-examples list gains guides/classification.md, which 
+test/readme_getting_started_test.exs requires for every guide in mix.exs. 
+Landed as a stand-alone [DOC] commit because README is outside every Phase 24 
+Module Tree (CLAUDE.md README rule); the guide itself lands in the Phase 24.5 
+commit.
+
+---
+
 ## [FEAT] Add TypeSafe Jev classification adapter with live-probed fixtures
 *Monday, September 28th at 12am*
 Phase 24.4 of steering/2026-09-22_JEV_SUPPORT.md (spec §41): 
