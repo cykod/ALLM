@@ -345,6 +345,10 @@ Other changes:
 - Add a "Word timings and confidence" section to `guides/audio.md`, with a
   per-provider support table, and flagged calls to
   `examples/24_transcribe_audio.exs` and `26_stream_transcribe.exs`
+- `[:allm, :audio, :first_chunk]` for a transcription stream now also fires
+  at the first non-blank `:committed_transcript` when no
+  `:partial_transcript` came first; previously a stream the provider
+  committed without a partial reported no time to first transcript
 
 ## [REL] v0.5.0 — Text embeddings
 

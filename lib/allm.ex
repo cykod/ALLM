@@ -1993,7 +1993,9 @@ defmodule ALLM do
   `opts[:stream_timeout]` (default 60,000 ms of silence) is forwarded to the
   adapter. The call runs inside an `[:allm, :stream_transcribe, …]` span
   whose `:stop` has `response: nil`, and `[:allm, :audio, :first_chunk]`
-  fires at the first `:partial_transcript`. Neither carries audio or
+  fires at the first `:partial_transcript`, or at the first non-blank
+  `:committed_transcript` when a provider commits with no partial before
+  it. Neither carries audio or
   transcript text.
 
   ## Examples
@@ -3311,8 +3313,20 @@ defmodule ALLM do
        when started in [:speech_started, :transcription_started] and is_binary(model),
        do: %{state | model: model}
 
-  defp observe_audio_event({first, _}, %{fired?: false} = state, ctx)
-       when first in [:audio_delta, :partial_transcript] do
+  defp observe_audio_event({first, _} = event, %{fired?: false} = state, ctx)
+       when first in [:audio_delta, :partial_transcript, :committed_transcript] do
+    if first_chunk?(event), do: emit_first_chunk(state, ctx), else: state
+  end
+
+  defp observe_audio_event(_event, state, _ctx), do: state
+
+  # A realtime provider may commit a segment with no partial before it
+  # (ElevenLabs does, occasionally), so the first committed transcript with
+  # text also counts; a blank commit carries nothing to time.
+  defp first_chunk?({:committed_transcript, %{text: text}}), do: String.trim(text) != ""
+  defp first_chunk?(_event), do: true
+
+  defp emit_first_chunk(state, ctx) do
     ALLM.Telemetry.execute(
       [:audio, :first_chunk],
       %{latency: System.monotonic_time() - ctx.started_at},
@@ -3321,6 +3335,4 @@ defmodule ALLM do
 
     %{state | fired?: true}
   end
-
-  defp observe_audio_event(_event, state, _ctx), do: state
 end

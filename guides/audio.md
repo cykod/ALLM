@@ -808,7 +808,7 @@ A few settings decide how soon the first audio plays:
     `options: %{"generation_config" => %{"chunk_length_schedule" => [...]}}`
     tunes.
   * **Measure it.** `[:allm, :audio, :first_chunk]` (see "Telemetry") reports
-    the time from the call to the first audio or first partial transcript,
+    the time from the call to the first audio or first transcript text,
     per stream.
 
 For reference, single measurements taken while the adapters were built: the
@@ -917,7 +917,9 @@ forms; `input_length` is `nil` for `stream_synthesize_input/3`) and
 stream is the time to the first audio, and a separate event reports it:
 
   * `[:allm, :audio, :first_chunk]` fires once per stream, at the first
-    `:audio_delta` (speech) or `:partial_transcript` (transcription), with
+    `:audio_delta` (speech), or the first `:partial_transcript` or non-blank
+    `:committed_transcript` (transcription, since a realtime provider can
+    commit with no partial before it), with
     `measurements.latency` in native time units since the façade call, and
     metadata `request_id`, `capability` (`:speech` or `:transcription`) and
     `provider_model`. It does not fire for a stream that fails before its

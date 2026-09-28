@@ -31,7 +31,7 @@ defmodule ALLM.Telemetry do
   | `[:allm, :transcribe, :start \\| :stop \\| :exception]` | speech-to-text | `duration`, plus `text_length` on `:stop` | `request_id`, `engine`, `model`, `audio_mime`, plus `usage`, `response`, `error` on `:stop` |
   | `[:allm, :stream_synthesize, :start \\| :stop \\| :exception]` | streaming text-to-speech (`ALLM.stream_synthesize/3` and `ALLM.stream_synthesize_input/3`) | `duration`; `:stop` fires when the stream is returned, not when it drains | `request_id`, `engine`, `model`, `input_length` (`nil` for the input form), plus `response: nil` on `:stop` |
   | `[:allm, :stream_transcribe, :start \\| :stop \\| :exception]` | streaming speech-to-text (`ALLM.stream_transcribe/3`) | as above | `request_id`, `engine`, `model`, `sample_rate`, plus `response: nil` on `:stop` |
-  | `[:allm, :audio, :first_chunk]` | once per audio stream, at its first `:audio_delta` or `:partial_transcript` | `latency` (native time units from the façade call) | `request_id`, `capability` (`:speech` or `:transcription`), `provider_model` |
+  | `[:allm, :audio, :first_chunk]` | once per audio stream, at its first `:audio_delta` (speech), or its first `:partial_transcript` or non-blank `:committed_transcript`, whichever comes first (transcription) | `latency` (native time units from the façade call) | `request_id`, `capability` (`:speech` or `:transcription`), `provider_model` |
   | `[:allm, :adapter, :retry]` | per-attempt retry (non-streaming) | `system_time` | the calling façade's metadata (e.g. `request_id`, `model`) + `attempt`, `delay_ms`, `reason` |
 
   `[:allm, :embed, :stop]` carries `embedding_count` and `chunk_count` on
@@ -87,8 +87,8 @@ defmodule ALLM.Telemetry do
   The streaming audio spans follow the chat `:stream` carve-out: `:stop`
   carries `response: nil`, because the span closes when the enumerable is
   returned, before any audio has arrived. `[:allm, :audio, :first_chunk]` is
-  the event that measures time to first audio (or first partial
-  transcript), which is the latency a voice interface is judged by.
+  the event that measures time to first audio (or first transcript
+  text, partial or committed), which is the latency a voice interface is judged by.
   `provider_model` is the `:model` on the stream's start event, or the
   dispatched request's model when the adapter reported none (`nil` when
   neither is known). Neither the spans nor the event carry audio bytes or

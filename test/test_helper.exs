@@ -28,8 +28,29 @@ Code.require_file("../examples/fixtures/compact_tools.exs", __DIR__)
 # (`input_pump_test.exs` flaked one line at a time across two batches).
 # `refute_receive/3` has its own default (`refute_receive_timeout`, 100 ms),
 # untouched here, so no refute window changes.
+live_tags = [:live_openai, :live_anthropic, :live_gemini, :live_openai_images]
+
 ExUnit.start(
-  exclude: [:pending, :live_openai, :live_anthropic, :live_gemini, :live_openai_images],
+  exclude: [:pending | live_tags],
   capture_log: true,
   assert_receive_timeout: 1_000
 )
+
+# The default suite never makes a live provider call. Keys resolve only through
+# `ALLM.Keys` (opts → runtime store → app config → `*_API_KEY` env → `.env`
+# when `load_dotenv: true`), so removing every ambient source here makes
+# "keyless" a property of the run rather than of the developer's shell. Without
+# it, a shell with `.env` sourced (the repo's documented key mechanism) let
+# keyless `assert_raise EngineError` tests reach HTTP with a real key. This runs
+# once, before any test module loads, so it is not a mid-suite global mutation.
+# Only an explicit `--only live_*` / `--include live_*` run keeps the keys —
+# that is the eval suite, and the `live_*` modules skip themselves when their
+# key is absent.
+unless Enum.any?(ExUnit.configuration()[:include], &(&1 in live_tags)) do
+  for {name, _value} <- System.get_env(), String.ends_with?(name, "_API_KEY") do
+    System.delete_env(name)
+  end
+
+  Application.put_env(:allm, :keys, %{})
+  Application.put_env(:allm, :load_dotenv, false)
+end

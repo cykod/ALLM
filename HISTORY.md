@@ -1,3 +1,22 @@
+## [BUG] Block live calls in tests; fire first_chunk on committed text
+*Monday, September 28th at 7pm*
+Two fixes surfaced by re-running the ElevenLabs live arm after a credit top-up.
+
+- The default test suite can no longer make live provider calls: 
+test/test_helper.exs deletes every *_API_KEY env var and empties :allm 
+:keys/:load_dotenv before any test loads, unless a live_* tag is included (the 
+eval suite). test/no_ambient_keys_test.exs pins it. With .env sourced, the 
+provider suite had 8 keyless tests reaching HTTP with real keys; it is now 0 
+failures. CLAUDE.md states the guarantee.
+- [:allm, :audio, :first_chunk] for a transcription stream now also fires at 
+the first non-blank :committed_transcript when no partial came first (spec §37 
+telemetry amendment). ElevenLabs realtime occasionally commits with no partial 
+(1 of 20 live sessions), which left the event missing and made 
+examples/27_voice_loop.exs flaky. The ElevenLabs arm now runs green end to end 
+(23-27 OK) and RUN_OUTPUT_ELEVENLABS.md is regenerated from that run.
+
+---
+
 ## [DOC] Apply Phase 28 retro learnings to agent docs
 *Monday, September 28th at 3pm*
 From .work/retro/2026-09-28-transcript-timings_applied.md: CLAUDE.md treats 

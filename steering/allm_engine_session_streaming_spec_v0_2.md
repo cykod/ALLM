@@ -1893,6 +1893,8 @@ Additional per-span metadata:
 > - Both spans' `:stop` fires when the enumerable is **returned**, not when it drains (the chat `:stream` carve-out), so its metadata is `%{response: nil}` and carries no audio, usage or error; `:exception` as for the other spans.
 > - `[:allm, :audio, :first_chunk]` — emitted once per stream, at its first `:audio_delta` (speech) or `:partial_transcript` (transcription); never for a stream that fails first. Measurements `%{latency: integer()}` in native units from the façade call; metadata `:request_id`, `:capability` (`:speech | :transcription`), `:provider_model` (the model the start event reports when it is a binary, else the dispatched `request.model`). Because the spans stop before any audio, this is the event that measures time to first audio.
 >
+> **Amendment (2026-09-28, the commit that carries it).** For transcription the event fires at the first `:partial_transcript` **or** the first `:committed_transcript` with non-blank text, whichever comes first. ElevenLabs realtime occasionally commits a segment with no partial before it (1 of 20 live sessions on 2026-09-28), and under the partial-only rule such a stream never reported a time to first transcript. A blank commit does not fire it. Still once per stream, still never for a stream that fails first (`lib/allm.ex` `observe_audio_event/3`).
+>
 > None of the three carries audio bytes or transcript text.
 
 > **Phase 24 amendment (commits `7de1c1c..0c9c8b5`; docs land in the 24.5 commit).** Typed classification (§41) adds one span:

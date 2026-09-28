@@ -143,7 +143,7 @@ case ALLM.stream_synthesize_input(speech_engine, ALLM.AudioStream.text_deltas(ch
         IO.puts(
           "OK: voice loop — heard=#{inspect(question)} reply_deltas=#{length(deltas)} " <>
             "reply_bytes=#{byte_size(bytes)} sample_rate=#{response.sample_rate} " <>
-            "stt_first_partial_ms=#{stt_ms} tts_first_audio_ms=#{tts_ms}"
+            "stt_first_transcript_ms=#{stt_ms} tts_first_audio_ms=#{tts_ms}"
         )
     end
 

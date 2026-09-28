@@ -478,6 +478,39 @@ defmodule ALLM.ALLMStreamTranscribeTest do
                for({[:allm, :audio, :first_chunk], _, _} = e <- TelemetryCapture.events(), do: e)
     end
 
+    # ElevenLabs realtime sometimes commits a segment without any partial
+    # before it (1 of 20 live sessions, 2026-09-28); the stream still has a
+    # time to first transcript, and the event must report it.
+    test ":first_chunk fires at the first committed transcript when no partial came first" do
+      events = List.delete(happy_events(), TranscriptionEvent.partial_transcript("hi"))
+      refute Enum.any?(events, &match?({:partial_transcript, _}, &1))
+
+      assert {:ok, stream} = ALLM.stream_transcribe(probe_engine(events), [@pcm])
+      assert {:ok, _} = AudioStream.collect_transcription(stream)
+
+      assert [{_, %{latency: latency}, %{capability: :transcription, provider_model: "rt-model"}}] =
+               for({[:allm, :audio, :first_chunk], _, _} = e <- TelemetryCapture.events(), do: e)
+
+      assert latency > 0
+    end
+
+    test ":first_chunk does not fire on a blank committed transcript" do
+      [started, _partial, _committed, completed] = happy_events()
+      {:transcription_completed, payload} = completed
+
+      events = [
+        started,
+        TranscriptionEvent.committed_transcript("  "),
+        {:transcription_completed, %{payload | text: ""}}
+      ]
+
+      assert {:ok, stream} = ALLM.stream_transcribe(probe_engine(events), [@pcm])
+      assert {:ok, _} = AudioStream.collect_transcription(stream)
+
+      assert [] =
+               for({[:allm, :audio, :first_chunk], _, _} = e <- TelemetryCapture.events(), do: e)
+    end
+
     test ":first_chunk does not fire on a stream that errors before any partial" do
       err = TranscriptionAdapterError.new(:provider_unavailable)
       engine = fake_engine(adapter_opts: [transcription_script: [{:error, err}]])
