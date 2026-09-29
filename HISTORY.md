@@ -1,3 +1,25 @@
+## [BUG] Support gpt-image-2 and the full GPT image model family
+*Tuesday, September 29th at 8pm*
+The OpenAI images adapter keyed its GPT-image wire shape on the exact string 
+gpt-image-1, so gpt-image-2, gpt-image-2.5-sunburst/flare, gpt-image-1.5 and 
+gpt-image-1-mini fell into the unknown-model field list, sent response_format, 
+and were rejected live with Unknown parameter: 'response_format'.
+- Adapter: an is_gpt_image_model guard (any gpt-image-* plus 
+chatgpt-image-latest) now drives response_format omission, :url rejection, 
+token usage, output MIME and background/output_format; all nine documented 
+models are gated for generate and edit.
+- New pass-through options: output_compression, moderation (generate) and 
+input_fidelity (edit), omitted when absent.
+- ImageRequest quality type widened with :medium, :xhigh and :max for 
+gpt-image-2.5-*.
+- Guide updated to gpt-image-2 with sizes, options, and the 2026-12-01 removal 
+of gpt-image-1-mini, gpt-image-1.5 and chatgpt-image-latest.
+- Verified live across all five GPT image models, a gpt-image-2 edit, and 19 
+new chat models (gpt-6*, gpt-5.6*, Claude 5.x, Gemini 3.5-3.8), which needed no 
+changes.
+
+---
+
 ## [BUG] Block live calls in tests; fire first_chunk on committed text
 *Monday, September 28th at 7pm*
 Two fixes surfaced by re-running the ElevenLabs live arm after a credit top-up.

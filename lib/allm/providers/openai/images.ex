@@ -4,7 +4,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   OpenAI's `/v1/images/generations` and `/v1/images/edits` endpoints.
 
   Layer B — runtime. Constructed via
-  `ALLM.Engine.new(image_adapter: ALLM.Providers.OpenAI.Images, model: "gpt-image-1")`
+  `ALLM.Engine.new(image_adapter: ALLM.Providers.OpenAI.Images, model: "gpt-image-2")`
   and consumed through the `ALLM.generate_image/3 · edit_image/4`
   façade. Keys resolve via
   `ALLM.Keys.fetch!(:openai, opts)` at request-build time per the documented contract
@@ -13,17 +13,27 @@ defmodule ALLM.Providers.OpenAI.Images do
   ## Status
 
   The JSON `:generate` HTTP path is wired for `dall-e-2`, `dall-e-3`, and
-  `gpt-image-1`. The gpt-image-1 path applies forced-base64 normalization
-  (gpt-image-1 ignores `response_format` at the wire), token-based usage
-  (`input_tokens` / `output_tokens`), and `output_format` → `:mime_type`
-  mapping per the documented contract. The multipart `:edit` HTTP path is wired for
-  `dall-e-2` and `gpt-image-1`, including URL-source eager-download per
-  the documented contract.
+  the GPT image models. The GPT image path applies forced-base64
+  normalization (GPT image models reject `response_format` at the wire),
+  token-based usage (`input_tokens` / `output_tokens`), and
+  `output_format` → `:mime_type` mapping per the documented contract. The
+  multipart `:edit` HTTP path is wired for `dall-e-2` and the GPT image
+  models, including URL-source eager-download per the documented contract.
+
+  **GPT image models** are `gpt-image-1`, `gpt-image-1-mini`,
+  `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2.5-sunburst`,
+  `gpt-image-2.5-flare`, their dated snapshots, and `chatgpt-image-latest`.
+  Any other `gpt-image-*` model string is treated as one too (see
+  `gpt_image_model?/1`), so a new snapshot gets the right wire shape
+  without an adapter change. OpenAI's deprecations page schedules
+  `gpt-image-1-mini`, `gpt-image-1.5`, and `chatgpt-image-latest` for
+  removal on 2026-12-01, recommending `gpt-image-2.5-sunburst` or
+  `gpt-image-2.5-flare` instead.
 
   OpenAI has retired `dall-e-2` and `dall-e-3`: neither is listed by
   `GET /v1/models` as of 2026-09-24. Their rows stay in the matrix below so
   a request naming them is still gated pre-flight, but new code should use
-  `gpt-image-1`.
+  `gpt-image-2`.
 
   ## Model × Operation matrix
 
@@ -31,7 +41,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   |---------------|:-----------:|:-------:|-------------------|------------------------------------------|
   | `dall-e-2` | yes | yes | `url` or `b64_json` per caller | `images = length(data)` |
   | `dall-e-3` | yes | no | `url` or `b64_json` per caller | `images = length(data)` |
-  | `gpt-image-1` | yes | yes | `b64_json` ALWAYS (forced) | `images` + `input_tokens` + `output_tokens` |
+  | GPT image models | yes | yes | `b64_json` ALWAYS (forced) | `images` + `input_tokens` + `output_tokens` |
 
   Cells marked "no" produce
   `{:error, %ImageAdapterError{reason: :unsupported_operation,
@@ -39,19 +49,30 @@ defmodule ALLM.Providers.OpenAI.Images do
   models (any string not in the matrix) fall through to the provider
   of ` design docs`.
 
-  ## gpt-image-1 specifics
+  ## GPT image model specifics
 
-  * **Body fields.** When `request.model == "gpt-image-1"`, `to_json_body/2`
-    OMITS `response_format`, includes `quality` / `background` per the
+  * **Body fields.** For a GPT image model, `to_json_body/2` OMITS
+    `response_format`, includes `quality` / `background` per the
     wire-field map, and includes `output_format` from
     `request.options[:output_format]` (`"png" | "jpeg" | "webp"`). When
     `:output_format` is absent the adapter OMITS the field and the OpenAI
     API applies its server-side default of `"png"`. Per CLAUDE.md
     "Adapters MUST document any default they inject for a Layer-A `nil`
-    field that the wire requires" — gpt-image-1's `output_format` does
-    NOT need an adapter-side default because the provider-default and the
-    project's response `:mime_type` default both resolve to PNG.
-  * **Response decode.** gpt-image-1 always returns `b64_json` per image.
+    field that the wire requires" — `output_format` does NOT need an
+    adapter-side default because the provider-default and the project's
+    response `:mime_type` default both resolve to PNG.
+  * **Further options.** `request.options[:output_compression]` (0–100,
+    `jpeg`/`webp` only), `request.options[:moderation]` (`"low"|"auto"`,
+    `:generate` only) and `request.options[:input_fidelity]`
+    (`"high"|"low"`, `:edit` only; gpt-image-2 ignores it) are forwarded
+    verbatim when present and omitted otherwise. None is range-checked by
+    the adapter.
+  * **Quality and size.** `:quality` accepts `:low | :medium | :high |
+    :auto`; `gpt-image-2.5-*` also accepts `:xhigh | :max`. gpt-image-2
+    and later accept any `{w, h}` with both sides divisible by 16, an
+    aspect ratio between 1:3 and 3:1, and at most 3840x2160. The adapter
+    forwards both without checking; OpenAI rejects invalid combinations.
+  * **Response decode.** GPT image models always return `b64_json` per image.
     For `:binary` callers the adapter Base64-decodes server-side; for
     `:base64` callers the b64 is forwarded verbatim. `:url` callers are
     rejected pre-flight.
@@ -76,7 +97,7 @@ defmodule ALLM.Providers.OpenAI.Images do
   Both paths flow through the same `Retry.run/3` integration and share
   the same `decode_response/4` and `to_image_adapter_error/4` helpers
   the response shape is identical to `:generate` (a `data: [...]` array
-  of url/b64_json items, optional `usage` on gpt-image-1).
+  of url/b64_json items, optional `usage` on GPT image models).
 
   ## URL-source resolution
 
@@ -146,11 +167,39 @@ defmodule ALLM.Providers.OpenAI.Images do
 
   @base_url "https://api.openai.com/v1"
 
-  @model_ops %{
-    "dall-e-2" => [:generate, :edit],
-    "dall-e-3" => [:generate],
-    "gpt-image-1" => [:generate, :edit]
-  }
+  # Every model OpenAI's Images reference lists as a "GPT image model"
+  # (checked 2026-09-29 against the `model` enum of
+  # `/v1/images/generations` and `/v1/images/edits`, and `GET /v1/models`).
+  # They share one wire shape — base64-only, no `response_format`, token
+  # usage — so the adapter keys that shape on `is_gpt_image_model/1`, not
+  # on this list. The list only feeds the operation gate.
+  @gpt_image_models ~w(
+    gpt-image-1
+    gpt-image-1-mini
+    gpt-image-1.5
+    gpt-image-2
+    gpt-image-2-2026-04-21
+    gpt-image-2.5-sunburst
+    gpt-image-2.5-sunburst-2026-09-08
+    gpt-image-2.5-flare
+    gpt-image-2.5-flare-2026-09-08
+  )
+
+  @model_ops Map.merge(
+               %{"dall-e-2" => [:generate, :edit], "dall-e-3" => [:generate]},
+               Map.new(@gpt_image_models, &{&1, [:generate, :edit]})
+             )
+
+  # The GPT image family: any `gpt-image-*` model (so a future snapshot or
+  # release gets the base64-only wire shape without an adapter change) plus
+  # `chatgpt-image-latest`, which the edits reference lists among them.
+  # Without this, an unlisted GPT image model falls into the unknown-model
+  # union field list and sends `response_format`, which OpenAI rejects with
+  # `Unknown parameter: 'response_format'`.
+  defguardp is_gpt_image_model(model)
+            when is_binary(model) and
+                   (model == "chatgpt-image-latest" or
+                      (byte_size(model) > 10 and binary_part(model, 0, 10) == "gpt-image-"))
 
   # ---------------------------------------------------------------------------
   # ALLM.ImageAdapter callbacks
@@ -182,14 +231,14 @@ defmodule ALLM.Providers.OpenAI.Images do
     1. **Operation gate.** `request.operation in supported_operations`.
        Failure → `:unsupported_operation`.
     2. **Model gate.** When `request.model` is in the known matrix
-       (`dall-e-2`, `dall-e-3`, `gpt-image-1`), the operation must be
+       (`dall-e-2`, `dall-e-3`, the listed GPT image models), the operation must be
        allowed for that model. Failure → `:unsupported_operation` with
        `metadata: %{operation: op, model: model}`. Unknown models fall
        through.
-    3. **gpt-image-1 + `:url` rejection.** When `request.model ==
-       "gpt-image-1"` and `request.response_format == :url`, the request
-       is rejected with `:invalid_request` because gpt-image-1 only
-       returns base64.
+    3. **GPT image model + `:url` rejection.** When `request.model` is a
+       GPT image model (`gpt_image_model?/1`) and
+       `request.response_format == :url`, the request is rejected with
+       `:invalid_request` because GPT image models only return base64.
     4. **URL-source resolution** — `:edit` requests with
        `{:url, _}` source images are eagerly fetched. Not implemented yet
        (lands with the multipart body builder).
@@ -202,7 +251,8 @@ defmodule ALLM.Providers.OpenAI.Images do
 
   When `request.size` is `nil`, the adapter OMITS the `size` field from
   the wire body and lets OpenAI apply its server-side default
-  (`"1024x1024"` for dall-e-3 / gpt-image-1; `"1024x1024"` for dall-e-2).
+  (`"1024x1024"` for dall-e-2 / dall-e-3; whatever OpenAI's current
+  default is for GPT image models).
   Per the wire-field map row, `nil → omit`. Other size shapes encode as:
   `{w, h}` → `"<w>x<h>"`; `:auto` → `"auto"`; binary → passthrough.
 
@@ -225,7 +275,7 @@ defmodule ALLM.Providers.OpenAI.Images do
       field server-side and produces `{:binary, bytes}` source.
 
   For `dall-e-2` / `dall-e-3` the response `:mime_type` defaults to
-  `"image/png"`. For `gpt-image-1` the MIME type is driven by
+  `"image/png"`. For GPT image models the MIME type is driven by
   `request.options[:output_format]` per the documented contract:
   `"png"|:png` → `"image/png"`, `"jpeg"|:jpeg|:jpg` → `"image/jpeg"`,
   `"webp"|:webp` → `"image/webp"`. When `:output_format` is absent the
@@ -310,6 +360,11 @@ defmodule ALLM.Providers.OpenAI.Images do
   def endpoint_for(:edit), do: "/images/edits"
 
   @doc false
+  @spec gpt_image_model?(term()) :: boolean()
+  def gpt_image_model?(model) when is_gpt_image_model(model), do: true
+  def gpt_image_model?(_model), do: false
+
+  @doc false
   @spec gate_model_op(String.t() | nil, ImageRequest.operation()) ::
           :ok | {:error, ImageAdapterError.t()}
   def gate_model_op(nil, _operation), do: :ok
@@ -347,12 +402,12 @@ defmodule ALLM.Providers.OpenAI.Images do
   # Pre-HTTP gate ordering per Invariant 1:
   #   1. operation gate
   #   2. model gate
-  #   3. gpt-image-1 + :url rejection
+  #   3. GPT image model + :url rejection
   #   4. URL-source resolution (handled downstream in multipart builder)
   defp run_gates(%ImageRequest{} = request, opts) do
     with :ok <- gate_operation(request, opts),
          :ok <- gate_model(request, opts) do
-      gate_gpt_image_1_url(request, opts)
+      gate_gpt_image_url(request, opts)
     end
   end
 
@@ -380,16 +435,17 @@ defmodule ALLM.Providers.OpenAI.Images do
     end
   end
 
-  defp gate_gpt_image_1_url(%ImageRequest{model: "gpt-image-1", response_format: :url}, opts) do
+  defp gate_gpt_image_url(%ImageRequest{model: model, response_format: :url}, opts)
+       when is_gpt_image_model(model) do
     {:error,
      ImageAdapterError.new(:invalid_request,
        provider: :openai,
-       message: "gpt-image-1 only returns base64; request response_format: :base64 or :binary",
-       metadata: HTTPResponse.build_metadata(%{model: "gpt-image-1", response_format: :url}, opts)
+       message: "#{model} only returns base64; request response_format: :base64 or :binary",
+       metadata: HTTPResponse.build_metadata(%{model: model, response_format: :url}, opts)
      )}
   end
 
-  defp gate_gpt_image_1_url(%ImageRequest{}, _opts), do: :ok
+  defp gate_gpt_image_url(%ImageRequest{}, _opts), do: :ok
 
   defp stub_error(opts) do
     ImageAdapterError.new(:unknown,
@@ -527,14 +583,40 @@ defmodule ALLM.Providers.OpenAI.Images do
   defp fields_for(:generate, "dall-e-3"),
     do: [:prompt, :model, :n, :size, :response_format, :quality, :style, :user]
 
-  defp fields_for(:generate, "gpt-image-1"),
-    do: [:prompt, :model, :n, :size, :quality, :background, :output_format, :user]
+  defp fields_for(:generate, model) when is_gpt_image_model(model),
+    do: [
+      :prompt,
+      :model,
+      :n,
+      :size,
+      :quality,
+      :background,
+      :output_format,
+      :output_compression,
+      :moderation,
+      :user
+    ]
 
   defp fields_for(:edit, "dall-e-2"),
     do: [:image, :mask, :prompt, :model, :n, :size, :response_format, :user]
 
-  defp fields_for(:edit, "gpt-image-1"),
-    do: [:image, :mask, :prompt, :model, :n, :size, :quality, :background, :output_format, :user]
+  # The edits endpoint takes no `moderation` field; it adds `input_fidelity`
+  # (ignored by gpt-image-2 per the reference, honoured by gpt-image-1.5).
+  defp fields_for(:edit, model) when is_gpt_image_model(model),
+    do: [
+      :image,
+      :mask,
+      :prompt,
+      :model,
+      :n,
+      :size,
+      :quality,
+      :background,
+      :input_fidelity,
+      :output_format,
+      :output_compression,
+      :user
+    ]
 
   # Unknown model fallback — emit the union of all plain fields and let
   # the provider reject anything it does not recognize, per Decision #3.
@@ -608,13 +690,16 @@ defmodule ALLM.Providers.OpenAI.Images do
   defp json_field(:style, request), do: style_pair(request)
   defp json_field(:background, request), do: background_pair(request)
   defp json_field(:output_format, request), do: output_format_pair(request)
+  defp json_field(:output_compression, request), do: option_pair(request, :output_compression)
+  defp json_field(:moderation, request), do: option_pair(request, :moderation)
+  defp json_field(:input_fidelity, request), do: option_pair(request, :input_fidelity)
   defp json_field(:user, request), do: user_pair(request)
 
-  # `gpt-image-1` rejects `response_format` at the wire (Decision #5); OMIT
-  # the field for that model. dall-e-2 / dall-e-3 / unknown models encode
-  # `:url` → `"url"` and `:base64`/`:binary` → `"b64_json"`.
+  # GPT image models reject `response_format` at the wire (Decision #5);
+  # OMIT the field for the whole family. dall-e-2 / dall-e-3 / unknown
+  # models encode `:url` → `"url"` and `:base64`/`:binary` → `"b64_json"`.
   @spec response_format_pair(ImageRequest.t()) :: {String.t(), String.t()} | nil
-  defp response_format_pair(%ImageRequest{model: "gpt-image-1"}), do: nil
+  defp response_format_pair(%ImageRequest{model: model}) when is_gpt_image_model(model), do: nil
   defp response_format_pair(%ImageRequest{response_format: :url}), do: {"response_format", "url"}
 
   defp response_format_pair(%ImageRequest{response_format: rf}) when rf in [:base64, :binary],
@@ -636,28 +721,29 @@ defmodule ALLM.Providers.OpenAI.Images do
   defp style_pair(%ImageRequest{style: value}) when is_atom(value),
     do: {"style", Atom.to_string(value)}
 
-  # `background` ("transparent"|"opaque") is gpt-image-1-only per the
+  # `background` ("transparent"|"opaque"|"auto") is GPT-image-only per the
   # wire-field map. The struct field accepts atoms `:transparent | :opaque`
   # or a binary; we encode atoms verbatim and pass binaries through.
+  # OpenAI marks `transparent` as preview on gpt-image-2; the adapter
+  # forwards it and lets the provider decide.
   @spec background_pair(ImageRequest.t()) :: {String.t(), String.t()} | nil
-  defp background_pair(%ImageRequest{model: "gpt-image-1", background: nil}), do: nil
+  defp background_pair(%ImageRequest{model: model, background: bg})
+       when is_gpt_image_model(model) and is_atom(bg) and not is_nil(bg),
+       do: {"background", Atom.to_string(bg)}
 
-  defp background_pair(%ImageRequest{model: "gpt-image-1", background: bg}) when is_atom(bg),
-    do: {"background", Atom.to_string(bg)}
-
-  defp background_pair(%ImageRequest{model: "gpt-image-1", background: bg})
-       when is_binary(bg),
+  defp background_pair(%ImageRequest{model: model, background: bg})
+       when is_gpt_image_model(model) and is_binary(bg),
        do: {"background", bg}
 
   defp background_pair(_request), do: nil
 
-  # `output_format` ("png"|"jpeg"|"webp") is gpt-image-1-only per the
+  # `output_format` ("png"|"jpeg"|"webp") is GPT-image-only per the
   # wire-field map. Sourced from `request.options[:output_format]`. Per
   # Decision #19, when the key is absent the adapter OMITS the field and
   # OpenAI's server-side default ("png") applies.
   @spec output_format_pair(ImageRequest.t()) :: {String.t(), String.t()} | nil
-  defp output_format_pair(%ImageRequest{model: "gpt-image-1", options: options})
-       when is_map(options) do
+  defp output_format_pair(%ImageRequest{model: model, options: options})
+       when is_gpt_image_model(model) and is_map(options) do
     case Map.get(options, :output_format) do
       nil -> nil
       value when is_atom(value) -> {"output_format", Atom.to_string(value)}
@@ -667,6 +753,24 @@ defmodule ALLM.Providers.OpenAI.Images do
   end
 
   defp output_format_pair(_request), do: nil
+
+  # Plain pass-through for GPT-image fields sourced from `request.options`
+  # (`:output_compression` 0..100, `:moderation` "low"|"auto",
+  # `:input_fidelity` "high"|"low"). Absent → OMIT, so OpenAI's
+  # server-side default applies; values are not range-checked here — the
+  # provider rejects out-of-range input with a 400 → `:invalid_request`.
+  # Only reached for GPT image models, whose `fields_for/2` rows list these.
+  @spec option_pair(ImageRequest.t(), atom()) :: {String.t(), String.t() | integer()} | nil
+  defp option_pair(%ImageRequest{options: options}, key) when is_map(options) do
+    case Map.get(options, key) do
+      nil -> nil
+      value when is_atom(value) -> {Atom.to_string(key), Atom.to_string(value)}
+      value when is_binary(value) or is_integer(value) -> {Atom.to_string(key), value}
+      _ -> nil
+    end
+  end
+
+  defp option_pair(_request, _key), do: nil
 
   @spec user_pair(ImageRequest.t()) :: {String.t(), String.t()} | nil
   defp user_pair(%ImageRequest{options: options}) when is_map(options) do
@@ -1268,14 +1372,17 @@ defmodule ALLM.Providers.OpenAI.Images do
     end
   end
 
-  # dall-e-2 / dall-e-3 default to PNG. gpt-image-1 mime is driven by
+  # dall-e-2 / dall-e-3 default to PNG. GPT image model mime is driven by
   # `request.options[:output_format]` per Decision #19 — `mime_type_for_output_format/1`
   # resolves the value (atom or string) to a wire MIME type.
-  defp default_mime(%ImageRequest{model: "gpt-image-1", options: options}) when is_map(options) do
+  defp default_mime(%ImageRequest{model: model, options: options})
+       when is_gpt_image_model(model) and is_map(options) do
     mime_type_for_output_format(Map.get(options, :output_format))
   end
 
-  defp default_mime(%ImageRequest{model: "gpt-image-1"}), do: "image/png"
+  defp default_mime(%ImageRequest{model: model}) when is_gpt_image_model(model),
+    do: "image/png"
+
   defp default_mime(%ImageRequest{}), do: "image/png"
 
   @doc false
@@ -1299,9 +1406,10 @@ defmodule ALLM.Providers.OpenAI.Images do
   def mime_type_for_output_format(_), do: "image/png"
 
   # `build_usage/3` populates `ImageUsage` per the wire-field map. For
-  # gpt-image-1, `body.usage` carries `input_tokens` / `output_tokens`;
+  # GPT image models, `body.usage` carries `input_tokens` / `output_tokens`;
   # dall-e-2 / dall-e-3 omit `usage` entirely (image-count only).
-  defp build_usage(images, body, %ImageRequest{model: "gpt-image-1"}) when is_map(body) do
+  defp build_usage(images, body, %ImageRequest{model: model})
+       when is_gpt_image_model(model) and is_map(body) do
     case Map.get(body, "usage") do
       usage when is_map(usage) ->
         %ImageUsage{
@@ -1341,7 +1449,7 @@ defmodule ALLM.Providers.OpenAI.Images do
     end
   end
 
-  # gpt-image-1 carries `usage.input_tokens_details` (a small map with
+  # GPT image models carry `usage.input_tokens_details` (a small map with
   # text / image token breakdowns). Surface verbatim on
   # `response.metadata[:usage_details]` without overwriting caller-supplied
   # `:usage_details` (Invariant 4 — adapter never overwrites caller keys).

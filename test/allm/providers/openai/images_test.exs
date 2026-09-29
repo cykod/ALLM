@@ -1565,4 +1565,135 @@ defmodule ALLM.Providers.OpenAI.ImagesTest do
       assert err.metadata[:request_id] == "rid-prepare-stub"
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # GPT image model family (gpt-image-1.5 / -mini / -2 / -2.5-*, snapshots,
+  # future gpt-image-*). Before the family predicate every model but
+  # gpt-image-1 fell into the unknown-model union list, sent
+  # `response_format`, and got `Unknown parameter: 'response_format'` back.
+  # ---------------------------------------------------------------------------
+
+  @listed_gpt_image_models ~w(
+    gpt-image-1 gpt-image-1-mini gpt-image-1.5 gpt-image-2 gpt-image-2-2026-04-21
+    gpt-image-2.5-sunburst gpt-image-2.5-sunburst-2026-09-08
+    gpt-image-2.5-flare gpt-image-2.5-flare-2026-09-08
+  )
+
+  describe "gpt_image_model?/1" do
+    test "is true for every listed model, chatgpt-image-latest, and an unlisted gpt-image-*" do
+      for model <- @listed_gpt_image_models ++ ["chatgpt-image-latest", "gpt-image-3"] do
+        assert Images.gpt_image_model?(model), model
+      end
+    end
+
+    test "is false for DALL·E, chat models, near-misses, and non-binaries" do
+      for model <- ["dall-e-2", "dall-e-3", "gpt-4o", "gpt-image-", "gpt-imagex-2", nil, :x] do
+        refute Images.gpt_image_model?(model), inspect(model)
+      end
+    end
+  end
+
+  describe "gate_model_op/2 — GPT image family" do
+    test "every listed model allows :generate and :edit" do
+      for model <- @listed_gpt_image_models, op <- [:generate, :edit] do
+        assert Images.gate_model_op(model, op) == :ok, "#{model} #{op}"
+      end
+    end
+  end
+
+  describe "to_json_body/2 — GPT image family" do
+    test "omits response_format and carries GPT-image fields for every family member" do
+      for model <- @listed_gpt_image_models ++ ["chatgpt-image-latest", "gpt-image-3"] do
+        req =
+          ImageRequest.new(
+            operation: :generate,
+            prompt: "x",
+            model: model,
+            response_format: :base64,
+            size: {1536, 864},
+            quality: :high,
+            background: :opaque,
+            options: %{output_format: :jpeg, output_compression: 80, moderation: :low}
+          )
+
+        sent = Images.to_json_body(req, [])
+        refute Map.has_key?(sent, "response_format"), model
+        assert sent["size"] == "1536x864"
+        assert sent["quality"] == "high"
+        assert sent["background"] == "opaque"
+        assert sent["output_format"] == "jpeg"
+        assert sent["output_compression"] == 80
+        assert sent["moderation"] == "low"
+      end
+    end
+
+    test "gpt-image-2.5 quality :xhigh / :max wire as strings" do
+      for q <- [:xhigh, :max] do
+        req = ImageRequest.new(prompt: "x", model: "gpt-image-2.5-flare", quality: q)
+        assert Images.to_json_body(req, [])["quality"] == Atom.to_string(q)
+      end
+    end
+
+    test "absent options are omitted, not defaulted" do
+      sent = Images.to_json_body(ImageRequest.new(prompt: "x", model: "gpt-image-2"), [])
+      assert Map.keys(sent) |> Enum.sort() == ["model", "n", "prompt"]
+    end
+
+    test "dall-e-2 never carries the GPT-image-only option fields" do
+      req =
+        ImageRequest.new(
+          prompt: "x",
+          model: "dall-e-2",
+          options: %{output_compression: 80, moderation: "low", output_format: "webp"}
+        )
+
+      sent = Images.to_json_body(req, [])
+
+      for key <- ~w(output_compression moderation output_format background) do
+        refute Map.has_key?(sent, key), key
+      end
+    end
+  end
+
+  describe "generate/2 — gpt-image-2" do
+    test ":url is rejected pre-flight with the model named", %{stub: _stub} do
+      req = ImageRequest.new(prompt: "x", model: "gpt-image-2", response_format: :url)
+
+      assert {:error, %ImageAdapterError{reason: :invalid_request} = err} =
+               Images.generate(req, [])
+
+      assert err.message =~ "gpt-image-2 only returns base64"
+      assert err.metadata.model == "gpt-image-2"
+    end
+
+    test "decodes b64_json, token usage, usage details, and output_format MIME", %{stub: stub} do
+      parent = self()
+      body = recorded("generate_gpt_image_1_happy.json") |> drop_comment()
+
+      Req.Test.stub(stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:body, Jason.decode!(raw)})
+        respond_json(conn, 200, body)
+      end)
+
+      req =
+        ImageRequest.new(
+          prompt: "a kestrel",
+          model: "gpt-image-2",
+          response_format: :binary,
+          options: %{output_format: "webp"}
+        )
+
+      assert {:ok, %ImageResponse{} = resp} = call(stub, req)
+      assert_receive {:body, sent}, 500
+      refute Map.has_key?(sent, "response_format")
+
+      [%Image{source: {:binary, bytes}, mime_type: "image/webp"}] = resp.images
+      assert bytes == Base.decode64!(hd(body["data"])["b64_json"])
+      assert %ImageUsage{input_tokens: in_t, output_tokens: out_t} = resp.usage
+      assert in_t == body["usage"]["input_tokens"]
+      assert out_t == body["usage"]["output_tokens"]
+      assert resp.metadata[:usage_details] == body["usage"]["input_tokens_details"]
+    end
+  end
 end

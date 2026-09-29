@@ -31,12 +31,12 @@ capabilities. Set whichever you need:
 engine = ALLM.Engine.new(
   adapter: ALLM.Providers.OpenAI,             # for chat, optional here
   image_adapter: ALLM.Providers.OpenAI.Images,
-  model: "gpt-image-1"
+  model: "gpt-image-2"
 )
 ```
 
 The image model comes from the engine's `:model` field, or from a
-per-call `model:` opt (`ALLM.generate_image(engine, prompt, model: "gpt-image-1")`)
+per-call `model:` opt (`ALLM.generate_image(engine, prompt, model: "gpt-image-2")`)
 which overrides it.
 
 If you only generate images (no chat), the `:adapter` slot can stay
@@ -61,10 +61,20 @@ unset.
 
 * `:model` — override the engine's default.
 * `:size` — `"1024x1024"`, a `{w, h}` tuple, or `:auto`. Supported sizes
-  differ per provider and model.
+  differ per provider and model. `gpt-image-2` and later accept any size
+  whose sides are multiples of 16, with an aspect ratio between 1:3 and
+  3:1, up to 3840x2160.
 * `:n` — number of images to generate.
+* `:quality` — `:low`, `:medium`, `:high`, or `:auto` on OpenAI's GPT
+  image models; `gpt-image-2.5-sunburst` and `gpt-image-2.5-flare` also
+  take `:xhigh` and `:max`.
+* `:background` — `:transparent` or `:opaque` (GPT image models).
 * `:response_format` — `:binary` (the default), `:base64`, or `:url`.
-  `gpt-image-1` only returns base64, so it rejects `:url`.
+  OpenAI's GPT image models only return base64, so they reject `:url`.
+* `:options` — provider-specific extras. The OpenAI adapter forwards
+  `:output_format` (`"png"`, `"jpeg"`, `"webp"`), `:output_compression`
+  (0–100), `:moderation` (`"low"` or `"auto"`, generate only) and
+  `:input_fidelity` (`"high"` or `"low"`, edit only) when present.
 * `:request_timeout` — HTTP receive timeout in milliseconds.
 
 ## Editing an image (inpaint)
@@ -86,12 +96,19 @@ The base and mask can be raw bytes, a file path
 
 | Operation | OpenAI | Gemini |
 |---|---|---|
-| Generate (`generate_image/3`) | yes (`gpt-image-1`) | yes (`gemini-2.5-flash-image-preview`) |
-| Edit (`edit_image/4`) | yes (`gpt-image-1`) | yes |
+| Generate (`generate_image/3`) | yes (`gpt-image-2`) | yes (`gemini-3.1-flash-image`) |
+| Edit (`edit_image/4`) | yes (`gpt-image-2`) | yes |
+
+The OpenAI adapter treats every `gpt-image-*` model as a GPT image model
+(currently `gpt-image-1`, `gpt-image-1-mini`, `gpt-image-1.5`,
+`gpt-image-2`, `gpt-image-2.5-sunburst`, `gpt-image-2.5-flare`, and
+their dated snapshots), so a new snapshot works without a library
+update. OpenAI removes `gpt-image-1-mini`, `gpt-image-1.5`, and
+`chatgpt-image-latest` on 2026-12-01.
 
 OpenAI has retired `dall-e-2` and `dall-e-3`. The OpenAI adapter still
 recognises both names — a request naming one is gated before any HTTP
-call — but new code should use `gpt-image-1`.
+call — but new code should use a GPT image model.
 
 Anthropic does not ship an image adapter — set `:image_adapter` to
 OpenAI's or Gemini's even when your chat adapter is Anthropic.

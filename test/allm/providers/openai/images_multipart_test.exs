@@ -713,4 +713,32 @@ defmodule ALLM.Providers.OpenAI.ImagesMultipartTest do
                Images.prepare_request(req, opts)
     end
   end
+
+  describe "to_multipart_body/2 — GPT image family on :edit" do
+    test "gpt-image-2 omits response_format and moderation, forwards edit options" do
+      req =
+        ImageRequest.new(
+          operation: :edit,
+          prompt: "x",
+          model: "gpt-image-2",
+          input_images: [base_image()],
+          response_format: :base64,
+          background: :transparent,
+          options: %{
+            output_format: "png",
+            output_compression: 90,
+            input_fidelity: :high,
+            moderation: "low"
+          }
+        )
+
+      assert {:ok, fields} = Images.to_multipart_body(req, [])
+      refute List.keymember?(fields, "response_format", 0)
+      refute List.keymember?(fields, "moderation", 0)
+      assert {"background", "transparent"} in fields
+      assert {"output_format", "png"} in fields
+      assert {"output_compression", "90"} in fields
+      assert {"input_fidelity", "high"} in fields
+    end
+  end
 end

@@ -21,10 +21,11 @@ defmodule ALLM.ImageRequest do
   integers, treats `"auto"` as `:auto`, and otherwise passes binaries
   through verbatim.
 
-  `:quality` is the closed atom set `[:low, :standard, :high, :hd, :auto]`
-  with a `String.t` open arm — providers extend the set (`:hd` is
-  dall-e-3-only; `:high` is gpt-image-1-only). The decoder restores known
-  atoms; unknown binaries pass through verbatim.
+  `:quality` is the atom set `[:low, :medium, :high, :xhigh, :max,
+  :standard, :hd, :auto]` with a `String.t` open arm — providers extend
+  the set (`:hd` is dall-e-3-only; `:low`/`:medium`/`:high` are for the
+  GPT image models; `:xhigh`/`:max` are `gpt-image-2.5-*`-only). The
+  decoder restores known atoms; unknown binaries pass through verbatim.
 
   `:operation`, `:response_format`, `:style`, and `:background` are closed
   atom enums; an unknown value at decode time raises `ArgumentError` and
@@ -39,7 +40,8 @@ defmodule ALLM.ImageRequest do
 
   @type operation :: :generate | :edit
   @type size :: {pos_integer(), pos_integer()} | String.t() | :auto
-  @type quality :: :low | :standard | :high | :hd | :auto | String.t()
+  @type quality ::
+          :low | :medium | :high | :xhigh | :max | :standard | :hd | :auto | String.t()
   @type response_format :: :binary | :base64 | :url
 
   @type t :: %__MODULE__{
