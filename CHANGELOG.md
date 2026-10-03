@@ -1,3 +1,19 @@
+## [REL] v0.6.1 — GPT image family support
+
+Other changes:
+- Support `gpt-image-2`, `gpt-image-2.5-sunburst`, `gpt-image-2.5-flare`,
+  `gpt-image-1.5`, `gpt-image-1-mini`, their dated snapshots and
+  `chatgpt-image-latest` in `ALLM.Providers.OpenAI.Images`. Every model but
+  `gpt-image-1` previously sent `response_format` and was rejected by OpenAI
+  with `Unknown parameter: 'response_format'`; any `gpt-image-*` model now
+  gets the base64-only wire shape, token usage, and `:url` pre-flight rejection
+- Forward `output_compression`, `moderation` (generate) and `input_fidelity`
+  (edit) from `ImageRequest.options` for GPT image models
+- Accept `:medium`, `:xhigh` and `:max` in `ImageRequest.quality`
+- Update the image generation guide for `gpt-image-2`, arbitrary sizes, the
+  new options, and OpenAI's 2026-12-01 removal of `gpt-image-1-mini`,
+  `gpt-image-1.5` and `chatgpt-image-latest`
+
 ## [REL] v0.6.0 — Content moderation, compact tools, audio, prompt caching, typed classification and transcript timings
 
 Breaking changes:
