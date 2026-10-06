@@ -12,7 +12,8 @@ defmodule ALLM.Providers.AnthropicLiveTest do
   runs do not fail noisily.
 
   Phase 11.2 ships TWO rows: plain-text generate + streaming text.
-  Phase 11.3 adds the single-tool-call + structured-output rows. The
+  Phase 11.3 adds the single-tool-call + structured-output rows (the latter
+  now via native `output_config.format`). The
   session-round-trip row lands in Phase 11.4.
   """
   use ExUnit.Case, async: false
@@ -118,7 +119,7 @@ defmodule ALLM.Providers.AnthropicLiveTest do
     assert String.contains?(String.downcase(result.final_response.output_text), "sunny")
   end
 
-  test "structured output (tool-forcing) → output_text JSON-decodes to schema map" do
+  test "structured output (output_config.format) → output_text JSON-decodes to schema map" do
     schema = %{
       "type" => "object",
       "properties" => %{
@@ -146,7 +147,6 @@ defmodule ALLM.Providers.AnthropicLiveTest do
 
     assert response.finish_reason == :stop
     assert response.tool_calls == []
-    assert response.metadata.structured_output_tool == true
     assert is_binary(response.output_text)
     assert {:ok, decoded} = Jason.decode(response.output_text)
     assert is_binary(decoded["name"])

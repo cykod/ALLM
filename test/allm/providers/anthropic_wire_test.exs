@@ -583,12 +583,13 @@ defmodule ALLM.Providers.AnthropicWireTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Row 18 — structured output (tool-forcing per Phase 11.3)
+  # Row 18 — structured output (native output_config.format)
   # ---------------------------------------------------------------------------
 
-  test "structured output (tool-forcing) → output_text JSON-decodes; finish_reason :stop", %{
-    stub: stub
-  } do
+  test "structured output (output_config.format) → output_text JSON-decodes; finish_reason :stop",
+       %{
+         stub: stub
+       } do
     body = Fx.messages_response(:structured_output)
     parent = self()
 
@@ -609,17 +610,19 @@ defmodule ALLM.Providers.AnthropicWireTest do
 
     assert {:ok, response} = call(stub, request)
 
-    # The wire body MUST carry the synthetic tool + tool_choice forcing.
+    # Native format, no synthetic tool and no forced tool_choice (Claude
+    # Opus 5.5 / Sonnet 5.5 400 on a forced tool_choice).
     assert_receive {:wire_body, sent}
-    assert [synthetic] = sent["tools"]
-    assert synthetic["name"] == "respond_with_json_person"
-    assert sent["tool_choice"]["type"] == "tool"
-    assert sent["tool_choice"]["name"] == "respond_with_json_person"
+    refute Map.has_key?(sent, "tools")
+    refute Map.has_key?(sent, "tool_choice")
 
-    # Lifted response shape.
+    assert sent["output_config"]["format"] == %{
+             "type" => "json_schema",
+             "schema" => Map.put(schema, "additionalProperties", false)
+           }
+
     assert response.finish_reason == :stop
     assert response.tool_calls == []
-    assert response.metadata.structured_output_tool == true
     assert is_binary(response.output_text)
     assert Jason.decode!(response.output_text) == %{"name" => "Alice", "age" => 30}
   end

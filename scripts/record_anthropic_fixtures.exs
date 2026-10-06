@@ -88,55 +88,33 @@ defmodule RecordAnthropicFixtures do
       "messages" => [%{"role" => "user", "content" => "Reply with the single word: hello"}]
     })
 
-    # Phase 11.3 — structured output via tool-forcing. Records the
-    # `respond_with_json_person` synthetic tool call response (single-pass).
+    # Structured output via native `output_config.format`. Tool-forcing was
+    # removed because Claude Opus 5.5 / Sonnet 5.5 / Fable 5.1 reject a
+    # forced `tool_choice` with a 400. The schema carries
+    # `additionalProperties: false` — the API requires it on every object.
+    # Record these two with a model that rejects forced tool_choice:
+    #   ALLM_MODEL=claude-sonnet-5-5 (the arms above are skipped once recorded).
     person_schema = %{
       "type" => "object",
       "properties" => %{
         "name" => %{"type" => "string"},
         "age" => %{"type" => "integer"}
       },
-      "required" => ["name", "age"]
+      "required" => ["name", "age"],
+      "additionalProperties" => false
     }
 
-    record(:structured_output, model, %{
+    structured_body = %{
       "model" => model,
-      "max_tokens" => 256,
-      "tools" => [
-        %{
-          "name" => "respond_with_json_person",
-          "description" => "Return the final result as a JSON object matching the schema.",
-          "input_schema" => person_schema
-        }
-      ],
-      "tool_choice" => %{"type" => "tool", "name" => "respond_with_json_person"},
+      "max_tokens" => 1024,
+      "output_config" => %{"format" => %{"type" => "json_schema", "schema" => person_schema}},
       "messages" => [
-        %{
-          "role" => "user",
-          "content" => "Make up a person named Alice who is 30. Reply via the tool."
-        }
+        %{"role" => "user", "content" => "Make up a person named Alice who is 30."}
       ]
-    })
+    }
 
-    record_stream(:structured_output_stream, model, %{
-      "model" => model,
-      "max_tokens" => 256,
-      "stream" => true,
-      "tools" => [
-        %{
-          "name" => "respond_with_json_person",
-          "description" => "Return the final result as a JSON object matching the schema.",
-          "input_schema" => person_schema
-        }
-      ],
-      "tool_choice" => %{"type" => "tool", "name" => "respond_with_json_person"},
-      "messages" => [
-        %{
-          "role" => "user",
-          "content" => "Make up a person named Alice who is 30. Reply via the tool."
-        }
-      ]
-    })
+    record(:structured_output, model, structured_body)
+    record_stream(:structured_output_stream, model, Map.put(structured_body, "stream", true))
 
     record_stream(:tool_use_deltas, model, %{
       "model" => model,

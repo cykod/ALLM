@@ -1,3 +1,25 @@
+## [BUG] Use native output_config.format for Anthropic structured output
+*Tuesday, October 6th at 10pm*
+The Anthropic adapter forced a synthetic respond_with_json tool via tool_choice 
+to get JSON, which Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 reject with a 400, 
+so every structured Claude call failed (spec §5.4).
+- Structured output now sets output_config.format (json_schema, no beta 
+header), live-verified on claude-opus-5-5, claude-sonnet-5-5, claude-opus-4-7, 
+claude-sonnet-4-6 and claude-haiku-4-5; user tools stay callable on structured 
+requests.
+- New to_anthropic_json_schema/1 closes every object with additionalProperties: 
+false and moves constraints the API rejects (minimum, maxItems, uniqueItems, 
+minProperties, ...) into the schema description, per a live keyword probe.
+- Removed the tool-forcing machinery: inject_structured_output_tool/2, 
+lift_structured_output/1, the streaming rewrite wrapper and 
+metadata.structured_output_tool (breaking for direct callers); output_text is 
+now the model's literal JSON.
+- Re-recorded structured_output fixtures live from claude-sonnet-5-5 via the 
+updated recorder, rewrote the affected tests, updated example 06, 
+examples/README and spec §5.4.
+
+---
+
 ## [BUG] Support gpt-image-2 and the full GPT image model family
 *Tuesday, September 29th at 8pm*
 The OpenAI images adapter keyed its GPT-image wire shape on the exact string 

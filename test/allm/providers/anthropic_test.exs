@@ -290,19 +290,10 @@ defmodule ALLM.Providers.AnthropicTest do
       assert [%{"name" => "get_weather", "input_schema" => _}] = body["tools"]
     end
 
-    test "Phase 11.3: structured-output user-tool collision row" do
-      # When a user-defined tool is literally named `respond_with_json_person`
-      # AND the request carries `response_format: %{type: :json_schema, name:
-      # "person", ...}`, both entries appear in the body's `tools:` array.
-      # See moduledoc "Synthetic-tool-name collision" — the lift only fires
-      # when there is exactly ONE tool call whose name starts with the
-      # synthetic prefix, so a multi-call response surfaces unchanged.
-      user_tool =
-        Tool.new(
-          name: "respond_with_json_person",
-          description: "user tool",
-          schema: %{"type" => "object"}
-        )
+    test "structured output keeps user tools and never forces tool_choice" do
+      # Claude Opus 5.5 / Sonnet 5.5 / Fable 5.1 400 on a forced tool_choice,
+      # so structured output must not add one (or a synthetic tool).
+      user_tool = Tool.new(name: "weather", description: "w", schema: %{"type" => "object"})
 
       r =
         req(
@@ -316,159 +307,134 @@ defmodule ALLM.Providers.AnthropicTest do
         )
 
       body = Anthropic.to_anthropic_request_body(r)
-      tool_names = Enum.map(body["tools"], & &1["name"])
-      # Both entries present (collision footgun documented in moduledoc).
-      assert "respond_with_json_person" in tool_names
-      assert length(body["tools"]) == 2
+      assert Enum.map(body["tools"], & &1["name"]) == ["weather"]
+      refute Map.has_key?(body, "tool_choice")
+      assert body["output_config"]["format"]["type"] == "json_schema"
     end
-  end
 
-  # ---------------------------------------------------------------------------
-  # inject_structured_output_tool/2 (Decision #4)
-  # ---------------------------------------------------------------------------
-
-  describe "inject_structured_output_tool/2" do
-    test "with response_format :json_schema → injects synthetic tool + tool_choice" do
+    test "response_format :json_schema → native output_config.format" do
       schema = %{
         "type" => "object",
-        "properties" => %{"name" => %{"type" => "string"}, "age" => %{"type" => "integer"}}
+        "properties" => %{"name" => %{"type" => "string"}},
+        "required" => ["name"]
       }
 
-      r =
-        req(response_format: %{type: :json_schema, name: "person", schema: schema, strict: true})
+      r = req(response_format: %{type: :json_schema, name: "person", schema: schema, strict: true})
+      body = Anthropic.to_anthropic_request_body(r)
 
-      body = Anthropic.inject_structured_output_tool(r, %{"tools" => []})
+      assert body["output_config"] == %{
+               "format" => %{
+                 "type" => "json_schema",
+                 "schema" => Map.put(schema, "additionalProperties", false)
+               }
+             }
 
-      assert [synthetic] = body["tools"]
-      assert synthetic["name"] == "respond_with_json_person"
-      assert synthetic["description"] =~ "JSON object"
-      assert synthetic["input_schema"] == schema
-
-      assert body["tool_choice"] == %{type: "tool", name: "respond_with_json_person"}
+      refute Map.has_key?(body, "tools")
     end
 
-    test "with response_format :json_schema → APPENDS to existing user tools (preserves)" do
-      user_tool = %{"name" => "weather", "description" => "w", "input_schema" => %{}}
-
+    test "output_config.format merges into a caller-supplied output_config" do
       r =
         req(
-          response_format: %{
-            type: :json_schema,
-            name: "person",
-            schema: %{"type" => "object"},
-            strict: true
-          }
+          options: %{output_config: %{effort: "low"}},
+          response_format: %{type: :json_schema, name: "p", schema: %{"type" => "object"}}
         )
 
-      body = Anthropic.inject_structured_output_tool(r, %{"tools" => [user_tool]})
-
-      assert [^user_tool, synthetic] = body["tools"]
-      assert synthetic["name"] == "respond_with_json_person"
+      body = Anthropic.to_anthropic_request_body(r)
+      assert body["output_config"][:effort] == "low"
+      assert body["output_config"]["format"]["type"] == "json_schema"
     end
 
-    test "with response_format nil → body unchanged (identity)" do
-      assert Anthropic.inject_structured_output_tool(req(), %{}) == %{}
-      assert Anthropic.inject_structured_output_tool(req(), %{"x" => 1}) == %{"x" => 1}
-    end
+    test "response_format nil / :json_object → no output_config" do
+      refute Map.has_key?(Anthropic.to_anthropic_request_body(req()), "output_config")
 
-    test "with response_format :json_object → body unchanged (softer shape)" do
-      r = req(response_format: %{type: :json_object})
-      assert Anthropic.inject_structured_output_tool(r, %{"y" => 2}) == %{"y" => 2}
-    end
-
-    test "multi-turn: synthetic tool already called → injection is suppressed" do
-      # The thread carries an assistant message whose metadata.tool_calls
-      # includes a synthetic-prefixed tool call. The next request should
-      # NOT re-inject the synthetic tool so user tools remain callable
-      # (moduledoc "Multi-turn synthetic-tool de-injection").
-      synthetic_call =
-        ToolCall.new(
-          id: "toolu_synth",
-          name: "respond_with_json_person",
-          arguments: %{"name" => "A"}
-        )
-
-      messages = [
-        %Message{role: :user, content: "go"},
-        %Message{role: :assistant, content: "", metadata: %{tool_calls: [synthetic_call]}},
-        %Message{role: :tool, content: "ok", tool_call_id: "toolu_synth"}
-      ]
-
-      r =
-        Request.new(messages,
-          model: "claude-sonnet-4-6",
-          response_format: %{
-            type: :json_schema,
-            name: "person",
-            schema: %{"type" => "object"},
-            strict: true
-          }
-        )
-
-      assert Anthropic.inject_structured_output_tool(r, %{"tools" => []}) == %{"tools" => []}
+      body = Anthropic.to_anthropic_request_body(req(response_format: %{type: :json_object}))
+      refute Map.has_key?(body, "output_config")
     end
   end
 
   # ---------------------------------------------------------------------------
-  # lift_structured_output/1 (Decision #4)
+  # to_anthropic_json_schema/1 — schemas the native format accepts
   # ---------------------------------------------------------------------------
 
-  describe "lift_structured_output/1" do
-    test "single synthetic tool call → output_text/finish_reason/tool_calls/metadata rewritten" do
-      tc =
-        ToolCall.new(
-          id: "toolu_x",
-          name: "respond_with_json_person",
-          arguments: %{"name" => "Alice", "age" => 30},
-          raw_arguments: ~s({"name":"Alice","age":30})
-        )
-
-      msg = %Message{role: :assistant, content: "", metadata: %{tool_calls: [tc]}}
-
-      resp = %ALLM.Response{
-        tool_calls: [tc],
-        finish_reason: :tool_calls,
-        message: msg,
-        metadata: %{}
+  describe "to_anthropic_json_schema/1" do
+    test "closes every nested object, stringifies atom keys" do
+      schema = %{
+        type: "object",
+        properties: %{
+          tags: %{type: "array", items: %{type: "object", properties: %{k: %{type: "string"}}}},
+          maybe: %{anyOf: [%{type: "object", properties: %{}}, %{type: "null"}]},
+          ref: %{"$ref" => "#/$defs/thing"}
+        },
+        "$defs": %{thing: %{type: ["object", "null"], properties: %{}}}
       }
 
-      lifted = Anthropic.lift_structured_output(resp)
+      out = Anthropic.to_anthropic_json_schema(schema)
 
-      assert Jason.decode!(lifted.output_text) == %{"name" => "Alice", "age" => 30}
-      assert lifted.finish_reason == :stop
-      assert lifted.tool_calls == []
-      assert lifted.metadata.structured_output_tool == true
-      # The assistant message's content carries the JSON; tool_calls are dropped.
-      assert lifted.message.role == :assistant
-      assert Jason.decode!(lifted.message.content) == %{"name" => "Alice", "age" => 30}
-      refute Map.has_key?(lifted.message.metadata, :tool_calls)
+      assert out["additionalProperties"] == false
+      assert out["properties"]["tags"]["items"]["additionalProperties"] == false
+      assert out["properties"]["tags"]["items"]["properties"] == %{"k" => %{"type" => "string"}}
+
+      assert [%{"additionalProperties" => false}, %{"type" => "null"}] =
+               out["properties"]["maybe"]["anyOf"]
+
+      assert out["$defs"]["thing"]["additionalProperties"] == false
+      assert out["properties"]["ref"] == %{"$ref" => "#/$defs/thing"}
+      refute Map.has_key?(out["properties"]["tags"], "additionalProperties")
     end
 
-    test "single non-synthetic tool call (user_tool) → response unchanged" do
-      tc = ToolCall.new(id: "toolu_x", name: "user_tool", arguments: %{"x" => 1})
-      resp = %ALLM.Response{tool_calls: [tc], finish_reason: :tool_calls}
-      assert Anthropic.lift_structured_output(resp) == resp
+    test "additionalProperties: true is overridden (the API rejects it)" do
+      out =
+        Anthropic.to_anthropic_json_schema(%{"type" => "object", "additionalProperties" => true})
+
+      assert out["additionalProperties"] == false
     end
 
-    test "empty tool_calls → response unchanged" do
-      resp = %ALLM.Response{tool_calls: [], output_text: "hi", finish_reason: :stop}
-      assert Anthropic.lift_structured_output(resp) == resp
+    test "rejected constraints move into description; accepted ones stay" do
+      schema = %{
+        "type" => "object",
+        "properties" => %{
+          "age" => %{"type" => "integer", "minimum" => 0, "maximum" => 150},
+          "name" => %{"type" => "string", "description" => "Full name", "maxLength" => 40},
+          "few" => %{"type" => "array", "items" => %{"type" => "string"}, "minItems" => 1},
+          "many" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "minItems" => 2,
+            "maxItems" => 5,
+            "uniqueItems" => true
+          }
+        },
+        "maxProperties" => 9
+      }
+
+      out = Anthropic.to_anthropic_json_schema(schema)
+      props = out["properties"]
+
+      assert props["age"] == %{"type" => "integer", "description" => "{maximum: 150, minimum: 0}"}
+      assert props["name"] == %{"type" => "string", "description" => "Full name", "maxLength" => 40}
+      assert props["few"]["minItems"] == 1
+      refute Map.has_key?(props["many"], "minItems")
+      assert props["many"]["description"] == "{maxItems: 5, minItems: 2, uniqueItems: true}"
+      assert out["description"] == "{maxProperties: 9}"
     end
 
-    test "multi tool calls (synthetic + user_tool) → response unchanged" do
-      # Per Decision #4: lift only fires when length(tool_calls) == 1 AND the
-      # single call is synthetic-prefixed. Ambiguous multi-call responses
-      # surface verbatim with finish_reason: :tool_calls.
-      synthetic =
-        ToolCall.new(
-          id: "toolu_a",
-          name: "respond_with_json_person",
-          arguments: %{"name" => "A"}
-        )
+    test "property names that collide with keywords are not stripped" do
+      schema = %{
+        "type" => "object",
+        "properties" => %{"minimum" => %{"type" => "number"}, "items" => %{"type" => "string"}}
+      }
 
-      user_tc = ToolCall.new(id: "toolu_b", name: "user_tool", arguments: %{})
-      resp = %ALLM.Response{tool_calls: [synthetic, user_tc], finish_reason: :tool_calls}
-      assert Anthropic.lift_structured_output(resp) == resp
+      out = Anthropic.to_anthropic_json_schema(schema)
+
+      assert out["properties"] == %{
+               "minimum" => %{"type" => "number"},
+               "items" => %{"type" => "string"}
+             }
+    end
+
+    test "enum / const / default values pass through untouched" do
+      s = %{"type" => "string", "enum" => ["minimum", "maximum"], "default" => "minimum"}
+      assert Anthropic.to_anthropic_json_schema(s) == s
     end
   end
 
@@ -504,74 +470,42 @@ defmodule ALLM.Providers.AnthropicTest do
   # Stream-equivalence — chat/3 ≡ stream/3 |> StreamCollector.to_response/1
   # ---------------------------------------------------------------------------
 
-  describe "stream/2 + lift_structured_output/1 stream-equivalence" do
-    test "structured-output streamed response collapses to the same %Response{} shape" do
-      # Synthesized SSE: the Anthropic-emitted tool_use stream for the
-      # synthetic respond_with_json_person tool. After the wrap fires the
-      # collected response should match the lifted non-streaming response.
+  describe "structured output stream-equivalence" do
+    test "streamed native JSON collapses to the same %Response{} as the non-streaming arm" do
+      # Recorded from claude-sonnet-5-5 with output_config.format: the JSON
+      # arrives as ordinary text_delta events.
       chunks = Fx.stream_chunks(:structured_output_stream)
       stub_ref = FinchStub.install(chunks, [])
-
-      schema = %{
-        "type" => "object",
-        "properties" => %{"name" => %{"type" => "string"}, "age" => %{"type" => "integer"}}
-      }
 
       ALLM.Keys.put(:anthropic, "sk-ant-stream-equiv")
 
       r =
-        req(response_format: %{type: :json_schema, name: "person", schema: schema, strict: true})
+        req(
+          response_format: %{
+            type: :json_schema,
+            name: "person",
+            schema: %{"type" => "object"},
+            strict: true
+          }
+        )
 
-      {:ok, stream} =
-        Anthropic.stream(r, finch_module: FinchStub, finch_stub_ref: stub_ref)
-
+      {:ok, stream} = Anthropic.stream(r, finch_module: FinchStub, finch_stub_ref: stub_ref)
       events = Enum.to_list(stream)
 
-      # Wrap should rewrite the `:message_completed` to carry JSON content +
-      # finish_reason: :stop, and convert tool_call_* into text_* events.
       assert Enum.any?(events, &match?({:text_delta, _}, &1))
-      assert Enum.any?(events, &match?({:text_completed, _}, &1))
       refute Enum.any?(events, &match?({:tool_call_started, _}, &1))
-      refute Enum.any?(events, &match?({:tool_call_delta, _}, &1))
-      refute Enum.any?(events, &match?({:tool_call_completed, _}, &1))
 
-      assert {:message_completed, payload} =
-               Enum.find(events, &match?({:message_completed, _}, &1))
-
-      assert payload.finish_reason == :stop
-      assert Jason.decode!(payload.message.content) == %{"name" => "Alice", "age" => 30}
-
-      # StreamCollector.to_response/1 produces the same shape as the
-      # non-streaming arm's lifted response.
       state = Enum.reduce(events, StreamCollector.new(), &StreamCollector.apply_event(&2, &1))
       stream_response = StreamCollector.to_response(state)
 
-      assert stream_response.finish_reason == :stop
-      assert stream_response.tool_calls == []
-      assert Jason.decode!(stream_response.output_text) == %{"name" => "Alice", "age" => 30}
+      ns_response =
+        Anthropic.from_anthropic_response(Fx.messages_response(:structured_output), [])
 
-      # Invariant 14 — `metadata.structured_output_tool: true` MUST appear on
-      # both arms (M1 regression guard from the Phase 11.3 review). Compare
-      # against a synthetic non-streaming response that goes through the same
-      # `lift_structured_output/1` helper.
-      ns_input = %ALLM.Response{
-        output_text: nil,
-        tool_calls: [
-          %ALLM.ToolCall{
-            id: "toolu_01",
-            name: "respond_with_json_person",
-            arguments: %{"name" => "Alice", "age" => 30},
-            raw_arguments: ~s({"name":"Alice","age":30})
-          }
-        ],
-        finish_reason: :tool_calls,
-        metadata: %{}
-      }
-
-      ns_response = Anthropic.lift_structured_output(ns_input)
-
-      assert ns_response.metadata[:structured_output_tool] == true
-      assert stream_response.metadata[:structured_output_tool] == true
+      for resp <- [stream_response, ns_response] do
+        assert resp.finish_reason == :stop
+        assert resp.tool_calls == []
+        assert Jason.decode!(resp.output_text) == %{"name" => "Alice", "age" => 30}
+      end
     end
   end
 

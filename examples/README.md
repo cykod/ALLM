@@ -262,8 +262,7 @@ two features that account for most production traffic.
   without using `Session`.
 - `06_structured_output.exs` exercises
   `response_format: ALLM.json_schema(...)` with native enforcement on
-  OpenAI/Gemini and the tool-forcing pattern on Anthropic (described
-  below).
+  every provider (described below).
 - `07_manual_tool_round_trip.exs` shows the engine-wide
   `mode: :manual` halt path — the chat loop returns the assistant's
   tool calls without invoking them, the caller fabricates a tool result,
@@ -724,21 +723,20 @@ OpenAI's `:json_schema` response format uses native enforcement with
 `strict: true`; the model's literal output bytes are returned in
 `Response.output_text`.
 
-Anthropic's structured-output path uses the **tool-forcing pattern**: a
-synthetic `respond_with_json_<name>` tool is injected, `tool_choice`
-forces it, and the tool-call's `input` map is lifted to
-`Response.output_text` via `Jason.encode!/1` with
-`finish_reason: :stop` and `metadata.structured_output_tool: true`. The
-script asserts on the latter marker only when
-`ALLM_PROVIDER == "anthropic"` since OpenAI carries no equivalent flag.
+Anthropic uses the native `output_config.format` JSON-schema field and
+returns the model's literal JSON in `Response.output_text`. The adapter
+closes every object schema with `additionalProperties: false` and moves
+constraints Anthropic rejects (`minimum`, `maxItems`, …) into the
+schema's `description` — see the `ALLM.Providers.Anthropic` moduledoc.
+(It previously forced a synthetic tool via `tool_choice`, which Claude
+Opus 5.5 / Sonnet 5.5 reject with a 400.)
 
 Gemini uses the wire-native `responseSchema` / `responseMimeType:
 "application/json"` parameters on `generationConfig`.
 
-The semantic content is identical across providers; the byte string may
-differ (whitespace, key order, number formatting) — see the
-`@moduledoc ALLM.Providers.Anthropic` paragraph "Structured output
-`output_text` — semantic vs. byte equality".
+Every provider returns the model's literal output string, so the semantic
+content matches across providers while whitespace and key order may not —
+compare decoded maps, not bytes.
 
 ## Failure modes
 

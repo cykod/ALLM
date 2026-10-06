@@ -13,9 +13,8 @@ defmodule ALLM.Providers.AnthropicStreamWireTest do
   terminal `{:error, _}` events; the `{:ok, stream}` call-site tuple is
   preserved. Pre-flight failures surface as `{:error, _}` synchronously.
 
-  The streamed-structured-output row (design 11.2.1 row 14) ships alongside
-  `lift_structured_output/1` and asserts the rewritten event shape
-  (`:text_delta` / `:text_completed`) per Decision #5b — see Row 14 below.
+  The streamed-structured-output row (Row 14 below) asserts that native
+  `output_config.format` JSON arrives as `:text_delta` / `:text_completed`.
   """
   use ExUnit.Case, async: true
 
@@ -458,10 +457,10 @@ defmodule ALLM.Providers.AnthropicStreamWireTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Row 14 — streamed structured output (tool-forcing) — Phase 11.3
+  # Row 14 — streamed structured output (native output_config.format)
   # ---------------------------------------------------------------------------
 
-  test "streamed structured output: tool_use deltas → wrapped to text-stream + lifted message_completed" do
+  test "streamed structured output: native JSON arrives as text_delta events" do
     chunks = Fx.stream_chunks(:structured_output_stream)
     stub = install_stub(chunks)
 
@@ -475,18 +474,12 @@ defmodule ALLM.Providers.AnthropicStreamWireTest do
     {:ok, stream} = call_stream(stub, request)
     events = consume(stream)
 
-    # Per Decision #5b: the synthetic-tool wrap rewrites the tool_use stream
-    # into a text-stream so `StreamCollector.to_response/1` produces a clean
-    # `%Response{}` matching the non-streaming arm byte-for-byte (including
-    # `metadata.structured_output_tool: true` per invariant 14). Consumers
-    # see `:text_delta` events carrying partial JSON as the model emits it
-    # — matching OpenAI's native `:json_schema` streaming so provider-neutral
-    # consumer code can pattern-match `:text_delta`.
+    # Recorded from claude-sonnet-5-5: with output_config.format the JSON
+    # streams as ordinary text, matching OpenAI's native :json_schema
+    # streaming so provider-neutral consumers can pattern-match :text_delta.
     assert Enum.any?(events, &match?({:text_delta, _}, &1))
     assert Enum.any?(events, &match?({:text_completed, _}, &1))
     refute Enum.any?(events, &match?({:tool_call_started, _}, &1))
-    refute Enum.any?(events, &match?({:tool_call_delta, _}, &1))
-    refute Enum.any?(events, &match?({:tool_call_completed, _}, &1))
 
     completed = Enum.filter(events, &match?({:message_completed, _}, &1))
     assert length(completed) == 1
@@ -494,14 +487,11 @@ defmodule ALLM.Providers.AnthropicStreamWireTest do
     assert payload.finish_reason == :stop
     assert Jason.decode!(payload.message.content) == %{"name" => "Alice", "age" => 30}
 
-    # StreamCollector.to_response/1 yields `%Response{output_text: encoded_json,
-    # finish_reason: :stop, tool_calls: []}` per the deferred-row 14 spec.
     response = collect(events)
     assert response.finish_reason == :stop
     assert response.tool_calls == []
     assert is_binary(response.output_text)
     assert Jason.decode!(response.output_text) == %{"name" => "Alice", "age" => 30}
-    assert response.metadata[:structured_output_tool] == true
   end
 
   # ---------------------------------------------------------------------------

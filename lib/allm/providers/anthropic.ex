@@ -2,9 +2,9 @@ defmodule ALLM.Providers.Anthropic do
   @moduledoc """
   Anthropic provider adapter — Layer B.
 
-   ships the non-streaming `ALLM.Adapter` callback set;
-  adds the `ALLM.StreamAdapter` callbacks; adds structured-output
-  tool-forcing for both arms. This module implements:
+  Ships the `ALLM.Adapter` and `ALLM.StreamAdapter` callback sets, with
+  native structured output (`output_config.format`) on both arms. This
+  module implements:
 
     * `generate/2` — fires `POST https://api.anthropic.com/v1/messages` via
       `Req`, wrapped in `ALLM.Retry.run/3` with the Anthropic-specific
@@ -16,7 +16,7 @@ defmodule ALLM.Providers.Anthropic do
       `:max_tokens` natively across all model generations.
     * `requires_structured_finalize?/1` — capability declaration consumed
       by `ALLM.Capability.preflight/2`. Always `false` because Anthropic
-      uses tool-forcing (single-pass) for structured output rather than the
+      constrains the final text natively in a single pass rather than the
       OpenAI-style two-pass dance.
 
   ## System-message extraction
@@ -71,78 +71,45 @@ defmodule ALLM.Providers.Anthropic do
   `%ALLM.Error.EngineError{reason: :missing_key}` when no key resolver
   yields a value.
 
-  ## Structured output via tool-forcing
+  ## Structured output
 
   When `request.response_format == %{type: :json_schema, name: n, schema: s,
-  strict: b}`, `to_anthropic_request_body/1` injects a synthetic tool
-  `%{"name" => "respond_with_json_<n>", "description" => "...",
-  "input_schema" => s}` into the wire body's `tools:` array (appending to
-  any user tools) AND sets `tool_choice: %{type: "tool", name:
-  "respond_with_json_<n>"}` to force the model to call it. The response
-  decoder (`from_anthropic_response/2`) calls `lift_structured_output/1`,
-  which detects the synthetic call by name prefix
-  (`"respond_with_json_"`), replaces `Response.output_text` with
-  `Jason.encode!(tool_call.arguments)`, sets `finish_reason: :stop`,
-  clears `tool_calls: []`, and stamps `metadata.structured_output_tool ==
-  true` for observability. The streaming arm (`stream/2`) wraps its inner
-  enumerable in `Stream.transform/3` so the same `lift_structured_output/1`
-  helper runs on the accumulated state at completion — both arms produce
-  byte-identical `%Response{}` shapes.
+  strict: b}`, `to_anthropic_request_body/1` sets the native
+  `output_config: %{"format" => %{"type" => "json_schema", "schema" => s'}}`
+  field (merged into any `output_config` already supplied through
+  `request.options`, e.g. `effort`). Claude's final text block is then
+  constrained to the schema; it arrives as ordinary text on both arms, so
+  `Response.output_text` carries the model's literal JSON string and the
+  streaming arm emits ordinary `:text_delta` / `:text_completed` events.
+  `name` and `strict` are not sent — Anthropic's format has no name, and its
+  decoding is always strict. No beta header is required.
 
-  ### Streamed structured output — event shape
+  The adapter used to force a synthetic `respond_with_json_<name>` tool via
+  `tool_choice: %{type: "tool"}`. Claude Opus 5.5, Sonnet 5.5, and Fable 5.1
+  reject a forced `tool_choice` with a 400, so that path was removed; native
+  format is accepted by every Claude model this library targets (live-probed
+  2026-10-06: `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-opus-4-7`,
+  `claude-sonnet-4-6`, `claude-haiku-4-5`). User tools stay callable on a
+  structured-output request — only the final text is constrained.
 
-  When `response_format: %{type: :json_schema,...}` is set, the streaming
-  wrapper emits `:text_delta` events for partial JSON and a final
-  `:text_completed` event before the terminal `:message_completed`. The
-  synthetic `tool_use` round-trip is hidden from the consumer; this matches
-  OpenAI's native `:json_schema` streaming behavior so consumers can write
-  provider-neutral structured-output streaming code (pattern-match
-  `:text_delta` events to display JSON character-by-character).
+  ### Schema translation
 
-  Per the documented contractb: `:tool_call_*` events DO NOT fire on this path. The
-  shared `lift_structured_output/1` ensures the collected `%Response{}` is
-  byte-identical with the non-streaming arm: `output_text` carries the JSON,
-  `finish_reason` is `:stop`, `tool_calls` is empty, and `metadata` carries
-  `structured_output_tool: true` (invariant 14).
+  Anthropic accepts a narrower JSON Schema subset than tool `input_schema`
+  did, and returns a 400 for anything outside it.
+  `to_anthropic_json_schema/1` adjusts the schema `s` → `s'` before
+  sending:
 
-  `requires_structured_finalize?/1` is `false` because tool-forcing is
-  single-pass — the OpenAI-style two-pass `structured_finalize` dance is
-  unnecessary.
+    * every object schema gets `"additionalProperties" => false` (the API
+      requires the key explicitly and rejects `true`);
+    * keywords the API rejects — `minimum`, `maximum`, `exclusiveMinimum`,
+      `exclusiveMaximum`, `multipleOf`, `maxItems`, `uniqueItems`,
+      `minProperties`, `maxProperties`, and `minItems` above 1 — are
+      removed and restated in that schema's `description`, so the model
+      still sees them as guidance. They are **not** enforced: validate them
+      on the decoded output if they matter.
 
-  ### Cross-provider byte-shape carve-out
-
-  `output_text` from Anthropic's structured-output path is
-  `Jason.encode!/1` of the parsed map — the bytes are re-encoded from a
-  parsed map, so whitespace, key order, number formatting, and Unicode
-  escape style may differ from OpenAI's `:json_schema` path (which
-  preserves the model's literal output string). The semantic content is
-  identical — `Jason.decode!/1` of either yields the same Elixir map.
-  Consumers that hash, diff, or store `output_text` as a canonical "the
-  model said exactly this" record across providers should canonicalize
-  via `Jason.encode!/1` themselves.
-
-  ### Synthetic-tool-name collision
-
-  The synthetic tool's name is `"respond_with_json_<schema_name>"` — the
-  schema name embeds the namespace marker. A collision is only possible
-  when the user names a tool exactly identical (e.g., a user-defined
-  `respond_with_json_person` tool plus `response_format:
-  %{type: :json_schema, name: "person",...}`). In that pathological case
-  the body's `tools:` array contains both entries and the response
-  decoder's `lift_structured_output/1` only fires when there is exactly
-  one tool call whose name starts with the prefix; ambiguous multi-call
-  responses surface unchanged (`finish_reason: :tool_calls`). Avoid the
-  collision by renaming the user-defined tool.
-
-  ### Multi-turn synthetic-tool de-injection
-
-  After the first turn where the synthetic tool fires, the assistant
-  message carries the synthetic `tool_use` call and the next turn's
-  thread carries a `:tool` message with `tool_call_id` matching the
-  synthetic id. `inject_structured_output_tool/2` detects this by
-  scanning `request.messages` for a `:tool` message whose `tool_call_id`
-  matches the synthetic prefix; when found, the synthetic injection is
-  SKIPPED so user-defined tools remain callable on subsequent turns.
+  Atom keys are stringified. Property names inside `properties` / `$defs`
+  are never treated as keywords.
 
   ## Vision input
 
@@ -164,13 +131,6 @@ defmodule ALLM.Providers.Anthropic do
 
   @base_url "https://api.anthropic.com/v1"
   @anthropic_version "2023-06-01"
-  # Synthetic-tool name prefix for structured-output tool-forcing (§5.4 +
-  # Phase 11 design Decision #4). The full name is
-  # `"respond_with_json_<schema_name>"` so the schema name embeds in the
-  # synthetic tool name; collisions are only possible when the user names a
-  # tool exactly identical (a known footgun documented in the moduledoc).
-  @structured_output_tool_prefix "respond_with_json_"
-
   # Default per-message receive timeout for streaming. Spec §7.2 + StreamAdapter
   # invariant 4. Tunable via opts[:stream_timeout].
   @default_stream_timeout 60_000
@@ -222,9 +182,9 @@ defmodule ALLM.Providers.Anthropic do
   Capability declaration consumed by `ALLM.Capability.preflight/2`
   .
 
-  Always returns `false`. Anthropic's tool-forcing pattern is
-  single-pass — the OpenAI-style two-pass `structured_finalize` dance is
-  unnecessary.
+  Always returns `false`. Anthropic's native `output_config.format`
+  constrains the final text in a single pass — the OpenAI-style two-pass
+  `structured_finalize` dance is unnecessary.
 
   ## Examples
 
@@ -567,8 +527,8 @@ defmodule ALLM.Providers.Anthropic do
   Compose the JSON request body from a canonical `%Request{}`.
 
   Performs system-message extraction, message/tool/tool_choice
-  translation, and structured-output synthetic-tool injection (the documented contract
-  see `inject_structured_output_tool/2`).
+  translation, and maps `response_format` onto the native
+  `output_config.format` field (see `to_anthropic_output_format/1`).
 
   ## Examples
 
@@ -598,7 +558,26 @@ defmodule ALLM.Providers.Anthropic do
     |> maybe_put_tool_choice(request.tool_choice, request.tools)
     |> put_prompt_cache(request.prompt_cache)
     |> Map.merge(stringify_options(request.options))
-    |> then(&inject_structured_output_tool(request, &1))
+    |> put_output_format(request.response_format)
+  end
+
+  # Runs after the `request.options` merge so a caller-supplied
+  # `output_config` (e.g. `effort`) keeps its other keys; `format` is set
+  # from `response_format` and wins over a raw `options` format.
+  defp put_output_format(body, response_format) do
+    case to_anthropic_output_format(response_format) do
+      nil ->
+        body
+
+      format ->
+        output_config =
+          case Map.get(body, "output_config") do
+            %{} = existing -> existing |> Map.delete(:format) |> Map.put("format", format)
+            _ -> %{"format" => format}
+          end
+
+        Map.put(body, "output_config", output_config)
+    end
   end
 
   defp maybe_put_system(map, nil), do: map
@@ -998,164 +977,101 @@ defmodule ALLM.Providers.Anthropic do
   end
 
   @doc """
-  Inject the synthetic structured-output tool when `request.response_format`
-  is `%{type: :json_schema,...}`.
+  Translate `request.response_format` to Anthropic's native
+  `output_config.format` value, or `nil` when no format is sent.
 
-  Branches:
-
-    * `nil` or `%{type: :json_object}` (or anything other than
-      `:json_schema`) → returns `body` unchanged.
-    * `%{type: :json_schema, name: n, schema: s, strict: _}` AND the
-      request has NOT already produced a synthetic-tool result in a
-      prior turn → injects a synthetic tool entry into `body["tools"]`
-      (preserving any user tools — APPEND, not replace) AND sets
-      `body["tool_choice"] = %{type: "tool", name:
-      "respond_with_json_<n>"}` to force the model to call it.
-    * `%{type: :json_schema,...}` BUT a prior assistant turn already
-      produced the synthetic tool's output (the request's `messages`
-      contains a `:tool` message whose `tool_call_id` starts with the
-      synthetic prefix `"respond_with_json_"`) → returns `body`
-      unchanged so user-defined tools remain callable on subsequent
-      turns. See moduledoc "Multi-turn synthetic-tool de-injection".
+  Only `%{type: :json_schema, schema: s}` maps to a format; the schema is
+  passed through `to_anthropic_json_schema/1`. `nil`, `:json_object`, and
+  anything else return `nil` (Anthropic has no schema-less JSON mode).
 
   ## Examples
 
-      iex> body = %{"model" => "claude-sonnet-4-6"}
-      iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "x"}])
-      iex> ALLM.Providers.Anthropic.inject_structured_output_tool(req, body)
-      %{"model" => "claude-sonnet-4-6"}
+      iex> ALLM.Providers.Anthropic.to_anthropic_output_format(nil)
+      nil
 
-      iex> rf = %{type: :json_schema, name: "person", schema: %{"type" => "object"}, strict: true}
-      iex> req = ALLM.Request.new([%ALLM.Message{role: :user, content: "x"}], response_format: rf)
-      iex> body = ALLM.Providers.Anthropic.inject_structured_output_tool(req, %{"tools" => []})
-      iex> body["tool_choice"]
-      %{type: "tool", name: "respond_with_json_person"}
+      iex> rf = %{type: :json_schema, name: "person", strict: true,
+      ...>   schema: %{"type" => "object", "properties" => %{"name" => %{"type" => "string"}}}}
+      iex> ALLM.Providers.Anthropic.to_anthropic_output_format(rf)
+      %{"type" => "json_schema", "schema" => %{"type" => "object",
+        "properties" => %{"name" => %{"type" => "string"}}, "additionalProperties" => false}}
   """
-  @spec inject_structured_output_tool(Request.t(), map()) :: map()
-  def inject_structured_output_tool(%Request{response_format: rf} = request, body) do
-    case rf do
-      %{type: :json_schema, name: name, schema: schema} when is_binary(name) ->
-        if synthetic_already_called?(request.messages) do
-          body
-        else
-          do_inject_structured_output_tool(body, name, schema)
-        end
-
-      _ ->
-        body
-    end
+  @spec to_anthropic_output_format(Request.response_format() | nil) :: map() | nil
+  def to_anthropic_output_format(%{type: :json_schema, schema: %{} = schema}) do
+    %{"type" => "json_schema", "schema" => to_anthropic_json_schema(schema)}
   end
 
-  defp do_inject_structured_output_tool(body, name, schema) do
-    tool_name = @structured_output_tool_prefix <> name
+  def to_anthropic_output_format(_), do: nil
 
-    synthetic_tool = %{
-      "name" => tool_name,
-      "description" => "Return the final result as a JSON object matching the schema.",
-      "input_schema" => schema
-    }
+  # Keywords `output_config.format.schema` rejects with a 400 (live-probed
+  # 2026-10-06 against claude-haiku-4-5 / claude-sonnet-5-5). `minItems` is
+  # handled separately: 0 and 1 are accepted.
+  @unsupported_schema_keywords ~w(minimum maximum exclusiveMinimum exclusiveMaximum
+                                  multipleOf maxItems uniqueItems minProperties maxProperties)
 
-    existing_tools = Map.get(body, "tools", [])
+  # Keys whose value is a map of name => subschema.
+  @schema_map_keywords ~w(properties patternProperties $defs definitions dependentSchemas)
+  # Keys whose value is a single subschema.
+  @schema_keywords ~w(items additionalItems contains not if then else propertyNames)
+  # Keys whose value is a list of subschemas.
+  @schema_list_keywords ~w(anyOf allOf oneOf prefixItems)
 
-    body
-    |> Map.put("tools", existing_tools ++ [synthetic_tool])
-    |> Map.put("tool_choice", %{type: "tool", name: tool_name})
+  @doc false
+  @spec to_anthropic_json_schema(map()) :: map()
+  def to_anthropic_json_schema(%{} = schema) do
+    schema
+    |> Map.new(fn {k, v} -> translate_schema_entry(to_string_key(k), v) end)
+    |> move_unsupported_constraints()
+    |> close_object()
   end
 
-  # Detect a follow-up turn after the synthetic tool already fired by
-  # scanning `messages` for any assistant message whose metadata carries a
-  # tool_call with a name starting with @structured_output_tool_prefix.
-  # Suppresses re-injection so user-defined tools remain callable per the
-  # moduledoc "Multi-turn synthetic-tool de-injection" note.
-  defp synthetic_already_called?(messages) when is_list(messages) do
-    Enum.any?(messages, fn
-      %Message{role: :assistant, metadata: %{tool_calls: calls}} when is_list(calls) ->
-        Enum.any?(calls, fn
-          %ToolCall{name: n} when is_binary(n) ->
-            String.starts_with?(n, @structured_output_tool_prefix)
+  defp translate_schema_entry(k, %{} = v) when k in @schema_map_keywords,
+    do: {k, Map.new(v, fn {name, sub} -> {to_string_key(name), translate_subschema(sub)} end)}
 
-          _ ->
-            false
-        end)
+  defp translate_schema_entry(k, v) when k in @schema_keywords, do: {k, translate_subschema(v)}
 
-      _ ->
-        false
-    end)
-  end
+  defp translate_schema_entry(k, v) when k in @schema_list_keywords and is_list(v),
+    do: {k, Enum.map(v, &translate_subschema/1)}
 
-  defp synthetic_already_called?(_), do: false
+  defp translate_schema_entry(k, v), do: {k, v}
 
-  @doc """
-  Lift a synthetic structured-output tool call back to `Response.output_text`
-  .
+  defp translate_subschema(%{} = sub), do: to_anthropic_json_schema(sub)
+  defp translate_subschema(list) when is_list(list), do: Enum.map(list, &translate_subschema/1)
+  defp translate_subschema(other), do: other
 
-  When the response's `tool_calls` list has exactly one entry whose `name`
-  starts with `@structured_output_tool_prefix` ("respond_with_json_"):
+  defp move_unsupported_constraints(schema) do
+    {moved, kept} = Map.split(schema, @unsupported_schema_keywords)
 
-    * `output_text` becomes `Jason.encode!(tool_call.arguments)` (the
-      parsed input map; per the documented contract, `arguments` already carries the
-      parsed map and `raw_arguments` carries the JSON string).
-    * `finish_reason` is set to `:stop` (NOT `:tool_calls`).
-    * `tool_calls` is cleared to `[]` — the synthetic call is consumed.
-    * `metadata.structured_output_tool` is set to `true` for observability.
-    * The assistant `message` is rewritten so its `content` carries the
-      JSON-encoded text and its `metadata.tool_calls` is dropped.
+    {moved, kept} =
+      case Map.get(kept, "minItems") do
+        n when is_integer(n) and n > 1 ->
+          {Map.put(moved, "minItems", n), Map.delete(kept, "minItems")}
 
-  In every other shape (zero tool calls, multiple tool calls, single
-  non-synthetic tool call) the response is returned unchanged.
-
-  ## Examples
-
-      iex> resp = %ALLM.Response{output_text: "hi", finish_reason: :stop}
-      iex> ALLM.Providers.Anthropic.lift_structured_output(resp).output_text
-      "hi"
-
-      iex> tc = %ALLM.ToolCall{id: "toolu_x", name: "respond_with_json_person",
-      ...> arguments: %{"name" => "Alice"}, raw_arguments: ~s({"name":"Alice"})}
-      iex> resp = %ALLM.Response{tool_calls: [tc], finish_reason: :tool_calls,
-      ...> message: %ALLM.Message{role: :assistant, content: ""}}
-      iex> lifted = ALLM.Providers.Anthropic.lift_structured_output(resp)
-      iex> {Jason.decode!(lifted.output_text), lifted.finish_reason, lifted.tool_calls}
-      {%{"name" => "Alice"}, :stop, []}
-  """
-  @spec lift_structured_output(Response.t()) :: Response.t()
-  def lift_structured_output(%Response{tool_calls: [tc]} = response) do
-    if synthetic_tool_call?(tc) do
-      do_lift(response, tc)
-    else
-      response
-    end
-  end
-
-  def lift_structured_output(%Response{} = response), do: response
-
-  defp synthetic_tool_call?(%ToolCall{name: name}) when is_binary(name) do
-    String.starts_with?(name, @structured_output_tool_prefix)
-  end
-
-  defp synthetic_tool_call?(_), do: false
-
-  defp do_lift(%Response{} = response, %ToolCall{arguments: args}) do
-    encoded = Jason.encode!(args || %{})
-
-    new_message =
-      case response.message do
-        %Message{} = msg ->
-          %{msg | content: encoded, metadata: Map.delete(msg.metadata || %{}, :tool_calls)}
-
-        nil ->
-          %Message{role: :assistant, content: encoded, metadata: %{}}
+        _ ->
+          {moved, kept}
       end
 
-    %{
-      response
-      | output_text: encoded,
-        finish_reason: :stop,
-        tool_calls: [],
-        message: new_message,
-        metadata: Map.put(response.metadata || %{}, :structured_output_tool, true)
-    }
+    if map_size(moved) == 0 do
+      kept
+    else
+      note =
+        moved
+        |> Enum.sort()
+        |> Enum.map_join(", ", fn {k, v} -> "#{k}: #{Jason.encode!(v)}" end)
+
+      Map.update(kept, "description", "{#{note}}", &"#{&1}\n\n{#{note}}")
+    end
   end
+
+  defp close_object(schema) do
+    if object_schema?(schema),
+      do: Map.put(schema, "additionalProperties", false),
+      else: schema
+  end
+
+  defp object_schema?(%{"type" => "object"}), do: true
+  defp object_schema?(%{"type" => types}) when is_list(types), do: "object" in types
+  defp object_schema?(%{"properties" => %{}}), do: true
+  defp object_schema?(_), do: false
 
   # ---------------------------------------------------------------------------
   # Response decoding
@@ -1197,7 +1113,7 @@ defmodule ALLM.Providers.Anthropic do
       metadata: tool_calls_metadata(tool_calls)
     }
 
-    response = %Response{
+    %Response{
       id: Map.get(body, "id"),
       model: Map.get(body, "model"),
       message: message,
@@ -1209,8 +1125,6 @@ defmodule ALLM.Providers.Anthropic do
       raw: body,
       metadata: %{}
     }
-
-    lift_structured_output(response)
   end
 
   defp tool_calls_metadata([]), do: %{}
@@ -1432,109 +1346,8 @@ defmodule ALLM.Providers.Anthropic do
         fn state -> stream_after_fun(state, finch_module) end
       )
 
-    {:ok, maybe_wrap_structured_output(enumerable, request)}
+    {:ok, enumerable}
   end
-
-  # Decision #5b: only wrap when response_format is :json_schema (zero
-  # overhead for non-structured paths). The wrapper rewrites the synthetic
-  # tool's stream into a text-stream so `StreamCollector.to_response/1`
-  # produces a clean `%Response{}` matching the non-streaming arm's lift.
-  defp maybe_wrap_structured_output(enumerable, %Request{response_format: rf}) do
-    case rf do
-      %{type: :json_schema, name: name} when is_binary(name) ->
-        wrap_structured_output(enumerable, name)
-
-      _ ->
-        enumerable
-    end
-  end
-
-  defp wrap_structured_output(enumerable, schema_name) do
-    synthetic_name = @structured_output_tool_prefix <> schema_name
-
-    Stream.transform(
-      enumerable,
-      fn -> %{synthetic_id: nil, synthetic_name: synthetic_name, raw_args: ""} end,
-      &transform_event/2,
-      fn _acc -> :ok end
-    )
-  end
-
-  # Per-event transform: rewrites the synthetic tool's lifecycle events
-  # into a clean text-stream and rewrites the terminal `:message_completed`
-  # by running `lift_structured_output/1` on a synthesized in-flight
-  # `%Response{}`. Non-synthetic events pass through unchanged.
-  defp transform_event({:tool_call_started, %{id: id, name: name}} = event, acc) do
-    if name == acc.synthetic_name do
-      {[], %{acc | synthetic_id: id, raw_args: ""}}
-    else
-      {[event], acc}
-    end
-  end
-
-  defp transform_event(
-         {:tool_call_delta, %{id: id, arguments_delta: delta}} = event,
-         acc
-       ) do
-    if id == acc.synthetic_id and is_binary(delta) do
-      new_acc = %{acc | raw_args: acc.raw_args <> delta}
-      {[{:text_delta, %{id: nil, delta: delta}}], new_acc}
-    else
-      {[event], acc}
-    end
-  end
-
-  defp transform_event(
-         {:tool_call_completed, %{id: id, arguments: args, raw_arguments: raw}} = event,
-         acc
-       ) do
-    if id == acc.synthetic_id do
-      # Use the parsed args re-encoded so the on-the-wire text matches
-      # what `lift_structured_output/1` will produce for the non-streaming
-      # arm (Jason.encode!/1 of the parsed map). Falls back to the raw
-      # accumulated JSON when `args` is empty/unparseable.
-      text = if is_map(args) and map_size(args) > 0, do: Jason.encode!(args), else: raw
-      {[{:text_completed, %{id: nil, text: text}}], acc}
-    else
-      {[event], acc}
-    end
-  end
-
-  defp transform_event({:message_completed, payload}, acc) when acc.synthetic_id != nil do
-    args =
-      case Jason.decode(acc.raw_args) do
-        {:ok, %{} = parsed} -> parsed
-        _ -> %{}
-      end
-
-    encoded = Jason.encode!(args)
-
-    base_msg =
-      case payload do
-        %{message: %Message{} = m} -> m
-        _ -> %Message{role: :assistant, content: "", metadata: %{}}
-      end
-
-    new_msg = %{
-      base_msg
-      | content: encoded,
-        metadata: Map.delete(base_msg.metadata || %{}, :tool_calls)
-    }
-
-    new_payload =
-      payload
-      |> Map.put(:message, new_msg)
-      |> Map.put(:finish_reason, :stop)
-      |> Map.update(
-        :metadata,
-        %{structured_output_tool: true},
-        &Map.put(&1 || %{}, :structured_output_tool, true)
-      )
-
-    {[{:message_completed, new_payload}], acc}
-  end
-
-  defp transform_event(event, acc), do: {[event], acc}
 
   defp stream_start_fun(finch_request, finch_module, finch_name, finch_extra_opts) do
     ref = finch_module.async_request(finch_request, finch_name, finch_extra_opts)

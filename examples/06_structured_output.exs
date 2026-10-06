@@ -4,7 +4,7 @@
 #               + `response_format:` opt; the model is forced to emit JSON
 #               conforming to the supplied schema.
 # Spec section: §5.4 (response_format), §10.4 (structured_finalize),
-#               §11 Decision #4 (Anthropic tool-forcing lift + structured_output_tool marker).
+#               Anthropic native output_config.format.
 # Steering strategy: tight — `strict: true` schema + system prompt that names
 #                    the schema obligation. Assertion: JSON decodes and the
 #                    `message` field contains "OK".
@@ -57,21 +57,6 @@ unless ok? do
   )
 
   System.halt(1)
-end
-
-# Anthropic-only: structured-output via tool-forcing stamps
-# `metadata.structured_output_tool == true` on the final response per Decision #4.
-# OpenAI's native :json_schema response carries no equivalent marker.
-if System.get_env("ALLM_PROVIDER", "openai") == "anthropic" do
-  unless result.final_response.metadata[:structured_output_tool] == true do
-    IO.puts(
-      :stderr,
-      "FAIL: expected metadata.structured_output_tool == true for Anthropic, got " <>
-        inspect(result.final_response.metadata[:structured_output_tool])
-    )
-
-    System.halt(1)
-  end
 end
 
 IO.puts("OK: structured_output — decoded=#{inspect(decoded)} pass_1=#{inspect(pass_1_halted)}")

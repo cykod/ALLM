@@ -352,7 +352,7 @@ ALLM normalizes structured-output requests into one of the tagged maps above. Ad
 
 - OpenAI Chat Completions: `%{type: "json_schema", json_schema: %{name:, schema:, strict:}}`
 - OpenAI Responses API: `text: %{format: %{type: "json_schema", name:, schema:, strict:}}`
-- Anthropic: prepends a tool-forcing pattern (no native schema enforcement)
+- Anthropic: `output_config: %{format: %{type: "json_schema", schema:}}` — `name`/`strict` are not sent; the adapter closes every object with `additionalProperties: false` and moves rejected constraints (`minimum`, `maxItems`, …) into `description`. (Earlier versions forced a synthetic tool via `tool_choice`; Claude Opus 5.5 / Sonnet 5.5 / Fable 5.1 reject a forced `tool_choice` with a 400.)
 
 Prefer the `ALLM.json_schema/3` helper:
 
