@@ -110,6 +110,14 @@ defmodule ExamplesHelpers do
   # `temperature: 0` baseline; Google explicitly recommends `1.0` for Gemini 3.
   # Rows that omit the key inherit the `0` default in `engine/1` — caller
   # `temperature:` overrides still win.
+  #
+  # The optional `:zero_temperature_models` field lists model-name prefixes
+  # that accept `temperature: 0`. When a row carries it, any other model gets
+  # NO `temperature` param (the provider default applies). Claude Opus 4.7+
+  # and every Claude 5.x model 400 on `temperature: 0` ("`temperature` is
+  # deprecated for this model") while accepting the default `1` — live-probed
+  # 2026-10-06. An allowlist, not a denylist, so a newer model defaults to
+  # omitting the param rather than to a 400.
   @providers %{
     "openai" => %{
       adapter: ALLM.Providers.OpenAI,
@@ -136,6 +144,8 @@ defmodule ExamplesHelpers do
       default_model: "claude-sonnet-4-6",
       vision_default_model: "claude-haiku-4-5-20251001",
       key_env: "ANTHROPIC_API_KEY",
+      zero_temperature_models:
+        ~w(claude-opus-4-6 claude-sonnet-4-6 claude-sonnet-4-5 claude-haiku-4-5),
       image_adapter: nil,
       image_default_model: nil,
       # Anthropic has no embeddings endpoint — Voyage is its recommended
@@ -235,7 +245,8 @@ defmodule ExamplesHelpers do
   `extra_opts` is a keyword list merged on top of the helper defaults; pass
   `tools:`, `tool_executor:`, `tool_result_encoder:`, `params:`, etc. for
   per-script customization. The defaults set `tool_executor:`,
-  `tool_result_encoder:`, and `params: %{temperature: 0}`.
+  `tool_result_encoder:`, and `params:` from `default_params/2` (normally
+  `%{temperature: 0}`).
   """
   def engine(extra_opts \\ []) do
     {vision?, extra_opts} = Keyword.pop(extra_opts, :vision, false)
@@ -258,17 +269,32 @@ defmodule ExamplesHelpers do
     # the `:params` map below so a caller passing `params: %{max_tokens: 100}`
     # (without a `temperature` key) preserves the row's `default_temperature`
     # rather than silently losing it. Phase 16.6 retro Finding 3.
-    default_temperature = Map.get(row, :default_temperature, 0)
-
     base = [
       adapter: adapter,
       model: model,
       tool_executor: ALLM.ToolExecutor.Default,
       tool_result_encoder: ALLM.ToolResultEncoder.JSON,
-      params: %{temperature: default_temperature}
+      params: default_params(row, model)
     ]
 
     ALLM.Engine.new(merge_with_params(base, extra_opts))
+  end
+
+  # The row's baseline `params:` for `model`: `%{temperature: t}` with the
+  # row's `:default_temperature` (absent → `0`), or `%{}` when the row has a
+  # `:zero_temperature_models` allowlist that `model` is not on. Public test
+  # seam — `engine/1` needs a live key.
+  @doc false
+  def default_params(row, model) do
+    case Map.get(row, :zero_temperature_models) do
+      nil ->
+        %{temperature: Map.get(row, :default_temperature, 0)}
+
+      prefixes ->
+        if Enum.any?(prefixes, &String.starts_with?(model, &1)),
+          do: %{temperature: Map.get(row, :default_temperature, 0)},
+          else: %{}
+    end
   end
 
   # Deep-merge for the `:params` map only — every other keyword key is

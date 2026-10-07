@@ -121,6 +121,46 @@ defmodule ALLM.ExamplesHelpersTest do
     end
   end
 
+  describe "default_params/2 (temperature baseline per model)" do
+    setup do
+      %{rows: ExamplesHelpers.provider_rows()}
+    end
+
+    test "anthropic: models that accept temperature 0 keep it", %{rows: rows} do
+      row = Map.fetch!(rows, "anthropic")
+
+      for model <- ~w(claude-sonnet-4-6 claude-opus-4-6 claude-sonnet-4-5
+                      claude-haiku-4-5 claude-haiku-4-5-20251001) do
+        assert ExamplesHelpers.default_params(row, model) == %{temperature: 0}, model
+      end
+    end
+
+    test "anthropic: models that 400 on temperature 0 (and unknown ones) omit it", %{rows: rows} do
+      row = Map.fetch!(rows, "anthropic")
+
+      for model <- ~w(claude-opus-5-5 claude-sonnet-5-5 claude-fable-5-1 claude-opus-5
+                      claude-sonnet-5 claude-opus-4-8 claude-opus-4-7 claude-future-9) do
+        assert ExamplesHelpers.default_params(row, model) == %{}, model
+      end
+    end
+
+    test "both default models stay deterministic", %{rows: rows} do
+      row = Map.fetch!(rows, "anthropic")
+      assert ExamplesHelpers.default_params(row, row.default_model) == %{temperature: 0}
+      assert ExamplesHelpers.default_params(row, row.vision_default_model) == %{temperature: 0}
+    end
+
+    test "rows without an allowlist keep their default temperature for any model", %{rows: rows} do
+      assert ExamplesHelpers.default_params(rows["openai"], "anything") == %{temperature: 0}
+      assert ExamplesHelpers.default_params(rows["gemini"], "anything") == %{temperature: 1.0}
+    end
+
+    test "an omitted temperature survives a caller params merge" do
+      merged = ExamplesHelpers.merge_with_params([params: %{}], params: %{max_tokens: 100})
+      assert merged[:params] == %{max_tokens: 100}
+    end
+  end
+
   describe "provider rows and chat_provider?/1" do
     test "chat_provider?/1 is false for the capability-only rows and true for every other row" do
       rows = ExamplesHelpers.provider_rows()

@@ -1,3 +1,15 @@
+## [BUG] Omit temperature 0 in examples for Claude models that reject it
+*Wednesday, October 7th at 12am*
+The examples helper sent temperature: 0 to every Anthropic model, but Claude 
+Opus 4.7+ and every 5.x model 400 on it (live-probed 2026-10-06; all accept the 
+default 1). The Anthropic row now carries a zero_temperature_models allowlist 
+(claude-opus-4-6, claude-sonnet-4-6, claude-sonnet-4-5, claude-haiku-4-5) that 
+keeps the deterministic baseline; any other model gets no temperature param, so 
+new models default to the provider value rather than a 400. The new 
+default_params/2 seam is pinned in examples_helpers_test.exs.
+
+---
+
 ## [BUG] Use native output_config.format for Anthropic structured output
 *Tuesday, October 6th at 10pm*
 The Anthropic adapter forced a synthetic respond_with_json tool via tool_choice 
