@@ -1,3 +1,15 @@
+## [TWK] Drop forced tool_choice on Claude models that reject it
+*Wednesday, October 7th at 12pm*
+Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 return a 400 for 
+tool_choice any/tool, so the Anthropic adapter now omits a forced choice 
+(:required, a tool name, or %{type: any|tool}) on those models and the request 
+runs as :auto, logged at :debug. :none, raw options tool_choice, and every 
+other model are unchanged; a live probe (2026-10-07) confirmed Fable 5, Opus 5, 
+Sonnet 5, Opus 4.x, Sonnet 4.6 and Haiku 4.5 still accept forcing. Example 09 
+now passes live on Opus 5.5, Sonnet 5.5, Fable 5.1 and Sonnet 4.6.
+
+---
+
 ## [BUG] Omit temperature 0 in examples for Claude models that reject it
 *Wednesday, October 7th at 12am*
 The examples helper sent temperature: 0 to every Anthropic model, but Claude 

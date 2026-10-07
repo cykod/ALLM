@@ -513,6 +513,73 @@ defmodule ALLM.Providers.AnthropicTest do
   # Additional small-branch coverage (forced_choice, header_value, etc.)
   # ---------------------------------------------------------------------------
 
+  describe "forced tool_choice on models that reject it" do
+    setup do
+      %{tool: Tool.new(name: "get_weather", description: "w", schema: %{"type" => "object"})}
+    end
+
+    test "forced choices are omitted for Opus 5.5 / Sonnet 5.5 / Fable 5.1 / Mythos 5.1", %{
+      tool: tool
+    } do
+      for model <- ~w(claude-opus-5-5 claude-sonnet-5-5 claude-fable-5-1 claude-mythos-5-1),
+          choice <- [
+            :required,
+            "get_weather",
+            %{type: "tool", name: "get_weather"},
+            %{"type" => "any"}
+          ] do
+        body =
+          Anthropic.to_anthropic_request_body(req(model: model, tools: [tool], tool_choice: choice))
+
+        refute Map.has_key?(body, "tool_choice"), "#{model} #{inspect(choice)}"
+        assert [%{"name" => "get_weather"}] = body["tools"]
+      end
+    end
+
+    test ":none is still sent on a rejecting model", %{tool: tool} do
+      body =
+        Anthropic.to_anthropic_request_body(
+          req(model: "claude-opus-5-5", tools: [tool], tool_choice: :none)
+        )
+
+      assert body["tool_choice"] == %{"type" => "none"}
+    end
+
+    test "forced choices are still sent on models that accept them", %{tool: tool} do
+      for model <-
+            ~w(claude-sonnet-4-6 claude-opus-4-8 claude-opus-5 claude-sonnet-5 claude-fable-5) do
+        body =
+          Anthropic.to_anthropic_request_body(
+            req(model: model, tools: [tool], tool_choice: :required)
+          )
+
+        assert body["tool_choice"] == %{"type" => "any"}, model
+      end
+    end
+
+    test "the empty-tools guard still raises on a rejecting model" do
+      assert_raise ArgumentError, ~r/requires non-empty tools/, fn ->
+        Anthropic.to_anthropic_request_body(req(model: "claude-sonnet-5-5", tool_choice: :required))
+      end
+    end
+
+    test "a raw tool_choice in options is passed through untouched", %{tool: tool} do
+      r = req(model: "claude-opus-5-5", tools: [tool], options: %{tool_choice: %{type: "any"}})
+      assert Anthropic.to_anthropic_request_body(r)["tool_choice"] == %{type: "any"}
+    end
+
+    test "the drop is logged at :debug", %{tool: tool} do
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          Anthropic.to_anthropic_request_body(
+            req(model: "claude-opus-5-5", tools: [tool], tool_choice: :required)
+          )
+        end)
+
+      assert log =~ "dropping forced tool_choice :required for claude-opus-5-5"
+    end
+  end
+
   describe "additional branch coverage" do
     test "tool_choice atom-keyed %{type: \"tool\"} with non-empty tools is allowed" do
       tool = Tool.new(name: "x", description: "d", schema: %{})

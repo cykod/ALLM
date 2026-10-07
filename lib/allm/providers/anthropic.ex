@@ -43,6 +43,18 @@ defmodule ALLM.Providers.Anthropic do
   Note the rename `:required → "any"` — Anthropic uses different wording
   than OpenAI for the same semantic.
 
+  ### Forced tool choice is dropped on models that reject it
+
+  Claude Opus 5.5, Sonnet 5.5, Fable 5.1, and Mythos 5.1 return a 400
+  (`tool_choice: type "tool" and "any" are not supported for this model.`)
+  for a forced choice. On those models a forced choice (`:required`, a tool
+  name, or `%{type: "any" | "tool"}`) is **omitted** from the wire body, so
+  the request runs as `:auto`: the model may answer without calling a tool,
+  and a caller that needs the call should also say so in the prompt. `:none`
+  and `:auto` are sent unchanged, as is every choice on other models. The
+  drop is logged at `:debug`. A raw `tool_choice` passed through
+  `request.options` is not touched. See `rejects_forced_tool_choice?/1`.
+
   ## Stop-reason normalization (total per the documented contract)
 
   | Anthropic string | ALLM atom | Notes |
@@ -555,7 +567,7 @@ defmodule ALLM.Providers.Anthropic do
     |> maybe_put_system(system_text)
     |> maybe_put("temperature", request.temperature)
     |> maybe_put_tools(request.tools)
-    |> maybe_put_tool_choice(request.tool_choice, request.tools)
+    |> maybe_put_tool_choice(request.tool_choice, request.tools, request.model)
     |> put_prompt_cache(request.prompt_cache)
     |> Map.merge(stringify_options(request.options))
     |> put_output_format(request.response_format)
@@ -608,7 +620,7 @@ defmodule ALLM.Providers.Anthropic do
     Map.put(map, "tools", to_anthropic_tools(tools))
   end
 
-  defp maybe_put_tool_choice(map, choice, tools) do
+  defp maybe_put_tool_choice(map, choice, tools, model) do
     case to_anthropic_tool_choice(choice) do
       {:omit} ->
         map
@@ -623,9 +635,52 @@ defmodule ALLM.Providers.Anthropic do
                 "tool_choice #{inspect(choice)} requires non-empty tools list"
         end
 
-        Map.put(map, "tool_choice", wire)
+        put_tool_choice(map, wire, choice, model)
     end
   end
+
+  # Omits a forced choice on a model that 400s on it (moduledoc "Forced tool
+  # choice is dropped on models that reject it"); otherwise sets it.
+  defp put_tool_choice(map, wire, choice, model) do
+    if forced_choice?(wire) and rejects_forced_tool_choice?(model) do
+      Logger.debug(fn ->
+        "ALLM.Providers.Anthropic: dropping forced tool_choice #{inspect(choice)} " <>
+          "for #{model}, which rejects it; the request runs as :auto"
+      end)
+
+      map
+    else
+      Map.put(map, "tool_choice", wire)
+    end
+  end
+
+  # Model-name prefixes that 400 on `tool_choice` `any` / `tool`
+  # (live-probed 2026-10-07). Claude Fable 5, Opus 5, Sonnet 5, and Opus 4.x
+  # accept it. A prefix also matches dated or suffixed IDs.
+  @forced_tool_choice_rejecting_models ~w(claude-opus-5-5 claude-sonnet-5-5
+                                          claude-fable-5-1 claude-mythos-5-1)
+
+  @doc """
+  `true` when `model` rejects a forced `tool_choice`, so the adapter omits
+  it (see the moduledoc "Forced tool choice is dropped on models that
+  reject it").
+
+  ## Examples
+
+      iex> ALLM.Providers.Anthropic.rejects_forced_tool_choice?("claude-opus-5-5")
+      true
+
+      iex> ALLM.Providers.Anthropic.rejects_forced_tool_choice?("claude-sonnet-4-6")
+      false
+
+      iex> ALLM.Providers.Anthropic.rejects_forced_tool_choice?(nil)
+      false
+  """
+  @spec rejects_forced_tool_choice?(String.t() | nil) :: boolean()
+  def rejects_forced_tool_choice?(model) when is_binary(model),
+    do: Enum.any?(@forced_tool_choice_rejecting_models, &String.starts_with?(model, &1))
+
+  def rejects_forced_tool_choice?(_), do: false
 
   defp forced_choice?(%{"type" => t}) when t in ["any", "tool"], do: true
   defp forced_choice?(%{type: t}) when t in ["any", "tool"], do: true

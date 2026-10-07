@@ -49,7 +49,9 @@ messages = [
 # Pass 1 forces a tool call. Under `:auto`, some models (claude-sonnet-4-6
 # observed) answer "What's the weather?" directly instead of calling the tool,
 # so the ask-user path would depend on the model's choice rather than on the
-# handler this script demonstrates.
+# handler this script demonstrates. Claude Opus 5.5 / Sonnet 5.5 / Fable 5.1
+# reject a forced choice, so the Anthropic adapter drops it there and the
+# system prompt alone steers the call.
 {:ok, result1} = ALLM.chat(engine, messages, tool_choice: :required)
 
 ok1? =
