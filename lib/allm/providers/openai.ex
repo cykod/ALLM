@@ -887,6 +887,7 @@ defmodule ALLM.Providers.OpenAI do
       responses_tool_calls_by_item_id: %{},
       responses_tool_call_item_order: [],
       finish_reason: nil,
+      incomplete_details: nil,
       message_completed_emitted?: false,
       accumulated_text: "",
       reasoning_summary: ""
@@ -1060,8 +1061,19 @@ defmodule ALLM.Providers.OpenAI do
   #   * response.output_text.delta          → :text_delta
   #   * response.reasoning_summary.delta    → accumulate into state.reasoning_summary
   #   * response.completed                  → synthesize :message_completed
-  #   * response.error                      → terminal {:error, _}
+  #   * response.incomplete                 → synthesize :message_completed
+  #     (finish_reason from the status, e.g. :length on max_output_tokens)
+  #   * response.failed                     → terminal {:error, _}
+  #   * error / response.error              → terminal {:error, _}
   # Unknown event names are dropped (defensive — OpenAI may add new ones).
+  #
+  # `response.incomplete` and `response.failed` are TERMINAL events of the
+  # Responses stream exactly as `response.completed` is (each is the last
+  # `response.*` lifecycle event and carries the final `response` object).
+  # Dropping them as unknown let the stream end on the transport's `:done`,
+  # whose synthesized `:message_completed` has `finish_reason: nil` and no
+  # usage: a reasoning model that spent its `max_output_tokens` returned the
+  # partial text with no signal that it had been cut off.
   defp responses_chunk_to_events("response.output_text.delta", decoded, state) do
     delta = decoded["delta"] || ""
 
@@ -1080,13 +1092,22 @@ defmodule ALLM.Providers.OpenAI do
     {[], false, new_state}
   end
 
-  defp responses_chunk_to_events("response.completed", decoded, state) do
+  defp responses_chunk_to_events(terminal, decoded, state)
+       when terminal in ["response.completed", "response.incomplete"] do
     # Pull final status / incomplete_details / usage off the embedded
     # response object when present — provides the canonical finish_reason
-    # for the synthetic :message_completed event.
+    # for the synthetic :message_completed event. `response.incomplete`
+    # carries the same `response` object with `status: "incomplete"`, so
+    # `map_responses_status/1` maps it exactly as the non-streaming path does.
     response_obj = decoded["response"] || %{}
     {finish_reason, _raw} = map_responses_status(response_obj)
-    state = Map.put(state, :finish_reason, finish_reason)
+
+    state = %{
+      state
+      | finish_reason: finish_reason,
+        incomplete_details: decode_incomplete_details(response_obj)
+    }
+
     usage_events = responses_usage_events(response_obj)
 
     if state.message_completed_emitted? do
@@ -1106,6 +1127,44 @@ defmodule ALLM.Providers.OpenAI do
       )
 
     {[{:error, err}], true, %{state | done: true}}
+  end
+
+  # The documented stream-level error event: `event: error`, with `code` /
+  # `message` / `param` at the top level of the payload (no `response`).
+  # Some streams nest the same fields under `"error"` instead; both shapes
+  # are read so neither collapses to `:unknown` / "(no message)".
+  defp responses_chunk_to_events("error", decoded, state) do
+    error_obj =
+      case decoded do
+        %{"error" => %{} = nested} -> nested
+        _ -> decoded
+      end
+
+    err =
+      AdapterError.new(responses_error_reason(error_obj["code"]),
+        provider: :openai,
+        message: "OpenAI Responses API stream error: " <> error_message(error_obj),
+        cause: decoded
+      )
+
+    {[{:error, err}], true, %{state | done: true}}
+  end
+
+  # `response.failed`: the response object carries `status: "failed"` and an
+  # `error: %{code, message}`. Usage (when present) is still folded so the
+  # caller sees what the failed attempt cost.
+  defp responses_chunk_to_events("response.failed", decoded, state) do
+    response_obj = decoded["response"] || %{}
+    error_obj = response_obj["error"] || %{}
+
+    err =
+      AdapterError.new(responses_error_reason(error_obj["code"]),
+        provider: :openai,
+        message: "OpenAI Responses API response.failed: " <> error_message(error_obj),
+        cause: error_obj
+      )
+
+    {responses_usage_events(response_obj) ++ [{:error, err}], true, %{state | done: true}}
   end
 
   # Bug #5 fix — Responses-API streaming tool calls (Phase 10 retro).
@@ -1279,6 +1338,8 @@ defmodule ALLM.Providers.OpenAI do
       else
         %{reasoning: %{summary: state.reasoning_summary}}
       end
+
+    metadata = maybe_put_metadata(metadata, :incomplete_details, state.incomplete_details)
 
     tool_call_events ++
       [{:message_completed, %{message: msg, finish_reason: finish_reason, metadata: metadata}}]
@@ -2262,6 +2323,19 @@ defmodule ALLM.Providers.OpenAI do
        do: %{reason: reason}
 
   defp decode_incomplete_details(_), do: nil
+
+  # Responses-stream error codes → the closed `AdapterError` reason set.
+  # Only the codes OpenAI documents as transient map to a retryable reason;
+  # everything else (invalid_prompt, image errors, …) is a request problem
+  # or unknown, and is kept verbatim in the error's `:cause`.
+  defp responses_error_reason("rate_limit_exceeded"), do: :rate_limited
+  defp responses_error_reason("server_error"), do: :provider_unavailable
+  defp responses_error_reason("vector_store_timeout"), do: :timeout
+  defp responses_error_reason("invalid_prompt"), do: :invalid_request
+  defp responses_error_reason(_), do: :unknown
+
+  defp error_message(%{"message" => message}) when is_binary(message), do: message
+  defp error_message(_), do: "(no message)"
 
   defp decode_reasoning_metadata(%{"reasoning" => %{} = r}) do
     effort = Map.get(r, "effort")

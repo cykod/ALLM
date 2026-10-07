@@ -464,6 +464,100 @@ defmodule ALLM.Providers.OpenAIStreamWireTest do
     assert response.usage.reasoning_tokens == 4
   end
 
+  # Regression: the Responses stream's other two terminal lifecycle events
+  # were dropped as unknown names, so a reasoning model that hit
+  # `max_output_tokens` ended on the transport's `:done` and the collected
+  # response read `finish_reason: nil`, `usage: nil` with the PARTIAL text as
+  # `output_text` — indistinguishable from a provider fault, and the partial
+  # text looked like a valid (truncated) answer. Found by a consumer whose
+  # every vision call through `ALLM.generate/3` collapsed this way.
+  describe "Responses-API terminal events other than response.completed" do
+    test "response.incomplete (max_output_tokens) → finish_reason :length, usage, incomplete_details" do
+      stub = install_stub(Fx.responses_stream_chunks(:incomplete_max_output_tokens))
+
+      {:ok, stream} = call_stream(stub, req(model: "gpt-5.5"))
+      response = stream |> consume() |> collect()
+
+      assert response.finish_reason == :length
+      assert response.output_text == ~s({"title":"Guacamole","ingredients":[)
+      assert response.metadata.incomplete_details == %{reason: "max_output_tokens"}
+      assert response.usage.output_tokens == 4000
+      assert response.usage.reasoning_tokens == 3700
+    end
+
+    test "response.incomplete for another reason → finish_reason :content_filter / :other" do
+      for {reason, expected} <- [{"content_filter", :content_filter}, {"other_thing", :other}] do
+        chunk =
+          "event: response.incomplete\ndata: " <>
+            Jason.encode!(%{
+              "type" => "response.incomplete",
+              "response" => %{
+                "status" => "incomplete",
+                "incomplete_details" => %{"reason" => reason}
+              }
+            }) <> "\n\n"
+
+        stub = install_stub([chunk])
+        {:ok, stream} = call_stream(stub, req(model: "gpt-5.5"))
+        response = stream |> consume() |> collect()
+
+        assert response.finish_reason == expected
+        assert response.metadata.incomplete_details == %{reason: reason}
+      end
+    end
+
+    test "response.failed → terminal error carrying the provider's code and message, usage kept" do
+      stub = install_stub(Fx.responses_stream_chunks(:failed))
+
+      {:ok, stream} = call_stream(stub, req(model: "gpt-5.5"))
+      events = consume(stream)
+
+      assert [{:error, %AdapterError{} = err}] = Enum.filter(events, &match?({:error, _}, &1))
+      assert err.reason == :provider_unavailable
+      assert err.message =~ "The server had an error processing your request."
+
+      assert err.cause == %{
+               "code" => "server_error",
+               "message" => "The server had an error processing your request."
+             }
+
+      response = collect(events)
+      assert response.finish_reason == :error
+      assert response.usage.input_tokens == 20
+    end
+
+    test "the stream-level `error` event → terminal error mapped from its code" do
+      stub = install_stub(Fx.responses_stream_chunks(:error_event))
+
+      {:ok, stream} = call_stream(stub, req(model: "gpt-5.5"))
+      events = consume(stream)
+
+      assert [{:error, %AdapterError{reason: :rate_limited} = err}] =
+               Enum.filter(events, &match?({:error, _}, &1))
+
+      assert err.message =~ "Rate limit reached."
+      assert collect(events).finish_reason == :error
+    end
+
+    test "the `error` event with code/message nested under \"error\" maps the same way" do
+      chunk =
+        "event: error\ndata: " <>
+          Jason.encode!(%{
+            "type" => "error",
+            "error" => %{"code" => "server_error", "message" => "Upstream blew up."}
+          }) <> "\n\n"
+
+      stub = install_stub([chunk])
+      {:ok, stream} = call_stream(stub, req(model: "gpt-5.5"))
+      events = consume(stream)
+
+      assert [{:error, %AdapterError{reason: :provider_unavailable} = err}] =
+               Enum.filter(events, &match?({:error, _}, &1))
+
+      assert err.message =~ "Upstream blew up."
+    end
+  end
+
   test "streaming never retries — zero [:allm, :adapter, :retry] events on mid-stream 5xx" do
     handler_id = "openai_stream_no_retry_test_#{System.unique_integer([:positive])}"
 

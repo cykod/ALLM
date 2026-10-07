@@ -1,3 +1,19 @@
+## [BUG] Handle Responses stream incomplete, failed and error events
+*Wednesday, October 7th at 5pm*
+The OpenAI Responses streaming mapper only recognised response.completed and 
+response.error, so response.incomplete, response.failed and the documented 
+error event were dropped as unknown and the stream ended on transport close 
+with finish_reason nil and no usage (spec §10.1). response.incomplete now 
+folds like response.completed, yielding :length on max_output_tokens plus usage 
+and metadata.incomplete_details; response.failed and error now end the stream 
+with an AdapterError mapped from the provider code, reading the error event's 
+fields at the top level or nested under "error". Verified against a live 
+gpt-5-mini stream capped at 16 tokens: HEAD replayed those bytes as {nil, nil, 
+%{}}, the fix as {:length, usage, incomplete_details}; the failed/error arms 
+could not be triggered live and rest on synthesized fixtures.
+
+---
+
 ## [TWK] Drop forced tool_choice on Claude models that reject it
 *Wednesday, October 7th at 12pm*
 Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 return a 400 for 

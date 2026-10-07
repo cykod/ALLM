@@ -1,0 +1,7 @@
+: synthesized OpenAI Responses API stream that ends on the stream-level `error` event
+: per https://platform.openai.com/docs/api-reference/responses-streaming accessed 2026-10-07
+: hand-crafted; not recorded from the live API
+: locks in `event: error` as a terminal error event (regression: only the undocumented response.error was handled)
+event: error
+data: {"type":"error","code":"rate_limit_exceeded","message":"Rate limit reached.","param":null}
+
